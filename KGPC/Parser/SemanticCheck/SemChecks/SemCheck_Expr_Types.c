@@ -4785,13 +4785,12 @@ FIELD_RESOLVED:
                 }
                 KgpcType *arr_type = create_array_type(elem_type,
                     expr->array_lower_bound, expr->array_upper_bound);
+                destroy_kgpc_type(elem_type);
                 if (arr_type != NULL)
                 {
                     semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
                     destroy_kgpc_type(arr_type);
                 }
-                if (elem_owned)
-                    destroy_kgpc_type(elem_type);
             }
         }
     }
@@ -5118,11 +5117,11 @@ FIELD_RESOLVED:
                 kgpc_type_retain(elem_type);
             KgpcType *arr_type = create_array_type(elem_type,
                 field_desc->array_start, field_desc->array_end);
+            destroy_kgpc_type(elem_type);
             if (arr_type != NULL)
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
             if (arr_type != NULL)
                 destroy_kgpc_type(arr_type);
-            /* Note: elem_type ownership was transferred to create_array_type, do NOT destroy it here */
         }
     }
 

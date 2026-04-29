@@ -637,7 +637,9 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
             element_type = create_primitive_type(field->array_element_type);
         if (element_type == NULL)
             return NULL;
-        return create_array_type(element_type, field->array_start, field->array_end);
+        KgpcType *array_type = create_array_type(element_type, field->array_start, field->array_end);
+        destroy_kgpc_type(element_type);
+        return array_type;
     }
 
     /* Handle inline pointer fields like bufptr: ^Char */

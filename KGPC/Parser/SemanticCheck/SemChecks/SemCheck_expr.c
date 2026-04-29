@@ -1040,6 +1040,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                             if (element_type_borrowed)
                                                 kgpc_type_retain(element_type);
                                             field_type = create_array_type(element_type, field->array_start, field->array_end);
+                                            kgpc_type_release(element_type);
                                         }
                                     }
                                     else if (field->type_id != NULL)
@@ -1301,6 +1302,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
 
             KgpcType *array_type = create_array_type(element_type,
                 expr->array_lower_bound, end_index);
+            kgpc_type_release(element_type);
             return array_type;
         }
 

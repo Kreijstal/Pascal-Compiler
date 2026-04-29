@@ -487,6 +487,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                                 elem_type ? elem_type->kind : -1);
                         }
                         field_type = create_array_type(elem_type, field->array_start, field->array_end);
+                        kgpc_type_release(elem_type);
                     }
                 }
                 

@@ -764,11 +764,10 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
             KgpcType *arr_type = create_array_type(elem_type, start, end);
             if (arr_type != NULL)
             {
+                destroy_kgpc_type(elem_type);
                 arg_type = arr_type;
                 if (owns_type_out != NULL)
                     *owns_type_out = 1;
-                /* create_array_type takes ownership of elem_type, so we must NOT destroy it here.
-                 * The elem_type will be freed when arr_type is destroyed. */
             }
             else if (elem_owned && elem_type != NULL)
             {

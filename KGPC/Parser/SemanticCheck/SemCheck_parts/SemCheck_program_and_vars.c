@@ -1846,13 +1846,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (var_type == HASHVAR_ARRAY &&
                         tree->tree_data.var_decl_data.type_id != NULL &&
                         pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"))
-                    {
-                        /* Create ShortString as array[0..255] of Char */
-                        KgpcType *char_type = create_primitive_type(CHAR_TYPE);
-                        var_kgpc_type = create_array_type(char_type, 0, 255);
-                        if (var_kgpc_type != NULL)
                         {
-                            struct TypeAlias alias = {0};
+                            /* Create ShortString as array[0..255] of Char */
+                            KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                            var_kgpc_type = create_array_type(char_type, 0, 255);
+                            if (char_type != NULL)
+                                kgpc_type_release(char_type);
+                            if (var_kgpc_type != NULL)
+                            {
+                                struct TypeAlias alias = {0};
                             alias.is_array = 1;
                             alias.array_start = 0;
                             alias.array_end = 255;
