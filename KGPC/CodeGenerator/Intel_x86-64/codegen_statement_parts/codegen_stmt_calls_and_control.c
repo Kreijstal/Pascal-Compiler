@@ -12,7 +12,7 @@ static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, 
     return node->type;
 }
 
-static KgpcType *codegen_lookup_owner_field_proc_type(CodeGenContext *ctx,
+static struct RecordField *codegen_lookup_owner_field(CodeGenContext *ctx,
     const char *field_name)
 {
     if (ctx == NULL || ctx->symtab == NULL ||
@@ -35,19 +35,47 @@ static KgpcType *codegen_lookup_owner_field_proc_type(CodeGenContext *ctx,
                  kgpc_type_is_record(owner_node->type->info.points_to))
             record = kgpc_type_get_record(owner_node->type->info.points_to);
     }
-    if (record == NULL)
-        return NULL;
 
-    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    while (record != NULL)
     {
-        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
-            continue;
-        struct RecordField *field = (struct RecordField *)cur->cur;
-        if (field->name != NULL &&
-            pascal_identifier_equals(field->name, field_name))
-            return field->proc_type;
+        for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+        {
+            if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+                continue;
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL &&
+                pascal_identifier_equals(field->name, field_name))
+                return field;
+        }
+
+        if (record->parent_class_name == NULL)
+            break;
+
+        HashNode_t *parent_node = NULL;
+        if (FindSymbol(&parent_node, ctx->symtab, record->parent_class_name) == 0 ||
+            parent_node == NULL)
+            break;
+
+        record = hashnode_get_record_type(parent_node);
+        if (record == NULL && parent_node->type != NULL)
+        {
+            if (kgpc_type_is_record(parent_node->type))
+                record = kgpc_type_get_record(parent_node->type);
+            else if (kgpc_type_is_pointer(parent_node->type) &&
+                     parent_node->type->info.points_to != NULL &&
+                     kgpc_type_is_record(parent_node->type->info.points_to))
+                record = kgpc_type_get_record(parent_node->type->info.points_to);
+        }
     }
+
     return NULL;
+}
+
+static KgpcType *codegen_lookup_owner_field_proc_type(CodeGenContext *ctx,
+    const char *field_name)
+{
+    struct RecordField *field = codegen_lookup_owner_field(ctx, field_name);
+    return field != NULL ? field->proc_type : NULL;
 }
 
 static int codegen_expr_is_const_symbol(const struct Expression *expr, SymTab_t *symtab)
@@ -1245,6 +1273,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int use_word = 0;
             const char *value_reg8 = NULL;
             const char *value_reg16 = NULL;
+            KgpcType *sym_type = NULL;
+            struct RecordField *owner_field = NULL;
             long long target_size = (var_expr->type == EXPR_RECORD_ACCESS) ?
                 codegen_record_field_effective_size(var_expr, ctx) :
                 expr_effective_size_bytes(var_expr);
@@ -1257,6 +1287,45 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 long long resolved_size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
                 if (resolved_size > 0 && resolved_size < 4)
                     target_size = resolved_size;
+            }
+            if ((target_size <= 0 || target_size == 4) && ctx != NULL &&
+                ctx->symtab != NULL)
+            {
+                sym_type = codegen_expr_lookup_symtab_type(var_expr, ctx->symtab);
+                if (sym_type != NULL)
+                {
+                    long long sym_size = kgpc_type_sizeof(sym_type);
+                    if (sym_size > 0)
+                        target_size = sym_size;
+                }
+            }
+            if (sym_type == NULL && var_expr != NULL && var_expr->type == EXPR_VAR_ID &&
+                var_expr->expr_data.id != NULL)
+            {
+                owner_field = codegen_lookup_owner_field(ctx, var_expr->expr_data.id);
+                if (owner_field != NULL)
+                {
+                    long long field_size = 0;
+                    if (codegen_sizeof_type_reference(ctx, owner_field->type,
+                            owner_field->type_id, owner_field->nested_record,
+                            &field_size) == 0 && field_size > 0)
+                    {
+                        target_size = field_size;
+                    }
+                }
+            }
+            if (!use_qword &&
+                (codegen_stmt_type_is_class_vmt_value(var_expr->resolved_kgpc_type) ||
+                 codegen_stmt_type_is_class_vmt_value(sym_type)))
+            {
+                use_qword = 1;
+            }
+            if (!use_qword && owner_field != NULL && owner_field->type_id != NULL &&
+                ctx != NULL)
+            {
+                struct TypeAlias *field_alias = codegen_lookup_type_alias(ctx, owner_field->type_id);
+                if (field_alias != NULL && field_alias->is_class_reference)
+                    use_qword = 1;
             }
             if (!use_qword && target_size >= CODEGEN_POINTER_SIZE_BYTES &&
                 !is_single_target)
@@ -1421,11 +1490,31 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset, ctx);
             int use_qword = codegen_type_uses_qword(var_type);
+            struct RecordField *owner_field = codegen_lookup_owner_field(ctx, var_expr->expr_data.id);
             /* Override for Single type (4-byte float): check resolved type storage */
             long long resolved_size = (var_expr->resolved_kgpc_type != NULL) ?
                 kgpc_type_sizeof(var_expr->resolved_kgpc_type) : 8;
+            if (resolved_size <= 0 && owner_field != NULL)
+            {
+                long long field_size = 0;
+                if (codegen_sizeof_type_reference(ctx, owner_field->type,
+                        owner_field->type_id, owner_field->nested_record,
+                        &field_size) == 0 && field_size > 0)
+                {
+                    resolved_size = field_size;
+                }
+            }
             if (is_single_float_type(var_type, resolved_size))
                 use_qword = 0;
+            else if (!use_qword && owner_field != NULL && owner_field->type_id != NULL)
+            {
+                struct TypeAlias *field_alias = codegen_lookup_type_alias(ctx, owner_field->type_id);
+                if ((field_alias != NULL && field_alias->is_class_reference) ||
+                    resolved_size >= CODEGEN_POINTER_SIZE_BYTES)
+                {
+                    use_qword = 1;
+                }
+            }
             int use_byte = 0;
             const char *value_reg8 = NULL;
             if (!use_qword && var_type == CHAR_TYPE)
@@ -1799,8 +1888,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 value_reg, inst_list, &coerced_to_real);
         }
         int use_qword = codegen_type_uses_qword(var_type_2);
+        struct RecordField *target_field = codegen_lookup_record_field(var_expr);
         if (is_single_real_field)
             use_qword = 0;
+        if (!use_qword &&
+            codegen_stmt_type_is_class_vmt_value(var_expr->resolved_kgpc_type))
+            use_qword = 1;
+        if (!use_qword && target_field != NULL && target_field->type_id != NULL &&
+            ctx != NULL)
+        {
+            struct TypeAlias *field_alias = codegen_lookup_type_alias(ctx, target_field->type_id);
+            if (field_alias != NULL && field_alias->is_class_reference)
+                use_qword = 1;
+        }
         if (!use_qword && record_element_size >= CODEGEN_POINTER_SIZE_BYTES)
             use_qword = 1;
         int use_word = (!use_qword && record_element_size == 2);
