@@ -373,7 +373,8 @@ void semcheck_expr_set_call_kgpc_type(struct Expression *expr, KgpcType *type,
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
         return;
 
-    if (expr->expr_data.function_call_data.call_kgpc_type != NULL && owns_existing)
+    (void)owns_existing;
+    if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
     {
         destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
     }

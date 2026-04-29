@@ -1626,7 +1626,8 @@ static void semcheck_stmt_set_call_kgpc_type(struct Statement *stmt, KgpcType *t
     if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
         return;
 
-    if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL && owns_existing)
+    (void)owns_existing;
+    if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
     {
         destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
     }
