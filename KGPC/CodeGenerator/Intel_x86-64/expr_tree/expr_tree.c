@@ -3793,28 +3793,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             if (vmt_class_name == NULL)
                                 vmt_class_name =
                                     expr->expr_data.function_call_data.self_class_name;
-                            char owner_from_call[256];
-                            if (vmt_class_name == NULL)
-                            {
-                                const char *call_id = expr->expr_data.function_call_data.mangled_id != NULL ?
-                                    expr->expr_data.function_call_data.mangled_id :
-                                    expr->expr_data.function_call_data.id;
-                                const char *sep = call_id != NULL ? strstr(call_id, "__") : NULL;
-                                if (sep != NULL && sep > call_id)
-                                {
-                                    size_t n = (size_t)(sep - call_id);
-                                    if (n >= sizeof(owner_from_call))
-                                        n = sizeof(owner_from_call) - 1;
-                                    memcpy(owner_from_call, call_id, n);
-                                    owner_from_call[n] = '\0';
-                                    vmt_class_name = owner_from_call;
-                                }
-                            }
-                            if (vmt_class_name != NULL) {
-                                static char vmt_buf[256];
-                                snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", vmt_class_name);
-                                vmt_label = vmt_buf;
-                            }
+                            KGPC_COMPILER_HARD_ASSERT(vmt_class_name != NULL && vmt_class_name[0] != '\0',
+                                "constructor VMT initialization requires structured class metadata");
+                            static char vmt_buf[256];
+                            snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", vmt_class_name);
+                            vmt_label = vmt_buf;
                             if (vmt_label != NULL) {
                                 Register_t *fallback_vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
                                 if (fallback_vmt_reg != NULL) {
@@ -3846,28 +3829,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                         if (vmt_class_name == NULL)
                             vmt_class_name =
                                 expr->expr_data.function_call_data.self_class_name;
-                        char owner_from_call[256];
-                        if (vmt_class_name == NULL)
-                        {
-                            const char *call_id = expr->expr_data.function_call_data.mangled_id != NULL ?
-                                expr->expr_data.function_call_data.mangled_id :
-                                expr->expr_data.function_call_data.id;
-                            const char *sep = call_id != NULL ? strstr(call_id, "__") : NULL;
-                            if (sep != NULL && sep > call_id)
-                            {
-                                size_t n = (size_t)(sep - call_id);
-                                if (n >= sizeof(owner_from_call))
-                                    n = sizeof(owner_from_call) - 1;
-                                memcpy(owner_from_call, call_id, n);
-                                owner_from_call[n] = '\0';
-                                vmt_class_name = owner_from_call;
-                            }
-                        }
-                        if (vmt_class_name != NULL) {
-                            static char vmt_buf[256];
-                            snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", vmt_class_name);
-                            vmt_label = vmt_buf;
-                        }
+                        KGPC_COMPILER_HARD_ASSERT(vmt_class_name != NULL && vmt_class_name[0] != '\0',
+                            "constructor VMT initialization requires structured class metadata");
+                        static char vmt_buf[256];
+                        snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", vmt_class_name);
+                        vmt_label = vmt_buf;
                         if (vmt_label != NULL) {
                             Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
                             if (vmt_reg != NULL) {
@@ -4204,12 +4170,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             if (virtual_method == NULL)
                 virtual_method =
                     expr->expr_data.function_call_data.placeholder_method_name;
-            if (virtual_method == NULL)
-                virtual_method = expr->expr_data.function_call_data.id;
+            KGPC_COMPILER_HARD_ASSERT(virtual_owner != NULL && virtual_owner[0] != '\0',
+                "virtual expression call reached codegen without semcheck owner metadata");
+            KGPC_COMPILER_HARD_ASSERT(virtual_method != NULL && virtual_method[0] != '\0',
+                "virtual expression call reached codegen without semcheck method metadata");
             int vmt_index = codegen_resolve_virtual_vmt_index(ctx,
                 virtual_owner, virtual_method,
-                expr->expr_data.function_call_data.call_kgpc_type,
-                expr->expr_data.function_call_data.vmt_index);
+                expr->expr_data.function_call_data.call_kgpc_type);
             int self_arg_index = has_record_return ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
             int dispatch_self_is_vmt = expr->expr_data.function_call_data.is_class_method_call;
@@ -4288,35 +4255,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 !dispatch_self_is_vmt)
             {
                 const char *ctor_owner = virtual_owner;
-                char owner_from_call[256];
-                if (ctor_owner == NULL)
-                {
-                    const char *call_id =
-                        expr->expr_data.function_call_data.mangled_id != NULL ?
-                        expr->expr_data.function_call_data.mangled_id :
-                        expr->expr_data.function_call_data.id;
-                    if (call_id == NULL)
-                        call_id = proc_name_hint;
-                    const char *sep = call_id != NULL ? strstr(call_id, "__") : NULL;
-                    if (sep != NULL && sep > call_id)
-                    {
-                        size_t n = (size_t)(sep - call_id);
-                        if (n >= sizeof(owner_from_call))
-                            n = sizeof(owner_from_call) - 1;
-                        memcpy(owner_from_call, call_id, n);
-                        owner_from_call[n] = '\0';
-                        ctor_owner = owner_from_call;
-                    }
-                }
-                if (ctor_owner != NULL)
-                {
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %%r11\n",
-                        ctor_owner);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, (%s)\n",
-                        self_reg);
-                    inst_list = add_inst(inst_list, buffer);
-                }
+                KGPC_COMPILER_HARD_ASSERT(ctor_owner != NULL && ctor_owner[0] != '\0',
+                    "constructor VMT initialization requires structured owner metadata");
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %%r11\n",
+                    ctor_owner);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, (%s)\n",
+                    self_reg);
+                inst_list = add_inst(inst_list, buffer);
             }
             /* Self has already been lowered to the correct calling form during
              * argument passing: instance pointer for normal methods, VMT pointer
@@ -5979,24 +5925,6 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     if (ctx != NULL && ctx->symtab != NULL)
                     {
                         const char *method_owner = ctx->current_subprogram_owner_class;
-                        /* If owner_class is not set (cached unit methods), try to
-                         * extract the class name from the mangled subprogram id.
-                         * Mangled names have the form "classname__methodname_params". */
-                        char extracted_owner[256];
-                        if (method_owner == NULL && ctx->current_subprogram_mangled != NULL)
-                        {
-                            const char *dunder = strstr(ctx->current_subprogram_mangled, "__");
-                            if (dunder != NULL)
-                            {
-                                size_t len = (size_t)(dunder - ctx->current_subprogram_mangled);
-                                if (len > 0 && len < sizeof(extracted_owner))
-                                {
-                                    memcpy(extracted_owner, ctx->current_subprogram_mangled, len);
-                                    extracted_owner[len] = '\0';
-                                    method_owner = extracted_owner;
-                                }
-                            }
-                        }
                         if (method_owner != NULL)
                         {
                         char qual_name[512];

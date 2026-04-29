@@ -3197,6 +3197,12 @@ int semcheck_funccall(int *type_return,
                                 if (expr->expr_data.function_call_data.self_class_name == NULL)
                                     expr->expr_data.function_call_data.self_class_name =
                                         strdup(class_name);
+                                if (expr->expr_data.function_call_data.cached_owner_class == NULL)
+                                    expr->expr_data.function_call_data.cached_owner_class =
+                                        strdup(class_name);
+                                if (expr->expr_data.function_call_data.cached_method_name == NULL)
+                                    expr->expr_data.function_call_data.cached_method_name =
+                                        strdup(id);
                             }
                             /* Mark class method calls so codegen passes VMT as Self.
                              * Walk the parent class chain since the method may be
@@ -6497,6 +6503,12 @@ method_call_resolved:
                             if (expr->expr_data.function_call_data.self_class_name == NULL)
                                 expr->expr_data.function_call_data.self_class_name =
                                     strdup(best_match->owner_class);
+                            if (expr->expr_data.function_call_data.cached_owner_class == NULL)
+                                expr->expr_data.function_call_data.cached_owner_class =
+                                    strdup(best_match->owner_class);
+                            if (expr->expr_data.function_call_data.cached_method_name == NULL)
+                                expr->expr_data.function_call_data.cached_method_name =
+                                    strdup(best_match->method_name);
                             break;
                         }
                     }
@@ -6606,6 +6618,19 @@ method_call_resolved:
             }
         }
         semcheck_set_function_call_target(expr, best_match);
+        if (expr->expr_data.function_call_data.is_virtual_call)
+        {
+            KGPC_SEMCHECK_HARD_ASSERT(
+                expr->expr_data.function_call_data.cached_owner_class != NULL &&
+                expr->expr_data.function_call_data.cached_owner_class[0] != '\0',
+                "virtual expression call '%s' resolved without owner metadata",
+                id != NULL ? id : "(unknown)");
+            KGPC_SEMCHECK_HARD_ASSERT(
+                expr->expr_data.function_call_data.cached_method_name != NULL &&
+                expr->expr_data.function_call_data.cached_method_name[0] != '\0',
+                "virtual expression call '%s' resolved without method metadata",
+                id != NULL ? id : "(unknown)");
+        }
         semcheck_sync_function_call_target_to_mangled(expr, symtab);
         semcheck_mark_call_requires_static_link(best_match);
         hash_return = best_match;
@@ -6968,6 +6993,18 @@ skip_overload_resolution:
     else
     {
         set_hash_meta(hash_return, mutating);
+        if (hash_return->owner_class != NULL &&
+            expr->expr_data.function_call_data.cached_owner_class == NULL)
+        {
+            expr->expr_data.function_call_data.cached_owner_class =
+                strdup(hash_return->owner_class);
+        }
+        if (hash_return->method_name != NULL &&
+            expr->expr_data.function_call_data.cached_method_name == NULL)
+        {
+            expr->expr_data.function_call_data.cached_method_name =
+                strdup(hash_return->method_name);
+        }
         if(0) /* scope depth check removed — tree scoping has no depth */
         {
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {

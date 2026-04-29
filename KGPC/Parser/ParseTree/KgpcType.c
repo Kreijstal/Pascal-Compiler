@@ -2909,9 +2909,6 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
     if (alias == NULL)
         return 4;
 
-    if (alias->storage_size > 0)
-        return alias->storage_size;
-
     if (alias->set_element_type == CHAR_TYPE ||
         alias->set_element_type == BYTE_TYPE ||
         (alias->set_element_type_id != NULL &&
@@ -2934,6 +2931,9 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
             return kgpc_default_set_storage_size_for_high(count - 1);
     }
 
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
     return 4;
 }
 
@@ -2941,6 +2941,14 @@ long long kgpc_type_sizeof(KgpcType *type)
 {
     if (type == NULL)
         return -1;
+
+    if (type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == SET_TYPE &&
+        type->type_alias != NULL &&
+        type->type_alias->is_set)
+    {
+        return kgpc_set_storage_size(type->type_alias);
+    }
 
     if (type->type_alias != NULL &&
         type->type_alias->storage_size > 0 &&

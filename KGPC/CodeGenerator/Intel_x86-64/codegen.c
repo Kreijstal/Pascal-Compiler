@@ -501,42 +501,59 @@ static int codegen_call_type_method_param_count(KgpcType *call_type)
 
 int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
     const char *owner_class_name, const char *method_name,
-    KgpcType *call_type, int fallback_vmt_index)
+    KgpcType *call_type)
 {
-    if (ctx == NULL || ctx->symtab == NULL ||
-        owner_class_name == NULL || method_name == NULL)
-        return fallback_vmt_index;
-
-    const char *lookup_method_name = method_name;
-    const char *qualified_sep = strstr(method_name, "__");
-    if (qualified_sep != NULL && qualified_sep[2] != '\0')
-        lookup_method_name = qualified_sep + 2;
+    KGPC_COMPILER_HARD_ASSERT(ctx != NULL && ctx->symtab != NULL,
+        "virtual VMT index resolution requires a codegen context and symbol table");
+    KGPC_COMPILER_HARD_ASSERT(owner_class_name != NULL && owner_class_name[0] != '\0',
+        "virtual VMT index resolution requires structured owner class metadata");
+    KGPC_COMPILER_HARD_ASSERT(method_name != NULL && method_name[0] != '\0',
+        "virtual VMT index resolution requires structured bare method metadata");
+    KGPC_COMPILER_HARD_ASSERT(strstr(method_name, "__") == NULL,
+        "virtual VMT index resolution received mangled method name '%s'; pass cached_method_name instead",
+        method_name);
 
     struct RecordType *record = semcheck_lookup_record_type(ctx->symtab,
         owner_class_name);
-    if (record == NULL || record->methods == NULL)
-        return fallback_vmt_index;
+    KGPC_COMPILER_HARD_ASSERT(record != NULL,
+        "virtual VMT owner class '%s' is missing from the structured type table",
+        owner_class_name);
+    KGPC_COMPILER_HARD_ASSERT(record->methods != NULL,
+        "virtual VMT owner class '%s' has no structured VMT method table",
+        owner_class_name);
 
     int wanted_param_count = codegen_call_type_method_param_count(call_type);
     struct MethodInfo *name_match = NULL;
+    int name_match_count = 0;
     for (ListNode_t *node = record->methods; node != NULL; node = node->next)
     {
         struct MethodInfo *method = (struct MethodInfo *)node->cur;
         if (method == NULL || method->name == NULL ||
             !(method->is_virtual || method->is_override) ||
-            !pascal_identifier_equals(method->name, lookup_method_name))
+            !pascal_identifier_equals(method->name, method_name))
             continue;
 
-        if (name_match == NULL)
-            name_match = method;
-        if (wanted_param_count >= 0 && method->param_count >= 0 &&
-            wanted_param_count != method->param_count)
-            continue;
+        name_match = method;
+        name_match_count++;
+        if (wanted_param_count >= 0)
+        {
+            KGPC_COMPILER_HARD_ASSERT(method->param_count >= 0,
+                "virtual method '%s.%s' has no structured parameter count",
+                owner_class_name, method_name);
+            if (wanted_param_count != method->param_count)
+                continue;
 
-        return method->vmt_index;
+            return method->vmt_index;
+        }
     }
 
-    return name_match != NULL ? name_match->vmt_index : fallback_vmt_index;
+    KGPC_COMPILER_HARD_ASSERT(name_match != NULL,
+        "virtual method '%s.%s' is missing from the structured VMT method table",
+        owner_class_name, method_name);
+    KGPC_COMPILER_HARD_ASSERT(name_match_count == 1,
+        "virtual method '%s.%s' is overloaded but call type metadata is missing",
+        owner_class_name, method_name);
+    return name_match->vmt_index;
 }
 
 KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
@@ -2168,6 +2185,14 @@ static int codegen_storage_size_from_type(KgpcType *type)
     {
         if (alias->is_pointer || alias->is_class_reference)
             return 8;
+        if (alias->is_set)
+        {
+            long long set_size = kgpc_type_sizeof(type);
+            KGPC_COMPILER_HARD_ASSERT(set_size > 0 && set_size <= INT_MAX,
+                "set type '%s' has no structured storage size",
+                alias->alias_name != NULL ? alias->alias_name : "(anonymous set)");
+            return (int)set_size;
+        }
         if (alias->is_shortstring)
         {
             int short_size = codegen_shortstring_storage_size(type);
@@ -2217,6 +2242,20 @@ static int codegen_storage_size_from_type_alias(const struct TypeAlias *alias)
 
     if (alias->is_pointer || alias->is_class_reference)
         return 8;
+
+    if (alias->is_set)
+    {
+        KgpcType *set_type = create_primitive_type(SET_TYPE);
+        KGPC_COMPILER_HARD_ASSERT(set_type != NULL,
+            "failed to allocate structured set type for storage sizing");
+        kgpc_type_set_type_alias(set_type, (struct TypeAlias *)alias);
+        long long set_size = kgpc_type_sizeof(set_type);
+        destroy_kgpc_type(set_type);
+        KGPC_COMPILER_HARD_ASSERT(set_size > 0 && set_size <= INT_MAX,
+            "set type '%s' has no structured storage size",
+            alias->alias_name != NULL ? alias->alias_name : "(anonymous set)");
+        return (int)set_size;
+    }
 
     if (alias->is_shortstring)
     {
@@ -5326,23 +5365,19 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             const char *resolved_id = NULL;
             int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
             ListNode_t *matches = FindAllIdents(symtab, base_name);
-            const char *fallback_id = NULL;
+            int matching_defined_candidate_count = 0;
             for (ListNode_t *m = matches; m != NULL; m = m->next) {
                 HashNode_t *cand = (HashNode_t *)m->cur;
                 if (cand == NULL || cand->type == NULL ||
                     cand->type->kind != TYPE_KIND_PROCEDURE ||
                     cand->type->info.proc_info.definition == NULL)
                     continue;
-                if (fallback_id == NULL) {
-                    fallback_id = cand->mangled_id;
-                    if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
-                        fallback_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
-                }
                 int count = ListLength(cand->type->info.proc_info.params);
                 if (!tmpl->is_static && count > 0)
                     count -= 1;
                 if (count != wanted_params)
                     continue;
+                matching_defined_candidate_count++;
                 resolved_id = cand->mangled_id;
                 if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
                     resolved_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
@@ -5352,8 +5387,9 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 DestroyList(matches);
             free(base_name);
 
-            if (resolved_id == NULL)
-                resolved_id = fallback_id;
+            KGPC_COMPILER_HARD_ASSERT(resolved_id != NULL || matching_defined_candidate_count == 0,
+                "generic VMT specialization '%s.%s' had a same-signature implementation but no resolved id",
+                class_label, tmpl->name);
             if (resolved_id == NULL)
                 continue;
 
@@ -5414,15 +5450,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
 
         const char *full_mangled = method->resolved_mangled_id;
-        const char *fallback_mangled = method->mangled_name;
         const char *slot_label = NULL;
         if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
             codegen_set_contains(&g_available_subprograms_set, full_mangled))
             slot_label = full_mangled;
-        if (slot_label == NULL && fallback_mangled != NULL &&
-            g_codegen_available_subprograms != NULL &&
-            codegen_set_contains(&g_available_subprograms_set, fallback_mangled))
-            slot_label = fallback_mangled;
         if (slot_label != NULL) {
             fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
         } else if (full_mangled != NULL) {

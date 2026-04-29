@@ -1670,12 +1670,14 @@ static void semcheck_stmt_set_call_owner_info(struct Statement *stmt,
     if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
         return;
 
-    if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+    if (owner_class != NULL &&
+        stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
     {
         free(stmt->stmt_data.procedure_call_data.cached_owner_class);
         stmt->stmt_data.procedure_call_data.cached_owner_class = NULL;
     }
-    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+    if (method_name != NULL &&
+        stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
     {
         free(stmt->stmt_data.procedure_call_data.cached_method_name);
         stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
@@ -6737,6 +6739,12 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.vmt_index = vmt_index;
                     stmt->stmt_data.procedure_call_data.self_class_name =
                         strdup(self_record->type_id);
+                    if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_owner_class =
+                            strdup(self_record->type_id);
+                    if (stmt->stmt_data.procedure_call_data.cached_method_name == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_method_name =
+                            strdup(bare_method_name);
                 }
                 /* Interface method call check */
                 if (self_record != NULL && self_record->is_interface &&
@@ -8713,6 +8721,12 @@ proccall_parent_resolve_done:
                         if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                             stmt->stmt_data.procedure_call_data.self_class_name =
                                 strdup(resolved_proc->owner_class);
+                        if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
+                            stmt->stmt_data.procedure_call_data.cached_owner_class =
+                                strdup(resolved_proc->owner_class);
+                        if (stmt->stmt_data.procedure_call_data.cached_method_name == NULL)
+                            stmt->stmt_data.procedure_call_data.cached_method_name =
+                                strdup(resolved_proc->method_name);
                         break;
                     }
                 }
@@ -8724,6 +8738,12 @@ proccall_parent_resolve_done:
                     if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                         stmt->stmt_data.procedure_call_data.self_class_name =
                             strdup(resolved_proc->owner_class);
+                    if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_owner_class =
+                            strdup(resolved_proc->owner_class);
+                    if (stmt->stmt_data.procedure_call_data.cached_method_name == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_method_name =
+                            strdup(resolved_proc->method_name);
                 }
             }
         }

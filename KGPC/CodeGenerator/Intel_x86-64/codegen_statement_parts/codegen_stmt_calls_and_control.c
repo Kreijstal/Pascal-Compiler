@@ -2308,6 +2308,21 @@ static struct Expression *codegen_build_temp_call_expr_from_stmt(
         call_expr->expr_data.function_call_data.self_class_name =
             strdup(stmt->stmt_data.procedure_call_data.self_class_name);
     }
+    if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+    {
+        call_expr->expr_data.function_call_data.cached_owner_class =
+            strdup(stmt->stmt_data.procedure_call_data.cached_owner_class);
+    }
+    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+    {
+        call_expr->expr_data.function_call_data.cached_method_name =
+            strdup(stmt->stmt_data.procedure_call_data.cached_method_name);
+    }
+    if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+    {
+        call_expr->expr_data.function_call_data.placeholder_method_name =
+            strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+    }
     call_expr->expr_data.function_call_data.is_class_method_call =
         stmt->stmt_data.procedure_call_data.is_class_method_call;
     call_expr->expr_data.function_call_data.is_constructor_call =
@@ -3023,12 +3038,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             if (virtual_method == NULL)
                 virtual_method =
                     stmt->stmt_data.procedure_call_data.placeholder_method_name;
-            if (virtual_method == NULL)
-                virtual_method = stmt->stmt_data.procedure_call_data.id;
+            KGPC_COMPILER_HARD_ASSERT(virtual_owner != NULL && virtual_owner[0] != '\0',
+                "virtual procedure call reached codegen without semcheck owner metadata");
+            KGPC_COMPILER_HARD_ASSERT(virtual_method != NULL && virtual_method[0] != '\0',
+                "virtual procedure call reached codegen without semcheck method metadata");
             int vmt_index = codegen_resolve_virtual_vmt_index(ctx,
                 virtual_owner, virtual_method,
-                stmt->stmt_data.procedure_call_data.call_kgpc_type,
-                stmt->stmt_data.procedure_call_data.vmt_index);
+                stmt->stmt_data.procedure_call_data.call_kgpc_type);
             int self_arg_index = should_pass_static_link ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
             int self_is_vmt =
@@ -3038,35 +3054,14 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 !self_is_vmt)
             {
                 const char *ctor_owner = virtual_owner;
-                char owner_from_call[256];
-                if (ctor_owner == NULL)
-                {
-                    const char *call_id =
-                        stmt->stmt_data.procedure_call_data.mangled_id != NULL ?
-                        stmt->stmt_data.procedure_call_data.mangled_id :
-                        stmt->stmt_data.procedure_call_data.id;
-                    if (call_id == NULL)
-                        call_id = proc_name;
-                    const char *sep = call_id != NULL ? strstr(call_id, "__") : NULL;
-                    if (sep != NULL && sep > call_id)
-                    {
-                        size_t n = (size_t)(sep - call_id);
-                        if (n >= sizeof(owner_from_call))
-                            n = sizeof(owner_from_call) - 1;
-                        memcpy(owner_from_call, call_id, n);
-                        owner_from_call[n] = '\0';
-                        ctor_owner = owner_from_call;
-                    }
-                }
-                if (ctor_owner != NULL)
-                {
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %%r11\n",
-                        ctor_owner);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, (%s)\n",
-                        self_reg);
-                    inst_list = add_inst(inst_list, buffer);
-                }
+                KGPC_COMPILER_HARD_ASSERT(ctor_owner != NULL && ctor_owner[0] != '\0',
+                    "constructor VMT initialization requires structured owner metadata");
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %%r11\n",
+                    ctor_owner);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, (%s)\n",
+                    self_reg);
+                inst_list = add_inst(inst_list, buffer);
             }
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
             inst_list = add_inst(inst_list, buffer);
