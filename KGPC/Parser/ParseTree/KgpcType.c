@@ -3904,12 +3904,11 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
     
-    /* Copy shared KgpcType only for aliases that semcheck/codegen resolves
-     * through a canonical shared enum/set type. Other alias kinds treat
-     * kgpc_type as an AST-side borrowed cache and should not add ownership
-     * through copied alias metadata. */
+    /* TypeAlias.kgpc_type is shared metadata, not an owning edge.
+     * Copied aliases should keep the same borrowed pointer so cloned
+     * type metadata does not accumulate extra retains on canonical
+     * enum/set types that are owned elsewhere. */
     if (src->kgpc_type != NULL && (src->is_enum || src->is_set)) {
-        kgpc_type_retain(src->kgpc_type);
         dst->kgpc_type = src->kgpc_type;
     }
     
@@ -3951,13 +3950,7 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     
     /* Note: We don't free inline_record_type as it's owned by AST */
     
-    /* Save and NULL out kgpc_type before releasing to prevent infinite recursion
-     * when the alias's kgpc_type points back to the type that owns this alias */
-    if (alias->kgpc_type != NULL) {
-        KgpcType *kgpc_type_to_release = alias->kgpc_type;
-        alias->kgpc_type = NULL;  /* Break potential cycle before release */
-        kgpc_type_release(kgpc_type_to_release);
-    }
+    alias->kgpc_type = NULL;
     
     free(alias);
 }
