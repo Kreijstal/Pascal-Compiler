@@ -260,6 +260,14 @@ static long long fpc_enum_storage_size_from_alias(const struct TypeAlias *alias)
 {
     if (alias != NULL && alias->storage_size > 0)
         return alias->storage_size;
+    if (alias != NULL && alias->range_known)
+    {
+        if (alias->range_start >= 0 && alias->range_end <= 0xff)
+            return 1;
+        if (alias->range_start >= 0 && alias->range_end <= 0xffff)
+            return 2;
+        return 4;
+    }
     if (alias != NULL && alias->enum_literals != NULL)
     {
         int count = list_length(alias->enum_literals);

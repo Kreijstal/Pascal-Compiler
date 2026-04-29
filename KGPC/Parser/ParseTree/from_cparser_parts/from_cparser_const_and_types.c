@@ -1517,6 +1517,32 @@ int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
     }
     case PASCAL_T_FUNC_CALL:
     {
+        if (expr->child != NULL && expr->child->typ == PASCAL_T_IDENTIFIER &&
+            expr->child->next != NULL)
+        {
+            const char *func_name = expr->child->sym != NULL ? expr->child->sym->name : NULL;
+            ast_t *arg = unwrap_pascal_node(expr->child->next);
+            const char *type_name = (arg != NULL && arg->typ == PASCAL_T_IDENTIFIER &&
+                arg->sym != NULL) ? arg->sym->name : NULL;
+            if (pascal_identifier_equals(func_name, "Low"))
+            {
+                if (pascal_identifier_equals(type_name, "LongInt") ||
+                    pascal_identifier_equals(type_name, "Integer"))
+                {
+                    *out_value = INT_MIN;
+                    return 0;
+                }
+            }
+            else if (pascal_identifier_equals(func_name, "High"))
+            {
+                if (pascal_identifier_equals(type_name, "LongInt") ||
+                    pascal_identifier_equals(type_name, "Integer"))
+                {
+                    *out_value = INT_MAX;
+                    return 0;
+                }
+            }
+        }
         /* Typecast expressions like tregister($05000000) are parsed as
          * FUNC_CALL where child is the type name and child->next is the
          * argument.  Evaluate the argument as an integer constant. */
@@ -2992,6 +3018,9 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
             list_builder_init(&enum_value_builder);
             ast_t *value = spec_node->child;
             int ordinal = 0;
+            int have_ordinal_bounds = 0;
+            long long ordinal_min = 0;
+            long long ordinal_max = 0;
             while (value != NULL) {
                 int literal_value = ordinal;
                 if (value->typ == PASCAL_T_IDENTIFIER)
@@ -3008,8 +3037,23 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 char ordinal_buf[64];
                 snprintf(ordinal_buf, sizeof(ordinal_buf), "%d", literal_value);
                 list_builder_append(&enum_value_builder, strdup(ordinal_buf), LIST_STRING);
+                if (!have_ordinal_bounds) {
+                    ordinal_min = literal_value;
+                    ordinal_max = literal_value;
+                    have_ordinal_bounds = 1;
+                } else {
+                    if ((long long)literal_value < ordinal_min)
+                        ordinal_min = literal_value;
+                    if ((long long)literal_value > ordinal_max)
+                        ordinal_max = literal_value;
+                }
                 ordinal = literal_value + 1;
                 value = value->next;
+            }
+            if (have_ordinal_bounds) {
+                type_info->range_known = 1;
+                type_info->range_start = ordinal_min;
+                type_info->range_end = ordinal_max;
             }
             type_info->enum_literals = list_builder_finish(&enum_builder);
             type_info->enum_values = list_builder_finish(&enum_value_builder);

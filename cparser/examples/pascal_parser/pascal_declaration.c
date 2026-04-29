@@ -4010,6 +4010,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* constructor_param_list = create_simple_param_list();
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("constructor")),              // constructor keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
         constructor_param_list,                      // optional parameter list

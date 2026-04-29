@@ -557,6 +557,8 @@ void annotate_method_template(struct MethodTemplate *method_template, ast_t *met
          * Only set is_class_method here; is_static is set by the "static" directive. */
         if (sym_name != NULL && strcasecmp(sym_name, "class") == 0) {
             method_template->is_class_method = 1;
+            if (method_ast->typ == PASCAL_T_CONSTRUCTOR_DECL)
+                method_template->is_static = 1;
         }
         cursor = cursor->next;
     }
@@ -884,9 +886,12 @@ static void collect_class_members(ast_t *node, const char *class_name,
             {
                 int saw_class = 0;
                 int saw_var = 0;
+                int has_direct_field_decl = 0;
                 for (ast_t *scan = unwrapped->child; scan != NULL; scan = scan->next)
                 {
                     ast_t *node = unwrap_pascal_node(scan);
+                    if (node != NULL && node->typ == PASCAL_T_FIELD_DECL)
+                        has_direct_field_decl = 1;
                     if (node != NULL && node->sym != NULL && node->sym->name != NULL)
                     {
                         if (strcasecmp(node->sym->name, "class") == 0)
@@ -914,6 +919,18 @@ static void collect_class_members(ast_t *node, const char *class_name,
                                     }
                                 }
                             }
+                            list_builder_extend(field_builder, fields);
+                        }
+                    }
+                }
+                else if (has_direct_field_decl)
+                {
+                    for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
+                    {
+                        ast_t *node = unwrap_pascal_node(child);
+                        if (node != NULL && node->typ == PASCAL_T_FIELD_DECL)
+                        {
+                            ListNode_t *fields = convert_class_field_decl(node);
                             list_builder_extend(field_builder, fields);
                         }
                     }
@@ -969,7 +986,8 @@ static void collect_class_members(ast_t *node, const char *class_name,
             }
             case PASCAL_T_VAR_SECTION: {
                 /* Handle var / class var sections inside classes. */
-                int is_class_var_section = 0;
+                int class_var_active = 0;
+                int pending_class = 0;
                 if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
                 {
                     fprintf(stderr, "[KGPC] class var section nodes:");
@@ -982,23 +1000,27 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     }
                     fprintf(stderr, "\n");
                 }
-                for (ast_t *scan = unwrapped->child; scan != NULL; scan = scan->next)
-                {
-                    ast_t *node = unwrap_pascal_node(scan);
-                    if (node != NULL && node->sym != NULL && node->sym->name != NULL &&
-                        strcasecmp(node->sym->name, "class") == 0)
-                    {
-                        is_class_var_section = 1;
-                        break;
-                    }
-                }
                 for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
                 {
                     ast_t *node = unwrap_pascal_node(child);
+                    if (node != NULL && node->sym != NULL && node->sym->name != NULL)
+                    {
+                        if (strcasecmp(node->sym->name, "class") == 0)
+                        {
+                            pending_class = 1;
+                            continue;
+                        }
+                        if (strcasecmp(node->sym->name, "var") == 0)
+                        {
+                            class_var_active = pending_class;
+                            pending_class = 0;
+                            continue;
+                        }
+                    }
                     if (node != NULL && node->typ == PASCAL_T_FIELD_DECL)
                     {
                         ListNode_t *fields = convert_class_field_decl(node);
-                        if (is_class_var_section && fields != NULL)
+                        if (class_var_active && fields != NULL)
                         {
                             for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next)
                             {
@@ -1805,7 +1827,8 @@ void convert_record_members(ast_t *node, ListBuilder *builder,
         } else if (cur->typ == PASCAL_T_VAR_SECTION) {
             /* Handle var / class var / class threadvar sections inside objects.
              * The VAR_SECTION wraps keyword nodes and FIELD_DECL children. */
-            int is_class_var_section = 0;
+            int class_var_active = 0;
+            int pending_class = 0;
             if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
             {
                 fprintf(stderr, "[KGPC] var section nodes:");
@@ -1818,19 +1841,25 @@ void convert_record_members(ast_t *node, ListBuilder *builder,
                 }
                 fprintf(stderr, "\n");
             }
-            for (ast_t *scan = cur->child; scan != NULL; scan = scan->next) {
-                ast_t *node = unwrap_pascal_node(scan);
-                if (node != NULL && node->sym != NULL && node->sym->name != NULL &&
-                    strcasecmp(node->sym->name, "class") == 0)
-                {
-                    is_class_var_section = 1;
-                    break;
-                }
-            }
             for (ast_t *child = cur->child; child != NULL; child = child->next) {
-                if (child->typ == PASCAL_T_FIELD_DECL) {
-                    ListNode_t *fields = convert_field_decl(child);
-                    if (is_class_var_section && fields != NULL)
+                ast_t *node = unwrap_pascal_node(child);
+                if (node != NULL && node->sym != NULL && node->sym->name != NULL)
+                {
+                    if (strcasecmp(node->sym->name, "class") == 0)
+                    {
+                        pending_class = 1;
+                        continue;
+                    }
+                    if (strcasecmp(node->sym->name, "var") == 0)
+                    {
+                        class_var_active = pending_class;
+                        pending_class = 0;
+                        continue;
+                    }
+                }
+                if (node != NULL && node->typ == PASCAL_T_FIELD_DECL) {
+                    ListNode_t *fields = convert_field_decl(node);
+                    if (class_var_active && fields != NULL)
                     {
                         for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next)
                         {
@@ -1847,21 +1876,38 @@ void convert_record_members(ast_t *node, ListBuilder *builder,
         } else if (cur->typ == PASCAL_T_CLASS_MEMBER) {
             /* CLASS_MEMBER may wrap either:
              * 1. Visibility sections (e.g. public/private) — recurse
-             * 2. "class var" fields from object types — set is_class_var on each */
+             * 2. "class var" fields from object types — set is_class_var on each
+             * 3. plain "var" fields from object types — keep instance fields */
             int has_field_decls = 0;
+            int saw_class = 0;
+            int saw_var = 0;
             for (ast_t *chk = cur->child; chk != NULL; chk = chk->next) {
-                if (chk->typ == PASCAL_T_FIELD_DECL) { has_field_decls = 1; break; }
+                ast_t *node = unwrap_pascal_node(chk);
+                if (node != NULL && node->typ == PASCAL_T_FIELD_DECL)
+                    has_field_decls = 1;
+                if (node != NULL && node->sym != NULL && node->sym->name != NULL)
+                {
+                    if (strcasecmp(node->sym->name, "class") == 0)
+                        saw_class = 1;
+                    else if (strcasecmp(node->sym->name, "var") == 0 ||
+                             strcasecmp(node->sym->name, "threadvar") == 0)
+                        saw_var = 1;
+                }
             }
             if (has_field_decls) {
-                /* This is a "class var" section — convert fields and mark is_class_var */
+                /* Convert fields and mark class storage only when the parser
+                 * carried explicit class-var markers. */
                 for (ast_t *child = cur->child; child != NULL; child = child->next) {
-                    if (child->typ == PASCAL_T_FIELD_DECL) {
-                        ListNode_t *fields = convert_field_decl(child);
+                    ast_t *node = unwrap_pascal_node(child);
+                    if (node != NULL && node->typ == PASCAL_T_FIELD_DECL) {
+                        ListNode_t *fields = convert_field_decl(node);
                         if (fields != NULL) {
-                            for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next) {
-                                if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL) {
-                                    struct RecordField *field = (struct RecordField *)fnode->cur;
-                                    field->is_class_var = 1;
+                            if (saw_class && saw_var) {
+                                for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next) {
+                                    if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL) {
+                                        struct RecordField *field = (struct RecordField *)fnode->cur;
+                                        field->is_class_var = 1;
+                                    }
                                 }
                             }
                             list_builder_extend(builder, fields);

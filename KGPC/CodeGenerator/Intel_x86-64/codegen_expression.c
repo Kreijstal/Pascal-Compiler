@@ -235,6 +235,31 @@ static int codegen_record_has_class_var_named(const struct RecordType *record,
     return 0;
 }
 
+static const struct RecordType *codegen_record_class_var_owner_named(SymTab_t *symtab,
+    struct RecordType *record, const char *field_id)
+{
+    if (record == NULL || field_id == NULL)
+        return NULL;
+
+    struct RecordType *field_owner = NULL;
+    struct RecordField *field = semcheck_find_class_field_including_hidden(
+        symtab, record, field_id, &field_owner);
+    if (field != NULL && field->is_class_var == 1)
+        return field_owner != NULL ? field_owner : record;
+
+    for (ListNode_t *node = record->fields; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_RECORD_FIELD || node->cur == NULL)
+            continue;
+        field = (struct RecordField *)node->cur;
+        if (field->is_class_var == 1 && field->name != NULL &&
+            pascal_identifier_equals(field->name, field_id))
+            return record;
+    }
+
+    return NULL;
+}
+
 static ListNode_t *codegen_emit_classvar_base_address_named(ListNode_t *inst_list,
     const char *addr_reg64, const struct RecordType *record, long long field_offset)
 {
@@ -483,8 +508,9 @@ static ListNode_t *codegen_try_emit_nonlocal_class_var(ListNode_t *inst_list,
     {
         struct RecordType *class_record = semcheck_lookup_record_type(
             ctx->symtab, class_labels[i]);
-        if (class_record != NULL &&
-            codegen_record_has_class_var_named(class_record, var_id))
+        const struct RecordType *class_var_owner =
+            codegen_record_class_var_owner_named(ctx->symtab, class_record, var_id);
+        if (class_var_owner != NULL)
         {
             char buffer[128];
             *offset = 0;
@@ -6174,9 +6200,6 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
                 return 8;
         }
 
-        if (field->has_cached_layout && field->cached_size > 0)
-            return field->cached_size;
-
         if (ctx->symtab != NULL && field_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
@@ -6184,10 +6207,17 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
                 type_node != NULL && type_node->type != NULL)
             {
                 long long type_size = kgpc_type_sizeof(type_node->type);
-                if (type_size > 0)
+                if (type_size > 0 &&
+                    type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                    type_node->type->info.primitive_type_tag == ENUM_TYPE)
+                    return type_size;
+                if (type_size > 0 && !(field->has_cached_layout && field->cached_size > 0))
                     return type_size;
             }
         }
+
+        if (field->has_cached_layout && field->cached_size > 0)
+            return field->cached_size;
 
         struct RecordType *nested = field->nested_record;
         if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
@@ -6848,9 +6878,11 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         }
     }
 
+    const struct RecordType *class_var_owner =
+        codegen_record_class_var_owner_named(ctx->symtab, record_expr_record, field_id);
     if (record_expr_record != NULL && field_id != NULL &&
         record_expr_record->type_id != NULL &&
-        (codegen_record_has_class_var_named(record_expr_record, field_id) ||
+        (class_var_owner != NULL ||
          codegen_nonstatic_class_method_owner_field_uses_classvar(
              ctx, record_expr_record, record_expr)))
     {
@@ -6865,7 +6897,8 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         }
 
         inst_list = codegen_emit_classvar_base_address_named(inst_list,
-            addr_reg->bit_64, record_expr_record,
+            addr_reg->bit_64,
+            class_var_owner != NULL ? class_var_owner : record_expr_record,
             expr->expr_data.record_access_data.field_offset);
         *out_reg = addr_reg;
         return inst_list;

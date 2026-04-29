@@ -436,6 +436,9 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             inline_alias->base_type = ENUM_TYPE;
             inline_alias->enum_is_scoped = type_info.enum_is_scoped;
             inline_alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
+            inline_alias->range_known = type_info.range_known;
+            inline_alias->range_start = type_info.range_start;
+            inline_alias->range_end = type_info.range_end;
             inline_alias->enum_literals = type_info.enum_literals;
             inline_alias->enum_values = type_info.enum_values;
             type_info.enum_literals = NULL;
@@ -2580,6 +2583,11 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         alias->is_enum = type_info.is_enum;
         alias->enum_is_scoped = type_info.enum_is_scoped;
         alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
+        if (type_info.is_enum && type_info.range_known) {
+            alias->range_known = 1;
+            alias->range_start = type_info.range_start;
+            alias->range_end = type_info.range_end;
+        }
         if (type_info.enum_literals != NULL) {
             alias->enum_literals = type_info.enum_literals;
             type_info.enum_literals = NULL;

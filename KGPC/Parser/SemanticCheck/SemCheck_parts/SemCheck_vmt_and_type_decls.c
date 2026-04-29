@@ -1,27 +1,24 @@
 #include "../SemCheck_internal.h"
 
 static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
-static int semcheck_vmt_method_is_tobject_slot(const char *name)
+static void semcheck_ensure_implicit_tobject_parent(struct RecordType *record_info,
+                                                    const char *class_name)
 {
-    return name != NULL &&
-        (strcasecmp(name, "Destroy") == 0 ||
-         strcasecmp(name, "NewInstance") == 0 ||
-         strcasecmp(name, "FreeInstance") == 0 ||
-         strcasecmp(name, "SafeCallException") == 0 ||
-         strcasecmp(name, "DefaultHandler") == 0 ||
-         strcasecmp(name, "AfterConstruction") == 0 ||
-         strcasecmp(name, "BeforeDestruction") == 0 ||
-         strcasecmp(name, "DefaultHandlerStr") == 0 ||
-         strcasecmp(name, "Dispatch") == 0 ||
-         strcasecmp(name, "DispatchStr") == 0 ||
-         strcasecmp(name, "Equals") == 0 ||
-         strcasecmp(name, "GetHashCode") == 0 ||
-         strcasecmp(name, "ToString") == 0);
+    if (record_info == NULL || !record_info->is_class ||
+        record_info->parent_class_name != NULL ||
+        !pascal_frontend_is_objfpc_mode())
+        return;
+
+    if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
+        record_info->parent_class_name = strdup("TObject");
 }
 
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
     if (record_info == NULL || class_name == NULL)
+        return 0;
+    semcheck_ensure_implicit_tobject_parent(record_info, class_name);
+    if (record_info->methods != NULL)
         return 0;
     
     /* Get methods registered for this class.
@@ -39,7 +36,7 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     /* Start with parent's VMT if this class has a parent */
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
-    int max_vmt_index = (record_info->parent_class_name != NULL) ? 24 : 11;
+    int max_vmt_index = 11;
 
 if (record_info->parent_class_name != NULL) {
         /* Look up parent class */
@@ -76,10 +73,6 @@ if (record_info->parent_class_name != NULL) {
                             cloned->is_virtual = parent_method->is_virtual;
 	                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
 	                            cloned->vmt_index = parent_method->vmt_index;
-	                            if (parent_record->parent_class_name != NULL &&
-	                                cloned->vmt_index < 25 &&
-	                                !semcheck_vmt_method_is_tobject_slot(cloned->name))
-	                                cloned->vmt_index += 13;
 	                            if (cloned->vmt_index > max_vmt_index)
 	                                max_vmt_index = cloned->vmt_index;
 	                            cloned->param_count = parent_method->param_count;
@@ -520,6 +513,7 @@ void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
             }
         }
 
+        semcheck_ensure_implicit_tobject_parent(record_info, class_name);
         build_class_vmt(symtab, record_info, class_name, tree->line_num);
 
         for (ListNode_t *tmpl_cur = record_info->method_templates;
@@ -1405,18 +1399,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (record_info != NULL && record_info->is_type_helper)
                     semcheck_register_type_helper(record_info, symtab);
 
-                /* In objfpc mode, classes without explicit parent inherit from TObject,
-                 * unless this IS TObject itself (to avoid circular inheritance). */
-                if (record_info != NULL && record_info->is_class &&
-                    record_info->parent_class_name == NULL &&
-                    pascal_frontend_is_objfpc_mode())
-                {
-                    const char *class_name = tree->tree_data.type_decl_data.id;
-                    if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
-                    {
-                        record_info->parent_class_name = strdup("TObject");
-                    }
-                }
+                semcheck_ensure_implicit_tobject_parent(record_info,
+                    tree->tree_data.type_decl_data.id);
 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
@@ -2691,6 +2675,17 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             {
                 /* Replace predeclared UNKNOWN placeholders for simple aliases once the
                  * real target type becomes available (e.g. SysUtils.TEndian -> ObjPas.TEndian). */
+                kgpc_type_retain(kgpc_type);
+                kgpc_type_release(existing_type->type);
+                existing_type->type = kgpc_type;
+            }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                     kgpc_type != NULL &&
+                     kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+                     existing_type->type != NULL &&
+                     existing_type->type->kind == TYPE_KIND_PRIMITIVE &&
+                     existing_type->type->info.primitive_type_tag == PROCEDURE)
+            {
                 kgpc_type_retain(kgpc_type);
                 kgpc_type_release(existing_type->type);
                 existing_type->type = kgpc_type;

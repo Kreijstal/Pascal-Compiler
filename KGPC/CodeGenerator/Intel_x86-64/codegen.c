@@ -1592,6 +1592,104 @@ static int record_has_class_method_templates(const struct RecordType *record)
     return 0;
 }
 
+static const char *codegen_class_constructor_target(SymTab_t *symtab,
+    const char *owner, const struct MethodTemplate *tmpl, Tree_t **definition_out)
+{
+    assert(symtab != NULL);
+    assert(owner != NULL);
+    assert(tmpl != NULL);
+    assert(tmpl->name != NULL);
+
+    if (definition_out != NULL)
+        *definition_out = NULL;
+
+    char lookup[512];
+    snprintf(lookup, sizeof(lookup), "%s__%s", owner, tmpl->name);
+
+    HashNode_t *method_node = NULL;
+    assert(FindSymbol(&method_node, symtab, lookup) != 0);
+    assert(method_node != NULL);
+    assert(method_node->type != NULL);
+    assert(method_node->type->kind == TYPE_KIND_PROCEDURE);
+    assert(method_node->type->info.proc_info.definition != NULL);
+
+    Tree_t *definition = method_node->type->info.proc_info.definition;
+    if (definition_out != NULL)
+        *definition_out = definition;
+
+    const char *target = codegen_subprogram_emission_symbol(method_node);
+    assert(target != NULL);
+    assert(target[0] != '\0');
+    return target;
+}
+
+static void codegen_mark_class_constructors_used(ListNode_t *type_decls,
+    SymTab_t *symtab)
+{
+    for (ListNode_t *node = type_decls; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_TREE || node->cur == NULL)
+            continue;
+        Tree_t *type_tree = (Tree_t *)node->cur;
+        if (type_tree->type != TREE_TYPE_DECL ||
+            type_tree->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
+            continue;
+        struct RecordType *record = type_tree->tree_data.type_decl_data.info.record;
+        const char *owner = type_tree->tree_data.type_decl_data.id;
+        if (record == NULL || owner == NULL)
+            continue;
+        for (ListNode_t *mnode = record->method_templates; mnode != NULL; mnode = mnode->next)
+        {
+            if (mnode->type != LIST_METHOD_TEMPLATE || mnode->cur == NULL)
+                continue;
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)mnode->cur;
+            if (tmpl->kind != METHOD_TEMPLATE_CONSTRUCTOR ||
+                !tmpl->is_class_method || !tmpl->is_static ||
+                tmpl->name == NULL)
+                continue;
+
+            Tree_t *definition = NULL;
+            const char *target = codegen_class_constructor_target(symtab, owner, tmpl, &definition);
+            assert(definition != NULL);
+            definition->tree_data.subprogram_data.is_used = 1;
+            codegen_keep_subprogram_label(target);
+        }
+    }
+}
+
+static ListNode_t *codegen_class_constructor_calls(ListNode_t *inst_list,
+    ListNode_t *type_decls, SymTab_t *symtab)
+{
+    for (ListNode_t *node = type_decls; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_TREE || node->cur == NULL)
+            continue;
+        Tree_t *type_tree = (Tree_t *)node->cur;
+        if (type_tree->type != TREE_TYPE_DECL ||
+            type_tree->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
+            continue;
+        struct RecordType *record = type_tree->tree_data.type_decl_data.info.record;
+        const char *owner = type_tree->tree_data.type_decl_data.id;
+        if (record == NULL || owner == NULL)
+            continue;
+        for (ListNode_t *mnode = record->method_templates; mnode != NULL; mnode = mnode->next)
+        {
+            if (mnode->type != LIST_METHOD_TEMPLATE || mnode->cur == NULL)
+                continue;
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)mnode->cur;
+            if (tmpl->kind != METHOD_TEMPLATE_CONSTRUCTOR ||
+                !tmpl->is_class_method || !tmpl->is_static ||
+                tmpl->name == NULL)
+                continue;
+            char buffer[1024];
+            const char *target = codegen_class_constructor_target(symtab, owner, tmpl, NULL);
+            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", target);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
 static int record_has_method_decls(const struct RecordType *record)
 {
     if (record == NULL || record->fields == NULL)
@@ -1795,15 +1893,6 @@ static void codegen_add_class_vars_for_method(const char *owner_class,
     if (class_name == NULL)
         return;
 
-    int is_static_check = from_cparser_is_method_static(class_name, method_name_arg);
-    int is_nonstatic_class_method =
-        from_cparser_is_method_nonstatic_class_method(class_name, method_name_arg);
-    if (!is_static_check && !is_nonstatic_class_method)
-    {
-        free(class_name);
-        return;
-    }
-    
     /* Look up the class type */
     HashNode_t *class_node = NULL;
     if (!FindSymbol(&class_node, symtab, class_name) || class_node == NULL)
@@ -1837,6 +1926,14 @@ static void codegen_add_class_vars_for_method(const char *owner_class,
     if (!has_class_vars)
         include_all_fields = 1;
     if (record_info->is_type_helper)
+    {
+        free(class_name);
+        return;
+    }
+    int is_static_check = from_cparser_is_method_static(class_name, method_name_arg);
+    int is_nonstatic_class_method =
+        from_cparser_is_method_nonstatic_class_method(class_name, method_name_arg);
+    if (!is_static_check && !is_nonstatic_class_method && !has_class_vars)
     {
         free(class_name);
         return;
@@ -4234,6 +4331,17 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 0);
 
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            codegen_mark_class_constructors_used(unit->tree_data.unit_data.interface_type_decls, symtab);
+            codegen_mark_class_constructors_used(unit->tree_data.unit_data.implementation_type_decls, symtab);
+        }
+    }
+    codegen_mark_class_constructors_used(tree->tree_data.program_data.type_declaration, symtab);
+
     /* Collect available subprogram labels from loaded units, then program */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
@@ -4320,6 +4428,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     /* No collision detection needed for single-unit codegen — collisions
      * only occur when multiple units are merged in program codegen. */
     codegen_collect_callable_export_names(tree->tree_data.unit_data.subprograms);
+    codegen_mark_class_constructors_used(tree->tree_data.unit_data.interface_type_decls, symtab);
+    codegen_mark_class_constructors_used(tree->tree_data.unit_data.implementation_type_decls, symtab);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
     codegen_collect_available_subprogram_labels(tree->tree_data.unit_data.subprograms);
@@ -5272,75 +5382,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 11: vMsgStrPtr */
     fprintf(ctx->output_file, "\t.quad\t0\n");
-
-    struct RecordType *parent_record_for_vmt = NULL;
-    int parent_max_vmt_index = 11;
-    if (record_info->parent_class_name != NULL) {
-        parent_record_for_vmt = codegen_lookup_record_type_by_name(
-            symtab, record_info->parent_class_name, 0);
-        for (struct RecordType *cur_parent = parent_record_for_vmt;
-             cur_parent != NULL; ) {
-            for (ListNode_t *method_node = cur_parent->methods;
-                 method_node != NULL; method_node = method_node->next) {
-                struct MethodInfo *parent_method = (struct MethodInfo *)method_node->cur;
-                if (parent_method != NULL &&
-                    parent_method->vmt_index > parent_max_vmt_index)
-                    parent_max_vmt_index = parent_method->vmt_index;
-            }
-
-            if (cur_parent->parent_class_name == NULL)
-                break;
-            cur_parent = codegen_lookup_record_type_by_name(
-                symtab, cur_parent->parent_class_name, 0);
-        }
-    }
-
-    if (parent_record_for_vmt != NULL && record_info->methods != NULL) {
-        for (ListNode_t *method_node = record_info->methods;
-             method_node != NULL; method_node = method_node->next) {
-            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
-            if (method == NULL || method->name == NULL)
-                continue;
-
-            struct MethodInfo *parent_match = NULL;
-            for (struct RecordType *cur_parent = parent_record_for_vmt;
-                 cur_parent != NULL && parent_match == NULL; ) {
-                for (ListNode_t *parent_node = cur_parent->methods;
-                     parent_node != NULL; parent_node = parent_node->next) {
-                    struct MethodInfo *candidate = (struct MethodInfo *)parent_node->cur;
-                    if (candidate == NULL || candidate->name == NULL ||
-                        strcasecmp(candidate->name, method->name) != 0)
-                        continue;
-                    int signature_matches = 0;
-                    if (method->param_sig != NULL && candidate->param_sig != NULL)
-                        signature_matches =
-                            (strcmp(method->param_sig, candidate->param_sig) == 0);
-                    else if (method->param_count >= 0 && candidate->param_count >= 0)
-                        signature_matches =
-                            (method->param_count == candidate->param_count);
-                    else
-                        signature_matches = 1;
-                    if (signature_matches) {
-                        parent_match = candidate;
-                        break;
-                    }
-                }
-
-                if (parent_match != NULL || cur_parent->parent_class_name == NULL)
-                    break;
-                cur_parent = codegen_lookup_record_type_by_name(
-                    symtab, cur_parent->parent_class_name, 0);
-            }
-
-            if (parent_match != NULL) {
-                method->vmt_index = parent_match->vmt_index;
-            } else if (method->vmt_index <= parent_max_vmt_index) {
-                method->vmt_index = ++parent_max_vmt_index;
-            } else if (method->vmt_index > parent_max_vmt_index) {
-                parent_max_vmt_index = method->vmt_index;
-            }
-        }
-    }
 
     /* Generic specializations can carry a cloned VMT from semcheck while the
      * actual specialized methods are only visible here by their emitted
@@ -7040,6 +7081,21 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
+
+    /* Class constructors initialize class-level storage before unit/program
+     * initialization code can observe it. */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            inst_list = codegen_class_constructor_calls(inst_list,
+                unit->tree_data.unit_data.interface_type_decls, symtab);
+            inst_list = codegen_class_constructor_calls(inst_list,
+                unit->tree_data.unit_data.implementation_type_decls, symtab);
+        }
+    }
+    inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration, symtab);
 
     /* Emit unit initialization blocks in dependency (load) order. */
     if (comp_ctx != NULL) {

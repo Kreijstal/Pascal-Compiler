@@ -2937,6 +2937,35 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
     return 4;
 }
 
+static long long kgpc_enum_storage_size(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->range_known)
+    {
+        if (alias->range_start >= 0 && alias->range_end <= 0xff)
+            return 1;
+        if (alias->range_start >= 0 && alias->range_end <= 0xffff)
+            return 2;
+        return 4;
+    }
+
+    if (alias->enum_literals != NULL)
+    {
+        int count = kgpc_list_length(alias->enum_literals);
+        if (count > 0 && count <= 0x100)
+            return 1;
+        if (count > 0 && count <= 0x10000)
+            return 2;
+    }
+
+    return 4;
+}
+
 long long kgpc_type_sizeof(KgpcType *type)
 {
     if (type == NULL)
@@ -2967,17 +2996,7 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case BOOL:
                     return 1;
                 case ENUM_TYPE:
-                    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
-                        return type->type_alias->storage_size;
-                    if (type->type_alias != NULL && type->type_alias->enum_literals != NULL)
-                    {
-                        int count = ListLength(type->type_alias->enum_literals);
-                        if (count > 0 && count <= 0x100)
-                            return 1;
-                        if (count > 0 && count <= 0x10000)
-                            return 2;
-                    }
-                    return 4;
+                    return kgpc_enum_storage_size(type->type_alias);
                 case SET_TYPE:
                 {
                     if (type->type_alias != NULL && type->type_alias->is_set)

@@ -1689,6 +1689,91 @@ static void semcheck_stmt_set_call_owner_info(struct Statement *stmt,
         stmt->stmt_data.procedure_call_data.cached_method_name = strdup(method_name);
 }
 
+static int semcheck_stmt_proc_type_param_count(KgpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+        return -1;
+
+    ListNode_t *params = type->info.proc_info.params;
+    int count = ListLength(params);
+    if (count <= 0)
+        return count;
+
+    Tree_t *first_param = (Tree_t *)params->cur;
+    if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+        first_param->tree_data.var_decl_data.ids != NULL)
+    {
+        const char *first_name =
+            (const char *)first_param->tree_data.var_decl_data.ids->cur;
+        if (first_name != NULL && pascal_identifier_equals(first_name, "Self"))
+            count--;
+    }
+
+    return count;
+}
+
+static struct MethodInfo *semcheck_stmt_find_receiver_vmt_method(
+    struct RecordType *receiver_record, const char *method_name,
+    KgpcType *call_type)
+{
+    if (receiver_record == NULL || receiver_record->methods == NULL ||
+        method_name == NULL)
+        return NULL;
+
+    int wanted_param_count = semcheck_stmt_proc_type_param_count(call_type);
+    struct MethodInfo *single_name_match = NULL;
+    int name_match_count = 0;
+
+    for (ListNode_t *node = receiver_record->methods; node != NULL; node = node->next)
+    {
+        struct MethodInfo *method = (struct MethodInfo *)node->cur;
+        if (method == NULL || method->name == NULL ||
+            !(method->is_virtual || method->is_override) ||
+            !pascal_identifier_equals(method->name, method_name))
+            continue;
+
+        single_name_match = method;
+        name_match_count++;
+        if (wanted_param_count >= 0)
+        {
+            if (method->param_count < 0)
+                return NULL;
+            if (method->param_count == wanted_param_count)
+                return method;
+        }
+    }
+
+    if (wanted_param_count < 0 && name_match_count == 1)
+        return single_name_match;
+    return NULL;
+}
+
+static void semcheck_stmt_set_receiver_virtual_dispatch(struct Statement *stmt,
+    struct RecordType *receiver_record, const char *method_name,
+    KgpcType *call_type)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL ||
+        receiver_record == NULL || receiver_record->type_id == NULL ||
+        method_name == NULL)
+        return;
+
+    struct MethodInfo *method = semcheck_stmt_find_receiver_vmt_method(
+        receiver_record, method_name, call_type);
+    if (method == NULL)
+        return;
+
+    stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+    stmt->stmt_data.procedure_call_data.vmt_index = method->vmt_index;
+
+    free(stmt->stmt_data.procedure_call_data.self_class_name);
+    stmt->stmt_data.procedure_call_data.self_class_name =
+        strdup(receiver_record->type_id);
+
+    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+        free(stmt->stmt_data.procedure_call_data.cached_method_name);
+    stmt->stmt_data.procedure_call_data.cached_method_name = strdup(method_name);
+}
+
 /* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
  * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
 static int semcheck_alias_is_widechar(struct TypeAlias *alias)
@@ -4068,6 +4153,14 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_INHERITED:
+            if (stmt->stmt_data.inherited_data.call_expr == NULL)
+            {
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num,
+                    stmt->source_index,
+                    "Error on line %d, inherited statement has no resolved call target.\n\n",
+                    stmt->line_num);
+                return ++return_val;
+            }
             if (stmt->stmt_data.inherited_data.call_expr != NULL)
             {
                 struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
@@ -4102,6 +4195,15 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 
                 if (call_expr->type == EXPR_FUNCTION_CALL)
                 {
+                    if (call_expr->expr_data.function_call_data.args_expr == NULL &&
+                        call_expr->expr_data.function_call_data.is_bare_inherited)
+                    {
+                        ListNode_t *forwarded_args =
+                            semcheck_clone_current_subprogram_actual_args(0);
+                        if (forwarded_args != NULL)
+                            call_expr->expr_data.function_call_data.args_expr = forwarded_args;
+                    }
+
                     if (1)
                     {
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
@@ -4275,6 +4377,12 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                             if (parent_method_node == NULL)
                             {
+                                if (call_expr->expr_data.function_call_data.is_bare_inherited)
+                                {
+                                    stmt->stmt_data.inherited_data.call_expr = NULL;
+                                    destroy_expr(call_expr);
+                                    break;
+                                }
                                 semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                                     "Error on line %d, inherited call to %s has no matching overload.\n\n",
                                     stmt->line_num,
@@ -7447,6 +7555,13 @@ skip_type_receiver_rewrite:
                             receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
                             receiver_is_type_ident = 1;
                     }
+                }
+
+                if (!is_static && !is_nonstatic_class_method &&
+                    !receiver_is_type_ident)
+                {
+                    semcheck_stmt_set_receiver_virtual_dispatch(stmt,
+                        record_info, method_name, method_node->type);
                 }
 
                 {

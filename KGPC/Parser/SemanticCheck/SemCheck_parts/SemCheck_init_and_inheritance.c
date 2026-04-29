@@ -2286,6 +2286,16 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
             }
             struct RecordField *original_field = (struct RecordField *)cur->cur;
 
+            /* Class vars are static storage owned by the declaring class.
+             * They remain visible through parent lookup and must not be
+             * cloned into subclasses, otherwise inherited reads/writes split
+             * across different CLASSVAR labels. */
+            if (original_field->is_class_var == 1)
+            {
+                cur = cur->next;
+                continue;
+            }
+
             /* Skip hidden fields from parent if the record already has them
              * (e.g., __kgpc_class_typeinfo added to forward declarations). */
             if (record_field_is_hidden(original_field) && original_field->name != NULL)

@@ -12,6 +12,44 @@ static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, 
     return node->type;
 }
 
+static KgpcType *codegen_lookup_owner_field_proc_type(CodeGenContext *ctx,
+    const char *field_name)
+{
+    if (ctx == NULL || ctx->symtab == NULL ||
+        ctx->current_subprogram_owner_class == NULL || field_name == NULL)
+        return NULL;
+
+    HashNode_t *owner_node = NULL;
+    if (FindSymbol(&owner_node, ctx->symtab,
+            ctx->current_subprogram_owner_class) == 0 ||
+        owner_node == NULL)
+        return NULL;
+
+    struct RecordType *record = hashnode_get_record_type(owner_node);
+    if (record == NULL && owner_node->type != NULL)
+    {
+        if (kgpc_type_is_record(owner_node->type))
+            record = kgpc_type_get_record(owner_node->type);
+        else if (kgpc_type_is_pointer(owner_node->type) &&
+                 owner_node->type->info.points_to != NULL &&
+                 kgpc_type_is_record(owner_node->type->info.points_to))
+            record = kgpc_type_get_record(owner_node->type->info.points_to);
+    }
+    if (record == NULL)
+        return NULL;
+
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field->name != NULL &&
+            pascal_identifier_equals(field->name, field_name))
+            return field->proc_type;
+    }
+    return NULL;
+}
+
 static int codegen_expr_is_const_symbol(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL || symtab == NULL ||
@@ -2836,7 +2874,10 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 4. Pass arguments as usual.  For method pointers, reserve the
          * first argument register for Self by passing has_self=1. */
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
-        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
+        KgpcType *indirect_call_type = call_kgpc_type;
+        if (indirect_call_type == NULL)
+            indirect_call_type = codegen_lookup_owner_field_proc_type(ctx, unmangled_name);
+        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, indirect_call_type,
             proc_name_hint, callee_is_method_pointer ? 1 : 0, NULL, 0);
 
         if (callee_is_method_pointer && bound_self_spill != NULL)

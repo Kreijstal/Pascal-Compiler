@@ -340,9 +340,10 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
 
     /* For object types, class vars/consts are not accessible via Self.
      * For class types, class vars are also not stored in the instance/VMT
-     * directly; expose them in scope for static methods and class methods. */
+     * directly; expose actual class vars in all methods.  Instance fields must
+     * still go through Self, so normal instance methods only get class vars. */
     int is_object_type = !record_type_is_class(record_info) && !record_info->is_type_helper;
-    if (!is_static && !is_nonstatic_class_method && !is_object_type)
+    if (!is_static && !is_nonstatic_class_method && !is_object_type && !has_class_vars)
     {
         free(class_name);
         return;

@@ -16,6 +16,7 @@
 #include "expr_tree.h"
 #include "../register_types.h"
 #include "../codegen_expression.h"
+#include "../codegen_stmt_internal.h"
 #include "../stackmng/stackmng.h"
 #include "../../../flags.h"
 #include "../../../Parser/List/List.h"
@@ -1451,6 +1452,91 @@ static int expr_is_single_real_local(const struct Expression *expr)
     /* Record-field real expressions may be tagged as REAL while physically
      * stored as Single. Use effective expression size as fallback. */
     return expr_effective_size_bytes(expr) == 4;
+}
+
+static struct RecordType *expr_tree_record_from_expr(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->record_type != NULL)
+        return expr->record_type;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        KgpcType *type = expr->resolved_kgpc_type;
+        if (kgpc_type_is_record(type))
+            return kgpc_type_get_record(type);
+        if (kgpc_type_is_pointer(type) && type->info.points_to != NULL &&
+            kgpc_type_is_record(type->info.points_to))
+            return kgpc_type_get_record(type->info.points_to);
+    }
+    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+            node != NULL)
+        {
+            struct RecordType *record = hashnode_get_record_type(node);
+            if (record != NULL)
+                return record;
+            if (node->type != NULL)
+            {
+                if (kgpc_type_is_record(node->type))
+                    return kgpc_type_get_record(node->type);
+                if (kgpc_type_is_pointer(node->type) &&
+                    node->type->info.points_to != NULL &&
+                    kgpc_type_is_record(node->type->info.points_to))
+                    return kgpc_type_get_record(node->type->info.points_to);
+            }
+        }
+    }
+    return NULL;
+}
+
+static KgpcType *expr_tree_proc_type_from_record_field(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_RECORD_ACCESS ||
+        expr->expr_data.record_access_data.record_expr == NULL ||
+        expr->expr_data.record_access_data.field_id == NULL)
+        return NULL;
+
+    struct RecordField *resolved_field =
+        codegen_lookup_record_field_expr((struct Expression *)expr, ctx);
+    if (resolved_field != NULL)
+    {
+        if (resolved_field->proc_type != NULL)
+            return resolved_field->proc_type;
+        if (resolved_field->type == PROCEDURE && resolved_field->type_id != NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, resolved_field->type_id) != 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                type_node->type->kind == TYPE_KIND_PROCEDURE)
+                return type_node->type;
+        }
+    }
+
+    struct RecordType *record = expr_tree_record_from_expr(ctx,
+        expr->expr_data.record_access_data.record_expr);
+    if (record == NULL)
+        return NULL;
+
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field->name != NULL &&
+            pascal_identifier_equals(field->name,
+                expr->expr_data.record_access_data.field_id))
+        {
+            return field->proc_type;
+        }
+    }
+    return NULL;
 }
 
 static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab_t *symtab)
@@ -3944,6 +4030,118 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             mangled_name_hint != NULL)
             proc_name_hint = mangled_name_hint;
 
+        int procvar_method_self_index = -1;
+        StackNode_t *procvar_method_self_spill = NULL;
+        StackNode_t *procvar_method_code_spill = NULL;
+        struct Expression *procvar_callee_expr =
+            expr->expr_data.function_call_data.procedural_var_expr;
+        struct Expression *procvar_method_storage_expr = procvar_callee_expr;
+        KgpcType *procvar_call_type = func_type;
+        if (procvar_call_type == NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+        {
+            procvar_call_type = expr->expr_data.function_call_data.call_kgpc_type;
+        }
+        int procvar_is_method_pointer = 0;
+
+        if (expr->expr_data.function_call_data.is_procedural_var_call &&
+            procvar_callee_expr != NULL)
+        {
+            KgpcType *callee_type = expr_get_kgpc_type(procvar_callee_expr);
+            KgpcType *record_field_proc_type =
+                expr_tree_proc_type_from_record_field(ctx, procvar_callee_expr);
+            if (record_field_proc_type != NULL &&
+                record_field_proc_type->kind == TYPE_KIND_PROCEDURE)
+                callee_type = record_field_proc_type;
+            else if (callee_type == NULL)
+                callee_type = record_field_proc_type;
+            if (callee_type != NULL && callee_type->kind == TYPE_KIND_POINTER &&
+                callee_type->info.points_to != NULL)
+                callee_type = callee_type->info.points_to;
+            if (callee_type != NULL && callee_type->kind == TYPE_KIND_PROCEDURE)
+                procvar_call_type = callee_type;
+            if (kgpc_type_is_method_pointer(callee_type))
+                procvar_is_method_pointer = 1;
+
+            if (procvar_callee_expr->type == EXPR_TYPECAST &&
+                procvar_callee_expr->expr_data.typecast_data.expr != NULL)
+            {
+                procvar_method_storage_expr =
+                    procvar_callee_expr->expr_data.typecast_data.expr;
+                if (!procvar_is_method_pointer)
+                {
+                    KgpcType *target_type = expr_get_kgpc_type(procvar_callee_expr);
+                    if (target_type != NULL && target_type->kind == TYPE_KIND_POINTER &&
+                        target_type->info.points_to != NULL)
+                        target_type = target_type->info.points_to;
+                    if (kgpc_type_is_method_pointer(target_type))
+                        procvar_is_method_pointer = 1;
+                }
+            }
+
+            if (!procvar_is_method_pointer &&
+                procvar_method_storage_expr != NULL &&
+                procvar_method_storage_expr->type == EXPR_VAR_ID &&
+                ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *callee_node = NULL;
+                if (FindSymbol(&callee_node, ctx->symtab,
+                        procvar_method_storage_expr->expr_data.id) != 0 &&
+                    callee_node != NULL && callee_node->type != NULL)
+                {
+                    KgpcType *symbol_type = callee_node->type;
+                    if (symbol_type->kind == TYPE_KIND_POINTER &&
+                        symbol_type->info.points_to != NULL)
+                        symbol_type = symbol_type->info.points_to;
+                    if (symbol_type->kind == TYPE_KIND_PROCEDURE)
+                        procvar_call_type = symbol_type;
+                    if (kgpc_type_is_method_pointer(symbol_type))
+                        procvar_is_method_pointer = 1;
+                }
+            }
+
+            if (procvar_is_method_pointer)
+            {
+                Register_t *descriptor_reg = NULL;
+                if (codegen_expr_is_addressable(procvar_method_storage_expr))
+                    inst_list = codegen_address_for_expr(procvar_method_storage_expr,
+                        inst_list, ctx, &descriptor_reg);
+                else
+                    inst_list = codegen_expr_with_result(procvar_method_storage_expr,
+                        inst_list, ctx, &descriptor_reg);
+
+                if (codegen_had_error(ctx) || descriptor_reg == NULL)
+                    return inst_list;
+
+                procvar_method_self_spill = add_l_t_bytes("procvar_method_self", 8);
+                procvar_method_code_spill = add_l_t_bytes("procvar_method_code", 8);
+                if (procvar_method_self_spill == NULL ||
+                    procvar_method_code_spill == NULL)
+                {
+                    free_reg(get_reg_stack(), descriptor_reg);
+                    return inst_list;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %%r11\n",
+                    descriptor_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, -%d(%%rbp)\n",
+                    procvar_method_self_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %%r11\n",
+                    descriptor_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, -%d(%%rbp)\n",
+                    procvar_method_code_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), descriptor_reg);
+
+                procvar_method_self_index = arg_start_index;
+                arg_start_index += 1;
+            }
+        }
+
         if (is_constructor && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
             int args_count = 0;
             for (ListNode_t *c = args_to_pass; c != NULL; c = c->next) args_count++;
@@ -3952,7 +4150,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
 
         inst_list = codegen_pass_arguments(args_to_pass,
-            inst_list, ctx, func_type, proc_name_hint, arg_start_index, expr,
+            inst_list, ctx, procvar_call_type, proc_name_hint, arg_start_index, expr,
             expr->expr_data.function_call_data.is_class_method_call);
 
         /* Invalidate static link cache after argument evaluation
@@ -4037,6 +4235,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list = add_inst(inst_list, buffer);
         }
 
+        if (procvar_method_self_spill != NULL && procvar_method_self_index >= 0)
+        {
+            const char *self_arg_reg = current_arg_reg64(procvar_method_self_index);
+            assert(self_arg_reg != NULL && "current_arg_reg64(..) should never return NULL");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                procvar_method_self_spill->offset, self_arg_reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
         if (static_link_expr_active)
             codegen_end_expression(ctx);
 
@@ -4059,7 +4266,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Check if this is a call through a procedural variable */
         if (expr->expr_data.function_call_data.is_procedural_var_call)
         {
-            if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
+            if (procvar_method_code_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
+                    procvar_method_code_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
             {
                 /* Evaluate expression producing the function pointer */
                 Register_t *func_ptr_reg = NULL;
@@ -4198,8 +4413,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 dispatch_self_is_vmt = 1;
             }
+            int first_arg_is_vmt = expr_tree_first_arg_is_class_vmt_value(expr, ctx);
+            int constructor_receiver_is_vmt =
+                expr->expr_data.function_call_data.is_constructor_call &&
+                first_arg_is_vmt;
             int self_is_vmt = (!expr->expr_data.function_call_data.is_constructor_call) &&
-                expr_tree_first_arg_is_class_vmt_value(expr, ctx);
+                first_arg_is_vmt;
             dispatch_self_is_vmt = dispatch_self_is_vmt || self_is_vmt;
             if (expr->expr_data.function_call_data.is_constructor_call &&
                 constructor_instance_reg != NULL &&
@@ -4252,7 +4471,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             if (expr->expr_data.function_call_data.is_constructor_call &&
                 expr->expr_data.function_call_data.constructor_receiver_expr == NULL &&
-                !dispatch_self_is_vmt)
+                !dispatch_self_is_vmt &&
+                !constructor_receiver_is_vmt)
             {
                 const char *ctor_owner = virtual_owner;
                 KGPC_COMPILER_HARD_ASSERT(ctor_owner != NULL && ctor_owner[0] != '\0',
@@ -4712,7 +4932,24 @@ cleanup_constructor:
          * offset 8, then return the ADDRESS of the struct in target_reg.
          * The callee passes the struct pointer like any other 16-byte
          * record argument. */
-        if (expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+        int receiver_is_type_reference = 0;
+        if (expr->expr_data.addr_of_proc_data.receiver_expr != NULL &&
+            expr->expr_data.addr_of_proc_data.receiver_expr->type == EXPR_VAR_ID &&
+            expr->expr_data.addr_of_proc_data.receiver_expr->expr_data.id != NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *receiver_node = NULL;
+            if (FindSymbol(&receiver_node, ctx->symtab,
+                    expr->expr_data.addr_of_proc_data.receiver_expr->expr_data.id) != 0 &&
+                receiver_node != NULL &&
+                receiver_node->hash_type == HASHTYPE_TYPE)
+            {
+                receiver_is_type_reference = 1;
+            }
+        }
+
+        if (expr->expr_data.addr_of_proc_data.receiver_expr != NULL &&
+            !receiver_is_type_reference)
         {
             StackNode_t *tm_slot = add_l_t_bytes("__tmethod_temp", 16);
             if (tm_slot == NULL)
@@ -4738,12 +4975,20 @@ cleanup_constructor:
             inst_list = add_inst(inst_list, buffer);
             free_reg(get_reg_stack(), code_reg);
 
-            /* Step 2: evaluate the receiver expression to get Self pointer,
-             * then store at offset 8 of the temp. */
+            /* Step 2: store the receiver Self pointer at offset 8 of the temp.
+             * Classes already evaluate to an instance pointer. Object/record
+             * receivers pass their address as Self. */
             Register_t *self_reg = NULL;
-            inst_list = codegen_expr_with_result(
-                expr->expr_data.addr_of_proc_data.receiver_expr,
-                inst_list, ctx, &self_reg);
+            struct RecordType *receiver_record = expr_tree_record_from_expr(ctx,
+                expr->expr_data.addr_of_proc_data.receiver_expr);
+            if (receiver_record != NULL && !record_type_is_class(receiver_record))
+                inst_list = codegen_address_for_expr(
+                    expr->expr_data.addr_of_proc_data.receiver_expr,
+                    inst_list, ctx, &self_reg);
+            else
+                inst_list = codegen_expr_with_result(
+                    expr->expr_data.addr_of_proc_data.receiver_expr,
+                    inst_list, ctx, &self_reg);
             if (self_reg == NULL)
             {
                 if (collision_label != NULL) free(collision_label);

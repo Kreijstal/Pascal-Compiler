@@ -390,6 +390,15 @@ struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_INHERITED_STMT: {
         struct Expression *call_expr = convert_expression(unwrap_pascal_node(stmt_node->child));
+        if (call_expr == NULL && g_current_method_name != NULL)
+        {
+            call_expr = mk_functioncall(stmt_node->line, strdup(g_current_method_name), NULL);
+            if (call_expr != NULL)
+            {
+                call_expr->expr_data.function_call_data.is_inherited_call = 1;
+                call_expr->expr_data.function_call_data.is_bare_inherited = 1;
+            }
+        }
         return mk_inherited(stmt_node->line, call_expr);
     }
     case PASCAL_T_CASE_STMT: {
@@ -687,8 +696,12 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
             if (type_info->is_enum) {
                 alias->is_enum = 1;
                 alias->enum_is_scoped = type_info->enum_is_scoped;
+                alias->enum_has_explicit_values = type_info->enum_has_explicit_values;
                 alias->enum_literals = type_info->enum_literals;
                 alias->enum_values = type_info->enum_values;
+                alias->range_known = type_info->range_known;
+                alias->range_start = type_info->range_start;
+                alias->range_end = type_info->range_end;
             }
             if (type_info->is_file) {
                 alias->is_file = 1;
