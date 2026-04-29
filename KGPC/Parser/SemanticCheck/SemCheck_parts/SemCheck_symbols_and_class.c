@@ -155,7 +155,6 @@ void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
     if (alias->kgpc_type == NULL && target_alias->kgpc_type != NULL)
     {
         alias->kgpc_type = target_alias->kgpc_type;
-        kgpc_type_retain(alias->kgpc_type);
     }
 }
 
