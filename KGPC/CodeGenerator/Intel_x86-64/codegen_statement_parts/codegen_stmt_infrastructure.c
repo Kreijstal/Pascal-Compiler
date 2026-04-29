@@ -1113,6 +1113,7 @@ ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *stmt,
     }
     call_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
     call_stmt->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+    call_stmt->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call = 1;
 
     if (semcheck_stmt(ctx->symtab, call_stmt, INT_MAX) != 0)
     {

@@ -1258,6 +1258,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 if (resolved_size > 0 && resolved_size < 4)
                     target_size = resolved_size;
             }
+            if (!use_qword && target_size >= CODEGEN_POINTER_SIZE_BYTES &&
+                !is_single_target)
+                use_qword = 1;
             if (!use_qword && var_type == CHAR_TYPE)
             {
                 value_reg8 = register_name8(reg);

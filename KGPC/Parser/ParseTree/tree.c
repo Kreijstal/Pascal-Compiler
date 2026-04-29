@@ -2815,6 +2815,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
     new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
     new_stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
+    new_stmt->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call = 0;
 
     return new_stmt;
 }
