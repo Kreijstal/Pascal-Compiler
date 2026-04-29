@@ -2816,6 +2816,7 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         {
                             type_info->element_kgpc_type = create_array_type(
                                 inner_elem, nested_info.start, nested_info.end);
+                            kgpc_type_release(inner_elem);
                         }
                         else if (nested_info.element_type_id != NULL)
                         {
@@ -3566,4 +3567,3 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
 
     return NULL;
 }
-

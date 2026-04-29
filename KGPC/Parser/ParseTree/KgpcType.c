@@ -906,6 +906,8 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
 
         /* Create array type even if element type is NULL (forward reference) */
         result = create_array_type(element_type, start, end);
+        /* create_array_type retains element_type; release our local reference */
+        kgpc_type_release(element_type);
         if (result != NULL) {
             kgpc_type_set_type_alias(result, alias);
             /* Store element type ID for deferred resolution if element_type is NULL */
