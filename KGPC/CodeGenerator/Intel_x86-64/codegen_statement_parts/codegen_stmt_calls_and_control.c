@@ -4428,11 +4428,6 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
             kgpc_type_retain(for_var->resolved_kgpc_type);
             update_expr->resolved_kgpc_type = for_var->resolved_kgpc_type;
         }
-        if (for_var->resolved_kgpc_type != NULL)
-        {
-            update_expr->resolved_kgpc_type = for_var->resolved_kgpc_type;
-            kgpc_type_retain(for_var->resolved_kgpc_type);
-        }
     }
     update_stmt = mk_varassign(-1, 0, for_var, update_expr);
 

@@ -1513,11 +1513,7 @@ void destroy_stmt(struct Statement *stmt)
           if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
           {
               KgpcType *call_type = stmt->stmt_data.procedure_call_data.call_kgpc_type;
-              if (!(call_type->kind == TYPE_KIND_PROCEDURE &&
-                    call_type->info.proc_info.owns_params))
-              {
-                  destroy_kgpc_type(call_type);
-              }
+              destroy_kgpc_type(call_type);
               stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
           }
           if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
@@ -1779,14 +1775,7 @@ void destroy_expr(struct Expression *expr)
           if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
           {
               KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
-              /* Cached call signatures may reference parameter declaration trees
-               * owned by parse/type metadata. Let the original owner reclaim those
-               * procedure types instead of freeing them from expression teardown. */
-              if (!(call_type->kind == TYPE_KIND_PROCEDURE &&
-                    call_type->info.proc_info.owns_params))
-              {
-                  destroy_kgpc_type(call_type);
-              }
+              destroy_kgpc_type(call_type);
               expr->expr_data.function_call_data.call_kgpc_type = NULL;
           }
           if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
