@@ -14,6 +14,18 @@ static void semcheck_release_tree_decl_kgpc_type(Tree_t *tree)
     tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 0;
 }
 
+static void semcheck_set_tree_decl_kgpc_type_borrowed(Tree_t *tree, KgpcType *kgpc_type)
+{
+    if (tree == NULL || tree->type != TREE_TYPE_DECL)
+        return;
+
+    if (tree->tree_data.type_decl_data.kgpc_type != kgpc_type)
+        semcheck_release_tree_decl_kgpc_type(tree);
+
+    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+    tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 1;
+}
+
 static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
 static int semcheck_alias_metadata_already_applied(const struct TypeAlias *existing_alias,
     const struct TypeAlias *alias_info);
@@ -2109,7 +2121,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     if (alias_type != NULL)
                     {
                         tree->tree_data.type_decl_data.kgpc_type = alias_type;
-                        kgpc_type_retain(alias_type);
                         tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 0;
                     }
                 }
@@ -2132,7 +2143,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         if (tree->tree_data.type_decl_data.kgpc_type != NULL)
                             semcheck_release_tree_decl_kgpc_type(tree);
                         tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
-                        kgpc_type_retain(inline_kgpc);
                         tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 0;
                     }
                 }
@@ -2328,11 +2338,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     replace_existing = 1;
                                 if (replace_existing)
                                 {
-                                    if (existing != NULL)
-                                        semcheck_release_tree_decl_kgpc_type(tree);
-                                    tree->tree_data.type_decl_data.kgpc_type = target_node->type;
-                                    kgpc_type_retain(target_node->type);
-                                    tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 0;
+                                    semcheck_set_tree_decl_kgpc_type_borrowed(tree, target_node->type);
                                 }
                             }
                         }
