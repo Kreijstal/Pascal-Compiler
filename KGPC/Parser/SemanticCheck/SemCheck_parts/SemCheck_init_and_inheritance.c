@@ -6,9 +6,10 @@ static void semcheck_set_predeclared_tree_kgpc_type(Tree_t *tree, KgpcType *kgpc
         return;
 
     if (tree->tree_data.type_decl_data.kgpc_type != NULL &&
-        tree->tree_data.type_decl_data.kgpc_type != kgpc_type &&
         !tree->tree_data.type_decl_data.kgpc_type_is_borrowed)
     {
+        if (tree->tree_data.type_decl_data.kgpc_type == kgpc_type)
+            kgpc_type_retain(kgpc_type);
         destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
     }
 
