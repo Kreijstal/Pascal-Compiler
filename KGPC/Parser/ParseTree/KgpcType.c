@@ -2927,6 +2927,13 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
             return kgpc_default_set_storage_size_for_high((long long)count - 1);
     }
 
+    if (alias->range_known && alias->range_end >= alias->range_start)
+    {
+        long long count = (long long)alias->range_end - (long long)alias->range_start + 1;
+        if (count > 0)
+            return kgpc_default_set_storage_size_for_high(count - 1);
+    }
+
     return 4;
 }
 

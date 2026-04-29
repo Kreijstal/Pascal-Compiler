@@ -3729,6 +3729,64 @@ int expr_get_array_upper_bound(const struct Expression *expr)
     return expr->array_upper_bound;
 }
 
+static long long codegen_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long codegen_set_storage_size_for_set_alias(const struct TypeAlias *alias)
+{
+    if (alias == NULL || !alias->is_set)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = ListLength(alias->inline_enum_values);
+        if (count > 0)
+            return codegen_set_storage_size_for_high((long long)count - 1);
+    }
+
+    if (alias->range_known && alias->range_end >= alias->range_start)
+    {
+        long long count = (long long)alias->range_end - (long long)alias->range_start + 1;
+        if (count > 0)
+            return codegen_set_storage_size_for_high(count - 1);
+    }
+
+    return 4;
+}
+
+static int expr_is_large_set_type(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    struct TypeAlias *alias = type->type_alias;
+    if (alias != NULL && alias->is_set)
+    {
+        if (codegen_set_storage_size_for_set_alias(alias) > 4)
+            return 1;
+    }
+
+    if (kgpc_type_is_set(type) && kgpc_type_sizeof(type) > 4)
+        return 1;
+
+    return 0;
+}
+
 /* Check if an expression represents a "large" set that requires memory-based
  * operations (> 4 bytes).  This includes char sets (32 bytes) and enum sets
  * whose element type has more than 32 members. */
@@ -3737,22 +3795,60 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
     if (expr == NULL)
         return 0;
 
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL)
+    {
+        if (expr_is_large_set_type(expr_type))
+            return 1;
+    }
+
+    if (expr->type == EXPR_POINTER_DEREF && ctx != NULL && ctx->symtab != NULL)
+    {
+        const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL)
+        {
+            KgpcType *deref_type = NULL;
+            if (pointer_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
+            {
+                deref_type = pointer_expr->resolved_kgpc_type->info.points_to;
+            }
+            else if (pointer_expr->type == EXPR_VAR_ID && pointer_expr->expr_data.id != NULL)
+            {
+                HashNode_t *ptr_node = NULL;
+                if (FindSymbol(&ptr_node, ctx->symtab, pointer_expr->expr_data.id) != 0 &&
+                    ptr_node != NULL && ptr_node->type != NULL &&
+                    kgpc_type_is_pointer(ptr_node->type))
+                {
+                    deref_type = ptr_node->type->info.points_to;
+                }
+            }
+            else
+            {
+                KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
+                if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
+                    deref_type = pointer_type->info.points_to;
+            }
+
+            if (deref_type != NULL)
+            {
+                if (expr_is_large_set_type(deref_type))
+                    return 1;
+            }
+        }
+    }
+
     /* Check if expression has a KgpcType with type_alias */
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
         if (alias != NULL && alias->is_set)
         {
-            /* Char sets are always large (32 bytes) */
-            if (alias->set_element_type == CHAR_TYPE ||
-                (alias->set_element_type_id != NULL &&
-                 (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                  pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
-                return 1;
-            /* Any set with cached storage_size > 4 needs memory-based ops */
-            if (alias->storage_size > 4)
+            if (expr_is_large_set_type(expr->resolved_kgpc_type))
                 return 1;
         }
+        if (expr_is_large_set_type(expr->resolved_kgpc_type))
+            return 1;
     }
 
     /* For variable references, look up the type in the symbol table */
@@ -3766,14 +3862,11 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 struct TypeAlias *alias = node->type->type_alias;
                 if (alias != NULL && alias->is_set)
                 {
-                    if (alias->set_element_type == CHAR_TYPE ||
-                        (alias->set_element_type_id != NULL &&
-                         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
-                        return 1;
-                    if (alias->storage_size > 4)
+                    if (expr_is_large_set_type(node->type))
                         return 1;
                 }
+                if (expr_is_large_set_type(node->type))
+                    return 1;
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
@@ -4526,6 +4619,31 @@ static int codegen_formal_is_dynamic_array(Tree_t *formal, SymTab_t *symtab)
     return 0;
 }
 
+static int codegen_expr_is_open_array_descriptor_arg(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->is_array_expr && expr->array_is_dynamic)
+        return 1;
+
+    KgpcType *arg_type = expr_get_kgpc_type((struct Expression *)expr);
+    if (arg_type != NULL && kgpc_type_is_dynamic_array(arg_type))
+        return 1;
+
+    if (ctx == NULL || ctx->symtab == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *symbol = NULL;
+    if (FindSymbol(&symbol, ctx->symtab, expr->expr_data.id) == 0 ||
+        symbol == NULL || symbol->type == NULL)
+        return 0;
+
+    return kgpc_type_is_dynamic_array(symbol->type);
+}
+
 static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     long long *size_out, int depth);
 
@@ -4761,6 +4879,14 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         }
     }
 
+    int can_resolve_type_id = (type_id != NULL && ctx != NULL && ctx->symtab != NULL);
+    if (can_resolve_type_id)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
+            return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
+    }
+
     if (type_tag != UNKNOWN_TYPE)
     {
         long long base = codegen_sizeof_type_tag(type_tag);
@@ -4771,12 +4897,8 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         }
     }
 
-    if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    if (can_resolve_type_id)
     {
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
-            return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
-
         codegen_report_error(ctx, "ERROR: Unable to resolve type %s for size computation.", type_id);
         return 1;
     }
@@ -5321,12 +5443,78 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     if (pointer_expr == NULL || size_out == NULL)
         return 1;
 
+    int subtype = pointer_expr->pointer_subtype;
+    const char *type_id = pointer_expr->pointer_subtype_id;
+    struct RecordType *record_type = codegen_expr_record_type(pointer_expr,
+        ctx != NULL ? ctx->symtab : NULL);
+
+    if (record_type == NULL && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
+            record_type = codegen_get_record_type_from_node(node);
+    }
+
+    if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to determine record size for pointer target.");
+        return 1;
+    }
+
+    /* For untyped pointers (Pointer type with no target info), return failure
+     * without reporting an error — the caller handles this by defaulting to step=1 */
+    if (subtype == UNKNOWN_TYPE && type_id == NULL && record_type == NULL)
+    {
+        KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
+        if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
+        {
+            KgpcType *points_to = pointer_type->info.points_to;
+            if (points_to != NULL)
+            {
+                if (kgpc_type_is_set(points_to) && points_to->type_alias != NULL &&
+                    points_to->type_alias->is_set)
+                {
+                    long long set_size = codegen_set_storage_size_for_set_alias(points_to->type_alias);
+                    if (set_size > 0)
+                    {
+                        *size_out = set_size;
+                        return 0;
+                    }
+                }
+                long long pointee_size = kgpc_type_sizeof(points_to);
+                if (pointee_size > 0)
+                {
+                    *size_out = pointee_size;
+                    return 0;
+                }
+            }
+        }
+        return 1;
+    }
+
+    if (codegen_sizeof_type(ctx, subtype, type_id, record_type, size_out, 0) == 0 &&
+        *size_out > 0)
+    {
+        return 0;
+    }
+
     KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
     if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
     {
         KgpcType *points_to = pointer_type->info.points_to;
         if (points_to != NULL)
         {
+            if (kgpc_type_is_set(points_to) && points_to->type_alias != NULL)
+            {
+                long long set_size = 0;
+                if (points_to->type_alias->is_set)
+                    set_size = codegen_set_storage_size_for_set_alias(points_to->type_alias);
+                if (set_size > 0)
+                {
+                    *size_out = set_size;
+                    return 0;
+                }
+            }
             if (kgpc_type_is_array(points_to))
             {
                 KgpcArrayDimensionInfo info;
@@ -5367,65 +5555,6 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
             }
         }
     }
-    int subtype = pointer_expr->pointer_subtype;
-    const char *type_id = pointer_expr->pointer_subtype_id;
-    struct RecordType *record_type = codegen_expr_record_type(pointer_expr,
-        ctx != NULL ? ctx->symtab : NULL);
-
-    if (record_type == NULL && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
-    {
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
-            record_type = codegen_get_record_type_from_node(node);
-    }
-
-    if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)
-    {
-        codegen_report_error(ctx, "ERROR: Unable to determine record size for pointer target.");
-        return 1;
-    }
-
-    /* For untyped pointers (Pointer type with no target info), return failure
-     * without reporting an error — the caller handles this by defaulting to step=1 */
-    if (subtype == UNKNOWN_TYPE && type_id == NULL && record_type == NULL)
-    {
-        KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
-        if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
-        {
-            KgpcType *points_to = pointer_type->info.points_to;
-            if (points_to != NULL)
-            {
-                long long pointee_size = kgpc_type_sizeof(points_to);
-                if (pointee_size > 0)
-                {
-                    *size_out = pointee_size;
-                    return 0;
-                }
-            }
-        }
-        return 1;
-    }
-
-    if (codegen_sizeof_type(ctx, subtype, type_id, record_type, size_out, 0) == 0 &&
-        *size_out > 0)
-    {
-        return 0;
-    }
-
-    pointer_type = expr_get_kgpc_type(pointer_expr);
-    if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
-    {
-        KgpcType *points_to = pointer_type->info.points_to;
-        if (points_to != NULL)
-        {
-            long long pointee_size = kgpc_type_sizeof(points_to);
-            if (pointee_size > 0)
-            {
-                *size_out = pointee_size;
-                return 0;
-            }
-        }
-    }
 
     return 1;
 }
@@ -5450,23 +5579,49 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
 
     const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
     SymTab_t *symtab = (ctx != NULL) ? ctx->symtab : NULL;
-    struct RecordType *record = codegen_expr_record_type(record_access_expr, symtab);
-    if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
-        record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, symtab);
-    if (record == NULL)
-        return NULL;
+    struct RecordType *records_to_try[2] = { NULL, NULL };
+    int record_count = 0;
 
-    ListNode_t *cur = record->fields;
-    while (cur != NULL)
+    if (record_access_expr->expr_data.record_access_data.record_expr != NULL)
     {
-        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
-        {
-            struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
-                return field;
-        }
-        cur = cur->next;
+        records_to_try[record_count++] = codegen_expr_record_type(
+            record_access_expr->expr_data.record_access_data.record_expr, symtab);
     }
+
+    {
+        struct RecordType *result_record =
+            codegen_expr_record_type(record_access_expr, symtab);
+        if (result_record != NULL &&
+            (record_count == 0 || result_record != records_to_try[0]))
+        {
+            records_to_try[record_count++] = result_record;
+        }
+    }
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        struct RecordType *record = records_to_try[i];
+        if (record == NULL)
+            continue;
+
+        struct RecordField *field = semcheck_find_class_field_including_hidden(
+            symtab, record, field_id, NULL);
+        if (field != NULL)
+            return field;
+
+        ListNode_t *cur = record->fields;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+            {
+                field = (struct RecordField *)cur->cur;
+                if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
+                    return field;
+            }
+            cur = cur->next;
+        }
+    }
+
     return NULL;
 }
 
@@ -6452,16 +6607,14 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
             return inst_list;
     }
 
-    /* For class types, addr_reg points to the variable holding the pointer when the
-     * record expression is a VAR_ID, RECORD_ACCESS, or ARRAY_ACCESS yielding a
-     * class-typed field/element. Load the pointer value to get the instance.
-     * Non-var/non-record-access/non-array-access expressions (casts, function calls)
-     * already yield the pointer value. */
-    int needs_class_deref = (is_class_field && !is_type_ref);
-    if (needs_class_deref && record_expr->type != EXPR_VAR_ID &&
-        record_expr->type != EXPR_RECORD_ACCESS &&
-        record_expr->type != EXPR_ARRAY_ACCESS)
-        needs_class_deref = 0;
+    /* codegen_address_for_expr() returns the address of storage for addressable
+     * expressions, even when that storage is wrapped in a cast/as node. For
+     * class-typed expressions that means addr_reg points at the slot holding the
+     * instance pointer, so load the pointer value before applying the field offset.
+     * Non-addressable expressions (for example function calls) already materialise
+     * the instance pointer directly. */
+    int needs_class_deref = (is_class_field && !is_type_ref &&
+                             codegen_expr_is_addressable(record_expr));
     if (needs_class_deref)
     {
         char buffer[64];
@@ -8417,6 +8570,28 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         }
     }
 
+    if (base_is_array && !record_field_lower_known &&
+        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL &&
+        ctx->current_subprogram_owner_class != NULL)
+    {
+        HashNode_t *class_node = NULL;
+        if (FindSymbol(&class_node, ctx->symtab, ctx->current_subprogram_owner_class) != 0 &&
+            class_node != NULL && class_node->type != NULL &&
+            kgpc_type_is_record(class_node->type))
+        {
+            struct RecordType *class_record = kgpc_type_get_record(class_node->type);
+            struct RecordField *field = semcheck_find_class_field_including_hidden(
+                ctx->symtab, class_record, array_expr->expr_data.id, NULL);
+            if (field != NULL && field->is_array)
+            {
+                record_field = field;
+                record_field_lower_known = 1;
+                record_field_lower = field->array_start;
+            }
+        }
+    }
+
     /* EXPR_RECORD_ACCESS with unknown sub-record: try to resolve the field's record type
      * from the symbol table and look up the accessed field within it. */
     if (!base_is_array && !base_is_string && !base_is_pointer &&
@@ -8722,7 +8897,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (has_info)
     {
         first_index_stride = info.strides[0];
-        first_lower_bound = info.dim_lowers[0];
+        first_lower_bound = record_field_lower_known ?
+            record_field_lower : info.dim_lowers[0];
     }
     else
     {
@@ -11608,6 +11784,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else
                 {
                     struct Expression *address_expr = arg_expr;
+                    int forward_open_array_data = 0;
                     if (!codegen_expr_is_addressable(address_expr) &&
                         address_expr != NULL &&
                         address_expr->type == EXPR_FUNCTION_CALL &&
@@ -11634,6 +11811,18 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
                     inst_list = codegen_address_for_expr(address_expr, inst_list, ctx, &addr_reg);
 
+                    if (addr_reg != NULL &&
+                        formal_arg_decl != NULL &&
+                        formal_arg_decl->type == TREE_VAR_DECL &&
+                        formal_arg_decl->tree_data.var_decl_data.is_untyped_param &&
+                        codegen_expr_is_open_array_descriptor_arg(address_expr, ctx))
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                            addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        forward_open_array_data = 1;
+                    }
+
                     /* BUGFIX: For TRUE var parameters of class types, we pass the ADDRESS of the variable itself,
                      * not the value it contains. This allows the callee to update the variable (e.g., FreeAndNil).
                      *
@@ -11642,7 +11831,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
                     struct RecordType *arg_record = codegen_expr_record_type(arg_expr,
                         ctx != NULL ? ctx->symtab : NULL);
-                    if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
+                    if (!forward_open_array_data &&
+                        addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
                         arg_record != NULL && record_type_is_class(arg_record))
                     {
                         /* Check if the argument expression is itself a var parameter variable.
