@@ -1344,6 +1344,35 @@ static int expr_effective_storage_type(const struct Expression *expr, CodeGenCon
     return (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
 }
 
+static long long expr_effective_storage_size_ctx(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        long long size = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        if (size > 0)
+            return size;
+    }
+
+    if (ctx != NULL && ctx->symtab != NULL && expr->type == EXPR_VAR_ID &&
+        expr->expr_data.id != NULL)
+    {
+        HashNode_t *sym_node = NULL;
+        if (FindSymbol(&sym_node, ctx->symtab, expr->expr_data.id) != 0 &&
+            sym_node != NULL && sym_node->type != NULL)
+        {
+            long long size = kgpc_type_sizeof(sym_node->type);
+            if (size > 0)
+                return size;
+        }
+    }
+
+    return expr_effective_size_bytes(expr);
+}
+
 /**
  * Check if an expression requires 64-bit (qword) storage based on its type.
  * This checks both the type tag and storage_size from KgpcType.
@@ -1634,18 +1663,19 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
         return inst_list;
 
     char buffer[64];
+    long long storage_size = expr_effective_storage_size_ctx(expr, NULL);
     if (use_qword)
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg_name);
     else if (type_tag == CHAR_TYPE)
         snprintf(buffer, sizeof(buffer), "\tmovzbl\t-%d(%%rbp), %s\n", offset, reg_name);
-    else if (expr != NULL && expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 2)
+    else if (storage_size == 2)
     {
         if (codegen_type_is_signed(type_tag))
             snprintf(buffer, sizeof(buffer), "\tmovswl\t-%d(%%rbp), %s\n", offset, reg_name);
         else
             snprintf(buffer, sizeof(buffer), "\tmovzwl\t-%d(%%rbp), %s\n", offset, reg_name);
     }
-    else if (expr != NULL && expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 1)
+    else if (storage_size == 1)
     {
         if (codegen_type_is_signed(type_tag))
             snprintf(buffer, sizeof(buffer), "\tmovsbl\t-%d(%%rbp), %s\n", offset, reg_name);
@@ -5212,6 +5242,13 @@ cleanup_constructor:
         if (buf_leaf[0] != '$')
             stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
+        long long storage_size = 0;
+        if (stack_node != NULL && !stack_node->is_array && !stack_node->is_dynamic &&
+            stack_node->size > 0)
+            storage_size = stack_node->size;
+        if (storage_size <= 0)
+            storage_size = expr_effective_storage_size_ctx(expr, ctx);
+
         /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
          * Only apply when the identifier is not a local/stack variable in this scope,
          * otherwise this breaks function result variables that share the function name.
@@ -5433,7 +5470,7 @@ cleanup_constructor:
                 snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
                     target_reg->bit_64, target_reg->bit_32);
             }
-            else if (expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 2)
+            else if (storage_size == 2)
             {
                 if (codegen_type_is_signed(expr_type))
                     snprintf(load_value, sizeof(load_value), "\tmovswl\t(%s), %s\n",
@@ -5442,7 +5479,7 @@ cleanup_constructor:
                     snprintf(load_value, sizeof(load_value), "\tmovzwl\t(%s), %s\n",
                         target_reg->bit_64, target_reg->bit_32);
             }
-            else if (expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 1)
+            else if (storage_size == 1)
             {
                 if (codegen_type_is_signed(expr_type))
                     snprintf(load_value, sizeof(load_value), "\tmovsbl\t(%s), %s\n",
@@ -5605,9 +5642,17 @@ cleanup_constructor:
     }
 
     /* For sub-dword memory operands, use appropriately sized loads */
-    if (!is_immediate && expr != NULL && expr->resolved_kgpc_type != NULL)
+    if (!is_immediate && expr != NULL)
     {
-        long long sz = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        long long sz = expr_effective_storage_size_ctx(expr, ctx);
+        if (expr->type == EXPR_VAR_ID)
+        {
+            int scope_depth = 0;
+            StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+            if (stack_node != NULL && !stack_node->is_array && !stack_node->is_dynamic &&
+                stack_node->size > 0)
+                sz = stack_node->size;
+        }
         if (sz == 2)
         {
             if (codegen_type_is_signed(storage_tag))
