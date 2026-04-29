@@ -78,6 +78,33 @@ static KgpcType *codegen_lookup_owner_field_proc_type(CodeGenContext *ctx,
     return field != NULL ? field->proc_type : NULL;
 }
 
+static void codegen_stmt_hydrate_expr_type_from_symtab(struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->resolved_kgpc_type != NULL || ctx == NULL ||
+        ctx->symtab == NULL || expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return;
+
+    KgpcType *sym_type = codegen_expr_lookup_symtab_type(expr, ctx->symtab);
+    if (sym_type == NULL)
+    {
+        struct RecordField *owner_field = codegen_lookup_owner_field(ctx, expr->expr_data.id);
+        if (owner_field != NULL && owner_field->type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, owner_field->type_id) != 0 &&
+                type_node != NULL)
+                sym_type = type_node->type;
+        }
+    }
+
+    if (sym_type != NULL)
+    {
+        kgpc_type_retain(sym_type);
+        expr->resolved_kgpc_type = sym_type;
+    }
+}
+
 static int codegen_expr_is_const_symbol(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL || symtab == NULL ||
@@ -4730,6 +4757,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 
     if (for_var == NULL)
         return inst_list;
+    codegen_stmt_hydrate_expr_type_from_symtab(for_var, ctx);
 
     // Determine the direction of the loop
     const int is_downto = stmt->stmt_data.for_data.is_downto;
