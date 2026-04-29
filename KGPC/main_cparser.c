@@ -2267,9 +2267,9 @@ static int compile_single_program(
         if (ctx.output_file == NULL)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
-            DestroySymTab(symtab);
             compilation_context_destroy(&g_comp_ctx);
             destroy_tree(user_tree);
+            DestroySymTab(symtab);
             return 1;
         }
         ctx.label_counter = 1;
@@ -2338,9 +2338,9 @@ static int compile_single_program(
         codegen_cache_clear_transient_flags();
     }
 
-    DestroySymTab(symtab);
     compilation_context_destroy(&g_comp_ctx);
     destroy_tree(user_tree);
+    DestroySymTab(symtab);
 
     emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
     return exit_code;
@@ -3346,10 +3346,10 @@ int main(int argc, char **argv)
         if (sem_result > 0)
         {
             fprintf(stderr, "Semantic check failed for unit.\n");
-            DestroySymTab(symtab);
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            DestroySymTab(symtab);
             free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
@@ -3369,10 +3369,10 @@ int main(int argc, char **argv)
         if (ctx.output_file == NULL)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
-            DestroySymTab(symtab);
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            DestroySymTab(symtab);
             free(prelude_path);
             clear_dump_ast_path();
             unit_search_paths_destroy(&g_unit_paths);
@@ -3400,10 +3400,10 @@ int main(int argc, char **argv)
         if (codegen_failed)
         {
             fprintf(stderr, "ERROR: Code generation failed for unit.\n");
-            DestroySymTab(symtab);
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            DestroySymTab(symtab);
             free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
@@ -3415,10 +3415,10 @@ int main(int argc, char **argv)
             return 1;
         }
         
-        DestroySymTab(symtab);
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
         destroy_tree(user_tree);
+        DestroySymTab(symtab);
         free(prelude_path);
         if (ast_nil != NULL)
         {
@@ -3630,11 +3630,11 @@ int main(int argc, char **argv)
         if (ctx.output_file == NULL)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
-            DestroySymTab(symtab);
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             compilation_context_destroy(&g_comp_ctx);
             destroy_tree(user_tree);
+            DestroySymTab(symtab);
             clear_dump_ast_path();
             unit_search_paths_destroy(&g_unit_paths);
             return 1;
@@ -3713,11 +3713,11 @@ int main(int argc, char **argv)
         codegen_cache_clear_transient_flags();
     }
 
-    DestroySymTab(symtab);
     if (prelude_tree != NULL)
         destroy_tree(prelude_tree);
     compilation_context_destroy(&g_comp_ctx);
     destroy_tree(user_tree);
+    DestroySymTab(symtab);
     free(prelude_path);
 
     if (ast_nil != NULL)
