@@ -1614,6 +1614,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             /* Create array KgpcType - takes ownership of element_type */
                             KgpcType *array_type = create_array_type(element_type, start, end);
                             assert(array_type != NULL && "Failed to create array type");
+                            if (element_type != NULL)
+                                kgpc_type_release(element_type);
                             
                             /* Set type_alias on KgpcType so it's properly propagated */
                             kgpc_type_set_type_alias(array_type, alias);
@@ -1946,6 +1948,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (element_type_borrowed)
                                 kgpc_type_retain(element_type);
                             var_kgpc_type = create_array_type(element_type, start, end);
+                            if (element_type != NULL)
+                                kgpc_type_release(element_type);
                             kgpc_type_set_type_alias(var_kgpc_type, alias);
                         }
                         else
