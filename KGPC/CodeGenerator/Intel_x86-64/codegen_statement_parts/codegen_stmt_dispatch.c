@@ -824,6 +824,19 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     size_t j = 0;
                     for (size_t i = 0; i < len && j < alloc_size - 64; i++)
                     {
+                        /* For Intel-syntax blocks: strip '@' prefix from local labels.
+                         * MASM/TASM use @Label but GAS Intel mode does not support '@'.
+                         * Labels starting with a digit after @-stripping get a '_' prefix. */
+                        if (is_intel_syntax && stripped_src[i] == '@' &&
+                            (i == 0 || stripped_src[i-1] == '\n' || isspace((unsigned char)stripped_src[i-1]) ||
+                             stripped_src[i-1] == ','))
+                        {
+                            /* If the label starts with a digit, prefix with '_' */
+                            if (i + 1 < len && isdigit((unsigned char)stripped_src[i + 1]))
+                                cleaned[j++] = '_';
+                            continue; /* skip the '@' character */
+                        }
+
                         if (!is_intel_syntax)
                         {
                             /* Strip C++ style // comments (AT&T only) */
@@ -934,7 +947,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                     default: reg = current_arg_reg64(ri); break;
                                                     }
                                                     if (reg != NULL) {
-                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
+                                                        /* In Intel syntax, strip the '%' prefix */
+                                                        const char *regname = reg;
+                                                        if (is_intel_syntax && regname[0] == '%')
+                                                            regname++;
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", regname);
                                                         sj += (n > 0 ? (size_t)n : 0);
                                                         did_substitute = 1;
                                                     }
@@ -987,10 +1004,14 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                         did_substitute = 1;
                                                     }
                                                 } else if (var->offset > 0) {
-                                                    int n = snprintf(substituted + sj, sub_alloc - sj, "-%d(%%rbp)", var->offset);
-                                                    if (n > 0) {
-                                                        sj += (size_t)n;
-                                                        did_substitute = 1;
+                                                    if (is_intel_syntax) {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                            "[rbp - %d]", var->offset);
+                                                        if (n > 0) { sj += (size_t)n; did_substitute = 1; }
+                                                    } else {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                            "-%d(%%rbp)", var->offset);
+                                                        if (n > 0) { sj += (size_t)n; did_substitute = 1; }
                                                     }
                                                 }
                                             }
