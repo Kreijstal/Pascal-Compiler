@@ -185,6 +185,8 @@ int codegen_get_enumerator_current_info(SymTab_t *symtab, struct RecordType *enu
     HashNode_t **out_current_node, KgpcType **out_current_type);
 void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
     struct Expression *rhs_expr, CodeGenContext *ctx);
+struct RecordField *codegen_lookup_owner_field(CodeGenContext *ctx,
+    const char *field_name);
 struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr);
 struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr,
     CodeGenContext *ctx);
