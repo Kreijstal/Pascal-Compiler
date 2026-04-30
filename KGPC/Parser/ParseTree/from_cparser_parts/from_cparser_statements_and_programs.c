@@ -324,14 +324,14 @@ struct Statement *convert_statement(ast_t *stmt_node) {
                             if (type_node->typ == PASCAL_T_IDENTIFIER) {
                                 if (type_node->sym != NULL)
                                     exception_type_name = strdup(type_node->sym->name);
+                                on_child = on_child->next;
                             }
-                            on_child = on_child->next;
                         }
                         
                         /* Find the statement (should be after all the header stuff) */
                         while (on_child != NULL && on_child->typ != PASCAL_T_STATEMENT && 
                                on_child->typ != PASCAL_T_BEGIN_BLOCK && on_child->typ != PASCAL_T_ASSIGNMENT &&
-                               on_child->typ != PASCAL_T_FUNC_CALL) {
+                               on_child->typ != PASCAL_T_FUNC_CALL && on_child->typ != PASCAL_T_TRY_BLOCK) {
                             on_child = on_child->next;
                         }
                         
