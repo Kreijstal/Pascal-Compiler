@@ -65,6 +65,7 @@ struct TypeAlias
     int enum_is_scoped;        /* 1 if declared under {$SCOPEDENUMS ON} */
     int enum_has_explicit_values; /* 1 if any literal had an explicit assigned value */
     ListNode_t *enum_literals;
+    ListNode_t *enum_values;   /* Stringified ordinal for each enum literal */
     int is_file;
     int file_type;
     char *file_type_id;
@@ -103,6 +104,8 @@ struct RecordField
     int is_array;
     int array_start;
     int array_end;
+    char *array_dim_start_str;
+    char *array_dim_end_str;
     int array_element_type;
     char *array_element_type_id;
     struct TypeRef *array_element_type_ref;
@@ -308,6 +311,7 @@ struct Statement
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
             int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
             char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
+            int is_tp_new_dispose_helper_call; /* 1 if synthesized from TP-style New/Dispose helper lowering */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
             int is_interface_call;           /* 1 if this is an interface method call (needs interface vtable dispatch) */

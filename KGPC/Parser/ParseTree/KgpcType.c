@@ -2909,13 +2909,12 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
     if (alias == NULL)
         return 4;
 
-    if (alias->storage_size > 0)
-        return alias->storage_size;
-
     if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
         (alias->set_element_type_id != NULL &&
          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
         return 32;
 
     if (alias->is_enum_set && alias->inline_enum_values != NULL)
@@ -2932,6 +2931,38 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
             return kgpc_default_set_storage_size_for_high(count - 1);
     }
 
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    return 4;
+}
+
+static long long kgpc_enum_storage_size(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->range_known)
+    {
+        if (alias->range_start >= 0 && alias->range_end <= 0xff)
+            return 1;
+        if (alias->range_start >= 0 && alias->range_end <= 0xffff)
+            return 2;
+        return 4;
+    }
+
+    if (alias->enum_literals != NULL)
+    {
+        int count = kgpc_list_length(alias->enum_literals);
+        if (count > 0 && count <= 0x100)
+            return 1;
+        if (count > 0 && count <= 0x10000)
+            return 2;
+    }
+
     return 4;
 }
 
@@ -2939,6 +2970,14 @@ long long kgpc_type_sizeof(KgpcType *type)
 {
     if (type == NULL)
         return -1;
+
+    if (type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == SET_TYPE &&
+        type->type_alias != NULL &&
+        type->type_alias->is_set)
+    {
+        return kgpc_set_storage_size(type->type_alias);
+    }
 
     if (type->type_alias != NULL &&
         type->type_alias->storage_size > 0 &&
@@ -2957,17 +2996,7 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case BOOL:
                     return 1;
                 case ENUM_TYPE:
-                    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
-                        return type->type_alias->storage_size;
-                    if (type->type_alias != NULL && type->type_alias->enum_literals != NULL)
-                    {
-                        int count = ListLength(type->type_alias->enum_literals);
-                        if (count > 0 && count <= 0x100)
-                            return 1;
-                        if (count > 0 && count <= 0x10000)
-                            return 2;
-                    }
-                    return 4;
+                    return kgpc_enum_storage_size(type->type_alias);
                 case SET_TYPE:
                 {
                     if (type->type_alias != NULL && type->type_alias->is_set)
@@ -3756,7 +3785,8 @@ long long kgpc_type_get_array_of_const_element_size(KgpcType *type)
 
 /* Create a KgpcType from a VarType enum value.
  * This is a helper for migrating from legacy type system.
- * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE,
+ * HASHVAR_METHODPROCEDURE
  * require additional information and cannot be created from VarType alone.
  * Returns NULL for these types - caller must use appropriate create_*_type() function.
  */
@@ -3784,6 +3814,7 @@ KgpcType* kgpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_RECORD:
         case HASHVAR_POINTER:
         case HASHVAR_PROCEDURE:
+        case HASHVAR_METHODPROCEDURE:
         case HASHVAR_UNTYPED:
             /* These require additional information beyond VarType */
             return NULL;
@@ -3905,6 +3936,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     /* Deep copy lists */
     dst->array_dimensions = copy_string_list(src->array_dimensions);
     dst->enum_literals = copy_string_list(src->enum_literals);
+    dst->enum_values = copy_string_list(src->enum_values);
     
     /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
@@ -3950,6 +3982,8 @@ static void free_copied_type_alias(struct TypeAlias *alias)
         destroy_list(alias->array_dimensions);
     if (alias->enum_literals != NULL)
         destroy_list(alias->enum_literals);
+    if (alias->enum_values != NULL)
+        destroy_list(alias->enum_values);
     
     /* Note: We don't free inline_record_type as it's owned by AST */
     

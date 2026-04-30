@@ -3581,6 +3581,36 @@ void kgpc_string_assign(char **target, const char *value)
     *target = kgpc_string_duplicate(value);
 }
 
+char *kgpc_string_unique(char **target)
+{
+    if (target == NULL)
+        return kgpc_alloc_empty_string();
+
+    char *value = *target;
+    if (value == NULL)
+    {
+        value = kgpc_alloc_empty_string();
+        *target = value;
+        return value;
+    }
+
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr == NULL)
+    {
+        value = kgpc_string_duplicate(value);
+        *target = value;
+        return value;
+    }
+
+    if (hdr->refcount <= 1)
+        return value;
+
+    char *copy = kgpc_string_duplicate_length(value, hdr->length);
+    kgpc_string_release(value);
+    *target = copy;
+    return copy;
+}
+
 void kgpc_string_assign_take(char **target, char *value)
 {
     if (target == NULL)
@@ -4038,6 +4068,21 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
 {
     if (dest == NULL || src == NULL || dest_size < 2)
         return;
+
+    if (!kgpc_string_is_managed(src))
+    {
+        unsigned char short_len = (unsigned char)src[0];
+        size_t c_len = strlen(src);
+        if (short_len > 0 && c_len == (size_t)short_len + 1)
+        {
+            size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+            size_t copy_len = (short_len < max_chars) ? short_len : max_chars;
+            dest[0] = (char)copy_len;
+            if (copy_len > 0)
+                memmove(dest + 1, src + 1, copy_len);
+            return;
+        }
+    }
 
     size_t src_len = kgpc_string_known_length(src);
     /* ShortString max capacity is 255 chars (indices 1..255) */
@@ -5377,20 +5422,38 @@ void kgpc_unicodestring_assign(uint16_t **target, const uint16_t *value)
     *target = (uint16_t *)value;
 }
 
-char *kgpc_strpas(const char *p)
+char *kgpc_strpas_string(const char *p)
 {
     if (p == NULL)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(p);
 }
 
-char *kgpc_strpas_len(const char *p, int64_t length)
+char *kgpc_strpas_len_string(const char *p, int64_t length)
 {
     if (p == NULL || length <= 0)
         return kgpc_alloc_empty_string();
     /* Truncate at first NUL, like a C-string — StrPas copies until NUL */
     size_t actual = strnlen(p, (size_t)length);
     return kgpc_string_duplicate_length(p, actual);
+}
+
+void kgpc_strpas(char *dest, const char *p)
+{
+    kgpc_string_to_shortstring(dest, p != NULL ? p : "", 256);
+}
+
+void kgpc_strpas_len(char *dest, const char *p, int64_t length)
+{
+    if (p == NULL || length <= 0)
+    {
+        kgpc_string_to_shortstring(dest, "", 256);
+        return;
+    }
+    size_t actual = strnlen(p, (size_t)length);
+    char *tmp = kgpc_string_duplicate_length(p, actual);
+    kgpc_string_to_shortstring(dest, tmp, 256);
+    kgpc_string_release(tmp);
 }
 
 static int64_t kgpc_pos_internal(const char *hay, size_t hay_len, const char *needle, size_t needle_len, int64_t start_index)

@@ -305,8 +305,8 @@ function kgpc_get_process_id: NativeUInt; external;
 function kgpc_load_library(path: PChar): NativeUInt; external;
 function kgpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; external;
 function kgpc_free_library(handle: NativeUInt): Integer; external;
-function kgpc_strpas(p: PAnsiChar): AnsiString; external;
-function kgpc_strpas_len(p: PAnsiChar; Len: SizeInt): AnsiString; external;
+function kgpc_strpas_string(p: PAnsiChar): AnsiString; external;
+function kgpc_strpas_len_string(p: PAnsiChar; Len: SizeInt): AnsiString; external;
 function c_system(cmd: PAnsiChar): LongInt; cdecl; external name 'system';
 
 function ToPChar(const S: AnsiString): PChar;
@@ -343,7 +343,7 @@ begin
     if P = nil then
         StrPas := ''
     else
-        StrPas := kgpc_strpas(P);
+        StrPas := kgpc_strpas_string(P);
 end;
 
 function StrPas(P: PChar): AnsiString;
@@ -351,7 +351,7 @@ begin
     if P = nil then
         StrPas := ''
     else
-        StrPas := kgpc_strpas(PAnsiChar(P));
+        StrPas := kgpc_strpas_string(PAnsiChar(P));
 end;
 
 function StrPas(P: PAnsiChar; Len: SizeInt): AnsiString;
@@ -359,7 +359,7 @@ begin
     if (P = nil) or (Len <= 0) then
         StrPas := ''
     else
-        StrPas := kgpc_strpas_len(P, Len);
+        StrPas := kgpc_strpas_len_string(P, Len);
 end;
 
 function StrPas(P: PChar; Len: SizeInt): AnsiString;
@@ -367,7 +367,7 @@ begin
     if (P = nil) or (Len <= 0) then
         StrPas := ''
     else
-        StrPas := kgpc_strpas_len(PAnsiChar(P), Len);
+        StrPas := kgpc_strpas_len_string(PAnsiChar(P), Len);
 end;
 
 function StrLen(P: PAnsiChar): SizeInt;

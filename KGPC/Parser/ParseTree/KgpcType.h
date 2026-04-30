@@ -234,7 +234,8 @@ long long kgpc_type_get_array_of_const_element_size(KgpcType *type);
 
 /* Create a KgpcType from a VarType enum value.
  * This is a helper for migrating from the legacy type system.
- * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE require
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE,
+ * HASHVAR_METHODPROCEDURE require
  * additional information beyond VarType and will return NULL - caller must use
  * appropriate create_*_type() function instead.
  * Returns a new KgpcType that caller owns, or NULL for complex types. */

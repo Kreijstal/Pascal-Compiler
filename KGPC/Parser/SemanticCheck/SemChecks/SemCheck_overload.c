@@ -2869,6 +2869,18 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     }
 
                     const char *formal_id = semcheck_get_param_type_id(formal_decl);
+                    if (arg_expr != NULL &&
+                        arg_expr->type == EXPR_ADDR_OF_PROC &&
+                        formal_kgpc != NULL &&
+                        formal_kgpc->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        int actual_is_method =
+                            arg_expr->expr_data.addr_of_proc_data.receiver_expr != NULL;
+                        int formal_is_method = kgpc_type_is_method_pointer(formal_kgpc);
+                        if (!actual_is_method && formal_is_method)
+                            quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
+                    }
+
                     if (formal_id != NULL && is_var_param &&
                         pascal_identifier_equals(formal_id, "OpenString") &&
                         is_string_type(arg_tag))

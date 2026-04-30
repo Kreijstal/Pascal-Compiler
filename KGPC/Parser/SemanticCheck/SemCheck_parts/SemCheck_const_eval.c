@@ -1912,6 +1912,20 @@ static int const_typecast_target_is_ordinal(SymTab_t *symtab, struct Expression 
     return 0;
 }
 
+static int const_fold_uint32_to_signed_ordinal(long long value,
+    long long ordinal_low, long long ordinal_high, long long *out_value)
+{
+    if (out_value == NULL)
+        return 0;
+    if (ordinal_low > INT32_MIN || ordinal_high < INT32_MAX)
+        return 0;
+    if (value < 0 || value > UINT32_MAX)
+        return 0;
+
+    *out_value = (int32_t)(uint32_t)value;
+    return *out_value >= ordinal_low && *out_value <= ordinal_high;
+}
+
 static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, long long *out_value,
     int emit_diagnostics)
 {
@@ -2080,6 +2094,9 @@ static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, l
                 case ENUM_TYPE:
                     if (const_typecast_target_is_ordinal(symtab, expr, &ordinal_low, &ordinal_high))
                     {
+                        if (const_fold_uint32_to_signed_ordinal(inner_value,
+                                ordinal_low, ordinal_high, out_value))
+                            return 0;
                         if (inner_value < ordinal_low || inner_value > ordinal_high)
                         {
                             if (emit_diagnostics)
@@ -2137,6 +2154,9 @@ static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, l
                 case UNKNOWN_TYPE:
                     if (const_typecast_target_is_ordinal(symtab, expr, &ordinal_low, &ordinal_high))
                     {
+                        if (const_fold_uint32_to_signed_ordinal(inner_value,
+                                ordinal_low, ordinal_high, out_value))
+                            return 0;
                         if (inner_value < ordinal_low || inner_value > ordinal_high)
                         {
                             if (emit_diagnostics)
@@ -2152,6 +2172,9 @@ static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, l
                 default:
                     if (const_typecast_target_is_ordinal(symtab, expr, &ordinal_low, &ordinal_high))
                     {
+                        if (const_fold_uint32_to_signed_ordinal(inner_value,
+                                ordinal_low, ordinal_high, out_value))
+                            return 0;
                         if (inner_value < ordinal_low || inner_value > ordinal_high)
                         {
                             if (emit_diagnostics)

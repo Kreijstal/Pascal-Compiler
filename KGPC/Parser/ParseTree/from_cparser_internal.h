@@ -114,6 +114,7 @@ typedef struct {
     int enum_is_scoped;
     int enum_has_explicit_values;
     ListNode_t *enum_literals;
+    ListNode_t *enum_values;
     int is_file;
     int file_type;
     char *file_type_id;

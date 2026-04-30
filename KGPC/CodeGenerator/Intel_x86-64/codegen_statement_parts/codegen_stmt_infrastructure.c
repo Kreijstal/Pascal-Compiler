@@ -825,6 +825,22 @@ long long codegen_record_field_effective_size(struct Expression *expr, CodeGenCo
                 return 8;
         }
 
+        if (ctx->symtab != NULL && field_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, field_type_id) != 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long type_size = kgpc_type_sizeof(type_node->type);
+                if (type_size > 0 &&
+                    type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                    type_node->type->info.primitive_type_tag == ENUM_TYPE)
+                    return type_size;
+                if (type_size > 0 && !(field->has_cached_layout && field->cached_size > 0))
+                    return type_size;
+            }
+        }
+
         if (field->has_cached_layout && field->cached_size > 0)
             return field->cached_size;
 
@@ -1097,6 +1113,7 @@ ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *stmt,
     }
     call_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
     call_stmt->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+    call_stmt->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call = 1;
 
     if (semcheck_stmt(ctx->symtab, call_stmt, INT_MAX) != 0)
     {

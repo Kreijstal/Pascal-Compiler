@@ -43,6 +43,55 @@ static long long align_offset(long long offset, int alignment);
 static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int depth, int line_num);
 static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, int *align_out, int depth, int line_num);
+int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value);
+
+static int parse_or_resolve_bound(SymTab_t *symtab, const char *text, long long *out)
+{
+    if (text == NULL || out == NULL)
+        return 1;
+    while (*text == ' ' || *text == '\t')
+        text++;
+    if (resolve_const_identifier(symtab, text, out) == 0)
+        return 0;
+    char *endptr = NULL;
+    long long parsed = strtoll(text, &endptr, 10);
+    if (endptr != text)
+    {
+        while (*endptr == ' ' || *endptr == '\t')
+            endptr++;
+        if (*endptr == '\0')
+        {
+            *out = parsed;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void resolve_record_field_array_bounds(SymTab_t *symtab,
+    struct RecordField *field)
+{
+    if (symtab == NULL || field == NULL || !field->is_array ||
+        field->array_dim_start_str == NULL || field->array_dim_end_str == NULL)
+        return;
+
+    long long start = 0;
+    long long end = 0;
+    if (parse_or_resolve_bound(symtab, field->array_dim_start_str, &start) != 0 ||
+        parse_or_resolve_bound(symtab, field->array_dim_end_str, &end) != 0)
+        return;
+
+    if (field->array_start == (int)start && field->array_end == (int)end &&
+        field->array_is_open == (end < start))
+        return;
+
+    field->array_start = (int)start;
+    field->array_end = (int)end;
+    field->array_is_open = (end < start);
+    field->has_cached_layout = 0;
+    field->cached_size = 0;
+    field->cached_alignment = 0;
+}
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -167,9 +216,11 @@ static long long fpc_set_storage_size_from_alias(SymTab_t *symtab, struct TypeAl
     long long result = 4;
 
     if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
         (alias->set_element_type_id != NULL &&
          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
     {
         result = 32;
     }
@@ -209,6 +260,14 @@ static long long fpc_enum_storage_size_from_alias(const struct TypeAlias *alias)
 {
     if (alias != NULL && alias->storage_size > 0)
         return alias->storage_size;
+    if (alias != NULL && alias->range_known)
+    {
+        if (alias->range_start >= 0 && alias->range_end <= 0xff)
+            return 1;
+        if (alias->range_start >= 0 && alias->range_end <= 0xffff)
+            return 2;
+        return 4;
+    }
     if (alias != NULL && alias->enum_literals != NULL)
     {
         int count = list_length(alias->enum_literals);
@@ -506,6 +565,8 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     if (field == NULL)
         return 1;  /* Minimum alignment */
 
+    resolve_record_field_array_bounds(symtab, field);
+
     if (field->has_cached_layout)
         return field->cached_alignment;
 
@@ -595,6 +656,7 @@ static int compute_field_size_uncached(SymTab_t *symtab, struct RecordField *fie
 
     if (field->is_array)
     {
+        resolve_record_field_array_bounds(symtab, field);
         const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
         if (debug_env != NULL && field->name != NULL) {
             fprintf(stderr, "[KGPC] compute_field_size array: field=%s is_open=%d start=%d end=%d\n",
@@ -697,6 +759,7 @@ static int compute_field_size_uncached(SymTab_t *symtab, struct RecordField *fie
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num)
 {
+    resolve_record_field_array_bounds(symtab, field);
     if (field != NULL && field->has_cached_layout)
     {
         if (size_out != NULL)
