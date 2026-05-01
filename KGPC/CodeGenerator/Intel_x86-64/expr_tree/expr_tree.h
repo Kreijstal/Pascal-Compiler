@@ -35,6 +35,5 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 int expr_tree_is_leaf(expr_node_t *);
 void print_expr_tree(expr_node_t *, int num_indent, FILE *);
 void free_expr_tree(expr_node_t *);
-long long expr_effective_storage_size_ctx(const struct Expression *expr, CodeGenContext *ctx);
 
 #endif
