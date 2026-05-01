@@ -1344,7 +1344,7 @@ static int expr_effective_storage_type(const struct Expression *expr, CodeGenCon
     return (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
 }
 
-long long expr_effective_storage_size_ctx(const struct Expression *expr,
+static long long expr_effective_storage_size_ctx(const struct Expression *expr,
     CodeGenContext *ctx)
 {
     if (expr == NULL)
@@ -1357,14 +1357,6 @@ long long expr_effective_storage_size_ctx(const struct Expression *expr,
             return size;
     }
 
-    if (expr->type == EXPR_RECORD_ACCESS)
-    {
-        long long field_size = codegen_record_field_effective_size(
-            (struct Expression *)expr, ctx);
-        if (field_size > 0)
-            return field_size;
-    }
-
     if (ctx != NULL && ctx->symtab != NULL && expr->type == EXPR_VAR_ID &&
         expr->expr_data.id != NULL)
     {
@@ -1375,17 +1367,6 @@ long long expr_effective_storage_size_ctx(const struct Expression *expr,
             long long size = kgpc_type_sizeof(sym_node->type);
             if (size > 0)
                 return size;
-        }
-
-        struct RecordField *owner_field =
-            codegen_lookup_owner_field(ctx, expr->expr_data.id);
-        if (owner_field != NULL)
-        {
-            long long field_size = 0;
-            if (codegen_sizeof_type_reference(ctx, owner_field->type,
-                    owner_field->type_id, owner_field->nested_record,
-                    &field_size) == 0 && field_size > 0)
-                return field_size;
         }
     }
 
@@ -1682,7 +1663,7 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
         return inst_list;
 
     char buffer[64];
-    long long storage_size = expr_effective_storage_size_ctx(expr, ctx);
+    long long storage_size = expr_effective_storage_size_ctx(expr, NULL);
     if (use_qword)
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg_name);
     else if (type_tag == CHAR_TYPE)

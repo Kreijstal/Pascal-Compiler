@@ -12,7 +12,7 @@ static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, 
     return node->type;
 }
 
-struct RecordField *codegen_lookup_owner_field(CodeGenContext *ctx,
+static struct RecordField *codegen_lookup_owner_field(CodeGenContext *ctx,
     const char *field_name)
 {
     if (ctx == NULL || ctx->symtab == NULL ||
@@ -1300,14 +1300,45 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int use_word = 0;
             const char *value_reg8 = NULL;
             const char *value_reg16 = NULL;
-            long long target_size = expr_effective_storage_size_ctx(var_expr, ctx);
-            /* Look up sym_type and owner_field for class-reference type checks below. */
-            KgpcType *sym_type = codegen_expr_lookup_symtab_type(var_expr,
-                ctx != NULL ? ctx->symtab : NULL);
+            KgpcType *sym_type = NULL;
             struct RecordField *owner_field = NULL;
-            if (var_expr != NULL && var_expr->type == EXPR_VAR_ID &&
+            long long target_size = (var_expr->type == EXPR_RECORD_ACCESS) ?
+                codegen_record_field_effective_size(var_expr, ctx) :
+                expr_effective_size_bytes(var_expr);
+            /* Cross-check with resolved_kgpc_type for sub-dword fields
+             * (e.g. Integer=SmallInt in FPC mode where type tag says 4
+             * but actual storage is 2 bytes). */
+            if (target_size == 4 && var_expr != NULL &&
+                var_expr->resolved_kgpc_type != NULL)
+            {
+                use_qword = 1;
+            }
+            if ((target_size <= 0 || target_size == 4) && ctx != NULL &&
+                ctx->symtab != NULL)
+            {
+                sym_type = codegen_expr_lookup_symtab_type(var_expr, ctx->symtab);
+                if (sym_type != NULL)
+                {
+                    long long sym_size = kgpc_type_sizeof(sym_type);
+                    if (sym_size > 0)
+                        target_size = sym_size;
+                }
+            }
+            if (sym_type == NULL && var_expr != NULL && var_expr->type == EXPR_VAR_ID &&
                 var_expr->expr_data.id != NULL)
+            {
                 owner_field = codegen_lookup_owner_field(ctx, var_expr->expr_data.id);
+                if (owner_field != NULL)
+                {
+                    long long field_size = 0;
+                    if (codegen_sizeof_type_reference(ctx, owner_field->type,
+                            owner_field->type_id, owner_field->nested_record,
+                            &field_size) == 0 && field_size > 0)
+                    {
+                        target_size = field_size;
+                    }
+                }
+            }
             if (!use_qword &&
                 (codegen_stmt_type_is_class_vmt_value(var_expr->resolved_kgpc_type) ||
                  codegen_stmt_type_is_class_vmt_value(sym_type)))
@@ -1485,11 +1516,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset, ctx);
             int use_qword = codegen_type_uses_qword(var_type);
             struct RecordField *owner_field = codegen_lookup_owner_field(ctx, var_expr->expr_data.id);
-            /* Determine effective storage size: use structured type metadata first,
-             * fall back to pointer size if nothing is known. */
-            long long resolved_size = expr_effective_storage_size_ctx(var_expr, ctx);
-            if (resolved_size <= 0)
-                resolved_size = CODEGEN_POINTER_SIZE_BYTES;
+            /* Override for Single type (4-byte float): check resolved type storage */
+            long long resolved_size = (var_expr->resolved_kgpc_type != NULL) ?
+                kgpc_type_sizeof(var_expr->resolved_kgpc_type) : 8;
+            if (resolved_size <= 0 && owner_field != NULL)
+            {
+                long long field_size = 0;
+                if (codegen_sizeof_type_reference(ctx, owner_field->type,
+                        owner_field->type_id, owner_field->nested_record,
+                        &field_size) == 0 && field_size > 0)
+                {
+                    resolved_size = field_size;
+                }
+            }
             if (is_single_float_type(var_type, resolved_size))
                 use_qword = 0;
             else if (!use_qword && owner_field != NULL && owner_field->type_id != NULL)
