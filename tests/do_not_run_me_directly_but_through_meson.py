@@ -3624,6 +3624,11 @@ FPC_RTL_ONLY_TESTS = {
 # exercise implicit System/ObjPas/FPC bootstrap behavior.
 FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "bitsizeof_const_expr",
+    # Pins the FreeMem-bypasses-RTL fix: with --no-stdlib + FPC RTL, a regression
+    # would route FreeMem(p) through libc free instead of MemoryManager.FreeMem,
+    # producing a "double free or corruption" SIGABRT. Two-arg FreeMem(p, size)
+    # form must also stay routed through the user-visible Pascal FreeMem.
+    "dos_freemem",
     "fpc_bootstrap_absolute_record_field",
     "fpc_bootstrap_andor_complex",
     "fpc_bootstrap_ansichar_type",
@@ -3727,6 +3732,10 @@ FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "system_core_basics",
     "system_qualified_length_if",
     "tdd_cp_acp_paramstr_ioresult",
+    # GetMem/FreeMem allocator-pairing repro: FreeMem(p) must route through the
+    # user-visible Pascal FreeMem (FPC's freemem_p) — same allocator as the
+    # GetMem(N) above it — not directly to the runtime kgpc_freemem helper.
+    "tdd_repro_pp_freemem_bypasses_rtl",
     "tdd_system_exit_qualified",
     "tdd_system_ttypekind",
     "tdd_types_core_symbols_bootstrap",

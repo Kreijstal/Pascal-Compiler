@@ -8393,7 +8393,18 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         else
             snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %s\n", arg_reg);
         inst_list = add_inst(inst_list, buffer);
+
         inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+        /* Free the instance memory.  We use kgpc_freemem (libc free)
+         * because the constructor codegen path uses kgpc_allocmem
+         * (libc malloc) — see codegen_constructor_call in expr_tree.c
+         * and the early-generic path in this file.  Routing via the
+         * Pascal-level FreeMem (FPC RTL's freemem_p ->
+         * MemoryManager.FreeMem) would mismatch the allocator and
+         * corrupt the heap when shutdown finalizers free objects like
+         * the OutOfMemory exception singleton.  User-code GetMem/FreeMem
+         * pairs are handled separately via overload resolution and are
+         * not affected by this body. */
         inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
     }
 
