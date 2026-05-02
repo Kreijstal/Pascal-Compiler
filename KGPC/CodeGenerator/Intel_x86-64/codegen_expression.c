@@ -9200,7 +9200,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     KgpcArrayDimensionInfo info;
     int has_info = 0;
-    if (base_is_array && array_type != NULL && !array_is_open_array &&
+    if (base_is_array && array_type != NULL &&
         kgpc_type_get_array_dimension_info(array_type, ctx->symtab, &info) == 0)
     {
         has_info = 1;
@@ -9680,7 +9680,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                     KGPC_COMPILER_HARD_ASSERT(element_size_ok,
                         "codegen_get_indexable_element_size failed in stride computation");
                     stride = element_size_ll;
-                    extra_lower_bound = 1; /* Default to 1-based */
+                    extra_lower_bound = 0;
                 }
 
                 {
@@ -12181,6 +12181,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
                     inst_list = codegen_address_for_expr(address_expr, inst_list, ctx, &addr_reg);
 
+                    /* BUGFIX: For assigned() with comma-syntax multi-dimensional array
+                     * accesses (e.g., assigned(fbitmap[x1,y1])), codegen_address_for_expr
+                     * returns the address of the innermost pointer slot.  kgpc_assigned
+                     * expects the pointer VALUE, not its address, so we must dereference. */
+                    if (addr_reg != NULL &&
+                        call_mangled != NULL &&
+                        strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                        address_expr != NULL &&
+                        address_expr->type == EXPR_ARRAY_ACCESS &&
+                        address_expr->expr_data.array_access_data.extra_indices != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                            addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
                     if (addr_reg != NULL &&
                         formal_arg_decl != NULL &&
                         formal_arg_decl->type == TREE_VAR_DECL &&
@@ -12421,6 +12437,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (codegen_had_error(ctx) || addr_reg == NULL)
                     return inst_list;
 
+                /* BUGFIX: For assigned() with comma-syntax multi-dimensional array
+                 * accesses, codegen_address_for_expr returns the address of the
+                 * innermost pointer slot.  kgpc_assigned expects the pointer VALUE,
+                 * not its address, so we must dereference. */
+                if (addr_reg != NULL &&
+                    call_mangled != NULL &&
+                    strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                    arg_expr != NULL &&
+                    arg_expr->type == EXPR_ARRAY_ACCESS &&
+                    arg_expr->expr_data.array_access_data.extra_indices != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
                 StackNode_t *arg_spill = add_l_t("arg_eval");
                 if (arg_spill != NULL && arg_infos != NULL)
                 {
@@ -12541,6 +12573,53 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * method pointer (or evaluate it into a register), load
                  * the code-field via [reg], and pass that as the scalar
                  * argument to kgpc_assigned. */
+                Register_t *src_reg = NULL;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                else
+                {
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                char load_buf[128];
+                snprintf(load_buf, sizeof(load_buf),
+                    "\tmovq\t(%s), %s\n", src_reg->bit_64, src_reg->bit_64);
+                inst_list = add_inst(inst_list, load_buf);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(load_buf, sizeof(load_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                        src_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, load_buf);
+                    free_reg(get_reg_stack(), src_reg);
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], src_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+            }
+            else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
+                     kgpc_type_is_dynamic_array(expr_get_kgpc_type(arg_expr)) &&
+                     call_mangled != NULL &&
+                     strcmp(call_mangled, "kgpc_assigned") == 0)
+            {
+                /* Assigned(dynarray) must inspect only the data-pointer
+                 * field (offset 0) of the dynamic-array descriptor.
+                 * Passing the descriptor's address would always test
+                 * non-null because the descriptor lives in the heap-
+                 * allocated outer array.  Instead, load the data pointer
+                 * via [reg] and pass that scalar to kgpc_assigned. */
                 Register_t *src_reg = NULL;
                 if (codegen_expr_is_addressable(arg_expr))
                 {
@@ -13014,6 +13093,21 @@ pass_value_arg:
                     }
                     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
                     free_expr_tree(expr_tree);
+                }
+
+                /* BUGFIX: For assigned() with comma-syntax array accesses,
+                 * gencode_expr_tree returns the address of the pointer slot.
+                 * kgpc_assigned expects the pointer VALUE, so dereference. */
+                if (top_reg != NULL &&
+                    call_mangled != NULL &&
+                    strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                    arg_expr != NULL &&
+                    arg_expr->type == EXPR_ARRAY_ACCESS &&
+                    arg_expr->expr_data.array_access_data.extra_indices != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        top_reg->bit_64, top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
                 }
 
                 if (expected_type == REAL_TYPE)

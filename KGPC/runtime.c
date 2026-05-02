@@ -3965,11 +3965,7 @@ void kgpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor
     size_t descriptor_size)
 {
     if (dest_descriptor == NULL)
-    {
-        if (temp_descriptor != NULL)
-            free(temp_descriptor);
         return;
-    }
 
     if (descriptor_size == 0)
         descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
@@ -3981,7 +3977,89 @@ void kgpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor
     }
 
     memcpy(dest_descriptor, temp_descriptor, descriptor_size);
-    free(temp_descriptor);
+}
+
+/* Deep-copy a dynamic array: allocate heap buffer, copy element data,
+ * and return a new descriptor. */
+void *kgpc_dynarray_deep_copy(const void *src_descriptor, size_t descriptor_size,
+    size_t element_size)
+{
+    if (src_descriptor == NULL || element_size == 0)
+        return NULL;
+
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
+
+    const kgpc_dynarray_descriptor_t *src = (const kgpc_dynarray_descriptor_t *)src_descriptor;
+    size_t count = src->length > 0 ? (size_t)src->length : 0;
+    size_t data_bytes = count * element_size;
+
+    void *heap_desc = malloc(descriptor_size);
+    if (heap_desc == NULL)
+        return NULL;
+
+    memcpy(heap_desc, src_descriptor, descriptor_size);
+    kgpc_dynarray_descriptor_t *dst = (kgpc_dynarray_descriptor_t *)heap_desc;
+
+    if (data_bytes > 0 && src->data != NULL)
+    {
+        void *heap_data = malloc(data_bytes);
+        if (heap_data != NULL)
+        {
+            memcpy(heap_data, src->data, data_bytes);
+            dst->data = heap_data;
+        }
+        else
+        {
+            dst->data = NULL;
+            dst->length = 0;
+        }
+    }
+    else
+    {
+        dst->data = NULL;
+        dst->length = 0;
+    }
+
+    return heap_desc;
+}
+
+/* Deep-copy into an existing destination descriptor. */
+void kgpc_dynarray_deep_copy_into(void *dest_descriptor, const void *src_descriptor,
+    size_t descriptor_size, size_t element_size)
+{
+    if (dest_descriptor == NULL || src_descriptor == NULL || element_size == 0)
+        return;
+
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
+
+    const kgpc_dynarray_descriptor_t *src = (const kgpc_dynarray_descriptor_t *)src_descriptor;
+    kgpc_dynarray_descriptor_t *dst = (kgpc_dynarray_descriptor_t *)dest_descriptor;
+
+    size_t count = src->length > 0 ? (size_t)src->length : 0;
+    size_t data_bytes = count * element_size;
+
+    void *heap_data = NULL;
+    if (data_bytes > 0 && src->data != NULL)
+    {
+        heap_data = malloc(data_bytes);
+        if (heap_data != NULL)
+            memcpy(heap_data, src->data, data_bytes);
+        else
+            count = 0;
+    }
+    else
+    {
+        count = 0;
+    }
+
+    /* Mirror the full descriptor (matching kgpc_dynarray_deep_copy) so
+     * any per-descriptor metadata beyond data/length is preserved, then
+     * point the destination at the freshly heap-allocated buffer. */
+    memcpy(dest_descriptor, src_descriptor, descriptor_size);
+    dst->data = heap_data;
+    dst->length = (int64_t)count;
 }
 
 long long kgpc_dynarray_compute_high(const void *descriptor_ptr, long long lower_bound)

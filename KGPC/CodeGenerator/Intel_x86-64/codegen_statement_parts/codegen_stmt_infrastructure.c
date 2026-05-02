@@ -1561,7 +1561,46 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             dest_temp->offset, dest_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        inst_list = codegen_call_dynarray_assign_from_temp(inst_list, ctx, dest_reload, value_reg, descriptor_size);
+        /* Array literals materialize their data on the stack. For typed
+         * constants and other storage that outlives the current frame,
+         * deep-copy the element data to the heap so the descriptor does
+         * not point to reclaimed stack memory. */
+        if (src_expr != NULL && src_expr->type == EXPR_ARRAY_LITERAL)
+        {
+            int elem_size = expr_get_array_element_size(src_expr, ctx);
+            if (elem_size <= 0)
+                elem_size = CODEGEN_POINTER_SIZE_BYTES;
+
+            char deep_buf[128];
+            if (codegen_target_is_windows())
+            {
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rcx\n", dest_reload->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%r8d\n", descriptor_size);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%r9d\n", elem_size);
+                inst_list = add_inst(inst_list, deep_buf);
+            }
+            else
+            {
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rdi\n", dest_reload->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%edx\n", descriptor_size);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%ecx\n", elem_size);
+                inst_list = add_inst(inst_list, deep_buf);
+            }
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_deep_copy_into");
+        }
+        else
+        {
+            inst_list = codegen_call_dynarray_assign_from_temp(inst_list, ctx, dest_reload, value_reg, descriptor_size);
+        }
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), dest_reload);
     }

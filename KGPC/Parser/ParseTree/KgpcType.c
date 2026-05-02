@@ -3558,15 +3558,34 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
     }
     else
     {
-        /* Traverse nested KgpcType objects */
+        /* Traverse nested KgpcType objects, computing strides per-dimension
+         * using the sizeof each level's element type. This correctly handles
+         * mixed static/dynamic nested arrays where intermediate element types
+         * are dynamic array descriptors (16 bytes) rather than scalar elements.
+         * Example: array of array[0..255] of array of longint
+         *   stride[0] = sizeof(array[0..255] of array of longint) = 4096
+         *   stride[1] = sizeof(array of longint) = 16
+         *   stride[2] = sizeof(longint) = 8
+         */
         KgpcType *curr = type;
         while (curr != NULL && curr->kind == TYPE_KIND_ARRAY && info->dim_count < 10)
         {
+            KgpcType *elem_type = curr->info.array_info.element_type;
+            long long elem_size = kgpc_type_sizeof(elem_type);
+            if (elem_size <= 0)
+                elem_size = 1;
+
             info->dim_lowers[info->dim_count] = curr->info.array_info.start_index;
             info->dim_uppers[info->dim_count] = curr->info.array_info.end_index;
-            info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+
+            long long dim_size = curr->info.array_info.end_index - curr->info.array_info.start_index + 1;
+            if (dim_size < 0) dim_size = 0;  /* dynamic array: runtime-determined */
+
+            info->dim_sizes[info->dim_count] = dim_size;
+            info->strides[info->dim_count] = elem_size;
+
             info->dim_count++;
-            curr = curr->info.array_info.element_type;
+            curr = elem_type;
         }
         if (curr != NULL)
             info->element_size = kgpc_type_sizeof(curr);
@@ -3578,16 +3597,35 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
     if (info->element_size <= 0)
         info->element_size = 1;
 
-    /* Compute strides and total size */
-    info->total_size = info->element_size;
-    for (int i = info->dim_count - 1; i >= 0; i--)
+    /* Compute total_size if not already set (alias branch uses the loop below;
+     * else branch strides are already computed per-level above). */
+    if (info->strides[0] == 0)
     {
-        info->strides[i] = info->total_size;
-        if (info->dim_sizes[i] > 0)
+        /* Alias branch: compute strides from element_size */
+        info->total_size = info->element_size;
+        for (int i = info->dim_count - 1; i >= 0; i--)
         {
-            if (info->total_size > LLONG_MAX / info->dim_sizes[i])
-                return -1;
-            info->total_size *= info->dim_sizes[i];
+            info->strides[i] = info->total_size;
+            if (info->dim_sizes[i] > 0)
+            {
+                if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+                    return -1;
+                info->total_size *= info->dim_sizes[i];
+            }
+        }
+    }
+    else
+    {
+        /* Else branch: strides computed per-level; compute total_size */
+        info->total_size = info->element_size;
+        for (int i = info->dim_count - 1; i >= 0; i--)
+        {
+            if (info->dim_sizes[i] > 0)
+            {
+                if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+                    return -1;
+                info->total_size *= info->dim_sizes[i];
+            }
         }
     }
 
