@@ -471,10 +471,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
      * is a known static array (e.g. var of a named array type), we must
      * still route through codegen_assign_static_array to perform a memcpy
      * of the literal data instead of storing a dangling stack-descriptor
-     * pointer into the variable. */
+     * pointer into the variable.
+     *
+     * BUT: if the destination type is a dynamic array (even if the
+     * expression's array_is_dynamic flag was not set — which happens
+     * for typed constant variables), we must use
+     * codegen_assign_dynamic_array.  Otherwise, memcpy'ing raw element
+     * data into the 16-byte descriptor slot overflows and corrupts
+     * adjacent stack variables (e.g. the function result descriptor). */
     if (dest_is_static_array && assign_expr != NULL &&
         assign_expr->type == EXPR_ARRAY_LITERAL)
     {
+        KgpcType *dest_type = expr_get_kgpc_type(var_expr);
+        int dest_is_dynamic = 0;
+        if (dest_type != NULL)
+            dest_is_dynamic = kgpc_type_is_dynamic_array(dest_type);
+        else if (var_expr->type == EXPR_VAR_ID)
+        {
+            /* Fallback: expr_get_kgpc_type may return NULL when
+             * resolved_kgpc_type is not set on the expression, but
+             * the StackNode knows it's dynamic. */
+            StackNode_t *node = find_label(var_expr->expr_data.id);
+            if (node != NULL && node->is_dynamic)
+                dest_is_dynamic = 1;
+        }
+        if (dest_is_dynamic)
+            return codegen_assign_dynamic_array(var_expr, assign_expr, inst_list, ctx);
         return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
     }
     else if (var_expr->type == EXPR_RECORD_ACCESS)
@@ -1311,7 +1333,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (target_size == 4 && var_expr != NULL &&
                 var_expr->resolved_kgpc_type != NULL)
             {
-                use_qword = 1;
+                long long resolved_size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                if (resolved_size > 0 && resolved_size < 4)
+                    target_size = resolved_size;
             }
             if ((target_size <= 0 || target_size == 4) && ctx != NULL &&
                 ctx->symtab != NULL)

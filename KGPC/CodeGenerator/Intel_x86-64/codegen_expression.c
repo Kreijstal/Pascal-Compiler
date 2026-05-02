@@ -9200,7 +9200,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     KgpcArrayDimensionInfo info;
     int has_info = 0;
-    if (base_is_array && array_type != NULL && !array_is_open_array &&
+    if (base_is_array && array_type != NULL &&
         kgpc_type_get_array_dimension_info(array_type, ctx->symtab, &info) == 0)
     {
         has_info = 1;
@@ -12541,6 +12541,53 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * method pointer (or evaluate it into a register), load
                  * the code-field via [reg], and pass that as the scalar
                  * argument to kgpc_assigned. */
+                Register_t *src_reg = NULL;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                else
+                {
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                char load_buf[128];
+                snprintf(load_buf, sizeof(load_buf),
+                    "\tmovq\t(%s), %s\n", src_reg->bit_64, src_reg->bit_64);
+                inst_list = add_inst(inst_list, load_buf);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(load_buf, sizeof(load_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                        src_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, load_buf);
+                    free_reg(get_reg_stack(), src_reg);
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], src_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+            }
+            else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
+                     kgpc_type_is_dynamic_array(expr_get_kgpc_type(arg_expr)) &&
+                     call_mangled != NULL &&
+                     strcmp(call_mangled, "kgpc_assigned") == 0)
+            {
+                /* Assigned(dynarray) must inspect only the data-pointer
+                 * field (offset 0) of the dynamic-array descriptor.
+                 * Passing the descriptor's address would always test
+                 * non-null because the descriptor lives in the heap-
+                 * allocated outer array.  Instead, load the data pointer
+                 * via [reg] and pass that scalar to kgpc_assigned. */
                 Register_t *src_reg = NULL;
                 if (codegen_expr_is_addressable(arg_expr))
                 {

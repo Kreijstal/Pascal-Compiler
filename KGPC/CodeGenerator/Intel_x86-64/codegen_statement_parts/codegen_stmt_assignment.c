@@ -1150,6 +1150,14 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
         return inst_list;
 
+    /* If the destination is actually a dynamic array (e.g. typed constant
+     * whose expression lacks array_is_dynamic), routing through
+     * codegen_assign_dynamic_array avoids raw memcpy overflowing the
+     * 16-byte descriptor slot. */
+    KgpcType *dest_type = expr_get_kgpc_type(dest_expr);
+    if (dest_type != NULL && kgpc_type_is_dynamic_array(dest_type))
+        return codegen_assign_dynamic_array(dest_expr, src_expr, inst_list, ctx);
+
     int dest_lower = 0, dest_upper = -1, dest_is_shortstring = 0;
     int src_lower = 0, src_upper = -1, src_is_shortstring = 0;
     int dest_is_char_array = codegen_get_char_array_bounds(dest_expr, ctx,
