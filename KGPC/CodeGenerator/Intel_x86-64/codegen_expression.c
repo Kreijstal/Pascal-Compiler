@@ -3147,13 +3147,23 @@ static ListNode_t *codegen_emit_class_cast_check_from_instance_ptr(struct Expres
         return inst_list;
     }
 
+    /* FPC semantics: (nil as T) yields nil without performing the type check.
+     * Skip the VMT/RTTI dereference when the source pointer is NULL. */
+    char skip_label[64];
+    gen_label(skip_label, sizeof(skip_label), ctx);
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n",
+        instance_ptr_reg->bit_64, instance_ptr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+
     Register_t *typeinfo_reg = NULL;
     inst_list = codegen_load_typeinfo_from_instance_ptr(inst_list, ctx,
         instance_ptr_reg, &typeinfo_reg);
     if (typeinfo_reg == NULL || codegen_had_error(ctx))
         return inst_list;
 
-    char buffer[128];
     /* Preserve the instance pointer across the runtime call (caller-saved registers may be clobbered).
      * Reserve the 32-byte Windows shadow space as well so the saved pointer is not overwritten. */
     inst_list = add_inst(inst_list, "\tsubq\t$48, %rsp\n");
@@ -3170,6 +3180,9 @@ static ListNode_t *codegen_emit_class_cast_check_from_instance_ptr(struct Expres
     snprintf(buffer, sizeof(buffer), "\tmovq\t32(%%rsp), %s\n", instance_ptr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\taddq\t$48, %rsp\n");
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
     return inst_list;
 }
 
@@ -3188,13 +3201,22 @@ static ListNode_t *codegen_emit_class_cast_check_from_class_vmt_ptr(struct Expre
         return inst_list;
     }
 
+    /* FPC semantics: (nil as T) yields nil without performing the type check. */
+    char skip_label[64];
+    gen_label(skip_label, sizeof(skip_label), ctx);
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n",
+        class_vmt_reg->bit_64, class_vmt_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+
     Register_t *typeinfo_reg = NULL;
     inst_list = codegen_load_typeinfo_from_class_vmt_ptr(inst_list, ctx,
         class_vmt_reg, &typeinfo_reg);
     if (typeinfo_reg == NULL || codegen_had_error(ctx))
         return inst_list;
 
-    char buffer[128];
     inst_list = add_inst(inst_list, "\tsubq\t$48, %rsp\n");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 32(%%rsp)\n", class_vmt_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
@@ -3209,6 +3231,9 @@ static ListNode_t *codegen_emit_class_cast_check_from_class_vmt_ptr(struct Expre
     snprintf(buffer, sizeof(buffer), "\tmovq\t32(%%rsp), %s\n", class_vmt_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\taddq\t$48, %rsp\n");
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
     return inst_list;
 }
 
@@ -5200,6 +5225,122 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
 
 static int codegen_sizeof_variant_part(CodeGenContext *ctx, struct VariantPart *variant,
     long long *size_out, int depth);
+static int codegen_get_variant_part_alignment(CodeGenContext *ctx,
+    struct VariantPart *variant, int depth);
+static int codegen_get_record_members_alignment(CodeGenContext *ctx,
+    ListNode_t *members, int depth);
+
+/* Align an offset to a given alignment boundary. */
+static long long codegen_align_offset_value(long long offset, int alignment)
+{
+    if (alignment <= 1)
+        return offset;
+    long long rem = offset % alignment;
+    if (rem == 0)
+        return offset;
+    return offset + (alignment - rem);
+}
+
+/* Compute the alignment requirement of a single record field.  Mirrors
+ * SemCheck_sizeof.c::get_field_alignment without the cached_alignment
+ * lookup (codegen does not maintain that cache field).  Returns 1 when the
+ * type cannot be resolved to keep the existing behaviour safe. */
+static int codegen_get_field_alignment(CodeGenContext *ctx,
+    struct RecordField *field, int depth)
+{
+    if (field == NULL)
+        return 1;
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+        return 1;
+    if (field->is_pointer)
+        return CODEGEN_POINTER_SIZE_BYTES;
+    if (field->is_array && field->array_is_open)
+        return CODEGEN_POINTER_SIZE_BYTES;
+
+    long long size = 0;
+    int type_tag = field->type;
+    const char *type_id = field->type_id;
+    struct RecordType *record_type = field->nested_record;
+    if (field->is_array)
+    {
+        type_tag = field->array_element_type;
+        type_id = field->array_element_type_id;
+        record_type = field->array_element_record;
+    }
+
+    if (record_type != NULL)
+    {
+        if (codegen_sizeof_record(ctx, record_type, &size, depth + 1) != 0)
+            return 1;
+    }
+    else if (type_tag != UNKNOWN_TYPE || type_id != NULL)
+    {
+        if (codegen_sizeof_type(ctx, type_tag, type_id, NULL, &size, depth + 1) != 0)
+            return 1;
+    }
+
+    if (size >= 8)
+        return 8;
+    if (size >= 4)
+        return 4;
+    if (size >= 2)
+        return 2;
+    return 1;
+}
+
+/* Compute alignment of any branch's worst-case field within a variant part. */
+static int codegen_get_variant_part_alignment(CodeGenContext *ctx,
+    struct VariantPart *variant, int depth)
+{
+    if (variant == NULL)
+        return 1;
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+        return 1;
+    int max_align = 1;
+    for (ListNode_t *cur = variant->branches; cur != NULL; cur = cur->next)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH && cur->cur != NULL)
+        {
+            struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
+            int branch_align = codegen_get_record_members_alignment(ctx,
+                branch->members, depth + 1);
+            if (branch_align > max_align)
+                max_align = branch_align;
+        }
+    }
+    return max_align;
+}
+
+/* Compute the maximum alignment across a list of record members. */
+static int codegen_get_record_members_alignment(CodeGenContext *ctx,
+    ListNode_t *members, int depth)
+{
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+        return 1;
+    int max_align = 1;
+    for (ListNode_t *cur = members; cur != NULL; cur = cur->next)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field != NULL && !field->is_class_var)
+            {
+                int field_align = codegen_get_field_alignment(ctx, field, depth + 1);
+                if (field_align > max_align)
+                    max_align = field_align;
+            }
+        }
+        else if (cur->type == LIST_VARIANT_PART && cur->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            int variant_align = codegen_get_variant_part_alignment(ctx, variant,
+                depth + 1);
+            if (variant_align > max_align)
+                max_align = variant_align;
+        }
+    }
+    return max_align;
+}
 
 static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *members,
     long long *size_out, int depth)
@@ -5272,6 +5413,10 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
         else if (cur->type == LIST_VARIANT_PART)
         {
             struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            int variant_align = codegen_get_variant_part_alignment(ctx, variant,
+                depth + 1);
+            total = codegen_align_offset_value(total, variant_align);
+
             long long variant_size = 0;
             if (codegen_sizeof_variant_part(ctx, variant, &variant_size, depth + 1) != 0)
                 return 1;

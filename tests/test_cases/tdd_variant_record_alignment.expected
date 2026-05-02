@@ -1,0 +1,4 @@
+SizeOf(TOper) = 24
+SizeOf(TItem) = 56
+Sym field roundtrip OK
+Array stride OK
