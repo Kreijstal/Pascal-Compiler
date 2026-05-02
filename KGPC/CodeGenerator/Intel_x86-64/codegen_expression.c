@@ -12107,6 +12107,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         return inst_list;
                     }
 
+                    /* Re-emit leaq of the stack buffer into buf_addr_reg.  The
+                     * earlier expression evaluation (codegen_address_for_expr /
+                     * codegen_expr_with_result) may have clobbered this register
+                     * because the register allocator does not know it is live
+                     * across the inner evaluation. */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        shortstr_buf->offset, buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+
                     if (codegen_target_is_windows())
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
@@ -12157,6 +12166,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         if (arg_infos != NULL) free(arg_infos);
                         return inst_list;
                     }
+
+                    /* Re-emit leaq of the stack buffer into buf_addr_reg; see
+                     * companion comment above for the rationale. */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        shortstr_buf->offset, buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
 
                     if (codegen_target_is_windows())
                     {
@@ -12227,6 +12242,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                             buf_save->offset, buf_addr_reg->bit_64);
                         inst_list = add_inst(inst_list, buffer);
                     }
+
+                    /* Re-emit leaq of the stack buffer into buf_addr_reg.  The
+                     * earlier codegen_expr_with_result for arg_expr may have
+                     * clobbered this register (e.g. when arg_expr requires a
+                     * scratch register that happens to coincide with buf_addr_reg). */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        shortstr_buf->offset, buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
 
                     if (codegen_target_is_windows())
                     {
