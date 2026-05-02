@@ -4040,20 +4040,26 @@ void kgpc_dynarray_deep_copy_into(void *dest_descriptor, const void *src_descrip
     size_t count = src->length > 0 ? (size_t)src->length : 0;
     size_t data_bytes = count * element_size;
 
+    void *heap_data = NULL;
     if (data_bytes > 0 && src->data != NULL)
     {
-        void *heap_data = malloc(data_bytes);
+        heap_data = malloc(data_bytes);
         if (heap_data != NULL)
-        {
             memcpy(heap_data, src->data, data_bytes);
-            dst->data = heap_data;
-            dst->length = (int64_t)count;
-            return;
-        }
+        else
+            count = 0;
+    }
+    else
+    {
+        count = 0;
     }
 
-    dst->data = NULL;
-    dst->length = 0;
+    /* Mirror the full descriptor (matching kgpc_dynarray_deep_copy) so
+     * any per-descriptor metadata beyond data/length is preserved, then
+     * point the destination at the freshly heap-allocated buffer. */
+    memcpy(dest_descriptor, src_descriptor, descriptor_size);
+    dst->data = heap_data;
+    dst->length = (int64_t)count;
 }
 
 long long kgpc_dynarray_compute_high(const void *descriptor_ptr, long long lower_bound)

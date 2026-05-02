@@ -1324,19 +1324,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             const char *value_reg16 = NULL;
             KgpcType *sym_type = NULL;
             struct RecordField *owner_field = NULL;
-            long long target_size = (var_expr->type == EXPR_RECORD_ACCESS) ?
-                codegen_record_field_effective_size(var_expr, ctx) :
-                expr_effective_size_bytes(var_expr);
-            /* Cross-check with resolved_kgpc_type for sub-dword fields
-             * (e.g. Integer=SmallInt in FPC mode where type tag says 4
-             * but actual storage is 2 bytes). */
-            if (target_size == 4 && var_expr != NULL &&
-                var_expr->resolved_kgpc_type != NULL)
-            {
-                long long resolved_size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
-                if (resolved_size > 0 && resolved_size < 4)
-                    target_size = resolved_size;
-            }
+            /* Prefer resolved_kgpc_type when available (most accurate —
+             * it captures aliases and sub-dword sizes such as
+             * Integer=SmallInt in FPC mode where the type tag says 4
+             * but actual storage is 2 bytes). Record-field accesses still
+             * use the field's effective size; otherwise fall back to the
+             * expression-based estimator. */
+            long long target_size = 0;
+            if (var_expr->type == EXPR_RECORD_ACCESS)
+                target_size = codegen_record_field_effective_size(var_expr, ctx);
+            else if (var_expr->resolved_kgpc_type != NULL)
+                target_size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+            if (target_size <= 0)
+                target_size = expr_effective_size_bytes(var_expr);
             if ((target_size <= 0 || target_size == 4) && ctx != NULL &&
                 ctx->symtab != NULL)
             {

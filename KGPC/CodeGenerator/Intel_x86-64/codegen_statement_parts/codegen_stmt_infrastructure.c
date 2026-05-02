@@ -1569,7 +1569,7 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
         {
             int elem_size = expr_get_array_element_size(src_expr, ctx);
             if (elem_size <= 0)
-                elem_size = DOUBLEWORD;
+                elem_size = CODEGEN_POINTER_SIZE_BYTES;
 
             char deep_buf[128];
             if (codegen_target_is_windows())
