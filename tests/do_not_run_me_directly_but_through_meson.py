@@ -4177,10 +4177,10 @@ def _add_pp_pas_bootstrap_test():
         #     3. The produced binary runs and prints "Hello, World!".
         #
         # pp_bootstrap needs prebuilt RTL .ppu files for ordinary program
-        # compilation.  If CI has only the FPCSource checkout, build those
-        # units first; do not fall back to source-only -Fu paths, because
-        # FPC refuses to recompile the root System unit while compiling a
-        # user program.
+        # compilation.  If CI has only the FPCSource checkout, build a
+        # same-source compiler first, then use it to build those units.  A
+        # distro FPC can build incompatible .ppu files even when it is good
+        # enough to seed the compiler build.
         helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
         assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
 
@@ -4196,11 +4196,39 @@ def _add_pp_pas_bootstrap_test():
                 "fpc is required to build prebuilt FPC RTL units for "
                 "pp_bootstrap helloworld verification"
             )
+            compiler_dir = os.path.join(fpc_src, "compiler")
             rtl_linux_dir = os.path.join(fpc_src, "rtl", "linux")
+            same_source_fpc = os.path.join(
+                compiler_dir, "ppcx64" + (".exe" if os.name == "nt" else "")
+            )
             try:
                 subprocess.run(
-                    [make_bin, "-C", rtl_linux_dir, "units", "FPC=" + fpc_bin],
-                    check=True, capture_output=True, text=True, timeout=240,
+                    [make_bin, "-C", compiler_dir, "ppcx64", "FPC=" + fpc_bin],
+                    check=True, capture_output=True, text=True, timeout=600,
+                )
+            except subprocess.CalledProcessError as e:
+                self.fail(
+                    "building same-source FPC compiler for pp_bootstrap failed\n"
+                    f"stdout:\n{(e.stdout or '')[:2000]}\n"
+                    f"stderr:\n{(e.stderr or '')[:2000]}"
+                )
+                return
+            except subprocess.TimeoutExpired:
+                self.fail("building same-source FPC compiler for pp_bootstrap timed out")
+                return
+            assert os.path.isfile(same_source_fpc), (
+                f"FPC compiler build did not produce {same_source_fpc}"
+            )
+            try:
+                subprocess.run(
+                    [
+                        make_bin,
+                        "-C",
+                        rtl_linux_dir,
+                        "units",
+                        "FPC=" + os.path.abspath(same_source_fpc),
+                    ],
+                    check=True, capture_output=True, text=True, timeout=600,
                 )
             except subprocess.CalledProcessError as e:
                 self.fail(
