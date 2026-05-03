@@ -4166,8 +4166,116 @@ def _add_pp_pas_bootstrap_test():
         actual_output = _strip_pp_header(process.stdout or "")
         self.assertEqual(actual_output, expected_output)
 
+        # End-to-end regression check: use the just-built pp_bootstrap to
+        # compile a tiny Pascal program and run it.  This pins more of the
+        # generated compiler than the -h banner — full unit-load /
+        # symtable / codegen / link / runtime — without re-compiling
+        # pp.pas (~7 minutes).  The pipeline is:
+        #     1. KGPC compiles pp.pas         -> tests/output/pp_bootstrap
+        #        (already done above; do NOT double-compile pp.pas).
+        #     2. pp_bootstrap compiles helloworld.p with the FPC RTL units.
+        #     3. The produced binary runs and prints "Hello, World!".
+        #
+        # If pp_bootstrap cannot find a prebuilt FPC RTL units directory
+        # (rtl/units/x86_64-linux), it tries to load the RTL units from
+        # source (rtl/linux + rtl/inc + rtl/objpas + rtl/unix + ...).
+        # Either form is the documented invocation in
+        # docs/FPC_BOOTSTRAP.md, "Compile hello world with the generated
+        # pp_bootstrap".
+        helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
+        assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
+
+        prebuilt_units_dir = os.path.join(fpc_src, "rtl", "units", "x86_64-linux")
+        prebuilt_system_ppu = os.path.join(prebuilt_units_dir, "system.ppu")
+        if os.path.isfile(prebuilt_system_ppu):
+            # Prebuilt RTL .ppu files are present (e.g., from a previous
+            # `make -C FPCSource/rtl/linux units` run).  Use them so we
+            # exercise pp_bootstrap's full unit-loading + codegen path
+            # rather than spending the ~minutes it would take to re-parse
+            # the entire RTL from source on every run.
+            rtl_search_paths = ["-Fu" + prebuilt_units_dir]
+        else:
+            # Fall back to source-based RTL search paths.  This mirrors
+            # docs/FPC_BOOTSTRAP.md, "Compile hello world with the
+            # generated pp_bootstrap".  pp_bootstrap will recompile each
+            # used RTL unit on the fly.
+            rtl_search_paths = [
+                "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+            ]
+
+        helloworld_exe = os.path.join(
+            TEST_OUTPUT_DIR, "helloworld_via_pp_bootstrap" + EXE_EXT)
+        try:
+            os.remove(helloworld_exe)
+        except FileNotFoundError:
+            pass
+        # `-n` skips fpc.cfg.  `-FE<dir>` puts the produced binary in
+        # TEST_OUTPUT_DIR.  `-o<name>` disambiguates the artifact from
+        # any other helloworld binary that may have ended up in the
+        # output tree.
+        bootstrap_cmd = [
+            os.path.abspath(executable_file),
+            "-n",
+            "-FE" + os.path.abspath(TEST_OUTPUT_DIR),
+            "-o" + os.path.basename(helloworld_exe),
+        ] + rtl_search_paths + [helloworld_p]
+        try:
+            compile_proc = subprocess.run(
+                bootstrap_cmd, capture_output=True, text=True, timeout=120
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("pp_bootstrap timed out compiling helloworld.p")
+            return
+
+        if compile_proc.returncode != 0 or not os.path.isfile(helloworld_exe):
+            import signal as _signal
+            sig = -compile_proc.returncode if compile_proc.returncode < 0 else None
+            sig_name = ""
+            if sig is not None:
+                try:
+                    sig_name = f" ({_signal.Signals(sig).name})"
+                except (ValueError, AttributeError):
+                    pass
+            self.fail(
+                f"pp_bootstrap failed to compile {helloworld_p} "
+                f"(rc={compile_proc.returncode}{sig_name}, "
+                f"binary_present={os.path.isfile(helloworld_exe)})\n"
+                f"cmd: {' '.join(bootstrap_cmd)}\n"
+                f"stdout:\n{(compile_proc.stdout or '')[:2000]}\n"
+                f"stderr:\n{(compile_proc.stderr or '')[:2000]}"
+            )
+
+        try:
+            run = subprocess.run(
+                [os.path.abspath(helloworld_exe)],
+                capture_output=True, text=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("helloworld binary built by pp_bootstrap timed out")
+            return
+        if run.returncode != 0:
+            self.fail(
+                f"helloworld binary built by pp_bootstrap exited with "
+                f"code {run.returncode}\n"
+                f"stdout:\n{(run.stdout or '')[:2000]}\n"
+                f"stderr:\n{(run.stderr or '')[:2000]}"
+            )
+        self.assertEqual(
+            (run.stdout or "").strip().splitlines(),
+            ["Hello, World!"],
+            "pp_bootstrap-built helloworld printed unexpected output",
+        )
+
     test_pp_pas_bootstrap.__name__ = "test_fpcrtl_pp_pas_bootstrap"
-    test_pp_pas_bootstrap.__doc__ = "pp.pas bootstrap — compile and link the FPC compiler"
+    test_pp_pas_bootstrap.__doc__ = (
+        "pp.pas bootstrap — compile and link the FPC compiler, then use "
+        "it to compile and run helloworld.p"
+    )
     test_pp_pas_bootstrap._timeout = 900  # pp.pas is much larger than regular tests
     setattr(TestCompiler, "test_fpcrtl_pp_pas_bootstrap", test_pp_pas_bootstrap)
 
