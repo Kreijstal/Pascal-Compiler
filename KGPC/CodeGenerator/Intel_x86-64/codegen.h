@@ -196,6 +196,9 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
     const struct Expression *expr, char **owned_target_out);
 KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
     const struct Expression *expr, HashNode_t **resolved_node_out);
+int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
+    const char *owner_class_name, const char *method_name,
+    KgpcType *call_type);
 HashNode_t *codegen_find_owner_unit_symbol(CodeGenContext *ctx, const char *id);
 
 /*

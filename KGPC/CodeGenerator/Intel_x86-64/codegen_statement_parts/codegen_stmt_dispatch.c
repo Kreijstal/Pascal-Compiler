@@ -350,7 +350,7 @@ int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_
     if (return_type != NULL)
     {
         int capacity = codegen_shortstring_capacity_from_type_local(return_type);
-        if (capacity > 0)
+        if (capacity > 1)
             return capacity;
     }
 
@@ -723,6 +723,29 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     }
                 }
 
+                /* --- Common preprocessing: strip Pascal comments --- */
+                size_t src_len = strlen(src);
+                char *stripped_src = malloc(src_len + 1);
+                if (stripped_src == NULL)
+                {
+                    inst_list = add_inst(inst_list, strdup(src));
+                    break;
+                }
+                {
+                    size_t j = 0;
+                    for (size_t i = 0; i < src_len; i++)
+                    {
+                        if (src[i] == '{')
+                        {
+                            while (i < src_len && src[i] != '}')
+                                i++;
+                            continue;
+                        }
+                        stripped_src[j++] = src[i];
+                    }
+                    stripped_src[j] = '\0';
+                }
+
                 if (is_intel_syntax)
                 {
                     /* Special case: sincos_r_r_r — generate a fallback that calls
@@ -770,6 +793,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
                             inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_cos_real\n"));
                             inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r13)\n"));
+                            free(stripped_src);
                             break;
                         }
                     }
@@ -777,69 +801,85 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                      * syntax-switching directives so they assemble correctly
                      * in the otherwise AT&T-syntax output file. */
                     inst_list = add_inst(inst_list, strdup(".intel_syntax noprefix\n"));
-                    inst_list = add_inst(inst_list, strdup(src));
-                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
-                    break;
+                    /* stripped_src goes through identifier substitution below */
                 }
 
+                /* --- AT&T-specific preprocessing ---
+                 * Comment stripping was done above via stripped_src.
+                 * Now do AT&T-only fixes: strip // comments, jmpq→jmp, uniquify .L labels. */
                 static int asm_block_counter = 0;
                 int block_id = asm_block_counter++;
-                size_t len = strlen(src);
-                /* Allocate generously for label suffix expansion */
+                size_t len = strlen(stripped_src);
                 size_t alloc_size = len * 2 + 4096;
                 char *cleaned = malloc(alloc_size);
-                if (cleaned != NULL)
+                if (cleaned == NULL)
+                {
+                    inst_list = add_inst(inst_list, strdup(stripped_src));
+                    free(stripped_src);
+                    if (is_intel_syntax)
+                        inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
+                    break;
+                }
                 {
                     size_t j = 0;
                     for (size_t i = 0; i < len && j < alloc_size - 64; i++)
                     {
-                        /* Strip Pascal-style {...} comments */
-                        if (src[i] == '{')
+                        /* For Intel-syntax blocks: strip '@' prefix from local labels.
+                         * MASM/TASM use @Label but GAS Intel mode does not support '@'.
+                         * Labels starting with a digit after @-stripping get a '_' prefix. */
+                        if (is_intel_syntax && stripped_src[i] == '@' &&
+                            (i == 0 || stripped_src[i-1] == '\n' || isspace((unsigned char)stripped_src[i-1]) ||
+                             stripped_src[i-1] == ','))
                         {
-                            while (i < len && src[i] != '}')
-                                i++;
-                            continue;
+                            /* If the label starts with a digit, prefix with '_' */
+                            if (i + 1 < len && isdigit((unsigned char)stripped_src[i + 1]))
+                                cleaned[j++] = '_';
+                            continue; /* skip the '@' character */
                         }
-                        /* Strip C++ style // comments */
-                        if (src[i] == '/' && i + 1 < len && src[i + 1] == '/')
+
+                        if (!is_intel_syntax)
                         {
-                            while (i < len && src[i] != '\n')
-                                i++;
-                            if (i < len)
-                                cleaned[j++] = '\n';
-                            continue;
-                        }
-                        /* Fix jmpq -> jmp for direct jumps (jmpq only valid for indirect) */
-                        if (i + 4 < len && strncmp(src + i, "jmpq", 4) == 0 &&
-                            (i == 0 || isspace((unsigned char)src[i-1])) &&
-                            isspace((unsigned char)src[i + 4]))
-                        {
-                            cleaned[j++] = 'j';
-                            cleaned[j++] = 'm';
-                            cleaned[j++] = 'p';
-                            i += 3; /* skip "jmpq", loop will advance past 'q' */
-                            continue;
-                        }
-                        /* Make local labels unique by appending block_id suffix.
-                         * Match ".L" at start of line (label definition) or after whitespace/comma (reference) */
-                        if (src[i] == '.' && i + 1 < len && src[i + 1] == 'L' &&
-                            (i == 0 || src[i-1] == '\n' || isspace((unsigned char)src[i-1]) ||
-                             src[i-1] == ',' || src[i-1] == '$'))
-                        {
-                            /* Copy the label name */
-                            while (i < len && j < alloc_size - 32 &&
-                                   (isalnum((unsigned char)src[i]) || src[i] == '.' || src[i] == '_' || src[i] == 'L'))
+                            /* Strip C++ style // comments (AT&T only) */
+                            if (stripped_src[i] == '/' && i + 1 < len && stripped_src[i + 1] == '/')
                             {
-                                cleaned[j++] = src[i++];
+                                while (i < len && stripped_src[i] != '\n')
+                                    i++;
+                                if (i < len)
+                                    cleaned[j++] = '\n';
+                                continue;
                             }
-                            /* Append unique suffix */
-                            j += snprintf(cleaned + j, 16, "_%d", block_id);
-                            i--; /* will be incremented by loop */
-                            continue;
+                            /* Fix jmpq -> jmp for direct jumps */
+                            if (i + 4 < len && strncmp(stripped_src + i, "jmpq", 4) == 0 &&
+                                (i == 0 || isspace((unsigned char)stripped_src[i-1])) &&
+                                isspace((unsigned char)stripped_src[i + 4]))
+                            {
+                                cleaned[j++] = 'j';
+                                cleaned[j++] = 'm';
+                                cleaned[j++] = 'p';
+                                i += 3;
+                                continue;
+                            }
+                            /* Make .L local labels unique */
+                            if (stripped_src[i] == '.' && i + 1 < len && stripped_src[i + 1] == 'L' &&
+                                (i == 0 || stripped_src[i-1] == '\n' || isspace((unsigned char)stripped_src[i-1]) ||
+                                 stripped_src[i-1] == ',' || stripped_src[i-1] == '$'))
+                            {
+                                while (i < len && j < alloc_size - 32 &&
+                                       (isalnum((unsigned char)stripped_src[i]) || stripped_src[i] == '.' ||
+                                        stripped_src[i] == '_' || stripped_src[i] == 'L'))
+                                {
+                                    cleaned[j++] = stripped_src[i++];
+                                }
+                                j += snprintf(cleaned + j, 16, "_%d", block_id);
+                                i--;
+                                continue;
+                            }
                         }
-                        cleaned[j++] = src[i];
+                        cleaned[j++] = stripped_src[i];
                     }
                     cleaned[j] = '\0';
+                }
+                free(stripped_src);
 
                     /* Resolve identifiers in asm blocks:
                        1. For nostackframe: substitute parameter names → ABI registers
@@ -907,7 +947,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                     default: reg = current_arg_reg64(ri); break;
                                                     }
                                                     if (reg != NULL) {
-                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
+                                                        /* In Intel syntax, strip the '%' prefix */
+                                                        const char *regname = reg;
+                                                        if (is_intel_syntax && regname[0] == '%')
+                                                            regname++;
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", regname);
                                                         sj += (n > 0 ? (size_t)n : 0);
                                                         did_substitute = 1;
                                                     }
@@ -915,6 +959,29 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                 }
                                             }
                                         }
+                                        /* Skip Intel-syntax type keywords — these are assembler
+                                         * reserved words, never Pascal identifiers.
+                                         * Copy them verbatim (they are not substituable). */
+                                        if (!did_substitute && is_intel_syntax) {
+                                            static const char *intel_keywords[] = {
+                                                "ptr", "byte", "word", "dword", "qword",
+                                                "xmmword", "ymmword", "tbyte", "near", "far",
+                                                "short", "long", "offset", NULL
+                                            };
+                                            int is_kw = 0;
+                                            for (int k = 0; intel_keywords[k] != NULL; k++) {
+                                                if (strcasecmp(id_buf, intel_keywords[k]) == 0) {
+                                                    is_kw = 1;
+                                                    break;
+                                                }
+                                            }
+                                            if (is_kw) {
+                                                memcpy(substituted + sj, cleaned + id_start, id_len);
+                                                sj += id_len;
+                                                did_substitute = 1;
+                                            }
+                                        }
+
                                         /* Try resolving as a global variable (case-insensitive) */
                                         if (!did_substitute) {
                                             StackNode_t *var = find_label(id_buf);
@@ -937,10 +1004,14 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                         did_substitute = 1;
                                                     }
                                                 } else if (var->offset > 0) {
-                                                    int n = snprintf(substituted + sj, sub_alloc - sj, "-%d(%%rbp)", var->offset);
-                                                    if (n > 0) {
-                                                        sj += (size_t)n;
-                                                        did_substitute = 1;
+                                                    if (is_intel_syntax) {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                            "[rbp - %d]", var->offset);
+                                                        if (n > 0) { sj += (size_t)n; did_substitute = 1; }
+                                                    } else {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                            "-%d(%%rbp)", var->offset);
+                                                        if (n > 0) { sj += (size_t)n; did_substitute = 1; }
                                                     }
                                                 }
                                             }
@@ -978,11 +1049,12 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             inst_list = add_inst(inst_list, cleaned);
                         }
                     }
-                    free(cleaned);
-                }
-                else
+                free(cleaned);
+
+                /* Intel-syntax blocks: close the syntax-switching directive */
+                if (is_intel_syntax)
                 {
-                    inst_list = add_inst(inst_list, src);
+                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
                 }
             }
             break;
@@ -1240,4 +1312,3 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #endif
     return inst_list;
 }
-

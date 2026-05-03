@@ -29,6 +29,113 @@ static int semcheck_operator_lookup_unit_index(SymTab_t *symtab)
     return semcheck_get_current_unit_index();
 }
 
+static const char *semcheck_contextual_enum_literal_name(struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_VAR_ID)
+        return NULL;
+
+    if (expr->id_ref != NULL && expr->id_ref->count > 0)
+        return expr->id_ref->segments[expr->id_ref->count - 1];
+
+    return expr->expr_data.id;
+}
+
+static int semcheck_resolve_enum_literal_from_alias(SymTab_t *symtab,
+    const struct TypeAlias *alias, const char *literal, long long *out_value)
+{
+    if (symtab == NULL || alias == NULL || literal == NULL || out_value == NULL)
+        return 0;
+
+    if (alias->alias_name != NULL &&
+        semcheck_resolve_scoped_enum_literal(symtab, alias->alias_name, literal, out_value))
+    {
+        return 1;
+    }
+
+    if (alias->target_type_ref != NULL && alias->target_type_ref->name != NULL &&
+        semcheck_resolve_scoped_enum_literal_ref(symtab, alias->target_type_ref->name,
+            literal, out_value))
+    {
+        return 1;
+    }
+
+    if (alias->target_type_id != NULL &&
+        semcheck_resolve_scoped_enum_literal(symtab, alias->target_type_id,
+            literal, out_value))
+    {
+        return 1;
+    }
+
+    int ordinal = 0;
+    for (ListNode_t *literal_node = alias->enum_literals;
+         literal_node != NULL;
+         literal_node = literal_node->next, ++ordinal)
+    {
+        const char *candidate = (const char *)literal_node->cur;
+        if (candidate != NULL && pascal_identifier_equals(candidate, literal))
+        {
+            KGPC_SEMCHECK_HARD_ASSERT(!alias->enum_has_explicit_values,
+                "contextual enum literal '%s' requires resolver-backed explicit enum values for '%s'",
+                literal,
+                alias->alias_name != NULL ? alias->alias_name : "(anonymous enum)");
+            *out_value = ordinal;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int semcheck_bind_expr_to_contextual_enum(SymTab_t *symtab,
+    struct Expression *expr, KgpcType *enum_type)
+{
+    if (symtab == NULL || expr == NULL || enum_type == NULL ||
+        enum_type->type_alias == NULL)
+    {
+        return 0;
+    }
+
+    const char *literal = semcheck_contextual_enum_literal_name(expr);
+    if (literal == NULL)
+        return 0;
+
+    long long value = 0;
+    if (!semcheck_resolve_enum_literal_from_alias(symtab, enum_type->type_alias,
+            literal, &value))
+    {
+        return 0;
+    }
+
+    expr->type = EXPR_INUM;
+    expr->expr_data.i_num = value;
+    semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+    semcheck_expr_set_resolved_kgpc_type_shared(expr, enum_type);
+    return 1;
+}
+
+static void semcheck_bind_set_literal_to_left_enum(SymTab_t *symtab,
+    struct Expression *set_expr, KgpcType *left_type)
+{
+    if (symtab == NULL || set_expr == NULL || set_expr->type != EXPR_SET ||
+        left_type == NULL || left_type->kind != TYPE_KIND_PRIMITIVE ||
+        left_type->info.primitive_type_tag != ENUM_TYPE ||
+        left_type->type_alias == NULL)
+    {
+        return;
+    }
+
+    for (ListNode_t *cur = set_expr->expr_data.set_data.elements;
+         cur != NULL; cur = cur->next)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        if (element == NULL)
+            continue;
+
+        semcheck_bind_expr_to_contextual_enum(symtab, element->lower, left_type);
+        semcheck_bind_expr_to_contextual_enum(symtab, element->upper, left_type);
+    }
+}
+
 /*
  * Per-operand match quality for binary operator candidate resolution.
  * EXACT > COMPATIBLE > INCOMPATIBLE, ranked by decreasing desirability.
@@ -505,6 +612,8 @@ int semcheck_relop(int *type_return,
     KgpcType *kgpc_type_second = NULL;
     return_val += semcheck_expr_with_type(&kgpc_type_first, symtab, expr1, max_scope_lev, mutating);
     type_first = semcheck_tag_from_kgpc(kgpc_type_first);
+    if (expr->expr_data.relop_data.type == IN && expr2 != NULL && expr2->type == EXPR_SET)
+        semcheck_bind_set_literal_to_left_enum(symtab, expr2, kgpc_type_first);
     if(expr2 != NULL)
     {
         return_val += semcheck_expr_with_type(&kgpc_type_second, symtab, expr2, max_scope_lev, mutating);
@@ -3433,7 +3542,10 @@ resolved:;
             hash_return->hash_type != HASHTYPE_FUNCTION &&
             hash_return->hash_type != HASHTYPE_PROCEDURE)
         {
+            HashNode_t *current_scope_result = FindIdentInCurrentScope(symtab, id);
             set_hash_meta(hash_return, mutating);
+            if (current_scope_result != hash_return)
+                semcheck_mark_static_link_needed(hash_return);
             set_type_from_hashtype(type_return, hash_return);
             semcheck_expr_set_resolved_kgpc_type_shared(expr, hash_return->type);
             semcheck_set_result_expr_metadata(expr, symtab, hash_return->type);

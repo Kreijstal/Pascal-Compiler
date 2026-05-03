@@ -34,6 +34,7 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../Parser/pascal_frontend.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 #include "../../unit_registry.h"
@@ -232,6 +233,31 @@ static int codegen_record_has_class_var_named(const struct RecordType *record,
     }
 
     return 0;
+}
+
+static const struct RecordType *codegen_record_class_var_owner_named(SymTab_t *symtab,
+    struct RecordType *record, const char *field_id)
+{
+    if (record == NULL || field_id == NULL)
+        return NULL;
+
+    struct RecordType *field_owner = NULL;
+    struct RecordField *field = semcheck_find_class_field_including_hidden(
+        symtab, record, field_id, &field_owner);
+    if (field != NULL && field->is_class_var == 1)
+        return field_owner != NULL ? field_owner : record;
+
+    for (ListNode_t *node = record->fields; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_RECORD_FIELD || node->cur == NULL)
+            continue;
+        field = (struct RecordField *)node->cur;
+        if (field->is_class_var == 1 && field->name != NULL &&
+            pascal_identifier_equals(field->name, field_id))
+            return record;
+    }
+
+    return NULL;
 }
 
 static ListNode_t *codegen_emit_classvar_base_address_named(ListNode_t *inst_list,
@@ -482,8 +508,9 @@ static ListNode_t *codegen_try_emit_nonlocal_class_var(ListNode_t *inst_list,
     {
         struct RecordType *class_record = semcheck_lookup_record_type(
             ctx->symtab, class_labels[i]);
-        if (class_record != NULL &&
-            codegen_record_has_class_var_named(class_record, var_id))
+        const struct RecordType *class_var_owner =
+            codegen_record_class_var_owner_named(ctx->symtab, class_record, var_id);
+        if (class_var_owner != NULL)
         {
             char buffer[128];
             *offset = 0;
@@ -553,6 +580,18 @@ static KgpcType *codegen_function_call_return_type_from_expr(
     if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
         return NULL;
 
+    /* In {$H-} / compiler bootstrap code, the callee declaration may still
+     * carry return_type_id = "String", while the semchecked call expression has
+     * already resolved that to fixed ShortString storage.  Prefer the resolved
+     * expression type so callers emit the hidden result buffer before Self. */
+    if (expr->resolved_kgpc_type != NULL &&
+        (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+         (expr->resolved_kgpc_type->type_alias != NULL &&
+          expr->resolved_kgpc_type->type_alias->is_shortstring)))
+    {
+        return expr->resolved_kgpc_type;
+    }
+
     /* If the callee's Tree_t has return_type == SHORTSTRING_TYPE (set during AST
      * conversion under {$H-}), honour that even though the KgpcType from
      * semantic analysis may say STRING_TYPE.  Must check before ret_type
@@ -582,6 +621,13 @@ static KgpcType *codegen_function_call_return_type_from_expr(
             cached_shortstring = create_primitive_type(SHORTSTRING_TYPE);
         return cached_shortstring;
     }
+    if (pascal_identifier_equals(ret_id, "String") &&
+        pascal_frontend_default_shortstring())
+    {
+        if (cached_shortstring == NULL)
+            cached_shortstring = create_primitive_type(SHORTSTRING_TYPE);
+        return cached_shortstring;
+    }
     if (pascal_identifier_equals(ret_id, "AnsiString") ||
         pascal_identifier_equals(ret_id, "String"))
     {
@@ -590,6 +636,135 @@ static KgpcType *codegen_function_call_return_type_from_expr(
         return cached_ansistring;
     }
     return NULL;
+}
+
+static const char *codegen_function_call_return_type_id_from_expr(
+    const struct Expression *expr)
+{
+    KgpcType *call_type = NULL;
+
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return NULL;
+
+    call_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (call_type == NULL &&
+        expr->expr_data.function_call_data.resolved_func != NULL)
+    {
+        call_type = expr->expr_data.function_call_data.resolved_func->type;
+    }
+    if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
+        return NULL;
+
+    if (call_type->info.proc_info.return_type_id != NULL)
+        return call_type->info.proc_info.return_type_id;
+    if (call_type->info.proc_info.definition != NULL)
+        return call_type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
+    return NULL;
+}
+
+static int codegen_return_type_is_shortstring_value(KgpcType *ret_type,
+    const char *ret_id)
+{
+    if (ret_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
+        if (kgpc_type_is_shortstring(ret_type) ||
+            (alias != NULL && alias->is_shortstring))
+            return 1;
+        if (kgpc_type_equals_tag(ret_type, STRING_TYPE) &&
+            !kgpc_type_is_shortstring(ret_type))
+        {
+            if (alias != NULL)
+                return alias->is_shortstring;
+            if (ret_id != NULL &&
+                (pascal_identifier_equals(ret_id, "AnsiString") ||
+                 pascal_identifier_equals(ret_id, "UnicodeString") ||
+                 pascal_identifier_equals(ret_id, "WideString")))
+                return 0;
+            if (pascal_frontend_default_shortstring())
+                return 1;
+        }
+    }
+    if (ret_id != NULL &&
+        pascal_identifier_equals(ret_id, "String") &&
+        pascal_frontend_default_shortstring())
+        return 1;
+    if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+        return 1;
+    return 0;
+}
+
+static int codegen_method_template_returns_shortstring(CodeGenContext *ctx,
+    const struct MethodTemplate *tmpl)
+{
+    if (tmpl == NULL || tmpl->kind != METHOD_TEMPLATE_FUNCTION)
+        return 0;
+    if (tmpl->method_tree != NULL &&
+        tmpl->method_tree->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE)
+        return 1;
+    if (ctx != NULL && tmpl->return_type_ast != NULL)
+    {
+        KgpcType *ret_type = convert_type_spec_to_kgpctype(tmpl->return_type_ast,
+            ctx->symtab);
+        if (codegen_return_type_is_shortstring_value(ret_type, NULL))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_virtual_call_returns_shortstring(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL ||
+        !expr->expr_data.function_call_data.is_virtual_call)
+        return 0;
+
+    const char *owner_name = expr->expr_data.function_call_data.self_class_name;
+    if (owner_name == NULL)
+        owner_name = expr->expr_data.function_call_data.cached_owner_class;
+    const char *method_name = expr->expr_data.function_call_data.cached_method_name;
+    if (method_name == NULL)
+        method_name = expr->expr_data.function_call_data.id;
+    if (owner_name == NULL || method_name == NULL)
+        return 0;
+
+    struct RecordType *record = semcheck_lookup_record_type(ctx->symtab, owner_name);
+    if (record == NULL)
+        return 0;
+
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl != NULL && tmpl->name != NULL &&
+            pascal_identifier_equals(tmpl->name, method_name) &&
+            codegen_method_template_returns_shortstring(ctx, tmpl))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_bare_method_returns_shortstring(CodeGenContext *ctx,
+    const char *method_name)
+{
+    if (ctx == NULL || method_name == NULL)
+        return 0;
+    const char *owner_name = ctx->current_subprogram_owner_class;
+    if (owner_name == NULL)
+        owner_name = ctx->current_subprogram_owner_class_full;
+    if (owner_name == NULL)
+        return 0;
+    struct RecordType *record = semcheck_lookup_record_type(ctx->symtab, owner_name);
+    if (record == NULL)
+        return 0;
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl != NULL && tmpl->name != NULL &&
+            pascal_identifier_equals(tmpl->name, method_name) &&
+            codegen_method_template_returns_shortstring(ctx, tmpl))
+            return 1;
+    }
+    return 0;
 }
 
 static long long codegen_sizeof_type_tag(int type_tag);
@@ -855,6 +1030,12 @@ static int codegen_expr_is_class_vmt_value(const struct Expression *expr, CodeGe
 
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
     {
+        if (ctx->current_subprogram_is_nonstatic_class_method &&
+            pascal_identifier_equals(expr->expr_data.id, "Self"))
+        {
+            return 1;
+        }
+
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
         {
@@ -1116,13 +1297,12 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
         KgpcType *ret_type = NULL;
         const char *ret_id = NULL;
 
+        ret_id = codegen_function_call_return_type_id_from_expr(expr);
         ret_type = codegen_function_call_return_type_from_expr(expr);
-        if (ret_type != NULL)
-        {
-            if (kgpc_type_is_shortstring(ret_type) ||
-                (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring))
-                return 1;
-        }
+        if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
+            return 1;
+        if (codegen_virtual_call_returns_shortstring(ctx, expr))
+            return 1;
 
         if (ret_type == NULL)
         {
@@ -1131,25 +1311,21 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
             if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
             {
                 ret_type = kgpc_type_get_return_type(call_type);
-                if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
-                    return 1;
                 ret_id = call_type->info.proc_info.return_type_id;
                 if (ret_id == NULL && call_type->info.proc_info.definition != NULL)
                     ret_id = call_type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
-                if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+                if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
                     return 1;
             }
             if (call_node != NULL && call_node->type != NULL &&
                 call_node->type->kind == TYPE_KIND_PROCEDURE)
             {
                 ret_type = kgpc_type_get_return_type(call_node->type);
-                if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
-                    return 1;
                 ret_id = call_node->type->info.proc_info.return_type_id;
                 if (ret_id == NULL && call_node->type->info.proc_info.definition != NULL)
                     ret_id = call_node->type->info.proc_info.definition
                         ->tree_data.subprogram_data.return_type_id;
-                if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+                if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
                     return 1;
             }
         }
@@ -1202,15 +1378,31 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
     }
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
+        if (codegen_bare_method_returns_shortstring(ctx, expr->expr_data.id))
+            return 1;
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
         {
+            if (node->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(node->type);
+                const char *ret_id = node->type->info.proc_info.return_type_id;
+                if (ret_id == NULL && node->type->info.proc_info.definition != NULL)
+                    ret_id = node->type->info.proc_info.definition
+                        ->tree_data.subprogram_data.return_type_id;
+                if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
+                    return 1;
+            }
             if (kgpc_type_equals_tag(node->type, STRING_TYPE) &&
                 !kgpc_type_is_shortstring(node->type))
             {
                 struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-                if (alias == NULL || !alias->is_shortstring)
+                if (alias != NULL && !alias->is_shortstring)
                     return 0;
+                if (alias == NULL && !pascal_frontend_default_shortstring())
+                    return 0;
+                if (alias == NULL)
+                    return 1;
             }
             if (kgpc_type_is_shortstring(node->type))
                 return 1;
@@ -1232,6 +1424,34 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
                 }
             }
         }
+    }
+
+    return 0;
+}
+
+static int codegen_expr_function_call_returns_ansistring(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+
+    KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (call_type == NULL)
+        call_type = codegen_resolve_function_call_type(ctx, (struct Expression *)expr, NULL);
+    if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
+        return 0;
+
+    const char *ret_id = call_type->info.proc_info.return_type_id;
+    if (ret_id != NULL && pascal_identifier_equals(ret_id, "AnsiString"))
+        return 1;
+
+    KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+    if (ret_type != NULL &&
+        ret_type->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(ret_type) == STRING_TYPE &&
+        !kgpc_type_is_shortstring(ret_type))
+    {
+        return 1;
     }
 
     return 0;
@@ -2678,9 +2898,11 @@ static int formal_decl_is_char_set(Tree_t *decl, SymTab_t *symtab)
     if (alias != NULL && alias->is_set)
     {
         if (alias->set_element_type == CHAR_TYPE ||
+            alias->set_element_type == BYTE_TYPE ||
             (alias->set_element_type_id != NULL &&
              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-              pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+              pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+              pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
             return 1;
     }
 
@@ -2925,13 +3147,23 @@ static ListNode_t *codegen_emit_class_cast_check_from_instance_ptr(struct Expres
         return inst_list;
     }
 
+    /* FPC semantics: (nil as T) yields nil without performing the type check.
+     * Skip the VMT/RTTI dereference when the source pointer is NULL. */
+    char skip_label[64];
+    gen_label(skip_label, sizeof(skip_label), ctx);
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n",
+        instance_ptr_reg->bit_64, instance_ptr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+
     Register_t *typeinfo_reg = NULL;
     inst_list = codegen_load_typeinfo_from_instance_ptr(inst_list, ctx,
         instance_ptr_reg, &typeinfo_reg);
     if (typeinfo_reg == NULL || codegen_had_error(ctx))
         return inst_list;
 
-    char buffer[128];
     /* Preserve the instance pointer across the runtime call (caller-saved registers may be clobbered).
      * Reserve the 32-byte Windows shadow space as well so the saved pointer is not overwritten. */
     inst_list = add_inst(inst_list, "\tsubq\t$48, %rsp\n");
@@ -2948,6 +3180,9 @@ static ListNode_t *codegen_emit_class_cast_check_from_instance_ptr(struct Expres
     snprintf(buffer, sizeof(buffer), "\tmovq\t32(%%rsp), %s\n", instance_ptr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\taddq\t$48, %rsp\n");
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
     return inst_list;
 }
 
@@ -2966,13 +3201,22 @@ static ListNode_t *codegen_emit_class_cast_check_from_class_vmt_ptr(struct Expre
         return inst_list;
     }
 
+    /* FPC semantics: (nil as T) yields nil without performing the type check. */
+    char skip_label[64];
+    gen_label(skip_label, sizeof(skip_label), ctx);
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n",
+        class_vmt_reg->bit_64, class_vmt_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+
     Register_t *typeinfo_reg = NULL;
     inst_list = codegen_load_typeinfo_from_class_vmt_ptr(inst_list, ctx,
         class_vmt_reg, &typeinfo_reg);
     if (typeinfo_reg == NULL || codegen_had_error(ctx))
         return inst_list;
 
-    char buffer[128];
     inst_list = add_inst(inst_list, "\tsubq\t$48, %rsp\n");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 32(%%rsp)\n", class_vmt_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
@@ -2987,6 +3231,9 @@ static ListNode_t *codegen_emit_class_cast_check_from_class_vmt_ptr(struct Expre
     snprintf(buffer, sizeof(buffer), "\tmovq\t32(%%rsp), %s\n", class_vmt_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\taddq\t$48, %rsp\n");
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
     return inst_list;
 }
 
@@ -4519,6 +4766,15 @@ long long codegen_expr_sret_size(const struct Expression *expr)
 
 int expr_returns_sret(const struct Expression *expr)
 {
+    if (expr != NULL && expr->type == EXPR_FUNCTION_CALL)
+    {
+        const char *mangled = expr->expr_data.function_call_data.mangled_id;
+        if (mangled != NULL &&
+            (strcmp(mangled, "kgpc_strpas_string") == 0 ||
+             strcmp(mangled, "kgpc_strpas_len_string") == 0))
+            return 0;
+    }
+
     long long sret_size = codegen_expr_sret_size(expr);
     if (sret_size <= 0)
         return 0;
@@ -4842,6 +5098,66 @@ static long long codegen_sizeof_type_tag(int type_tag)
     }
 }
 
+static long long codegen_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long codegen_set_storage_size_from_alias(CodeGenContext *ctx,
+    const struct TypeAlias *alias)
+{
+    if (alias == NULL || !alias->is_set)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = ListLength(alias->inline_enum_values);
+        if (count > 0)
+            return codegen_default_set_storage_size_for_high((long long)count - 1);
+    }
+
+    if (alias->range_known)
+        return codegen_default_set_storage_size_for_high(alias->range_end);
+
+    if (alias->set_element_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *elem_node = NULL;
+        if (FindSymbol(&elem_node, ctx->symtab, alias->set_element_type_id) != 0 &&
+            elem_node != NULL)
+        {
+            struct TypeAlias *elem_alias = codegen_get_type_alias_from_node(elem_node);
+            if (elem_alias != NULL)
+            {
+                if (elem_alias->is_enum && elem_alias->enum_literals != NULL)
+                {
+                    int count = ListLength(elem_alias->enum_literals);
+                    if (count > 0)
+                        return codegen_default_set_storage_size_for_high((long long)count - 1);
+                }
+                if (elem_alias->range_known)
+                    return codegen_default_set_storage_size_for_high(elem_alias->range_end);
+            }
+        }
+    }
+
+    return 4;
+}
+
 static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out, int depth)
 {
@@ -4909,6 +5225,122 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
 
 static int codegen_sizeof_variant_part(CodeGenContext *ctx, struct VariantPart *variant,
     long long *size_out, int depth);
+static int codegen_get_variant_part_alignment(CodeGenContext *ctx,
+    struct VariantPart *variant, int depth);
+static int codegen_get_record_members_alignment(CodeGenContext *ctx,
+    ListNode_t *members, int depth);
+
+/* Align an offset to a given alignment boundary. */
+static long long codegen_align_offset_value(long long offset, int alignment)
+{
+    if (alignment <= 1)
+        return offset;
+    long long rem = offset % alignment;
+    if (rem == 0)
+        return offset;
+    return offset + (alignment - rem);
+}
+
+/* Compute the alignment requirement of a single record field.  Mirrors
+ * SemCheck_sizeof.c::get_field_alignment without the cached_alignment
+ * lookup (codegen does not maintain that cache field).  Returns 1 when the
+ * type cannot be resolved to keep the existing behaviour safe. */
+static int codegen_get_field_alignment(CodeGenContext *ctx,
+    struct RecordField *field, int depth)
+{
+    if (field == NULL)
+        return 1;
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+        return 1;
+    if (field->is_pointer)
+        return CODEGEN_POINTER_SIZE_BYTES;
+    if (field->is_array && field->array_is_open)
+        return CODEGEN_POINTER_SIZE_BYTES;
+
+    long long size = 0;
+    int type_tag = field->type;
+    const char *type_id = field->type_id;
+    struct RecordType *record_type = field->nested_record;
+    if (field->is_array)
+    {
+        type_tag = field->array_element_type;
+        type_id = field->array_element_type_id;
+        record_type = field->array_element_record;
+    }
+
+    if (record_type != NULL)
+    {
+        if (codegen_sizeof_record(ctx, record_type, &size, depth + 1) != 0)
+            return 1;
+    }
+    else if (type_tag != UNKNOWN_TYPE || type_id != NULL)
+    {
+        if (codegen_sizeof_type(ctx, type_tag, type_id, NULL, &size, depth + 1) != 0)
+            return 1;
+    }
+
+    if (size >= 8)
+        return 8;
+    if (size >= 4)
+        return 4;
+    if (size >= 2)
+        return 2;
+    return 1;
+}
+
+/* Compute alignment of any branch's worst-case field within a variant part. */
+static int codegen_get_variant_part_alignment(CodeGenContext *ctx,
+    struct VariantPart *variant, int depth)
+{
+    if (variant == NULL)
+        return 1;
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+        return 1;
+    int max_align = 1;
+    for (ListNode_t *cur = variant->branches; cur != NULL; cur = cur->next)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH && cur->cur != NULL)
+        {
+            struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
+            int branch_align = codegen_get_record_members_alignment(ctx,
+                branch->members, depth + 1);
+            if (branch_align > max_align)
+                max_align = branch_align;
+        }
+    }
+    return max_align;
+}
+
+/* Compute the maximum alignment across a list of record members. */
+static int codegen_get_record_members_alignment(CodeGenContext *ctx,
+    ListNode_t *members, int depth)
+{
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+        return 1;
+    int max_align = 1;
+    for (ListNode_t *cur = members; cur != NULL; cur = cur->next)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field != NULL && !field->is_class_var)
+            {
+                int field_align = codegen_get_field_alignment(ctx, field, depth + 1);
+                if (field_align > max_align)
+                    max_align = field_align;
+            }
+        }
+        else if (cur->type == LIST_VARIANT_PART && cur->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            int variant_align = codegen_get_variant_part_alignment(ctx, variant,
+                depth + 1);
+            if (variant_align > max_align)
+                max_align = variant_align;
+        }
+    }
+    return max_align;
+}
 
 static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *members,
     long long *size_out, int depth)
@@ -4981,6 +5413,10 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
         else if (cur->type == LIST_VARIANT_PART)
         {
             struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            int variant_align = codegen_get_variant_part_alignment(ctx, variant,
+                depth + 1);
+            total = codegen_align_offset_value(total, variant_align);
+
             long long variant_size = 0;
             if (codegen_sizeof_variant_part(ctx, variant, &variant_size, depth + 1) != 0)
                 return 1;
@@ -5138,6 +5574,12 @@ static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
         }
 
         *size_out = element_size * count;
+        return 0;
+    }
+
+    if (alias->is_set)
+    {
+        *size_out = codegen_set_storage_size_from_alias(ctx, alias);
         return 0;
     }
 
@@ -5501,6 +5943,30 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
     if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
     {
+        struct TypeAlias *pointer_alias = kgpc_type_get_type_alias(pointer_type);
+        if (pointer_alias != NULL && pointer_alias->is_pointer)
+        {
+            if (pointer_alias->pointer_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindSymbol(&target_node, ctx->symtab, pointer_alias->pointer_type_id) != 0 &&
+                    target_node != NULL &&
+                    codegen_sizeof_hashnode(ctx, target_node, size_out, 0) == 0 &&
+                    *size_out > 0)
+                {
+                    return 0;
+                }
+            }
+
+            if (pointer_alias->pointer_type != UNKNOWN_TYPE &&
+                codegen_sizeof_type(ctx, pointer_alias->pointer_type,
+                    pointer_alias->pointer_type_id, NULL, size_out, 0) == 0 &&
+                *size_out > 0)
+            {
+                return 0;
+            }
+        }
+
         KgpcType *points_to = pointer_type->info.points_to;
         if (points_to != NULL)
         {
@@ -5550,8 +6016,12 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
             long long pointee_size = kgpc_type_sizeof(points_to);
             if (pointee_size > 0)
             {
-                *size_out = pointee_size;
-                return 0;
+                if (!(kgpc_type_is_set(points_to) && pointee_size <= 4 &&
+                      pointer_expr->pointer_subtype_id != NULL))
+                {
+                    *size_out = pointee_size;
+                    return 0;
+                }
             }
         }
     }
@@ -5875,9 +6345,6 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
                 return 8;
         }
 
-        if (field->has_cached_layout && field->cached_size > 0)
-            return field->cached_size;
-
         if (ctx->symtab != NULL && field_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
@@ -5885,10 +6352,17 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
                 type_node != NULL && type_node->type != NULL)
             {
                 long long type_size = kgpc_type_sizeof(type_node->type);
-                if (type_size > 0)
+                if (type_size > 0 &&
+                    type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                    type_node->type->info.primitive_type_tag == ENUM_TYPE)
+                    return type_size;
+                if (type_size > 0 && !(field->has_cached_layout && field->cached_size > 0))
                     return type_size;
             }
         }
+
+        if (field->has_cached_layout && field->cached_size > 0)
+            return field->cached_size;
 
         struct RecordType *nested = field->nested_record;
         if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
@@ -6212,6 +6686,20 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     free_expr_tree(pointer_tree);
 
     KgpcType *deref_type = expr_get_kgpc_type(expr);
+    if (deref_type == NULL)
+    {
+        KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
+        if (pointer_type == NULL && pointer_expr->type == EXPR_VAR_ID &&
+            ctx->symtab != NULL && pointer_expr->expr_data.id != NULL)
+        {
+            HashNode_t *pointer_node = NULL;
+            if (FindSymbol(&pointer_node, ctx->symtab, pointer_expr->expr_data.id) != 0 &&
+                pointer_node != NULL)
+                pointer_type = pointer_node->type;
+        }
+        if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
+            deref_type = pointer_type->info.points_to;
+    }
     if (deref_type != NULL)
     {
         struct TypeAlias *alias = kgpc_type_get_type_alias(deref_type);
@@ -6507,6 +6995,16 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         ctx != NULL ? ctx->symtab : NULL);
     int is_class_field = (record_expr_record != NULL &&
                           record_type_is_class(record_expr_record));
+    KgpcType *record_expr_value_type = expr_get_kgpc_type(record_expr);
+    int record_expr_value_is_class =
+        is_class_field ||
+        (record_expr_value_type != NULL &&
+         ((kgpc_type_is_record(record_expr_value_type) &&
+           record_type_is_class(kgpc_type_get_record(record_expr_value_type))) ||
+          (kgpc_type_is_pointer(record_expr_value_type) &&
+           record_expr_value_type->info.points_to != NULL &&
+           kgpc_type_is_record(record_expr_value_type->info.points_to) &&
+           record_type_is_class(kgpc_type_get_record(record_expr_value_type->info.points_to)))));
 
     int is_type_ref = 0;
     const char *type_label = NULL;
@@ -6525,9 +7023,11 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         }
     }
 
+    const struct RecordType *class_var_owner =
+        codegen_record_class_var_owner_named(ctx->symtab, record_expr_record, field_id);
     if (record_expr_record != NULL && field_id != NULL &&
         record_expr_record->type_id != NULL &&
-        (codegen_record_has_class_var_named(record_expr_record, field_id) ||
+        (class_var_owner != NULL ||
          codegen_nonstatic_class_method_owner_field_uses_classvar(
              ctx, record_expr_record, record_expr)))
     {
@@ -6542,7 +7042,8 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         }
 
         inst_list = codegen_emit_classvar_base_address_named(inst_list,
-            addr_reg->bit_64, record_expr_record,
+            addr_reg->bit_64,
+            class_var_owner != NULL ? class_var_owner : record_expr_record,
             expr->expr_data.record_access_data.field_offset);
         *out_reg = addr_reg;
         return inst_list;
@@ -6613,7 +7114,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
      * instance pointer, so load the pointer value before applying the field offset.
      * Non-addressable expressions (for example function calls) already materialise
      * the instance pointer directly. */
-    int needs_class_deref = (is_class_field && !is_type_ref &&
+    int needs_class_deref = (record_expr_value_is_class && !is_type_ref &&
                              codegen_expr_is_addressable(record_expr));
     if (needs_class_deref)
     {
@@ -6728,6 +7229,25 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
 
     if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+            addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    /* Array-typed fields cannot be loaded into a register as a value: yield
+     * the field's address so the consumer can either copy/iterate or treat
+     * the array as a pointer (Pascal allows `array of char` to decay to
+     * pchar in pchar-compatible contexts). Without this, KGPC would
+     * mis-emit `mov[lq] (%addr), %reg` and read 4-or-8 bytes of array
+     * contents as if they were a primitive value (root cause of taicpu
+     * gencode SIGSEGV when assigning insentry^.code, an array of char,
+     * to a pchar codes variable). */
+    if (expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(expr->resolved_kgpc_type))
     {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
@@ -8844,7 +9364,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     KgpcArrayDimensionInfo info;
     int has_info = 0;
-    if (base_is_array && array_type != NULL && !array_is_open_array &&
+    if (base_is_array && array_type != NULL &&
         kgpc_type_get_array_dimension_info(array_type, ctx->symtab, &info) == 0)
     {
         has_info = 1;
@@ -9324,7 +9844,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                     KGPC_COMPILER_HARD_ASSERT(element_size_ok,
                         "codegen_get_indexable_element_size failed in stride computation");
                     stride = element_size_ll;
-                    extra_lower_bound = 1; /* Default to 1-based */
+                    extra_lower_bound = 0;
                 }
 
                 {
@@ -9752,10 +10272,24 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     if (left_reg == NULL || right_reg == NULL)
         return inst_list;
 
-    int left_is_shortstring = (left_expr != NULL && codegen_expr_is_shortstring_value_ctx(left_expr, ctx) &&
-        !expr_has_type_tag(left_expr, STRING_TYPE));
-    int right_is_shortstring = (right_expr != NULL && codegen_expr_is_shortstring_value_ctx(right_expr, ctx) &&
-        !expr_has_type_tag(right_expr, STRING_TYPE));
+    int left_is_shortstring = (left_expr != NULL && codegen_expr_is_shortstring_value_ctx(left_expr, ctx));
+    int right_is_shortstring = (right_expr != NULL && codegen_expr_is_shortstring_value_ctx(right_expr, ctx));
+    if (codegen_expr_function_call_returns_ansistring(ctx, left_expr))
+        left_is_shortstring = 0;
+    if (codegen_expr_function_call_returns_ansistring(ctx, right_expr))
+        right_is_shortstring = 0;
+    if ((left_is_shortstring || right_is_shortstring) &&
+        pascal_frontend_default_shortstring())
+    {
+        if (!left_is_shortstring && left_expr != NULL &&
+            !codegen_expr_function_call_returns_ansistring(ctx, left_expr) &&
+            expr_has_type_tag(left_expr, STRING_TYPE))
+            left_is_shortstring = 1;
+        if (!right_is_shortstring && right_expr != NULL &&
+            !codegen_expr_function_call_returns_ansistring(ctx, right_expr) &&
+            expr_has_type_tag(right_expr, STRING_TYPE))
+            right_is_shortstring = 1;
+    }
     int left_is_char_array = (left_expr != NULL && codegen_expr_is_char_array_like_ctx(left_expr, ctx) &&
         !left_is_shortstring);
     int right_is_char_array = (right_expr != NULL && codegen_expr_is_char_array_like_ctx(right_expr, ctx) &&
@@ -11592,6 +12126,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         return inst_list;
                     }
 
+                    /* Re-emit leaq of the stack buffer into buf_addr_reg.  The
+                     * earlier expression evaluation (codegen_address_for_expr /
+                     * codegen_expr_with_result) may have clobbered this register
+                     * because the register allocator does not know it is live
+                     * across the inner evaluation. */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        shortstr_buf->offset, buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+
                     if (codegen_target_is_windows())
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
@@ -11642,6 +12185,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         if (arg_infos != NULL) free(arg_infos);
                         return inst_list;
                     }
+
+                    /* Re-emit leaq of the stack buffer into buf_addr_reg; see
+                     * companion comment above for the rationale. */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        shortstr_buf->offset, buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
 
                     if (codegen_target_is_windows())
                     {
@@ -11712,6 +12261,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                             buf_save->offset, buf_addr_reg->bit_64);
                         inst_list = add_inst(inst_list, buffer);
                     }
+
+                    /* Re-emit leaq of the stack buffer into buf_addr_reg.  The
+                     * earlier codegen_expr_with_result for arg_expr may have
+                     * clobbered this register (e.g. when arg_expr requires a
+                     * scratch register that happens to coincide with buf_addr_reg). */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        shortstr_buf->offset, buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
 
                     if (codegen_target_is_windows())
                     {
@@ -11810,6 +12367,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         return inst_list;
                     }
                     inst_list = codegen_address_for_expr(address_expr, inst_list, ctx, &addr_reg);
+
+                    /* BUGFIX: For assigned() with comma-syntax multi-dimensional array
+                     * accesses (e.g., assigned(fbitmap[x1,y1])), codegen_address_for_expr
+                     * returns the address of the innermost pointer slot.  kgpc_assigned
+                     * expects the pointer VALUE, not its address, so we must dereference. */
+                    if (addr_reg != NULL &&
+                        call_mangled != NULL &&
+                        strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                        address_expr != NULL &&
+                        address_expr->type == EXPR_ARRAY_ACCESS &&
+                        address_expr->expr_data.array_access_data.extra_indices != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                            addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
 
                     if (addr_reg != NULL &&
                         formal_arg_decl != NULL &&
@@ -12051,6 +12624,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (codegen_had_error(ctx) || addr_reg == NULL)
                     return inst_list;
 
+                /* BUGFIX: For assigned() with comma-syntax multi-dimensional array
+                 * accesses, codegen_address_for_expr returns the address of the
+                 * innermost pointer slot.  kgpc_assigned expects the pointer VALUE,
+                 * not its address, so we must dereference. */
+                if (addr_reg != NULL &&
+                    call_mangled != NULL &&
+                    strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                    arg_expr != NULL &&
+                    arg_expr->type == EXPR_ARRAY_ACCESS &&
+                    arg_expr->expr_data.array_access_data.extra_indices != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
                 StackNode_t *arg_spill = add_l_t("arg_eval");
                 if (arg_spill != NULL && arg_infos != NULL)
                 {
@@ -12171,6 +12760,53 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * method pointer (or evaluate it into a register), load
                  * the code-field via [reg], and pass that as the scalar
                  * argument to kgpc_assigned. */
+                Register_t *src_reg = NULL;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                else
+                {
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                char load_buf[128];
+                snprintf(load_buf, sizeof(load_buf),
+                    "\tmovq\t(%s), %s\n", src_reg->bit_64, src_reg->bit_64);
+                inst_list = add_inst(inst_list, load_buf);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(load_buf, sizeof(load_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                        src_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, load_buf);
+                    free_reg(get_reg_stack(), src_reg);
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], src_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+            }
+            else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
+                     kgpc_type_is_dynamic_array(expr_get_kgpc_type(arg_expr)) &&
+                     call_mangled != NULL &&
+                     strcmp(call_mangled, "kgpc_assigned") == 0)
+            {
+                /* Assigned(dynarray) must inspect only the data-pointer
+                 * field (offset 0) of the dynamic-array descriptor.
+                 * Passing the descriptor's address would always test
+                 * non-null because the descriptor lives in the heap-
+                 * allocated outer array.  Instead, load the data pointer
+                 * via [reg] and pass that scalar to kgpc_assigned. */
                 Register_t *src_reg = NULL;
                 if (codegen_expr_is_addressable(arg_expr))
                 {
@@ -12644,6 +13280,21 @@ pass_value_arg:
                     }
                     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
                     free_expr_tree(expr_tree);
+                }
+
+                /* BUGFIX: For assigned() with comma-syntax array accesses,
+                 * gencode_expr_tree returns the address of the pointer slot.
+                 * kgpc_assigned expects the pointer VALUE, so dereference. */
+                if (top_reg != NULL &&
+                    call_mangled != NULL &&
+                    strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                    arg_expr != NULL &&
+                    arg_expr->type == EXPR_ARRAY_ACCESS &&
+                    arg_expr->expr_data.array_access_data.extra_indices != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        top_reg->bit_64, top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
                 }
 
                 if (expected_type == REAL_TYPE)

@@ -31,6 +31,15 @@
 #include "../SymTab/SymTab.h"
 #include "../../../unit_registry.h"
 #include "SemCheck_sizeof.h"
+/* WithContextEntry is defined in SemCheck_Expr_Internal.h.  We can't include
+ * that header here because of redefinition conflicts with helpers like
+ * `semcheck_is_currency_kgpc_type`/`get_type_alias_from_node` that this file
+ * also defines as static.  Instead we forward-declare the with stack here. */
+struct WithContextEntry_fwd {
+    struct Expression *context_expr;
+    struct RecordType *record_type;
+};
+extern struct WithContextEntry_fwd *with_context_stack;
 
 void semcheck_debug_expr_brief(const struct Expression *expr, const char *label);
 struct RecordType *get_record_type_from_node(HashNode_t *node);
@@ -1671,12 +1680,14 @@ static void semcheck_stmt_set_call_owner_info(struct Statement *stmt,
     if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
         return;
 
-    if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+    if (owner_class != NULL &&
+        stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
     {
         free(stmt->stmt_data.procedure_call_data.cached_owner_class);
         stmt->stmt_data.procedure_call_data.cached_owner_class = NULL;
     }
-    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+    if (method_name != NULL &&
+        stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
     {
         free(stmt->stmt_data.procedure_call_data.cached_method_name);
         stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
@@ -1686,6 +1697,91 @@ static void semcheck_stmt_set_call_owner_info(struct Statement *stmt,
         stmt->stmt_data.procedure_call_data.cached_owner_class = strdup(owner_class);
     if (method_name != NULL)
         stmt->stmt_data.procedure_call_data.cached_method_name = strdup(method_name);
+}
+
+static int semcheck_stmt_proc_type_param_count(KgpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+        return -1;
+
+    ListNode_t *params = type->info.proc_info.params;
+    int count = ListLength(params);
+    if (count <= 0)
+        return count;
+
+    Tree_t *first_param = (Tree_t *)params->cur;
+    if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+        first_param->tree_data.var_decl_data.ids != NULL)
+    {
+        const char *first_name =
+            (const char *)first_param->tree_data.var_decl_data.ids->cur;
+        if (first_name != NULL && pascal_identifier_equals(first_name, "Self"))
+            count--;
+    }
+
+    return count;
+}
+
+static struct MethodInfo *semcheck_stmt_find_receiver_vmt_method(
+    struct RecordType *receiver_record, const char *method_name,
+    KgpcType *call_type)
+{
+    if (receiver_record == NULL || receiver_record->methods == NULL ||
+        method_name == NULL)
+        return NULL;
+
+    int wanted_param_count = semcheck_stmt_proc_type_param_count(call_type);
+    struct MethodInfo *single_name_match = NULL;
+    int name_match_count = 0;
+
+    for (ListNode_t *node = receiver_record->methods; node != NULL; node = node->next)
+    {
+        struct MethodInfo *method = (struct MethodInfo *)node->cur;
+        if (method == NULL || method->name == NULL ||
+            !(method->is_virtual || method->is_override) ||
+            !pascal_identifier_equals(method->name, method_name))
+            continue;
+
+        single_name_match = method;
+        name_match_count++;
+        if (wanted_param_count >= 0)
+        {
+            if (method->param_count < 0)
+                return NULL;
+            if (method->param_count == wanted_param_count)
+                return method;
+        }
+    }
+
+    if (wanted_param_count < 0 && name_match_count == 1)
+        return single_name_match;
+    return NULL;
+}
+
+static void semcheck_stmt_set_receiver_virtual_dispatch(struct Statement *stmt,
+    struct RecordType *receiver_record, const char *method_name,
+    KgpcType *call_type)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL ||
+        receiver_record == NULL || receiver_record->type_id == NULL ||
+        method_name == NULL)
+        return;
+
+    struct MethodInfo *method = semcheck_stmt_find_receiver_vmt_method(
+        receiver_record, method_name, call_type);
+    if (method == NULL)
+        return;
+
+    stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+    stmt->stmt_data.procedure_call_data.vmt_index = method->vmt_index;
+
+    free(stmt->stmt_data.procedure_call_data.self_class_name);
+    stmt->stmt_data.procedure_call_data.self_class_name =
+        strdup(receiver_record->type_id);
+
+    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+        free(stmt->stmt_data.procedure_call_data.cached_method_name);
+    stmt->stmt_data.procedure_call_data.cached_method_name = strdup(method_name);
 }
 
 /* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
@@ -4073,6 +4169,14 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_INHERITED:
+            if (stmt->stmt_data.inherited_data.call_expr == NULL)
+            {
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num,
+                    stmt->source_index,
+                    "Error on line %d, inherited statement has no resolved call target.\n\n",
+                    stmt->line_num);
+                return ++return_val;
+            }
             if (stmt->stmt_data.inherited_data.call_expr != NULL)
             {
                 struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
@@ -4107,6 +4211,15 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 
                 if (call_expr->type == EXPR_FUNCTION_CALL)
                 {
+                    if (call_expr->expr_data.function_call_data.args_expr == NULL &&
+                        call_expr->expr_data.function_call_data.is_bare_inherited)
+                    {
+                        ListNode_t *forwarded_args =
+                            semcheck_clone_current_subprogram_actual_args(0);
+                        if (forwarded_args != NULL)
+                            call_expr->expr_data.function_call_data.args_expr = forwarded_args;
+                    }
+
                     if (1)
                     {
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
@@ -4280,6 +4393,12 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                             if (parent_method_node == NULL)
                             {
+                                if (call_expr->expr_data.function_call_data.is_bare_inherited)
+                                {
+                                    stmt->stmt_data.inherited_data.call_expr = NULL;
+                                    destroy_expr(call_expr);
+                                    break;
+                                }
                                 semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                                     "Error on line %d, inherited call to %s has no matching overload.\n\n",
                                     stmt->line_num,
@@ -6640,6 +6759,79 @@ skip_type_receiver_rewrite:
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
                  method_node->hash_type == HASHTYPE_FUNCTION))
             {
+                /* WITH-context override: a method on the enclosing class's
+                 * Self can shadow an unqualified call inside `with X do ...`
+                 * when X's class also declares (or inherits) the same method.
+                 * In Pascal/Delphi semantics, the innermost WITH target wins
+                 * over the enclosing method's Self for unqualified method
+                 * resolution.  Re-route through the WITH receiver here.
+                 *
+                 * Notable case: TObject.Free is reachable via Self in any
+                 * method body, so without this override `with linkres do
+                 * Free;` resolves to Self.Free instead of linkres.Free,
+                 * causing a heap corruption double-free. */
+                /* Skip the WITH override when the only/innermost WITH context
+                 * is the synthetic `with Self do` wrapper that KGPC inserts
+                 * around every instance method body (see
+                 * convert_method_implementation in from_cparser_statements_and_programs.c).
+                 * In that case the WITH target IS Self, so the regular
+                 * Self-prepend path below resolves correctly with proper
+                 * overload-aware metadata.  Only override when there is an
+                 * outer user-written `with X do ...` whose target is a
+                 * different expression. */
+                int innermost_is_synthetic_self = 0;
+                if (with_context_count > 0 &&
+                    with_context_stack[with_context_count - 1].context_expr != NULL)
+                {
+                    struct Expression *innermost_ctx =
+                        with_context_stack[with_context_count - 1].context_expr;
+                    if (innermost_ctx->type == EXPR_VAR_ID &&
+                        innermost_ctx->expr_data.id != NULL &&
+                        pascal_identifier_equals(innermost_ctx->expr_data.id, "Self"))
+                    {
+                        innermost_is_synthetic_self = 1;
+                    }
+                }
+
+                if (with_context_count > 0 && !innermost_is_synthetic_self)
+                {
+                    struct Expression *with_expr = NULL;
+                    int wm = semcheck_with_try_resolve_method(proc_id, symtab,
+                        &with_expr, stmt->line_num);
+                    if (wm == 0 && with_expr != NULL)
+                    {
+                        ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                        if (self_node != NULL)
+                        {
+                            self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                            stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                            if (stmt->stmt_data.procedure_call_data.placeholder_method_name == NULL)
+                                stmt->stmt_data.procedure_call_data.placeholder_method_name = strdup(proc_id);
+                            return semcheck_proccall(symtab, stmt, max_scope_lev);
+                        }
+                        destroy_expr(with_expr);
+                    }
+                    else if (wm == 2 && with_expr != NULL)
+                    {
+                        /* Procedural field on the WITH target: rewrite as
+                         * with_expr.field(...) procedural-variable call. */
+                        struct Expression *field_access = mk_recordaccess(
+                            stmt->line_num, with_expr, strdup(proc_id));
+                        if (field_access != NULL)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                            stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                            int field_tag = UNKNOWN_TYPE;
+                            return return_val + semcheck_stmt_expr_tag(&field_tag, symtab,
+                                field_access, max_scope_lev, NO_MUTATE);
+                        }
+                        destroy_expr(with_expr);
+                    }
+                }
+
                 /* Save bare method name before rewrite for virtual dispatch check */
                 char *bare_method_name = strdup(proc_id);
 
@@ -6744,6 +6936,12 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.vmt_index = vmt_index;
                     stmt->stmt_data.procedure_call_data.self_class_name =
                         strdup(self_record->type_id);
+                    if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_owner_class =
+                            strdup(self_record->type_id);
+                    if (stmt->stmt_data.procedure_call_data.cached_method_name == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_method_name =
+                            strdup(bare_method_name);
                 }
                 /* Interface method call check */
                 if (self_record != NULL && self_record->is_interface &&
@@ -7445,6 +7643,31 @@ skip_type_receiver_rewrite:
                         if (FindSymbol(&receiver_node, symtab, receiver_expr->expr_data.id) != 0 &&
                             receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
                             receiver_is_type_ident = 1;
+                    }
+                }
+
+                if (!is_static && !is_nonstatic_class_method &&
+                    !stmt->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call &&
+                    !receiver_is_type_ident)
+                {
+                    semcheck_stmt_set_receiver_virtual_dispatch(stmt,
+                        record_info, method_name, method_node->type);
+                }
+
+                {
+                    struct RecordType *constructor_owner =
+                        (actual_method_owner != NULL) ? actual_method_owner : record_info;
+                    if (constructor_owner != NULL &&
+                        semcheck_stmt_method_is_declared_constructor(symtab,
+                            constructor_owner, method_name))
+                    {
+                        stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
+                        if (receiver_is_type_ident)
+                        {
+                            free(stmt->stmt_data.procedure_call_data.constructor_class_name);
+                            stmt->stmt_data.procedure_call_data.constructor_class_name =
+                                strdup(record_info->type_id);
+                        }
                     }
                 }
 
@@ -8703,6 +8926,12 @@ proccall_parent_resolve_done:
                         if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                             stmt->stmt_data.procedure_call_data.self_class_name =
                                 strdup(resolved_proc->owner_class);
+                        if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
+                            stmt->stmt_data.procedure_call_data.cached_owner_class =
+                                strdup(resolved_proc->owner_class);
+                        if (stmt->stmt_data.procedure_call_data.cached_method_name == NULL)
+                            stmt->stmt_data.procedure_call_data.cached_method_name =
+                                strdup(resolved_proc->method_name);
                         break;
                     }
                 }
@@ -8714,6 +8943,12 @@ proccall_parent_resolve_done:
                     if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                         stmt->stmt_data.procedure_call_data.self_class_name =
                             strdup(resolved_proc->owner_class);
+                    if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_owner_class =
+                            strdup(resolved_proc->owner_class);
+                    if (stmt->stmt_data.procedure_call_data.cached_method_name == NULL)
+                        stmt->stmt_data.procedure_call_data.cached_method_name =
+                            strdup(resolved_proc->method_name);
                 }
             }
         }
@@ -9726,6 +9961,7 @@ static struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, i
     {
         method_call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
         method_call->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+        method_call->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call = 1;
     }
     else
     {

@@ -825,6 +825,22 @@ long long codegen_record_field_effective_size(struct Expression *expr, CodeGenCo
                 return 8;
         }
 
+        if (ctx->symtab != NULL && field_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, field_type_id) != 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long type_size = kgpc_type_sizeof(type_node->type);
+                if (type_size > 0 &&
+                    type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                    type_node->type->info.primitive_type_tag == ENUM_TYPE)
+                    return type_size;
+                if (type_size > 0 && !(field->has_cached_layout && field->cached_size > 0))
+                    return type_size;
+            }
+        }
+
         if (field->has_cached_layout && field->cached_size > 0)
             return field->cached_size;
 
@@ -1097,6 +1113,7 @@ ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *stmt,
     }
     call_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
     call_stmt->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+    call_stmt->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call = 1;
 
     if (semcheck_stmt(ctx->symtab, call_stmt, INT_MAX) != 0)
     {
@@ -1544,7 +1561,46 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             dest_temp->offset, dest_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        inst_list = codegen_call_dynarray_assign_from_temp(inst_list, ctx, dest_reload, value_reg, descriptor_size);
+        /* Array literals materialize their data on the stack. For typed
+         * constants and other storage that outlives the current frame,
+         * deep-copy the element data to the heap so the descriptor does
+         * not point to reclaimed stack memory. */
+        if (src_expr != NULL && src_expr->type == EXPR_ARRAY_LITERAL)
+        {
+            int elem_size = expr_get_array_element_size(src_expr, ctx);
+            if (elem_size <= 0)
+                elem_size = CODEGEN_POINTER_SIZE_BYTES;
+
+            char deep_buf[128];
+            if (codegen_target_is_windows())
+            {
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rcx\n", dest_reload->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%r8d\n", descriptor_size);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%r9d\n", elem_size);
+                inst_list = add_inst(inst_list, deep_buf);
+            }
+            else
+            {
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rdi\n", dest_reload->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%edx\n", descriptor_size);
+                inst_list = add_inst(inst_list, deep_buf);
+                snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%ecx\n", elem_size);
+                inst_list = add_inst(inst_list, deep_buf);
+            }
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_deep_copy_into");
+        }
+        else
+        {
+            inst_list = codegen_call_dynarray_assign_from_temp(inst_list, ctx, dest_reload, value_reg, descriptor_size);
+        }
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), dest_reload);
     }

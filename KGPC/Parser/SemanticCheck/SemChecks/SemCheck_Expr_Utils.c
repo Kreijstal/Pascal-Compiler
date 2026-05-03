@@ -495,13 +495,22 @@ void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *targ
         expr->expr_data.function_call_data.mangled_id = target_symbol;
     }
     semcheck_expr_set_call_kgpc_type(expr, target->type, had_call_info);
-    /* Cache method identity so codegen doesn't need to parse mangled names. */
-    free(expr->expr_data.function_call_data.cached_owner_class);
-    expr->expr_data.function_call_data.cached_owner_class =
-        target->owner_class ? strdup(target->owner_class) : NULL;
-    free(expr->expr_data.function_call_data.cached_method_name);
-    expr->expr_data.function_call_data.cached_method_name =
-        target->method_name ? strdup(target->method_name) : NULL;
+    /* Cache method identity so codegen doesn't need to parse mangled names.
+     * Some earlier semcheck paths set this from structured record metadata
+     * before overload resolution. Do not erase that metadata when the resolved
+     * symbol is an implementation label without owner/method fields. */
+    if (target->owner_class != NULL)
+    {
+        free(expr->expr_data.function_call_data.cached_owner_class);
+        expr->expr_data.function_call_data.cached_owner_class =
+            strdup(target->owner_class);
+    }
+    if (target->method_name != NULL)
+    {
+        free(expr->expr_data.function_call_data.cached_method_name);
+        expr->expr_data.function_call_data.cached_method_name =
+            strdup(target->method_name);
+    }
     expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
 

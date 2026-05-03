@@ -1152,6 +1152,10 @@ void destroy_type_info_contents(TypeInfo *info) {
         destroy_list(info->enum_literals);
         info->enum_literals = NULL;
     }
+    if (info->enum_values != NULL) {
+        destroy_list(info->enum_values);
+        info->enum_values = NULL;
+    }
     if (info->array_dimensions != NULL) {
         destroy_list(info->array_dimensions);
         info->array_dimensions = NULL;

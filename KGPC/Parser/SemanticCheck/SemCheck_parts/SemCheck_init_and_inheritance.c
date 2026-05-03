@@ -361,8 +361,12 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
 
                         int ordinal = 0;
                         ListNode_t *literal_node = alias_info->enum_literals;
+                        ListNode_t *value_node = alias_info->enum_values;
                         while (literal_node != NULL)
                         {
+                            int literal_ordinal = ordinal;
+                            if (value_node != NULL && value_node->cur != NULL)
+                                literal_ordinal = atoi((const char *)value_node->cur);
                             if (literal_node->cur != NULL)
                             {
                                 char *literal_name = (char *)literal_node->cur;
@@ -378,27 +382,33 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         if (existing->type != NULL && existing->type != alias_info->kgpc_type)
                                             kgpc_type_release(existing->type);
                                         existing->is_constant = 1;
-                                        existing->const_int_value = ordinal;
+                                        existing->const_int_value = literal_ordinal;
                                         existing->type = alias_info->kgpc_type;
                                         existing->defined_in_unit = 0;
                                         kgpc_type_retain(existing->type);
                                         literal_node = literal_node->next;
-                                        ++ordinal;
+                                        if (value_node != NULL)
+                                            value_node = value_node->next;
+                                        ordinal = literal_ordinal + 1;
                                         continue;
                                     }
                                     /* Imported unit collisions are allowed: keep first visible literal. */
                                     if (tree->tree_data.type_decl_data.defined_in_unit)
                                     {
                                         literal_node = literal_node->next;
-                                        ++ordinal;
+                                        if (value_node != NULL)
+                                            value_node = value_node->next;
+                                        ordinal = literal_ordinal + 1;
                                         continue;
                                     }
                                     /* If it exists as a constant with the same value, skip silently */
-                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    if (existing->is_constant && existing->const_int_value == literal_ordinal)
                                     {
                                         /* Same enum literal from prelude - not an error */
                                         literal_node = literal_node->next;
-                                        ++ordinal;
+                                        if (value_node != NULL)
+                                            value_node = value_node->next;
+                                        ordinal = literal_ordinal + 1;
                                         continue;
                                     }
                                     /* Different value in local declarations is a real conflict. */
@@ -407,12 +417,14 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         tree->line_num, literal_name);
                                     ++errors;
                                     literal_node = literal_node->next;
-                                    ++ordinal;
+                                    if (value_node != NULL)
+                                        value_node = value_node->next;
+                                    ordinal = literal_ordinal + 1;
                                     continue;
                                 }
                                 
                                 /* Use typed API with shared enum KgpcType - all literals reference same type */
-                                if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->kgpc_type) > 0)
+                                if (PushConstOntoScope_Typed(symtab, literal_name, literal_ordinal, alias_info->kgpc_type) > 0)
                                 {
                                     semcheck_error_with_context_at(tree->line_num, 0, tree->source_index, 
                                             "Error on line %d, redeclaration of enum literal %s!\n",
@@ -432,8 +444,10 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                     }
                                 }
                             }
-                            ++ordinal;
                             literal_node = literal_node->next;
+                            if (value_node != NULL)
+                                value_node = value_node->next;
+                            ordinal = literal_ordinal + 1;
                         }
                         semcheck_restore_scope(symtab, saved_scope_for_enum_literals);
                         /* KgpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
@@ -2336,6 +2350,16 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
             }
             struct RecordField *original_field = (struct RecordField *)cur->cur;
 
+            /* Class vars are static storage owned by the declaring class.
+             * They remain visible through parent lookup and must not be
+             * cloned into subclasses, otherwise inherited reads/writes split
+             * across different CLASSVAR labels. */
+            if (original_field->is_class_var == 1)
+            {
+                cur = cur->next;
+                continue;
+            }
+
             /* Skip hidden fields from parent if the record already has them
              * (e.g., __kgpc_class_typeinfo added to forward declarations). */
             if (record_field_is_hidden(original_field) && original_field->name != NULL)
@@ -2402,6 +2426,10 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
             cloned_field->is_array = original_field->is_array;
             cloned_field->array_start = original_field->array_start;
             cloned_field->array_end = original_field->array_end;
+            cloned_field->array_dim_start_str = original_field->array_dim_start_str ?
+                strdup(original_field->array_dim_start_str) : NULL;
+            cloned_field->array_dim_end_str = original_field->array_dim_end_str ?
+                strdup(original_field->array_dim_end_str) : NULL;
             cloned_field->array_element_type = original_field->array_element_type;
             cloned_field->array_element_type_id = original_field->array_element_type_id ? 
                 strdup(original_field->array_element_type_id) : NULL;

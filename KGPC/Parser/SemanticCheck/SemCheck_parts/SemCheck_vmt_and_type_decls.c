@@ -58,9 +58,24 @@ static int semcheck_alias_metadata_already_applied(const struct TypeAlias *exist
            existing_alias->is_wide_string == alias_info->is_wide_string;
 }
 
+static void semcheck_ensure_implicit_tobject_parent(struct RecordType *record_info,
+                                                    const char *class_name)
+{
+    if (record_info == NULL || !record_info->is_class ||
+        record_info->parent_class_name != NULL ||
+        !pascal_frontend_is_objfpc_mode())
+        return;
+
+    if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
+        record_info->parent_class_name = strdup("TObject");
+}
+
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
     if (record_info == NULL || class_name == NULL)
+        return 0;
+    semcheck_ensure_implicit_tobject_parent(record_info, class_name);
+    if (record_info->methods != NULL)
         return 0;
     
     /* Get methods registered for this class.
@@ -78,6 +93,7 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     /* Start with parent's VMT if this class has a parent */
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
+    int max_vmt_index = 11;
 
 if (record_info->parent_class_name != NULL) {
         /* Look up parent class */
@@ -112,9 +128,11 @@ if (record_info->parent_class_name != NULL) {
                             cloned->name = parent_method->name ? strdup(parent_method->name) : NULL;
                             cloned->mangled_name = parent_method->mangled_name ? strdup(parent_method->mangled_name) : NULL;
                             cloned->is_virtual = parent_method->is_virtual;
-                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
-                            cloned->vmt_index = parent_method->vmt_index;
-                            cloned->param_count = parent_method->param_count;
+	                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
+	                            cloned->vmt_index = parent_method->vmt_index;
+	                            if (cloned->vmt_index > max_vmt_index)
+	                                max_vmt_index = cloned->vmt_index;
+	                            cloned->param_count = parent_method->param_count;
                             cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
                             cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
 
@@ -292,7 +310,7 @@ if (record_info->parent_class_name != NULL) {
                      * vDynamicTable, vMethodTable, vFieldTable, vTypeInfo,
                      * vInitTable, vAutoTable, vIntfTable, vMsgStrPtr.
                      * Virtual methods start at offset 96 (slot 12). */
-                    new_method->vmt_index = vmt_size + 12;
+	                    new_method->vmt_index = max_vmt_index + 1;
 
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {
@@ -301,15 +319,16 @@ if (record_info->parent_class_name != NULL) {
                         node->next = NULL;
                         
                         /* Append to end */
-                        if (vmt == NULL) {
-                            vmt = node;
-                        } else {
+	                        if (vmt == NULL) {
+	                            vmt = node;
+	                        } else {
                             ListNode_t *last = vmt;
                             while (last->next != NULL)
                                 last = last->next;
                             last->next = node;
-                        }
-                        vmt_size++;
+	                        }
+	                        vmt_size++;
+	                        max_vmt_index = new_method->vmt_index;
                     } else {
                         free(new_method->name);
                         free(new_method->mangled_name);
@@ -551,6 +570,7 @@ void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
             }
         }
 
+        semcheck_ensure_implicit_tobject_parent(record_info, class_name);
         build_class_vmt(symtab, record_info, class_name, tree->line_num);
 
         for (ListNode_t *tmpl_cur = record_info->method_templates;
@@ -1436,18 +1456,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (record_info != NULL && record_info->is_type_helper)
                     semcheck_register_type_helper(record_info, symtab);
 
-                /* In objfpc mode, classes without explicit parent inherit from TObject,
-                 * unless this IS TObject itself (to avoid circular inheritance). */
-                if (record_info != NULL && record_info->is_class &&
-                    record_info->parent_class_name == NULL &&
-                    pascal_frontend_is_objfpc_mode())
-                {
-                    const char *class_name = tree->tree_data.type_decl_data.id;
-                    if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
-                    {
-                        record_info->parent_class_name = strdup("TObject");
-                    }
-                }
+                semcheck_ensure_implicit_tobject_parent(record_info,
+                    tree->tree_data.type_decl_data.id);
 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
@@ -2742,6 +2752,17 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             {
                 /* Replace predeclared UNKNOWN placeholders for simple aliases once the
                  * real target type becomes available (e.g. SysUtils.TEndian -> ObjPas.TEndian). */
+                kgpc_type_retain(kgpc_type);
+                kgpc_type_release(existing_type->type);
+                existing_type->type = kgpc_type;
+            }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                     kgpc_type != NULL &&
+                     kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+                     existing_type->type != NULL &&
+                     existing_type->type->kind == TYPE_KIND_PRIMITIVE &&
+                     existing_type->type->info.primitive_type_tag == PROCEDURE)
+            {
                 kgpc_type_retain(kgpc_type);
                 kgpc_type_release(existing_type->type);
                 existing_type->type = kgpc_type;

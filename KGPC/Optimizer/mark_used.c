@@ -188,6 +188,7 @@ static void mark_class_constructors_from_subprograms(ListNode_t *sub_list, Subpr
 static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
 static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
     const char *method_name, SubprogramMap *map);
+static void mark_var_initializer_calls(ListNode_t *var_list, SubprogramMap *map);
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map);
 static int lookup_id_parse_owner_method(const char *lookup_id, char *owner_buf,
     size_t owner_buf_sz, char *method_buf, size_t method_buf_sz);
@@ -281,6 +282,19 @@ static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
 
     /* Mark as used */
     sub->tree_data.subprogram_data.is_used = 1;
+
+    /* TObject.Free: codegen unconditionally appends a FreeMem(self) call
+     * after the Pascal body, routing through whatever single-arg FreeMem
+     * overload is in scope (KGPC stdlib's "procedure FreeMem(var target)"
+     * or FPC RTL's "function FreeMem(p:pointer):ptruint").  Mark FreeMem
+     * as used here so DCE doesn't strip its body before linking. */
+    if (sub->tree_data.subprogram_data.owner_class != NULL &&
+        sub->tree_data.subprogram_data.method_name != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.owner_class, "TObject") == 0 &&
+        strcasecmp(sub->tree_data.subprogram_data.method_name, "Free") == 0)
+    {
+        mark_subprograms_by_id(map, "FreeMem");
+    }
 
     /* If this node has no body, try to find the implementation by plain id.
      * This handles the case where a forward declaration (mangled_id="runerror_i")
@@ -1046,6 +1060,10 @@ static void scan_used_subprogram_bodies(ListNode_t *sub_list, SubprogramMap *map
         if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
             Tree_t *sub = (Tree_t *)sub_list->cur;
             if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.is_used) {
+                mark_var_initializer_calls(
+                    sub->tree_data.subprogram_data.const_declarations, map);
+                mark_var_initializer_calls(
+                    sub->tree_data.subprogram_data.declarations, map);
                 struct Statement *body = sub->tree_data.subprogram_data.statement_list;
                 if (body != NULL)
                     mark_stmt_calls(body, map);

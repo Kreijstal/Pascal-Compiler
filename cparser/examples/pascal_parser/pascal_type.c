@@ -1081,8 +1081,8 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
     combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
-        token(keyword_ci("class")),
-        token(keyword_ci("var")),
+        token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("var", PASCAL_T_IDENTIFIER)),
         many(class_var_decl),
         NULL
     );
@@ -1090,7 +1090,7 @@ combinator_t* class_type(tag_t tag) {
     // Plain var section inside class: var FField: Type;
     // Allow multiple declarations separated by semicolons.
     combinator_t* plain_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
-        token(keyword_ci("var")),
+        token(create_keyword_parser("var", PASCAL_T_IDENTIFIER)),
         many(class_var_decl),
         NULL
     );
@@ -2594,18 +2594,18 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
 
     /* Use PASCAL_T_CLASS_MEMBER to distinguish "class var" from "var"
        so from_cparser.c can detect it and set is_class_var = 1.
-       (token() consumes keywords without creating AST children,
-       so a plain PASCAL_T_VAR_SECTION would be indistinguishable.) */
+       Use create_keyword_parser() so the AST carries structured section
+       markers instead of forcing conversion to infer from field children. */
     combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
-        token(keyword_ci("class")),
-        token(keyword_ci("var")),
+        token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("var", PASCAL_T_IDENTIFIER)),
         many(field_decl),
         NULL
     );
 
     combinator_t* class_threadvar_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
-        token(keyword_ci("class")),
-        token(keyword_ci("threadvar")),
+        token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("threadvar", PASCAL_T_IDENTIFIER)),
         many(field_decl),
         NULL
     );

@@ -12,6 +12,53 @@ static void semcheck_timing_step(const char *label, double *last_ms) {
     *last_ms = now;
 }
 
+static int semcheck_resolve_bound_literal(SymTab_t *symtab, const char *text, long long *out_value)
+{
+    if (text == NULL || out_value == NULL)
+        return 1;
+
+    while (*text == ' ' || *text == '\t')
+        text++;
+
+    if (resolve_const_identifier(symtab, text, out_value) == 0)
+        return 0;
+
+    char *endptr = NULL;
+    long long parsed = strtoll(text, &endptr, 10);
+    if (endptr != text)
+    {
+        while (*endptr == ' ' || *endptr == '\t')
+            endptr++;
+        if (*endptr == '\0')
+        {
+            *out_value = parsed;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static void semcheck_resolve_inline_set_range(SymTab_t *symtab, KgpcType *type)
+{
+    if (type == NULL || type->type_alias == NULL)
+        return;
+
+    struct TypeAlias *alias = type->type_alias;
+    if (!alias->is_set || !alias->is_range || alias->range_known)
+        return;
+
+    long long start_value = 0;
+    long long end_value = 0;
+    if (semcheck_resolve_bound_literal(symtab, alias->range_start_str, &start_value) == 0 &&
+        semcheck_resolve_bound_literal(symtab, alias->range_end_str, &end_value) == 0)
+    {
+        alias->range_start = start_value;
+        alias->range_end = end_value;
+        alias->range_known = 1;
+    }
+}
+
 /* Wire scope tree deps: add each unit in uses_list as a dependency of scope.
  * Also always adds System as a dependency. */
 static void wire_scope_deps(SymTab_t *symtab, ScopeNode *scope, ListNode_t *uses_list)
@@ -2357,6 +2404,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     element_type_borrowed = 0;
                     assert(element_type != NULL && "Array element type must be createable from VarType");
                 }
+
+                semcheck_resolve_inline_set_range(symtab, element_type);
 
                 if (element_type != NULL && kgpc_type_is_record(element_type))
                 {

@@ -1,4 +1,23 @@
 #include "../codegen_stmt_internal.h"
+#include "../../../Parser/pascal_frontend.h"
+
+static int codegen_assignment_type_is_class_vmt_value(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    if (type->type_alias != NULL && type->type_alias->is_class_reference)
+        return 1;
+
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+        type->info.points_to->type_alias != NULL &&
+        type->info.points_to->type_alias->is_class_reference)
+    {
+        return 1;
+    }
+
+    return 0;
+}
 
 int record_type_is_mp_integer(const struct RecordType *record_type)
 {
@@ -466,6 +485,7 @@ int codegen_shortstring_capacity_from_type_local(KgpcType *type)
             return alias->array_end - alias->array_start + 1;
         if (alias->storage_size > 1)
             return (int)alias->storage_size;
+        return 256;
     }
 
     if (kgpc_type_is_shortstring(type))
@@ -1130,19 +1150,27 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
         return inst_list;
 
+    /* If the destination is actually a dynamic array (e.g. typed constant
+     * whose expression lacks array_is_dynamic), routing through
+     * codegen_assign_dynamic_array avoids raw memcpy overflowing the
+     * 16-byte descriptor slot. */
+    KgpcType *dest_type = expr_get_kgpc_type(dest_expr);
+    if (dest_type != NULL && kgpc_type_is_dynamic_array(dest_type))
+        return codegen_assign_dynamic_array(dest_expr, src_expr, inst_list, ctx);
+
     int dest_lower = 0, dest_upper = -1, dest_is_shortstring = 0;
     int src_lower = 0, src_upper = -1, src_is_shortstring = 0;
     int dest_is_char_array = codegen_get_char_array_bounds(dest_expr, ctx,
         &dest_lower, &dest_upper, &dest_is_shortstring);
     int src_is_char_array = codegen_get_char_array_bounds(src_expr, ctx,
         &src_lower, &src_upper, &src_is_shortstring);
-    int src_is_shortstring_value = codegen_expr_is_shortstring_value_local(src_expr);
+    int src_is_shortstring_value = codegen_expr_is_shortstring_value_ctx(src_expr, ctx);
     if (src_expr->type == EXPR_ARRAY_LITERAL)
     {
         src_is_shortstring = 0;
         src_is_shortstring_value = 0;
     }
-    int dest_is_shortstring_value = codegen_expr_is_shortstring_value_local(dest_expr);
+    int dest_is_shortstring_value = codegen_expr_is_shortstring_value_ctx(dest_expr, ctx);
 
     if ((dest_is_shortstring || dest_is_shortstring_value) &&
         (src_is_shortstring || src_is_shortstring_value))
@@ -1176,7 +1204,9 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         return inst_list;
     }
 
-    if ((dest_is_shortstring || dest_is_shortstring_value) && src_is_char_array && !src_is_shortstring)
+    if ((dest_is_shortstring || dest_is_shortstring_value) &&
+        src_is_char_array && !src_is_shortstring &&
+        src_expr->type != EXPR_ARRAY_LITERAL)
     {
         Register_t *dest_reg = NULL;
         Register_t *src_reg = NULL;
@@ -1647,6 +1677,9 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         is_class_assignment = 1;
     else if (src_expr->record_type != NULL && record_type_is_class(src_expr->record_type))
         is_class_assignment = 1;
+    else if (codegen_assignment_type_is_class_vmt_value(expr_get_kgpc_type(dest_expr)) ||
+             codegen_assignment_type_is_class_vmt_value(expr_get_kgpc_type(src_expr)))
+        is_class_assignment = 1;
 
     if (is_class_assignment)
     {
@@ -1824,12 +1857,17 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
             /* Handle string function results assigned to ShortString arrays.
              * Functions like Copy return AnsiString, which needs to be converted to ShortString format. */
-            int dest_is_shortstring = codegen_expr_is_shortstring_array(dest_expr);
+            int dest_is_shortstring =
+                codegen_expr_is_shortstring_array(dest_expr) ||
+                codegen_expr_is_shortstring_value_ctx(dest_expr, ctx);
             int src_returns_string = (expr_get_type_tag(src_expr) == STRING_TYPE);
             
             if (dest_is_shortstring && src_returns_string)
             {
                 char buffer[128];
+                int src_returns_shortstring_sret =
+                    expr_returns_sret(src_expr) ||
+                    codegen_expr_is_shortstring_value_ctx(src_expr, ctx);
                 
                 /* Save dest address to stack before calling function (function call may clobber registers) */
                 StackNode_t *dest_save_slot = add_l_x("__shortstring_dest__", CODEGEN_POINTER_SIZE_BYTES);
@@ -1881,8 +1919,10 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 if (array_size <= 1)
                     array_size = 256;
                 
-                /* Call the string-to-shortstring conversion */
-                inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
+                if (src_returns_shortstring_sret)
+                    inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
+                else
+                    inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
                 
                 free_reg(get_reg_stack(), value_reg);
                 free_reg(get_reg_stack(), addr_reg);

@@ -2804,6 +2804,17 @@ void kgpc_raise(int64_t value)
     exit(EXIT_FAILURE);
 }
 
+/* Forward declarations: New/Dispose route through MemoryManager so that
+ * the allocator pair stays consistent regardless of whether the FPC RTL
+ * MemoryManager initializer (heap.inc) has overridden the libc-only
+ * defaults installed by kgpc_init_memory_manager.  In KGPC stdlib mode
+ * MemoryManager stays bound to libc (kgpc_mm_*), so this matches the
+ * previous behaviour byte-for-byte; in --no-stdlib + FPC RTL mode this
+ * routes New/Dispose through FPC's heap manager so they pair with
+ * GetMem/FreeMem (which also go through MemoryManager via heap.inc). */
+static void *kgpc_memory_manager_getmem(uintptr_t size);
+static void kgpc_memory_manager_freemem(void *ptr);
+
 void kgpc_new(void **target, size_t size)
 {
     if (target == NULL)
@@ -2847,7 +2858,12 @@ void kgpc_new(void **target, size_t size)
     }
     else
     {
-        memory = calloc(1, size);
+        memory = kgpc_memory_manager_getmem((uintptr_t)size);
+        /* Pascal's New zero-initialises the allocated record so that
+         * later reads of unset fields are deterministic; mirror calloc
+         * semantics here regardless of which heap manager is active. */
+        if (memory != NULL && size > 0)
+            memset(memory, 0, size);
     }
 
     if (memory == NULL)
@@ -2886,7 +2902,7 @@ void kgpc_dispose(void **target)
                 link = &(*link)->next;
             }
         }
-        free(*target);
+        kgpc_memory_manager_freemem(*target);
         *target = NULL;
     }
 }
@@ -3581,6 +3597,36 @@ void kgpc_string_assign(char **target, const char *value)
     *target = kgpc_string_duplicate(value);
 }
 
+char *kgpc_string_unique(char **target)
+{
+    if (target == NULL)
+        return kgpc_alloc_empty_string();
+
+    char *value = *target;
+    if (value == NULL)
+    {
+        value = kgpc_alloc_empty_string();
+        *target = value;
+        return value;
+    }
+
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr == NULL)
+    {
+        value = kgpc_string_duplicate(value);
+        *target = value;
+        return value;
+    }
+
+    if (hdr->refcount <= 1)
+        return value;
+
+    char *copy = kgpc_string_duplicate_length(value, hdr->length);
+    kgpc_string_release(value);
+    *target = copy;
+    return copy;
+}
+
 void kgpc_string_assign_take(char **target, char *value)
 {
     if (target == NULL)
@@ -3935,11 +3981,7 @@ void kgpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor
     size_t descriptor_size)
 {
     if (dest_descriptor == NULL)
-    {
-        if (temp_descriptor != NULL)
-            free(temp_descriptor);
         return;
-    }
 
     if (descriptor_size == 0)
         descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
@@ -3951,7 +3993,89 @@ void kgpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor
     }
 
     memcpy(dest_descriptor, temp_descriptor, descriptor_size);
-    free(temp_descriptor);
+}
+
+/* Deep-copy a dynamic array: allocate heap buffer, copy element data,
+ * and return a new descriptor. */
+void *kgpc_dynarray_deep_copy(const void *src_descriptor, size_t descriptor_size,
+    size_t element_size)
+{
+    if (src_descriptor == NULL || element_size == 0)
+        return NULL;
+
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
+
+    const kgpc_dynarray_descriptor_t *src = (const kgpc_dynarray_descriptor_t *)src_descriptor;
+    size_t count = src->length > 0 ? (size_t)src->length : 0;
+    size_t data_bytes = count * element_size;
+
+    void *heap_desc = malloc(descriptor_size);
+    if (heap_desc == NULL)
+        return NULL;
+
+    memcpy(heap_desc, src_descriptor, descriptor_size);
+    kgpc_dynarray_descriptor_t *dst = (kgpc_dynarray_descriptor_t *)heap_desc;
+
+    if (data_bytes > 0 && src->data != NULL)
+    {
+        void *heap_data = malloc(data_bytes);
+        if (heap_data != NULL)
+        {
+            memcpy(heap_data, src->data, data_bytes);
+            dst->data = heap_data;
+        }
+        else
+        {
+            dst->data = NULL;
+            dst->length = 0;
+        }
+    }
+    else
+    {
+        dst->data = NULL;
+        dst->length = 0;
+    }
+
+    return heap_desc;
+}
+
+/* Deep-copy into an existing destination descriptor. */
+void kgpc_dynarray_deep_copy_into(void *dest_descriptor, const void *src_descriptor,
+    size_t descriptor_size, size_t element_size)
+{
+    if (dest_descriptor == NULL || src_descriptor == NULL || element_size == 0)
+        return;
+
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
+
+    const kgpc_dynarray_descriptor_t *src = (const kgpc_dynarray_descriptor_t *)src_descriptor;
+    kgpc_dynarray_descriptor_t *dst = (kgpc_dynarray_descriptor_t *)dest_descriptor;
+
+    size_t count = src->length > 0 ? (size_t)src->length : 0;
+    size_t data_bytes = count * element_size;
+
+    void *heap_data = NULL;
+    if (data_bytes > 0 && src->data != NULL)
+    {
+        heap_data = malloc(data_bytes);
+        if (heap_data != NULL)
+            memcpy(heap_data, src->data, data_bytes);
+        else
+            count = 0;
+    }
+    else
+    {
+        count = 0;
+    }
+
+    /* Mirror the full descriptor (matching kgpc_dynarray_deep_copy) so
+     * any per-descriptor metadata beyond data/length is preserved, then
+     * point the destination at the freshly heap-allocated buffer. */
+    memcpy(dest_descriptor, src_descriptor, descriptor_size);
+    dst->data = heap_data;
+    dst->length = (int64_t)count;
 }
 
 long long kgpc_dynarray_compute_high(const void *descriptor_ptr, long long lower_bound)
@@ -4038,6 +4162,21 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
 {
     if (dest == NULL || src == NULL || dest_size < 2)
         return;
+
+    if (!kgpc_string_is_managed(src))
+    {
+        unsigned char short_len = (unsigned char)src[0];
+        size_t c_len = strlen(src);
+        if (short_len > 0 && c_len == (size_t)short_len + 1)
+        {
+            size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+            size_t copy_len = (short_len < max_chars) ? short_len : max_chars;
+            dest[0] = (char)copy_len;
+            if (copy_len > 0)
+                memmove(dest + 1, src + 1, copy_len);
+            return;
+        }
+    }
 
     size_t src_len = kgpc_string_known_length(src);
     /* ShortString max capacity is 255 chars (indices 1..255) */
@@ -4824,6 +4963,8 @@ static uintptr_t kgpc_mm_memsize(void *p)
 static void kgpc_mm_noop(void) {}
 
 typedef void *(*kgpc_mm_allocmem_fn)(uintptr_t size);
+typedef void *(*kgpc_mm_getmem_fn)(uintptr_t size);
+typedef uintptr_t (*kgpc_mm_freemem_fn)(void *p);
 
 static void *kgpc_memory_manager_allocmem(uintptr_t size)
 {
@@ -4835,6 +4976,44 @@ static void *kgpc_memory_manager_allocmem(uintptr_t size)
     if (alloc_fn == NULL)
         return kgpc_mm_allocmem(size);
     return alloc_fn(size);
+}
+
+/* GetMem dispatch — used by kgpc_new so the matching kgpc_dispose can
+ * call FreeMem on the same heap.  Reads MemoryManager.GetMem (offset 8)
+ * if non-NULL, otherwise falls back to libc malloc.  The fallback path
+ * exists for very early startup before kgpc_init_memory_manager has run
+ * (Pascal initialisers must not crash if reached during a constructor).
+ */
+static void *kgpc_memory_manager_getmem(uintptr_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    kgpc_mm_getmem_fn get_fn = NULL;
+    memcpy(&get_fn, MemoryManager + 8, sizeof(get_fn));
+    if (get_fn == NULL)
+        return kgpc_mm_getmem(size);
+    return get_fn(size);
+}
+
+/* FreeMem dispatch — paired with kgpc_memory_manager_getmem so that
+ * Dispose() releases memory through the same allocator that New()
+ * obtained it from.  When the FPC RTL's heap manager has rebound
+ * MemoryManager (heap.inc typed const initialiser) this routes through
+ * SysFreeMem; otherwise it falls back to libc free. */
+static void kgpc_memory_manager_freemem(void *ptr)
+{
+    if (ptr == NULL)
+        return;
+
+    kgpc_mm_freemem_fn free_fn = NULL;
+    memcpy(&free_fn, MemoryManager + 16, sizeof(free_fn));
+    if (free_fn == NULL)
+    {
+        free(ptr);
+        return;
+    }
+    free_fn(ptr);
 }
 
 __attribute__((constructor))
@@ -5377,20 +5556,38 @@ void kgpc_unicodestring_assign(uint16_t **target, const uint16_t *value)
     *target = (uint16_t *)value;
 }
 
-char *kgpc_strpas(const char *p)
+char *kgpc_strpas_string(const char *p)
 {
     if (p == NULL)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(p);
 }
 
-char *kgpc_strpas_len(const char *p, int64_t length)
+char *kgpc_strpas_len_string(const char *p, int64_t length)
 {
     if (p == NULL || length <= 0)
         return kgpc_alloc_empty_string();
     /* Truncate at first NUL, like a C-string — StrPas copies until NUL */
     size_t actual = strnlen(p, (size_t)length);
     return kgpc_string_duplicate_length(p, actual);
+}
+
+void kgpc_strpas(char *dest, const char *p)
+{
+    kgpc_string_to_shortstring(dest, p != NULL ? p : "", 256);
+}
+
+void kgpc_strpas_len(char *dest, const char *p, int64_t length)
+{
+    if (p == NULL || length <= 0)
+    {
+        kgpc_string_to_shortstring(dest, "", 256);
+        return;
+    }
+    size_t actual = strnlen(p, (size_t)length);
+    char *tmp = kgpc_string_duplicate_length(p, actual);
+    kgpc_string_to_shortstring(dest, tmp, 256);
+    kgpc_string_release(tmp);
 }
 
 static int64_t kgpc_pos_internal(const char *hay, size_t hay_len, const char *needle, size_t needle_len, int64_t start_index)

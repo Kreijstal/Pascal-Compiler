@@ -208,6 +208,11 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         if (decl != NULL)
             decl->tree_data.arr_decl_data.type_ref =
                 type_ref_from_element_info(&type_info, element_type_id);
+        if (decl != NULL && type_info.element_kgpc_type != NULL)
+        {
+            decl->tree_data.arr_decl_data.element_kgpc_type = type_info.element_kgpc_type;
+            kgpc_type_retain(decl->tree_data.arr_decl_data.element_kgpc_type);
+        }
         if (decl != NULL && type_info.unresolved_index_type != NULL) {
             decl->tree_data.arr_decl_data.unresolved_index_type = type_info.unresolved_index_type;
             type_info.unresolved_index_type = NULL;  /* ownership transferred */
@@ -371,7 +376,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     }
 
     struct TypeAlias *inline_alias = NULL;
-    if (type_info.is_range)
+    if (type_info.is_range && !type_info.is_set)
     {
         inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
         if (inline_alias != NULL)
@@ -408,6 +413,14 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             inline_alias->is_set = 1;
             inline_alias->set_element_type = type_info.set_element_type;
             inline_alias->base_type = SET_TYPE;
+            inline_alias->is_range = type_info.is_range;
+            inline_alias->range_known = type_info.range_known;
+            inline_alias->range_start = type_info.range_start;
+            inline_alias->range_end = type_info.range_end;
+            if (type_info.range_start_str != NULL)
+                inline_alias->range_start_str = strdup(type_info.range_start_str);
+            if (type_info.range_end_str != NULL)
+                inline_alias->range_end_str = strdup(type_info.range_end_str);
             if (type_info.set_element_type_id != NULL)
                 inline_alias->set_element_type_id = strdup(type_info.set_element_type_id);
             inline_alias->set_element_type_ref =
@@ -423,8 +436,13 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             inline_alias->base_type = ENUM_TYPE;
             inline_alias->enum_is_scoped = type_info.enum_is_scoped;
             inline_alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
+            inline_alias->range_known = type_info.range_known;
+            inline_alias->range_start = type_info.range_start;
+            inline_alias->range_end = type_info.range_end;
             inline_alias->enum_literals = type_info.enum_literals;
+            inline_alias->enum_values = type_info.enum_values;
             type_info.enum_literals = NULL;
+            type_info.enum_values = NULL;
         }
     }
 
@@ -2539,10 +2557,23 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             alias->set_element_type_ref = type_info.set_element_type_ref;
             type_info.set_element_type_ref = NULL;
         }
-        if (type_info.is_set && type_info.range_known) {
+        if (type_info.is_set && type_info.is_range) {
+            alias->is_range = 1;
             alias->range_known = 1;
             alias->range_start = type_info.range_start;
             alias->range_end = type_info.range_end;
+            if (!type_info.range_known)
+                alias->range_known = 0;
+            if (type_info.range_start_str != NULL) {
+                free(alias->range_start_str);
+                alias->range_start_str = type_info.range_start_str;
+                type_info.range_start_str = NULL;
+            }
+            if (type_info.range_end_str != NULL) {
+                free(alias->range_end_str);
+                alias->range_end_str = type_info.range_end_str;
+                type_info.range_end_str = NULL;
+            }
         }
         alias->is_enum_set = type_info.is_enum_set;
         if (type_info.inline_enum_values != NULL) {
@@ -2552,9 +2583,18 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         alias->is_enum = type_info.is_enum;
         alias->enum_is_scoped = type_info.enum_is_scoped;
         alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
+        if (type_info.is_enum && type_info.range_known) {
+            alias->range_known = 1;
+            alias->range_start = type_info.range_start;
+            alias->range_end = type_info.range_end;
+        }
         if (type_info.enum_literals != NULL) {
             alias->enum_literals = type_info.enum_literals;
             type_info.enum_literals = NULL;
+        }
+        if (type_info.enum_values != NULL) {
+            alias->enum_values = type_info.enum_values;
+            type_info.enum_values = NULL;
         }
         alias->is_file = type_info.is_file;
         alias->file_type = type_info.file_type;

@@ -2911,13 +2911,12 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
     if (alias == NULL)
         return 4;
 
-    if (alias->storage_size > 0)
-        return alias->storage_size;
-
     if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
         (alias->set_element_type_id != NULL &&
          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
         return 32;
 
     if (alias->is_enum_set && alias->inline_enum_values != NULL)
@@ -2934,6 +2933,38 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
             return kgpc_default_set_storage_size_for_high(count - 1);
     }
 
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    return 4;
+}
+
+static long long kgpc_enum_storage_size(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->range_known)
+    {
+        if (alias->range_start >= 0 && alias->range_end <= 0xff)
+            return 1;
+        if (alias->range_start >= 0 && alias->range_end <= 0xffff)
+            return 2;
+        return 4;
+    }
+
+    if (alias->enum_literals != NULL)
+    {
+        int count = kgpc_list_length(alias->enum_literals);
+        if (count > 0 && count <= 0x100)
+            return 1;
+        if (count > 0 && count <= 0x10000)
+            return 2;
+    }
+
     return 4;
 }
 
@@ -2941,6 +2972,14 @@ long long kgpc_type_sizeof(KgpcType *type)
 {
     if (type == NULL)
         return -1;
+
+    if (type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == SET_TYPE &&
+        type->type_alias != NULL &&
+        type->type_alias->is_set)
+    {
+        return kgpc_set_storage_size(type->type_alias);
+    }
 
     if (type->type_alias != NULL &&
         type->type_alias->storage_size > 0 &&
@@ -2959,17 +2998,7 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case BOOL:
                     return 1;
                 case ENUM_TYPE:
-                    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
-                        return type->type_alias->storage_size;
-                    if (type->type_alias != NULL && type->type_alias->enum_literals != NULL)
-                    {
-                        int count = ListLength(type->type_alias->enum_literals);
-                        if (count > 0 && count <= 0x100)
-                            return 1;
-                        if (count > 0 && count <= 0x10000)
-                            return 2;
-                    }
-                    return 4;
+                    return kgpc_enum_storage_size(type->type_alias);
                 case SET_TYPE:
                 {
                     if (type->type_alias != NULL && type->type_alias->is_set)
@@ -3531,15 +3560,34 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
     }
     else
     {
-        /* Traverse nested KgpcType objects */
+        /* Traverse nested KgpcType objects, computing strides per-dimension
+         * using the sizeof each level's element type. This correctly handles
+         * mixed static/dynamic nested arrays where intermediate element types
+         * are dynamic array descriptors (16 bytes) rather than scalar elements.
+         * Example: array of array[0..255] of array of longint
+         *   stride[0] = sizeof(array[0..255] of array of longint) = 4096
+         *   stride[1] = sizeof(array of longint) = 16
+         *   stride[2] = sizeof(longint) = 8
+         */
         KgpcType *curr = type;
         while (curr != NULL && curr->kind == TYPE_KIND_ARRAY && info->dim_count < 10)
         {
+            KgpcType *elem_type = curr->info.array_info.element_type;
+            long long elem_size = kgpc_type_sizeof(elem_type);
+            if (elem_size <= 0)
+                elem_size = 1;
+
             info->dim_lowers[info->dim_count] = curr->info.array_info.start_index;
             info->dim_uppers[info->dim_count] = curr->info.array_info.end_index;
-            info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+
+            long long dim_size = curr->info.array_info.end_index - curr->info.array_info.start_index + 1;
+            if (dim_size < 0) dim_size = 0;  /* dynamic array: runtime-determined */
+
+            info->dim_sizes[info->dim_count] = dim_size;
+            info->strides[info->dim_count] = elem_size;
+
             info->dim_count++;
-            curr = curr->info.array_info.element_type;
+            curr = elem_type;
         }
         if (curr != NULL)
             info->element_size = kgpc_type_sizeof(curr);
@@ -3551,16 +3599,35 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
     if (info->element_size <= 0)
         info->element_size = 1;
 
-    /* Compute strides and total size */
-    info->total_size = info->element_size;
-    for (int i = info->dim_count - 1; i >= 0; i--)
+    /* Compute total_size if not already set (alias branch uses the loop below;
+     * else branch strides are already computed per-level above). */
+    if (info->strides[0] == 0)
     {
-        info->strides[i] = info->total_size;
-        if (info->dim_sizes[i] > 0)
+        /* Alias branch: compute strides from element_size */
+        info->total_size = info->element_size;
+        for (int i = info->dim_count - 1; i >= 0; i--)
         {
-            if (info->total_size > LLONG_MAX / info->dim_sizes[i])
-                return -1;
-            info->total_size *= info->dim_sizes[i];
+            info->strides[i] = info->total_size;
+            if (info->dim_sizes[i] > 0)
+            {
+                if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+                    return -1;
+                info->total_size *= info->dim_sizes[i];
+            }
+        }
+    }
+    else
+    {
+        /* Else branch: strides computed per-level; compute total_size */
+        info->total_size = info->element_size;
+        for (int i = info->dim_count - 1; i >= 0; i--)
+        {
+            if (info->dim_sizes[i] > 0)
+            {
+                if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+                    return -1;
+                info->total_size *= info->dim_sizes[i];
+            }
         }
     }
 
@@ -3758,7 +3825,8 @@ long long kgpc_type_get_array_of_const_element_size(KgpcType *type)
 
 /* Create a KgpcType from a VarType enum value.
  * This is a helper for migrating from legacy type system.
- * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE,
+ * HASHVAR_METHODPROCEDURE
  * require additional information and cannot be created from VarType alone.
  * Returns NULL for these types - caller must use appropriate create_*_type() function.
  */
@@ -3786,6 +3854,7 @@ KgpcType* kgpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_RECORD:
         case HASHVAR_POINTER:
         case HASHVAR_PROCEDURE:
+        case HASHVAR_METHODPROCEDURE:
         case HASHVAR_UNTYPED:
             /* These require additional information beyond VarType */
             return NULL;
@@ -3907,6 +3976,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     /* Deep copy lists */
     dst->array_dimensions = copy_string_list(src->array_dimensions);
     dst->enum_literals = copy_string_list(src->enum_literals);
+    dst->enum_values = copy_string_list(src->enum_values);
     
     /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
@@ -3955,6 +4025,8 @@ static void free_copied_type_alias(struct TypeAlias *alias)
         destroy_list(alias->array_dimensions);
     if (alias->enum_literals != NULL)
         destroy_list(alias->enum_literals);
+    if (alias->enum_values != NULL)
+        destroy_list(alias->enum_values);
     
     /* Note: We don't free inline_record_type as it's owned by AST */
     

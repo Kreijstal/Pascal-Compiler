@@ -1582,6 +1582,14 @@ begin
     GetMem := p;
 end;
 
+function FreeMem(p: Pointer): PtrUInt; overload;
+begin
+    { Delphi/FPC compatibility: FreeMem(pointer) returns previous size.
+      KGPC's allocator does not track sizes, so we always return 0. }
+    freemem_impl(p);
+    FreeMem := 0;
+end;
+
 procedure FreeMem(p: Pointer; size: longint); overload;
 begin
     { FPC's FreeMem with size parameter just ignores the size and calls freemem }
