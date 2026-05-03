@@ -732,8 +732,14 @@ Tree_t *convert_method_impl(ast_t *method_node) {
 
     ast_t *cur = method_node->child;
     /* Skip optional keyword identifiers like "class" or "generic" that appear
-     * before the qualified identifier (e.g., "class function THost.SeedSum"). */
+     * before the qualified identifier (e.g., "class function THost.SeedSum").
+     * Also note when the leading keyword is "constructor" or "destructor" so
+     * that PASCAL_T_METHOD_IMPL nodes parsed by constructor_impl/destructor_impl
+     * can preserve the kind information that the AST type alone no longer
+     * carries (the parser folds all method implementations into METHOD_IMPL). */
     int method_decl_uses_operator_keyword = 0;
+    int method_decl_is_constructor = 0;
+    int method_decl_is_destructor = 0;
     while (cur != NULL) {
         ast_t *skip_node = unwrap_pascal_node(cur);
         if (skip_node == NULL) skip_node = cur;
@@ -742,11 +748,16 @@ Tree_t *convert_method_impl(ast_t *method_node) {
             is_method_decl_keyword(skip_node->sym->name)) {
             if (strcasecmp(skip_node->sym->name, "operator") == 0)
                 method_decl_uses_operator_keyword = 1;
+            else if (strcasecmp(skip_node->sym->name, "constructor") == 0)
+                method_decl_is_constructor = 1;
+            else if (strcasecmp(skip_node->sym->name, "destructor") == 0)
+                method_decl_is_destructor = 1;
             cur = cur->next;
             continue;
         }
         break;
     }
+    (void)method_decl_is_destructor; /* reserved for future use */
     ast_t *qualified = unwrap_pascal_node(cur);
 
     if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
@@ -1153,7 +1164,17 @@ Tree_t *convert_method_impl(ast_t *method_node) {
             is_class_operator = 1;
         }
     }
+    /* A method implementation parsed by the constructor_impl rule arrives as
+     * PASCAL_T_METHOD_IMPL with a leading "constructor" keyword child; the
+     * parser does not have a dedicated METHOD_IMPL_CONSTRUCTOR type.  Detect
+     * the keyword above so constructors named e.g. Create_sym_offset (any
+     * identifier — Pascal allows arbitrary constructor names) get the
+     * is_constructor flag and therefore the Self return-value epilogue.  The
+     * legacy fallbacks remain for declarations that do come through with a
+     * dedicated CONSTRUCTOR_DECL type, and for methods literally named
+     * "create" (case-insensitive) that historically relied on this. */
     int is_constructor = (method_node->typ == PASCAL_T_CONSTRUCTOR_DECL) ||
+        method_decl_is_constructor ||
         (method_name != NULL && strcasecmp(method_name, "create") == 0);
 
     ListBuilder params_builder;

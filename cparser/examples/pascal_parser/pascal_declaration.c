@@ -2520,9 +2520,15 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Constructor implementation (with required body)
+    /* Use create_keyword_parser instead of keyword_ci so the "constructor"
+     * keyword text leaves an AST identifier node behind.  Without it, the
+     * parser folds constructor_impl and method_procedure_impl into
+     * indistinguishable PASCAL_T_METHOD_IMPL trees, which prevents downstream
+     * passes (e.g. convert_method_impl) from setting subprogram_data
+     * is_constructor and emitting the Self return-value epilogue. */
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class modifier
-        token(keyword_ci("constructor")),            // constructor keyword
+        token(create_keyword_parser("constructor", PASCAL_T_IDENTIFIER)),            // constructor keyword (preserved in AST)
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
         token(match(";")),                           // semicolon
@@ -2536,7 +2542,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Destructor implementation (with required body)
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class modifier
-        token(keyword_ci("destructor")),             // destructor keyword
+        token(create_keyword_parser("destructor", PASCAL_T_IDENTIFIER)),             // destructor keyword (preserved in AST)
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
         token(match(";")),                           // semicolon
@@ -4011,7 +4017,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* constructor_param_list = create_simple_param_list();
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("constructor")),              // constructor keyword (with word boundary check)
+        token(create_keyword_parser("constructor", PASCAL_T_IDENTIFIER)),  // constructor keyword (preserved in AST so convert_method_impl can detect it)
         method_name_with_class,                      // ClassName.MethodName
         constructor_param_list,                      // optional parameter list
         token(match(";")),                           // semicolon
@@ -4023,7 +4029,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* destructor_param_list = create_simple_param_list();
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        token(keyword_ci("destructor")),               // destructor keyword (with word boundary check)
+        token(create_keyword_parser("destructor", PASCAL_T_IDENTIFIER)),   // destructor keyword (preserved in AST)
         method_name_with_class,                      // ClassName.MethodName
         destructor_param_list,                       // optional parameter list
         token(match(";")),                           // semicolon
