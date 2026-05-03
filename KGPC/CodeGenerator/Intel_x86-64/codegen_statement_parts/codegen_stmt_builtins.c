@@ -3095,20 +3095,83 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     if (args == NULL || args->next == NULL || args->next->next == NULL)
         return inst_list;
 
-    /* Pascal Move is Move(src, dst, count); kgpc_move expects destination
-     * first. Reorder the call explicitly instead of letting the generic
-     * builtin dispatcher emit a direct call to "Move". */
-    ListNode_t *dst_node = CreateListNode(args->next->cur, LIST_EXPR);
-    ListNode_t *src_node = CreateListNode(args->cur, LIST_EXPR);
-    ListNode_t *count_node = CreateListNode(args->next->next->cur, LIST_EXPR);
-    dst_node->next = src_node;
-    src_node->next = count_node;
+    /* Pascal Move(src, dst, count) — both src and dst are untyped reference
+     * parameters; kgpc_move expects (dest, src, count) in C ABI order.
+     * Compute the two reference addresses explicitly rather than dispatching
+     * through codegen_pass_arguments with procedure_name="Move", because the
+     * latter re-fetches FPC's formal-arg list (const source; var dest; count)
+     * and applies formal-position heuristics to the swapped argument list —
+     * causing the dst (matched against const source) to be passed by value
+     * (an array-element pointer load) instead of by address.  In FPC RTL
+     * mode this corrupted TFPList.Delete's destination during pp_bootstrap
+     * and produced the 0xa400000001 freelist signature. */
+    struct Expression *src_expr = (struct Expression *)args->cur;
+    struct Expression *dst_expr = (struct Expression *)args->next->cur;
+    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+    if (src_expr == NULL || dst_expr == NULL || count_expr == NULL)
+        return inst_list;
 
-    inst_list = codegen_pass_arguments(dst_node, inst_list, ctx, NULL, "Move", 0, NULL, 0);
-    DestroyList(dst_node);
+    char buffer[128];
+
+    Register_t *dst_addr = NULL;
+    inst_list = codegen_address_for_expr(dst_expr, inst_list, ctx, &dst_addr);
+    if (codegen_had_error(ctx) || dst_addr == NULL)
+        return inst_list;
+    StackNode_t *dst_spill = add_l_t("move_dst_spill");
+    if (dst_spill != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            dst_addr->bit_64, dst_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    free_reg(get_reg_stack(), dst_addr);
+
+    Register_t *src_addr = NULL;
+    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr);
+    if (codegen_had_error(ctx) || src_addr == NULL)
+        return inst_list;
+    StackNode_t *src_spill = add_l_t("move_src_spill");
+    if (src_spill != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            src_addr->bit_64, src_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    free_reg(get_reg_stack(), src_addr);
+
+    Register_t *count_reg = NULL;
+    inst_list = codegen_expr_with_result(count_expr, inst_list, ctx, &count_reg);
+    if (codegen_had_error(ctx) || count_reg == NULL)
+        return inst_list;
+
+    if (!expr_uses_qword_kgpctype(count_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, count_reg->bit_32, count_reg->bit_64);
+
+    const char *arg0 = current_arg_reg64(0);  /* dst */
+    const char *arg1 = current_arg_reg64(1);  /* src */
+    const char *arg2 = current_arg_reg64(2);  /* count */
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", count_reg->bit_64, arg2);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), count_reg);
+
+    if (dst_spill != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            dst_spill->offset, arg0);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    if (src_spill != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            src_spill->offset, arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
-    return codegen_cleanup_call_stack(inst_list, ctx);
+    free_arg_regs();
+    return inst_list;
 }
 
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
