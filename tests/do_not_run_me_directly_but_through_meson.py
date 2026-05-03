@@ -4176,37 +4176,49 @@ def _add_pp_pas_bootstrap_test():
         #     2. pp_bootstrap compiles helloworld.p with the FPC RTL units.
         #     3. The produced binary runs and prints "Hello, World!".
         #
-        # If pp_bootstrap cannot find a prebuilt FPC RTL units directory
-        # (rtl/units/x86_64-linux), it tries to load the RTL units from
-        # source (rtl/linux + rtl/inc + rtl/objpas + rtl/unix + ...).
-        # Either form is the documented invocation in
-        # docs/FPC_BOOTSTRAP.md, "Compile hello world with the generated
-        # pp_bootstrap".
+        # pp_bootstrap needs prebuilt RTL .ppu files for ordinary program
+        # compilation.  If CI has only the FPCSource checkout, build those
+        # units first; do not fall back to source-only -Fu paths, because
+        # FPC refuses to recompile the root System unit while compiling a
+        # user program.
         helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
         assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
 
         prebuilt_units_dir = os.path.join(fpc_src, "rtl", "units", "x86_64-linux")
         prebuilt_system_ppu = os.path.join(prebuilt_units_dir, "system.ppu")
-        if os.path.isfile(prebuilt_system_ppu):
-            # Prebuilt RTL .ppu files are present (e.g., from a previous
-            # `make -C FPCSource/rtl/linux units` run).  Use them so we
-            # exercise pp_bootstrap's full unit-loading + codegen path
-            # rather than spending the ~minutes it would take to re-parse
-            # the entire RTL from source on every run.
-            rtl_search_paths = ["-Fu" + prebuilt_units_dir]
-        else:
-            # Fall back to source-based RTL search paths.  This mirrors
-            # docs/FPC_BOOTSTRAP.md, "Compile hello world with the
-            # generated pp_bootstrap".  pp_bootstrap will recompile each
-            # used RTL unit on the fly.
-            rtl_search_paths = [
-                "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
-            ]
+        if not os.path.isfile(prebuilt_system_ppu):
+            make_bin = shutil.which("make")
+            fpc_bin = shutil.which("fpc")
+            assert make_bin is not None, (
+                "make is required to build FPC RTL units for pp_bootstrap"
+            )
+            assert fpc_bin is not None, (
+                "fpc is required to build prebuilt FPC RTL units for "
+                "pp_bootstrap helloworld verification"
+            )
+            rtl_linux_dir = os.path.join(fpc_src, "rtl", "linux")
+            try:
+                subprocess.run(
+                    [make_bin, "-C", rtl_linux_dir, "units", "FPC=" + fpc_bin],
+                    check=True, capture_output=True, text=True, timeout=240,
+                )
+            except subprocess.CalledProcessError as e:
+                self.fail(
+                    "building FPC RTL units for pp_bootstrap failed\n"
+                    f"stdout:\n{(e.stdout or '')[:2000]}\n"
+                    f"stderr:\n{(e.stderr or '')[:2000]}"
+                )
+                return
+            except subprocess.TimeoutExpired:
+                self.fail("building FPC RTL units for pp_bootstrap timed out")
+                return
+            assert os.path.isfile(prebuilt_system_ppu), (
+                f"FPC RTL build did not produce {prebuilt_system_ppu}"
+            )
+
+        # Prebuilt RTL .ppu files are present.  Use them so we exercise
+        # pp_bootstrap's full unit-loading + codegen path.
+        rtl_search_paths = ["-Fu" + prebuilt_units_dir]
 
         helloworld_exe = os.path.join(
             TEST_OUTPUT_DIR, "helloworld_via_pp_bootstrap" + EXE_EXT)
