@@ -2804,6 +2804,17 @@ void kgpc_raise(int64_t value)
     exit(EXIT_FAILURE);
 }
 
+/* Forward declarations: New/Dispose route through MemoryManager so that
+ * the allocator pair stays consistent regardless of whether the FPC RTL
+ * MemoryManager initializer (heap.inc) has overridden the libc-only
+ * defaults installed by kgpc_init_memory_manager.  In KGPC stdlib mode
+ * MemoryManager stays bound to libc (kgpc_mm_*), so this matches the
+ * previous behaviour byte-for-byte; in --no-stdlib + FPC RTL mode this
+ * routes New/Dispose through FPC's heap manager so they pair with
+ * GetMem/FreeMem (which also go through MemoryManager via heap.inc). */
+static void *kgpc_memory_manager_getmem(uintptr_t size);
+static void kgpc_memory_manager_freemem(void *ptr);
+
 void kgpc_new(void **target, size_t size)
 {
     if (target == NULL)
@@ -2847,7 +2858,12 @@ void kgpc_new(void **target, size_t size)
     }
     else
     {
-        memory = calloc(1, size);
+        memory = kgpc_memory_manager_getmem((uintptr_t)size);
+        /* Pascal's New zero-initialises the allocated record so that
+         * later reads of unset fields are deterministic; mirror calloc
+         * semantics here regardless of which heap manager is active. */
+        if (memory != NULL && size > 0)
+            memset(memory, 0, size);
     }
 
     if (memory == NULL)
@@ -2886,7 +2902,7 @@ void kgpc_dispose(void **target)
                 link = &(*link)->next;
             }
         }
-        free(*target);
+        kgpc_memory_manager_freemem(*target);
         *target = NULL;
     }
 }
@@ -4947,6 +4963,8 @@ static uintptr_t kgpc_mm_memsize(void *p)
 static void kgpc_mm_noop(void) {}
 
 typedef void *(*kgpc_mm_allocmem_fn)(uintptr_t size);
+typedef void *(*kgpc_mm_getmem_fn)(uintptr_t size);
+typedef uintptr_t (*kgpc_mm_freemem_fn)(void *p);
 
 static void *kgpc_memory_manager_allocmem(uintptr_t size)
 {
@@ -4958,6 +4976,44 @@ static void *kgpc_memory_manager_allocmem(uintptr_t size)
     if (alloc_fn == NULL)
         return kgpc_mm_allocmem(size);
     return alloc_fn(size);
+}
+
+/* GetMem dispatch — used by kgpc_new so the matching kgpc_dispose can
+ * call FreeMem on the same heap.  Reads MemoryManager.GetMem (offset 8)
+ * if non-NULL, otherwise falls back to libc malloc.  The fallback path
+ * exists for very early startup before kgpc_init_memory_manager has run
+ * (Pascal initialisers must not crash if reached during a constructor).
+ */
+static void *kgpc_memory_manager_getmem(uintptr_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    kgpc_mm_getmem_fn get_fn = NULL;
+    memcpy(&get_fn, MemoryManager + 8, sizeof(get_fn));
+    if (get_fn == NULL)
+        return kgpc_mm_getmem(size);
+    return get_fn(size);
+}
+
+/* FreeMem dispatch — paired with kgpc_memory_manager_getmem so that
+ * Dispose() releases memory through the same allocator that New()
+ * obtained it from.  When the FPC RTL's heap manager has rebound
+ * MemoryManager (heap.inc typed const initialiser) this routes through
+ * SysFreeMem; otherwise it falls back to libc free. */
+static void kgpc_memory_manager_freemem(void *ptr)
+{
+    if (ptr == NULL)
+        return;
+
+    kgpc_mm_freemem_fn free_fn = NULL;
+    memcpy(&free_fn, MemoryManager + 16, sizeof(free_fn));
+    if (free_fn == NULL)
+    {
+        free(ptr);
+        return;
+    }
+    free_fn(ptr);
 }
 
 __attribute__((constructor))
