@@ -1119,6 +1119,90 @@ int semcheck_typecast(int *type_return,
         *type_return = UNKNOWN_TYPE;
     }
 
+    /* Record-to-primitive typecast via operator overload.
+     *
+     * When the source has an `operator := (const c: TRec): <prim>` overload
+     * (e.g. `Tconstexprint` → `int64`), an explicit cast like `int64(rec)` must
+     * invoke that operator.  Without this rewrite, build_expr_tree strips the
+     * EXPR_TYPECAST and emits the raw record address as the int value, which
+     * causes wild garbage at the call site.  This was the root cause of the
+     * "Data element too large" miscompile in pp_bootstrap (textrec.inc:57)
+     * where pexpr.pas calls cstringdef.createshort(int64(p.value), true).
+     *
+     * We must NOT activate for raw bit-cast typecasts like `word(packed_2byte_rec)`
+     * (used by FPC's crt unit on TCharAttr).  Those records have no operator :=,
+     * and falling into semcheck_try_record_conversion_expression's global
+     * operator search risks matching unrelated overloads such as
+     * `olevariant__op_assign_word` and producing a NULL-call crash.
+     *
+     * Gate: only invoke the rewrite when a SPECIFIC operator named
+     * "<SourceTypeId>__op_assign_<TargetTypeId>" or "<SourceTypeId>__op_assign"
+     * exists in scope.  This requires both the source and target to have
+     * identifiable type names. */
+    if (target_type != UNKNOWN_TYPE && target_type != PROCEDURE &&
+        target_type != POINTER_TYPE && !target_is_array &&
+        inner_kgpc_type != NULL &&
+        expr->resolved_kgpc_type != NULL &&
+        expr->expr_data.typecast_data.expr != NULL &&
+        (is_integer_type(target_type) || target_type == REAL_TYPE ||
+            target_type == EXTENDED_TYPE || target_type == BOOL ||
+            target_type == CHAR_TYPE) &&
+        (inner_kgpc_type->kind == TYPE_KIND_RECORD ||
+            (inner_kgpc_type->kind == TYPE_KIND_POINTER &&
+                inner_kgpc_type->info.points_to != NULL &&
+                inner_kgpc_type->info.points_to->kind == TYPE_KIND_RECORD) ||
+            inner_type == RECORD_TYPE))
+    {
+        const char *source_type_id = NULL;
+        if (inner_kgpc_type->kind == TYPE_KIND_RECORD &&
+            inner_kgpc_type->info.record_info != NULL)
+        {
+            source_type_id = inner_kgpc_type->info.record_info->type_id;
+        }
+        else if (inner_kgpc_type->kind == TYPE_KIND_POINTER &&
+            inner_kgpc_type->info.points_to != NULL &&
+            inner_kgpc_type->info.points_to->kind == TYPE_KIND_RECORD &&
+            inner_kgpc_type->info.points_to->info.record_info != NULL)
+        {
+            source_type_id = inner_kgpc_type->info.points_to->info.record_info->type_id;
+        }
+
+        const char *target_id_for_op = expr->expr_data.typecast_data.target_type_id;
+
+        int has_source_specific_op = 0;
+        if (source_type_id != NULL)
+        {
+            char op_id[320];
+            snprintf(op_id, sizeof(op_id), "%s__op_assign", source_type_id);
+            ListNode_t *cands = FindAllIdents(symtab, op_id);
+            if (cands != NULL) { has_source_specific_op = 1; DestroyList(cands); }
+            if (!has_source_specific_op && target_id_for_op != NULL)
+            {
+                snprintf(op_id, sizeof(op_id), "%s__op_assign_%s",
+                    source_type_id, target_id_for_op);
+                cands = FindAllIdents(symtab, op_id);
+                if (cands != NULL) { has_source_specific_op = 1; DestroyList(cands); }
+            }
+        }
+
+        if (has_source_specific_op)
+        {
+            KgpcType *converted_source = inner_kgpc_type;
+            int converted_owned = 0;
+            if (semcheck_try_record_conversion_expression(symtab,
+                    &expr->expr_data.typecast_data.expr, NULL,
+                    expr->resolved_kgpc_type, &converted_source, &converted_owned))
+            {
+                /* Inner slot now points to a fresh EXPR_FUNCTION_CALL whose
+                 * first arg is the original record expression.  The outer
+                 * EXPR_TYPECAST is preserved as a redundant int-to-int cast
+                 * over the call's primitive result. */
+                if (converted_owned && converted_source != NULL)
+                    destroy_kgpc_type(converted_source);
+            }
+        }
+    }
+
     (void)inner_type;
     return error_count;
 }
