@@ -2419,6 +2419,51 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     if (formal_inline_alias->kgpc_type == NULL && formal_kgpc != NULL)
                         owns_formal = 1;
                 }
+
+                /* Reject the match when the formal parameter is a NAMED dynamic-array
+                 * type (e.g., `Data: TByteDynArray`) but the argument is a static
+                 * array.  Pascal does NOT auto-convert static arrays to dynamic
+                 * arrays for parameter passing — only `array of T` open-array
+                 * parameters (declared inline as such) accept static arrays.
+                 *
+                 * Without this check, a call like writebytes(bytes,1) where
+                 * bytes:array[0..3] of byte would resolve to the dyn-array
+                 * overload, and the callee would dereference the static array's
+                 * first 16 bytes as if they were a dyn-array descriptor, leading
+                 * to SIGSEGV (root cause of pp_bootstrap's writebytes_p_a_u64
+                 * crash in taicpu.gencode). */
+                if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_ARRAY &&
+                    kgpc_type_is_dynamic_array(formal_kgpc) &&
+                    formal_decl != NULL && formal_decl->type == TREE_VAR_DECL &&
+                    (formal_inline_alias == NULL || !formal_inline_alias->is_open_array))
+                {
+                    int arg_is_static_array = 0;
+                    if (arg_expr != NULL &&
+                        arg_expr->type != EXPR_SET &&
+                        arg_expr->type != EXPR_ARRAY_LITERAL)
+                    {
+                        int owns_arg_probe = 0;
+                        KgpcType *arg_probe_dyn = NULL;
+                        semcheck_resolve_arg_kgpc_type(arg_expr, symtab, max_scope_lev,
+                            &owns_arg_probe, &arg_probe_dyn);
+                        if (arg_probe_dyn != NULL &&
+                            arg_probe_dyn->kind == TYPE_KIND_ARRAY &&
+                            !kgpc_type_is_dynamic_array(arg_probe_dyn))
+                        {
+                            arg_is_static_array = 1;
+                        }
+                        if (owns_arg_probe && arg_probe_dyn != NULL)
+                            destroy_kgpc_type(arg_probe_dyn);
+                    }
+                    if (arg_is_static_array)
+                    {
+                        candidate_valid = 0;
+                        if (owns_formal && formal_kgpc != NULL)
+                            destroy_kgpc_type(formal_kgpc);
+                        break;
+                    }
+                }
+
                 if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_ARRAY_OF_CONST)
                 {
                     quality = semcheck_make_quality(MATCH_PROMOTION);

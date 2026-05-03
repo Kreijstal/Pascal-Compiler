@@ -7238,6 +7238,25 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
     }
 
+    /* Array-typed fields cannot be loaded into a register as a value: yield
+     * the field's address so the consumer can either copy/iterate or treat
+     * the array as a pointer (Pascal allows `array of char` to decay to
+     * pchar in pchar-compatible contexts). Without this, KGPC would
+     * mis-emit `mov[lq] (%addr), %reg` and read 4-or-8 bytes of array
+     * contents as if they were a primitive value (root cause of taicpu
+     * gencode SIGSEGV when assigning insentry^.code, an array of char,
+     * to a pchar codes variable). */
+    if (expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(expr->resolved_kgpc_type))
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+            addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
     char buffer[64];
     long long field_size = codegen_record_field_effective_size(expr, ctx);
     /* Cross-check with resolved_kgpc_type for sub-dword types that
