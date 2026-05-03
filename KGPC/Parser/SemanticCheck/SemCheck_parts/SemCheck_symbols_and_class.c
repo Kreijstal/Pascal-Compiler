@@ -1716,6 +1716,29 @@ ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *dec
                 if (type_id != NULL)
                 {
                     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+                    /* When the typed const was declared inside a unit's implementation
+                     * section, its referenced type may live in that unit's implementation
+                     * uses (a transitive dep that's not visible from the outer program
+                     * scope).  Fall back to the declaration's source unit scope so that
+                     * cross-unit typed-const initializers like cpuelf's
+                     * `elf_target_x86_64: TElfTarget = (...)` are still semchecked
+                     * (TElfTarget lives in ogelf, which cpuelf imports privately).
+                     * Switch into the unit's scope (which has the unit's interface +
+                     * implementation uses wired in as deps) so that FindAllIdents can
+                     * traverse them. */
+                    if (type_node == NULL)
+                    {
+                        int src_unit = (tree->type == TREE_VAR_DECL)
+                            ? tree->tree_data.var_decl_data.source_unit_index
+                            : tree->tree_data.arr_decl_data.source_unit_index;
+                        if (src_unit > 0)
+                        {
+                            ScopeNode *saved_scope =
+                                semcheck_switch_to_unit_scope(symtab, src_unit);
+                            type_node = semcheck_find_preferred_type_node(symtab, type_id);
+                            semcheck_restore_scope(symtab, saved_scope);
+                        }
+                    }
                     if (type_node == NULL &&
                         semcheck_map_builtin_type_name_local(type_id) == UNKNOWN_TYPE)
                     {
