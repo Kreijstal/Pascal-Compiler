@@ -31,6 +31,15 @@
 #include "../SymTab/SymTab.h"
 #include "../../../unit_registry.h"
 #include "SemCheck_sizeof.h"
+/* WithContextEntry is defined in SemCheck_Expr_Internal.h.  We can't include
+ * that header here because of redefinition conflicts with helpers like
+ * `semcheck_is_currency_kgpc_type`/`get_type_alias_from_node` that this file
+ * also defines as static.  Instead we forward-declare the with stack here. */
+struct WithContextEntry_fwd {
+    struct Expression *context_expr;
+    struct RecordType *record_type;
+};
+extern struct WithContextEntry_fwd *with_context_stack;
 
 void semcheck_debug_expr_brief(const struct Expression *expr, const char *label);
 struct RecordType *get_record_type_from_node(HashNode_t *node);
@@ -6743,6 +6752,79 @@ skip_type_receiver_rewrite:
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
                  method_node->hash_type == HASHTYPE_FUNCTION))
             {
+                /* WITH-context override: a method on the enclosing class's
+                 * Self can shadow an unqualified call inside `with X do ...`
+                 * when X's class also declares (or inherits) the same method.
+                 * In Pascal/Delphi semantics, the innermost WITH target wins
+                 * over the enclosing method's Self for unqualified method
+                 * resolution.  Re-route through the WITH receiver here.
+                 *
+                 * Notable case: TObject.Free is reachable via Self in any
+                 * method body, so without this override `with linkres do
+                 * Free;` resolves to Self.Free instead of linkres.Free,
+                 * causing a heap corruption double-free. */
+                /* Skip the WITH override when the only/innermost WITH context
+                 * is the synthetic `with Self do` wrapper that KGPC inserts
+                 * around every instance method body (see
+                 * convert_method_implementation in from_cparser_statements_and_programs.c).
+                 * In that case the WITH target IS Self, so the regular
+                 * Self-prepend path below resolves correctly with proper
+                 * overload-aware metadata.  Only override when there is an
+                 * outer user-written `with X do ...` whose target is a
+                 * different expression. */
+                int innermost_is_synthetic_self = 0;
+                if (with_context_count > 0 &&
+                    with_context_stack[with_context_count - 1].context_expr != NULL)
+                {
+                    struct Expression *innermost_ctx =
+                        with_context_stack[with_context_count - 1].context_expr;
+                    if (innermost_ctx->type == EXPR_VAR_ID &&
+                        innermost_ctx->expr_data.id != NULL &&
+                        pascal_identifier_equals(innermost_ctx->expr_data.id, "Self"))
+                    {
+                        innermost_is_synthetic_self = 1;
+                    }
+                }
+
+                if (with_context_count > 0 && !innermost_is_synthetic_self)
+                {
+                    struct Expression *with_expr = NULL;
+                    int wm = semcheck_with_try_resolve_method(proc_id, symtab,
+                        &with_expr, stmt->line_num);
+                    if (wm == 0 && with_expr != NULL)
+                    {
+                        ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                        if (self_node != NULL)
+                        {
+                            self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                            stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                            if (stmt->stmt_data.procedure_call_data.placeholder_method_name == NULL)
+                                stmt->stmt_data.procedure_call_data.placeholder_method_name = strdup(proc_id);
+                            return semcheck_proccall(symtab, stmt, max_scope_lev);
+                        }
+                        destroy_expr(with_expr);
+                    }
+                    else if (wm == 2 && with_expr != NULL)
+                    {
+                        /* Procedural field on the WITH target: rewrite as
+                         * with_expr.field(...) procedural-variable call. */
+                        struct Expression *field_access = mk_recordaccess(
+                            stmt->line_num, with_expr, strdup(proc_id));
+                        if (field_access != NULL)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                            stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                            int field_tag = UNKNOWN_TYPE;
+                            return return_val + semcheck_stmt_expr_tag(&field_tag, symtab,
+                                field_access, max_scope_lev, NO_MUTATE);
+                        }
+                        destroy_expr(with_expr);
+                    }
+                }
+
                 /* Save bare method name before rewrite for virtual dispatch check */
                 char *bare_method_name = strdup(proc_id);
 
