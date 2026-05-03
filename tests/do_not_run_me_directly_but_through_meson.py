@@ -4186,7 +4186,13 @@ def _add_pp_pas_bootstrap_test():
 
         prebuilt_units_dir = os.path.join(fpc_src, "rtl", "units", "x86_64-linux")
         prebuilt_system_ppu = os.path.join(prebuilt_units_dir, "system.ppu")
-        if not os.path.isfile(prebuilt_system_ppu):
+        # `abitag.o` is built by the loader (not units) target, so a cache
+        # populated by an older `make units` invocation can have system.ppu
+        # without it.  Treat the loader artifact as a co-required input so
+        # we always rebuild when either piece of the RTL is missing.
+        prebuilt_abitag_o = os.path.join(prebuilt_units_dir, "abitag.o")
+        if (not os.path.isfile(prebuilt_system_ppu)
+                or not os.path.isfile(prebuilt_abitag_o)):
             make_bin = shutil.which("make")
             fpc_bin = shutil.which("fpc")
             assert make_bin is not None, (
@@ -4220,12 +4226,19 @@ def _add_pp_pas_bootstrap_test():
                 f"FPC compiler build did not produce {same_source_fpc}"
             )
             try:
+                # `make all` (not `units`) is required: the `units` target
+                # only builds .ppu/.o pairs for Pascal units, but FPC's
+                # Linux startup code uses `{$L abitag.o}` to pull in an
+                # assembly-built note.ABI-tag section.  abitag is declared
+                # as a LOADER in the RTL Makefile and is built by the
+                # `loaders` (and thus `all`) target — `units` skips it,
+                # which leaves pp_bootstrap unable to link any program.
                 subprocess.run(
                     [
                         make_bin,
                         "-C",
                         rtl_linux_dir,
-                        "units",
+                        "all",
                         "FPC=" + os.path.abspath(same_source_fpc),
                     ],
                     check=True, capture_output=True, text=True, timeout=600,
@@ -4242,6 +4255,15 @@ def _add_pp_pas_bootstrap_test():
                 return
             assert os.path.isfile(prebuilt_system_ppu), (
                 f"FPC RTL build did not produce {prebuilt_system_ppu}"
+            )
+            # Loader artifacts (built by the `loaders` target rolled into
+            # `all`) live alongside the .ppu files and are pulled in via
+            # `{$L abitag.o}` from the Linux startup code.  Pin their
+            # presence so a future Makefile/target regression surfaces
+            # here instead of as an opaque "ld: cannot find abitag.o".
+            assert os.path.isfile(prebuilt_abitag_o), (
+                f"FPC RTL build did not produce {prebuilt_abitag_o}; "
+                "did the Makefile target switch from `all` back to `units`?"
             )
 
         # Prebuilt RTL .ppu files are present.  Use them so we exercise
