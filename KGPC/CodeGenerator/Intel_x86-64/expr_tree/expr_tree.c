@@ -6640,6 +6640,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
                 const char *left_op = left;
                 const char *right_op = right;
+                Register_t *right_mem_tmp = NULL;
                 if (arith_suffix == 'l')
                 {
                     left_op = reg_to_reg32(left, left_reg);
@@ -6676,11 +6677,37 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right_op);
                         inst_list = add_inst(inst_list, buffer);
                     }
+
+                    /* When the right operand is a 32-bit memory reference (no register),
+                     * addq/subq would read 8 bytes from a 4-byte stack slot, getting
+                     * garbage in the upper 32 bits.  Load into a temp register and
+                     * sign/zero-extend before the 64-bit arithmetic.
+                     * (We only handle the right operand here because the left operand
+                     * is the destination — the result is written back to it, so it
+                     * must remain addressable.) */
+                    if (right_reg == NULL && right != NULL &&
+                        right[0] != '$' && right[0] != '%' &&
+                        right_expr != NULL &&
+                        !codegen_type_uses_qword(expr_get_type_tag(right_expr)) &&
+                        !expr_uses_qword_kgpctype(right_expr) &&
+                        is_integer_type(expr_get_type_tag(right_expr)))
+                    {
+                        right_mem_tmp = get_free_reg(get_reg_stack(), &inst_list);
+                        if (right_mem_tmp != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, right_mem_tmp->bit_32);
+                            inst_list = add_inst(inst_list, buffer);
+                            if (codegen_type_is_signed(expr_get_type_tag(right_expr)))
+                                inst_list = codegen_sign_extend32_to64(inst_list, right_mem_tmp->bit_32, right_mem_tmp->bit_64);
+                            right_op = right_mem_tmp->bit_64;
+                        }
+                    }
                 }
                 if (type == OR)
                 {
                     int err = 0;
                     inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "or", arith_suffix, right_op, left_op, &err);
+                    if (right_mem_tmp != NULL) free_reg(get_reg_stack(), right_mem_tmp);
                     if (err) break;
                     break;
                 }
@@ -6712,6 +6739,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     assert(0 && "Bad addop type!");
                     break;
             }
+            if (right_mem_tmp != NULL) free_reg(get_reg_stack(), right_mem_tmp);
             /* Sign-extend 32-bit result to 64-bit so negative values are
                correctly represented when stored into 64-bit slots. */
             if (!use_qword_op && left_reg != NULL &&
