@@ -7310,18 +7310,19 @@ static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list, CodeGenContext
     char skip_label[18];
     gen_label(skip_label, sizeof(skip_label), ctx);
 
-    /* Guard against negative values only — btsl on a 32-bit register
-     * naturally wraps the bit index mod 32, so values > 31 are handled
-     * correctly (they map to the corresponding bit in the 32-bit word).
-     * This is consistent with how the IN operator tests bits using
-     * register-based btl which also wraps mod 32. */
+    /* For 32-bit register-resident sets only bits 0..31 exist.  Values
+     * outside that domain are not part of the set and must not affect any
+     * bit (Pascal: x in S is false when x is outside S's element domain,
+     * by symmetry construction must drop such elements rather than wrap). */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", value_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", skip_label);
     inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
 
-    /* Use btsl to set the bit (avoids %ecx shift register conflict).
-     * btsl on a 32-bit register wraps bit index mod 32. */
     snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
@@ -7380,8 +7381,21 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     snprintf(buffer, sizeof(buffer), "%s:\n", start_floor_label);
     inst_list = add_inst(inst_list, buffer);
 
-    /* No cap at 31 — btsl on a 32-bit register wraps bit index mod 32,
-     * which is consistent with how the IN operator tests bits. */
+    /* If start > 31 the entire range is outside the 32-bit set domain. */
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* Cap end at 31 — bits beyond the storage simply don't exist. */
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", end_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", end_cap_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$31, %s\n", end_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "%s:\n", end_cap_label);
+    inst_list = add_inst(inst_list, buffer);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", loop_label);
     inst_list = add_inst(inst_list, buffer);
@@ -10093,10 +10107,12 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
-    /* Non-char-set IN: use memory-based btl to correctly handle sets > 32 elements.
-     * btl reg, reg wraps the bit index mod 32, so it fails for enum sets with > 32
-     * elements (e.g. set of tsystemflags with 42 elements).  btl reg, (mem) correctly
-     * computes the byte offset for any bit position. */
+    /* IN against a register-resident (4-byte) set.  Pascal requires elements
+     * outside the set's element domain to test as false, so we must NOT use
+     * register-form btl unconditionally — that wraps the index mod 32 and
+     * would falsely report e.g. (33 in [1..18]) = true because bit 33 mod 32
+     * aliases bit 1.  Bound-check elem against [0..31] and short-circuit to
+     * false when out of range; only then do the btl. */
     if (relop_kind == IN)
     {
         if (relop_type != NULL)
@@ -10119,10 +10135,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             elem_reg = NULL;
         }
 
-        /* Evaluate the right operand (set) as a VALUE in a register.
-         * For non-char sets stored as 4 bytes, we use register-based btl
-         * which wraps bit index mod 32 — consistent with how set literals
-         * are constructed (btsl also wraps mod 32 in register form). */
+        /* Evaluate the right operand (set) as a 4-byte VALUE in a register. */
         Register_t *set_val_reg = NULL;
         inst_list = codegen_expr_with_result(right_expr, inst_list, ctx, &set_val_reg);
         if (codegen_had_error(ctx) || set_val_reg == NULL)
@@ -10146,16 +10159,38 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             inst_list = add_inst(inst_list, buffer);
         }
 
-        /* Use register-based btl which wraps bit index mod 32.
-         * This is consistent with set construction (btsl wraps mod 32).
-         * For 4-byte sets, bits > 31 are aliased with bits 0-31 by the
-         * same wrapping, so both set and test use the same bit position. */
+        char in_oob_label[18];
+        char in_done_label[18];
+        gen_label(in_oob_label, sizeof(in_oob_label), ctx);
+        gen_label(in_done_label, sizeof(in_done_label), ctx);
+
+        /* Out-of-domain (elem < 0 or elem > 31) → result is false. */
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob_label);
+        inst_list = add_inst(inst_list, buffer);
+
         snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
             elem_reg->bit_32, set_val_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n",
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", in_done_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", in_oob_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n",
+            elem_reg->bit_32, elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "%s:\n", in_done_label);
+        inst_list = add_inst(inst_list, buffer);
+
         snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
@@ -10692,11 +10727,39 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                 right_const_set->const_set_label, set_addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer_addr);
 
-            /* btl with memory operand handles both 4-byte small sets and 32-byte char sets. */
+            /* Bound-check elem against the actual storage size — bits beyond
+             * 8 * const_set_size don't exist and reading them would walk past
+             * the rodata.  Out-of-domain → result is false. */
+            char cs_oob[18];
+            char cs_done[18];
+            gen_label(cs_oob, sizeof(cs_oob), ctx);
+            gen_label(cs_done, sizeof(cs_done), ctx);
+            int cs_max_bit = (int)(right_const_set->const_set_size) * 8 - 1;
+            if (cs_max_bit < 0) cs_max_bit = 0;
+
+            snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", cs_oob);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, %s\n", cs_max_bit, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", cs_oob);
+            inst_list = add_inst(inst_list, buffer);
+
             snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left_reg->bit_32, set_addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", cs_done);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "%s:\n", cs_oob);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "%s:\n", cs_done);
+            inst_list = add_inst(inst_list, buffer);
+
             snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
 
@@ -10708,15 +10771,10 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
         if (right_is_char_set)
         {
-            /* For character sets: right operand is 32-byte array, left is char value (0-255)
-             * Algorithm:
-             * 1. dword_index = value / 32  (which of 8 dwords)
-             * 2. bit_index = value % 32    (which bit in that dword)
-             * 3. Load the appropriate dword from set variable
-             * 4. Test the appropriate bit
-             */
+            /* Char sets are 32 bytes = 256 bits.  The char value is already
+             * naturally in [0..255] for AnsiChar; for wider element types the
+             * bound check below short-circuits out-of-domain to false. */
 
-            /* Get address of the set variable */
             Register_t *set_addr_reg = NULL;
             inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
             if (codegen_had_error(ctx) || set_addr_reg == NULL)
@@ -10728,12 +10786,34 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                 return inst_list;
             }
 
-            /* btl with memory operand auto-computes byte offset for any bit position */
+            char ch_oob[18];
+            char ch_done[18];
+            gen_label(ch_oob, sizeof(ch_oob), ctx);
+            gen_label(ch_done, sizeof(ch_done), ctx);
+
+            snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", ch_oob);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpl\t$255, %s\n", left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", ch_oob);
+            inst_list = add_inst(inst_list, buffer);
+
             snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left_reg->bit_32, set_addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
-            /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
             snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", ch_done);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "%s:\n", ch_oob);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "%s:\n", ch_done);
+            inst_list = add_inst(inst_list, buffer);
+
             snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
 
@@ -10743,10 +10823,16 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
-        /* Enum sets may exceed 32 elements, so btl reg,reg (which wraps mod 32)
-         * is incorrect.  Spill the set value to the stack and use btl reg,(mem)
-         * which correctly computes the byte offset for any bit position. */
+        /* Small (4-byte register-resident) integer/enum set: bits beyond 31
+         * don't exist in the storage.  Bound-check elem against [0..31] and
+         * short-circuit out-of-domain to false; spill the set as qword so
+         * btl(mem) can be used safely for 0..31. */
         {
+            char es_oob[18];
+            char es_done[18];
+            gen_label(es_oob, sizeof(es_oob), ctx);
+            gen_label(es_done, sizeof(es_done), ctx);
+
             StackNode_t *set_spill = add_l_t("in_set_spill");
             if (set_spill != NULL)
             {
@@ -10755,22 +10841,58 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), right_reg);
 
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", es_oob);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", es_oob);
+                inst_list = add_inst(inst_list, buffer);
+
                 snprintf(buffer, sizeof(buffer), "\tbtl\t%s, -%d(%%rbp)\n",
                     left_reg->bit_32, set_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", es_done);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), "%s:\n", es_oob);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "%s:\n", es_done);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
             {
-                /* Fallback: use register btl (only correct for sets <= 32 elements) */
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", es_oob);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", es_oob);
+                inst_list = add_inst(inst_list, buffer);
+
                 snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
                     left_reg->bit_32, right_reg->bit_32);
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), right_reg);
+                snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", es_done);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), "%s:\n", es_oob);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "%s:\n", es_done);
+                inst_list = add_inst(inst_list, buffer);
             }
         }
-        /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
-        snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 

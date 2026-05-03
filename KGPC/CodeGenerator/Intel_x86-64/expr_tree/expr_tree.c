@@ -38,6 +38,21 @@ int codegen_array_access_targets_shortstring(const struct Expression *expr, Code
 static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGenContext *ctx,
     long long *out_len);
 
+static int expr_tree_is_tconstexprint_payload(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        if (expr->expr_data.record_access_data.field_id != NULL &&
+            pascal_identifier_equals(expr->expr_data.record_access_data.field_id, "valueord"))
+            return 1;
+        return expr_tree_is_tconstexprint_payload(
+            expr->expr_data.record_access_data.record_expr);
+    }
+    return 0;
+}
+
 static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
 {
@@ -7102,10 +7117,38 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                     if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
                     {
+                        /* Bound-check elem against [0..31] for 32-bit register-resident
+                         * sets — register-form btl wraps mod 32, so out-of-domain
+                         * elements would falsely match.  Pascal `n in S` must be FALSE
+                         * when n is outside S's element domain. */
+                        char in_oob[18];
+                        char in_done[18];
+                        gen_label(in_oob, sizeof(in_oob), ctx);
+                        gen_label(in_done, sizeof(in_done), ctx);
+
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", bit_index);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", bit_index);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob);
+                        inst_list = add_inst(inst_list, buffer);
+
                         snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", bit_index, bit_base);
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
                         inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", in_done);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        snprintf(buffer, sizeof(buffer), "%s:\n", in_oob);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\txorb\t%s, %s\n", left8, left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "%s:\n", in_done);
+                        inst_list = add_inst(inst_list, buffer);
+
                         snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
                         inst_list = add_inst(inst_list, buffer);
                     }
@@ -7620,7 +7663,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             {
                 int left_type = (left_expr != NULL) ? expr_get_type_tag(left_expr) : UNKNOWN_TYPE;
                 int right_type = (right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE;
-                int use_qword = codegen_type_uses_qword(left_type) || codegen_type_uses_qword(right_type);
+                int left_is_tconstexprint = expr_tree_is_tconstexprint_payload(left_expr);
+                int right_is_tconstexprint = expr_tree_is_tconstexprint_payload(right_expr);
+                int use_qword = codegen_type_uses_qword(left_type) ||
+                    codegen_type_uses_qword(right_type) || left_is_tconstexprint ||
+                    right_is_tconstexprint;
                 char cmp_suffix = use_qword ? 'q' : 'l';
 
                 const char *cmp_left = left;
@@ -7628,6 +7675,20 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 Register_t *imm_reg = NULL;
                 Register_t *left_mem_tmp = NULL;
                 Register_t *right_mem_tmp = NULL;
+                if (left_is_tconstexprint && left_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+                        left_reg->bit_64, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    cmp_left = left_reg->bit_64;
+                }
+                if (right_is_tconstexprint && right_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+                        right_reg->bit_64, right_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    cmp_right = right_reg->bit_64;
+                }
                 if (use_qword)
                 {
                     const char *left_candidate = left;
@@ -7715,6 +7776,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     if (right32 != NULL)
                         cmp_right = right32;
                 }
+
+                if (left_is_tconstexprint && left_reg != NULL)
+                    cmp_left = left_reg->bit_64;
+                if (right_is_tconstexprint && right_reg != NULL)
+                    cmp_right = right_reg->bit_64;
 
                 if (use_qword && cmp_right != NULL && cmp_right[0] == '$')
                 {
