@@ -233,24 +233,12 @@ LivenessInfo_t *liveness_compute(const Cfg_t *cfg)
     for (int i = 0; i < n; ++i)
         compute_def_use(cfg->blocks[i], &def_sets[i], &use_sets[i]);
 
-    /* Scratch sets for one iteration. */
-    LiveSet_t new_out;
-    LiveSet_t new_in;
-    if (rset_init(&new_out) != 0)
-    {
-        rset_fini(&new_out);
-        for (int i = 0; i < n; ++i)
-        {
-            rset_fini(&info->live_in[i]);
-            rset_fini(&info->live_out[i]);
-            rset_fini(&def_sets[i]);
-            rset_fini(&use_sets[i]);
-        }
-        free(def_sets);
-        free(use_sets);
-        goto oom_info;
-    }
-    if (rset_init(&new_in) != 0)
+    /* Scratch sets for one iteration — zero-initialised so cleanup is safe
+     * even when rset_init() fails part-way. */
+    LiveSet_t new_out = {NULL, 0, 0};
+    LiveSet_t new_in  = {NULL, 0, 0};
+
+    if (rset_init(&new_out) != 0 || rset_init(&new_in) != 0)
     {
         rset_fini(&new_out);
         rset_fini(&new_in);
