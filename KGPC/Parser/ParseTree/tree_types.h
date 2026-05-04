@@ -28,6 +28,16 @@ enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_EXPR, STMT_COMPOUND_STA
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DECL_GENERIC };
 
+/* Describes the special call-lowering rule that codegen must apply to a
+ * builtin function call expression.  Set by semcheck builtins; read by
+ * codegen so it never needs to strcmp on the emitted mangled name. */
+enum BuiltinCallLowering
+{
+    BUILTIN_CALL_NONE    = 0, /* Ordinary call — no special lowering */
+    BUILTIN_CALL_STRPAS  = 1, /* kgpc_strpas_string / kgpc_strpas_len_string */
+    BUILTIN_CALL_ASSIGNED = 2 /* kgpc_assigned */
+};
+
 struct TypeAlias
 {
     char *alias_name; /* The name of this alias (e.g. "RawByteString") */
@@ -578,6 +588,7 @@ struct Expression
             int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
             int is_bare_inherited;             /* 1 if bare "inherited" (no explicit method name) — forward enclosing args */
             int is_operator_call;              /* 1 if this call targets an operator (set by parser) */
+            enum BuiltinCallLowering builtin_call_lowering; /* Special lowering rule set by semcheck builtins */
         } function_call_data;
 
         /* Integer number */

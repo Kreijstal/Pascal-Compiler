@@ -3628,9 +3628,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
         int force_scalar_string_return =
-            func_mangled_name != NULL &&
-            (strcmp(func_mangled_name, "kgpc_strpas_string") == 0 ||
-             strcmp(func_mangled_name, "kgpc_strpas_len_string") == 0);
+            expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS;
         int has_record_return = expr_returns_sret(expr);
         if (force_scalar_string_return)
             has_record_return = 0;

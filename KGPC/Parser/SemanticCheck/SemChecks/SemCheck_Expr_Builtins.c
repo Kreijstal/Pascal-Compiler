@@ -1265,6 +1265,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
+        expr->expr_data.function_call_data.builtin_call_lowering = BUILTIN_CALL_STRPAS;
         semcheck_reset_function_call_cache(expr);
         semcheck_expr_set_resolved_type(expr, STRING_TYPE);
         *type_return = STRING_TYPE;
@@ -1591,6 +1592,7 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
+        expr->expr_data.function_call_data.builtin_call_lowering = BUILTIN_CALL_ASSIGNED;
         semcheck_reset_function_call_cache(expr);
         semcheck_expr_set_resolved_type(expr, BOOL);
         *type_return = BOOL;

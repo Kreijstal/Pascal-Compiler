@@ -4768,10 +4768,7 @@ int expr_returns_sret(const struct Expression *expr)
 {
     if (expr != NULL && expr->type == EXPR_FUNCTION_CALL)
     {
-        const char *mangled = expr->expr_data.function_call_data.mangled_id;
-        if (mangled != NULL &&
-            (strcmp(mangled, "kgpc_strpas_string") == 0 ||
-             strcmp(mangled, "kgpc_strpas_len_string") == 0))
+        if (expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS)
             return 0;
     }
 
@@ -12513,8 +12510,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                      * returns the address of the innermost pointer slot.  kgpc_assigned
                      * expects the pointer VALUE, not its address, so we must dereference. */
                     if (addr_reg != NULL &&
-                        call_mangled != NULL &&
-                        strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                        call_expr != NULL &&
+                        call_expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_ASSIGNED &&
                         address_expr != NULL &&
                         address_expr->type == EXPR_ARRAY_ACCESS &&
                         address_expr->expr_data.array_access_data.extra_indices != NULL)
@@ -12769,8 +12766,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * innermost pointer slot.  kgpc_assigned expects the pointer VALUE,
                  * not its address, so we must dereference. */
                 if (addr_reg != NULL &&
-                    call_mangled != NULL &&
-                    strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                    call_expr != NULL &&
+                    call_expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_ASSIGNED &&
                     arg_expr != NULL &&
                     arg_expr->type == EXPR_ARRAY_ACCESS &&
                     arg_expr->expr_data.array_access_data.extra_indices != NULL)
@@ -12890,8 +12887,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
                      kgpc_type_is_method_pointer(expr_get_kgpc_type(arg_expr)) &&
-                     call_mangled != NULL &&
-                     strcmp(call_mangled, "kgpc_assigned") == 0)
+                     call_expr != NULL &&
+                     call_expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_ASSIGNED)
             {
                 /* Assigned(method_ptr) must inspect only the code field
                  * (offset 0) of the TMethod aggregate.  Loading the entire
@@ -12938,8 +12935,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
                      kgpc_type_is_dynamic_array(expr_get_kgpc_type(arg_expr)) &&
-                     call_mangled != NULL &&
-                     strcmp(call_mangled, "kgpc_assigned") == 0)
+                     call_expr != NULL &&
+                     call_expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_ASSIGNED)
             {
                 /* Assigned(dynarray) must inspect only the data-pointer
                  * field (offset 0) of the dynamic-array descriptor.
@@ -13426,8 +13423,8 @@ pass_value_arg:
                  * gencode_expr_tree returns the address of the pointer slot.
                  * kgpc_assigned expects the pointer VALUE, so dereference. */
                 if (top_reg != NULL &&
-                    call_mangled != NULL &&
-                    strcmp(call_mangled, "kgpc_assigned") == 0 &&
+                    call_expr != NULL &&
+                    call_expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_ASSIGNED &&
                     arg_expr != NULL &&
                     arg_expr->type == EXPR_ARRAY_ACCESS &&
                     arg_expr->expr_data.array_access_data.extra_indices != NULL)
