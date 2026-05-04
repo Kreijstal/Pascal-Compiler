@@ -262,6 +262,7 @@ static void print_usage(const char *prog_name)
     fprintf(out, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
     fprintf(out, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
     fprintf(out, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
+    fprintf(out, "    --dump-ir-after=def-use  Dump IR with def/use annotations to stderr after each function\n");
     fprintf(out, "    --time-passes         Print timing information for major compiler stages\n");
     fprintf(out, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
     fprintf(out, "    --disable-dce         Emit unused subprograms (debugging)\n");
@@ -724,6 +725,19 @@ static SetFlagsResult set_flags(char **optional_args, int count)
         else if (strcmp(arg, "--function-sections") == 0)
         {
             set_function_sections_flag();
+        }
+        else if (strncmp(arg, "--dump-ir-after=", 16) == 0)
+        {
+            const char *phase = arg + 16;
+            if (strcmp(phase, "def-use") == 0)
+            {
+                set_dump_ir_flag();
+                fprintf(stderr, "IR dump after def-use enabled (output to stderr).\n\n");
+            }
+            else
+            {
+                fprintf(stderr, "WARNING: Unknown --dump-ir-after phase '%s' (supported: def-use)\n", phase);
+            }
         }
         else if (strcmp(arg, "--skip-unit-codegen") == 0)
         {

@@ -34,6 +34,7 @@
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
+#include "ir/ir_inst.h"
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
@@ -3907,6 +3908,59 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     return inst_list;
 }
 
+/* add_inst_du — emit an instruction with def/use metadata.
+ *
+ * Creates a LIST_IR_INST node instead of the LIST_STRING node that
+ * add_inst() creates.  The formatted asm text is identical; only the
+ * node type and the attached IrInst_t metadata differ.
+ *
+ * add_inst() is unchanged so unmigrated call sites keep working. */
+ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
+                        Register_t **defs, int n_defs,
+                        Register_t **uses, int n_uses,
+                        const char *fmt, ...)
+{
+    (void)ctx; /* reserved for future use */
+
+    char buf[CODEGEN_MAX_INST_BUF];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    IrInst_t *inst = ir_inst_new(buf, defs, n_defs, uses, n_uses);
+    if (inst == NULL)
+    {
+        /* Fall back to plain add_inst on allocation failure. */
+        return add_inst(inst_list, buf);
+    }
+
+    ListNode_t *new_node = CreateListNode(inst, LIST_IR_INST);
+    if (new_node == NULL)
+    {
+        ir_inst_free(inst);
+        return add_inst(inst_list, buf);
+    }
+
+    if (inst_list == NULL)
+    {
+        inst_list = new_node;
+    }
+    else if (g_inst_head == inst_list && g_inst_tail != NULL && g_inst_tail->next == NULL)
+    {
+        g_inst_tail->next = new_node;
+    }
+    else
+    {
+        PushListNodeBack(inst_list, new_node);
+    }
+    g_inst_head = inst_list;
+    g_inst_tail = new_node;
+
+    return inst_list;
+}
+
+
 ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
     CodeGenContext *ctx, const struct RecordType *class_record,
     const char *class_type_id, Register_t *instance_reg)
@@ -4055,7 +4109,10 @@ void free_inst_list(ListNode_t *inst_list)
     cur = inst_list;
     while(cur != NULL)
     {
-        free(cur->cur);
+        if (cur->type == LIST_IR_INST)
+            ir_inst_free((IrInst_t *)cur->cur);
+        else
+            free(cur->cur);
         cur = cur->next;
     }
 
@@ -4495,6 +4552,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
 
+        if (dump_ir_flag())
+            ir_print_function(stderr, init_label, inst_list);
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -4557,6 +4616,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
 
+        if (dump_ir_flag())
+            ir_print_function(stderr, final_label, inst_list);
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -6883,16 +6944,25 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
-    char *inst;
 
     assert(ctx != NULL);
 
     while(inst_list != NULL)
     {
-        inst = (char *)inst_list->cur;
-        assert(inst != NULL);
+        const char *text;
+        if (inst_list->type == LIST_IR_INST)
+        {
+            IrInst_t *ir = (IrInst_t *)inst_list->cur;
+            assert(ir != NULL);
+            text = ir->text;
+        }
+        else
+        {
+            text = (const char *)inst_list->cur;
+        }
+        assert(text != NULL);
 
-        fprintf(ctx->output_file, "%s", inst);
+        fprintf(ctx->output_file, "%s", text);
 
         inst_list = inst_list->next;
     }
@@ -7145,6 +7215,8 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
+    if (dump_ir_flag())
+        ir_print_function(stderr, prgm_name, inst_list);
     free_inst_list(inst_list);
 
     /* Emit INITFINAL table — FPC system unit references this to run unit
@@ -8483,6 +8555,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
+    if (dump_ir_flag())
+        ir_print_function(stderr, sub_id, inst_list);
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -9444,6 +9518,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
+    if (dump_ir_flag())
+        ir_print_function(stderr, sub_id, inst_list);
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -9971,6 +10047,8 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
+    if (dump_ir_flag())
+        ir_print_function(stderr, anon->generated_name, inst_list);
     
     free_inst_list(inst_list);
     pop_stackscope();
