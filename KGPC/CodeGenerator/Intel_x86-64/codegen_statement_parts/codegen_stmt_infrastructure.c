@@ -491,30 +491,6 @@ static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenCont
 static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *dest_reg, Register_t *temp_reg, int descriptor_size);
 
-/* Check if a type name represents an unsigned integer type */
-static int is_unsigned_type_name(const char *type_name)
-{
-    if (type_name == NULL)
-        return 0;
-    /* Unsigned integer types in Pascal */
-    if (strcasecmp(type_name, "Byte") == 0 ||
-        strcasecmp(type_name, "Word") == 0 ||
-        strcasecmp(type_name, "DWord") == 0 ||
-        strcasecmp(type_name, "QWord") == 0 ||
-        strcasecmp(type_name, "Cardinal") == 0 ||
-        strcasecmp(type_name, "LongWord") == 0 ||
-        strcasecmp(type_name, "UInt8") == 0 ||
-        strcasecmp(type_name, "UInt16") == 0 ||
-        strcasecmp(type_name, "UInt32") == 0 ||
-        strcasecmp(type_name, "UInt64") == 0 ||
-        strcasecmp(type_name, "NativeUInt") == 0 ||
-        strcasecmp(type_name, "SizeUInt") == 0 ||
-        strcasecmp(type_name, "PtrUInt") == 0)
-    {
-        return 1;
-    }
-    return 0;
-}
 
 int expr_integer_store_size(const struct Expression *expr)
 {
@@ -645,38 +621,31 @@ int expr_is_unsigned_type(const struct Expression *expr)
     /* Check resolved_kgpc_type for type alias information */
     if (expr->resolved_kgpc_type != NULL && expr->resolved_kgpc_type->type_alias != NULL)
     {
-        const char *target_type_id = expr->resolved_kgpc_type->type_alias->target_type_id;
-        if (is_unsigned_type_name(target_type_id))
+        if (kgpc_type_is_unsigned(expr->resolved_kgpc_type))
             return 1;
         if (expr->resolved_kgpc_type->type_alias->is_range &&
             expr->resolved_kgpc_type->type_alias->range_known &&
             expr->resolved_kgpc_type->type_alias->range_start >= 0)
             return 1;
     }
-    
+
     /* For array access expressions, check the array's element type */
     if (expr->type == EXPR_ARRAY_ACCESS)
     {
         const struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
-        if (array_expr != NULL && array_expr->array_element_type_id != NULL)
+        if (array_expr != NULL && array_expr->resolved_kgpc_type != NULL)
         {
-            if (is_unsigned_type_name(array_expr->array_element_type_id))
-                return 1;
-        }
-        /* Also check if the accessed array is an array with known element type */
-        if (array_expr != NULL && array_expr->resolved_kgpc_type != NULL &&
-            array_expr->resolved_kgpc_type->type_alias != NULL)
-        {
-            const char *elem_type_id = array_expr->resolved_kgpc_type->type_alias->array_element_type_id;
-            if (is_unsigned_type_name(elem_type_id))
+            KgpcType *elem_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
+            if (kgpc_type_is_unsigned(elem_type))
                 return 1;
         }
     }
-    
+
     /* Check array element type for arrays of unsigned types */
-    if (expr->is_array_expr && expr->array_element_type_id != NULL)
+    if (expr->is_array_expr && expr->resolved_kgpc_type != NULL)
     {
-        if (is_unsigned_type_name(expr->array_element_type_id))
+        KgpcType *elem_type = kgpc_type_get_array_element_type(expr->resolved_kgpc_type);
+        if (kgpc_type_is_unsigned(elem_type))
             return 1;
     }
     

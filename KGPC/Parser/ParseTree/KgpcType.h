@@ -271,6 +271,12 @@ int kgpc_type_uses_qword(KgpcType *type);
  * This replaces codegen_type_is_signed() for KgpcType-based code. */
 int kgpc_type_is_signed(const KgpcType *type);
 
+/* Check if a KgpcType represents an unsigned integer type.
+ * Returns 1 only for explicitly unsigned types (Byte, Word, LongWord/DWord/Cardinal, QWord,
+ * and subrange types with range_start >= 0).
+ * NOT defined as !kgpc_type_is_signed — record/pointer/etc. types return 0 from both. */
+int kgpc_type_is_unsigned(const KgpcType *type);
+
 /* Check if a KgpcType matches a specific legacy type tag.
  * This is a helper for transitioning code that compares types.
  * Returns 1 if the type matches the tag, 0 otherwise. */
