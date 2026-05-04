@@ -40,6 +40,10 @@ static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
 static int codegen_list_contains_string(ListNode_t *list, const char *value);
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+/* Defined in SemCheck_const_eval.c — declared here so codegen can register
+ * function-local real consts in cache-miss mode. */
+int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value);
+int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *iface_name, const char *method_name);
@@ -2914,6 +2918,16 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
             }
             if (!pushed)
                 PushConstOntoScope(symtab, (char *)id, const_value);
+        }
+        else if (expression_contains_real_literal_impl(symtab, value))
+        {
+            /* Real const (e.g. `const DELTA = 0.001;` or `c = 1.0/$10000`).
+             * The cache-miss codegen path enters a fresh scope per subprogram,
+             * so without this branch the const goes unresolved at use site and
+             * codegen emits "Unresolved non-local symbol". */
+            double real_value = 0.0;
+            if (evaluate_real_const_expr(symtab, value, &real_value) == 0)
+                PushRealConstOntoScope(symtab, (char *)id, real_value);
         }
         else
         {
@@ -8205,6 +8219,16 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         return;
     }
 
+    /* The register allocator is global state (single reg_stack per process).
+     * Without this reset, any registers that the previous function's codegen
+     * left "in use" (because that function's body didn't perfectly free them)
+     * remain marked as in-use here, and the current function's allocator
+     * sees fewer free registers than reality — producing wrong codegen.
+     * Previously this leak only got recovered when had_error tripped (line
+     * with reset_reg_stack() in the cache-miss loop); making it
+     * unconditional removes that hidden coupling. */
+    reset_reg_stack();
+
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
@@ -8531,6 +8555,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     {
         return;
     }
+
+    /* See comment in codegen_procedure: reset the global register allocator
+     * so leaks from prior functions don't poison this function's codegen. */
+    reset_reg_stack();
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
