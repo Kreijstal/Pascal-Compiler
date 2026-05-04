@@ -457,17 +457,25 @@ void ir_emit_function(ListNode_t *inst_list)
         /* Determine bit width from mnemonic suffix */
         int use_32bit = tmpl_uses_32bit(inst->tmpl);
 
-        /* Build a lookup table: vreg_id -> physical register name string */
-        /* We need to find, for each placeholder index i, the Register_t whose
-         * vreg_id matches vreg_ids[i].  Search defs then uses. */
-
-        /* Substitute %0, %1, ... with physical register names */
+        /* Substitute %0, %1, ... with physical register names.
+         * Compute an upper bound on the output size: template length plus the
+         * maximum register name length (e.g. "%r15d" = 5 chars) per placeholder
+         * minus the 2-byte "%N" token that is replaced.  Register names never
+         * exceed IR_MAX_REG_NAME_LEN characters. */
         const char *tmpl = inst->tmpl;
-        char buf[1024];
+        size_t tmpl_len = strlen(tmpl);
+        /* Each "%N" (2 bytes) may expand to at most IR_MAX_REG_NAME_LEN bytes. */
+        size_t max_out = tmpl_len + (size_t)(inst->n_placeholders) * IR_MAX_REG_NAME_LEN + 1;
+        char *buf = (char *)malloc(max_out);
+        if (buf == NULL)
+            continue;
         char *out = buf;
-        char *end = buf + sizeof(buf) - 1;
+        char *end = buf + max_out - 1;
         const char *p = tmpl;
 
+        /* Single-digit placeholder indices (%0..%9) are intentional: the maximum
+         * number of placeholders is IR_MAX_DEFS + IR_MAX_USES (= 6 at present),
+         * which comfortably fits within 0-9. */
         while (*p != '\0' && out < end)
         {
             if (*p == '%' && p[1] >= '0' && p[1] <= '9')
@@ -512,5 +520,8 @@ void ir_emit_function(ListNode_t *inst_list)
         /* Write result back into inst->text */
         free(inst->text);
         inst->text = strdup(buf);
+        free(buf);
+        /* strdup failure leaves inst->text as NULL; the instruction will emit
+         * nothing, which is acceptable during a fatal OOM situation. */
     }
 }
