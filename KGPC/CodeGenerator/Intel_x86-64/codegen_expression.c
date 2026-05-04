@@ -56,48 +56,6 @@ static inline int codegen_node_is_record_type(HashNode_t *node)
     return hashnode_is_record(node);
 }
 
-/* Collect method labels that need stubs (referenced via @MethodName but
- * body not available in the compilation unit).  Emitted as .weak stubs
- * in the final pass so they don't conflict with real definitions. */
-static ListNode_t *g_unresolved_method_stubs = NULL;
-
-void codegen_add_unresolved_method_stub(const char *label)
-{
-    if (label == NULL) return;
-    for (ListNode_t *n = g_unresolved_method_stubs; n != NULL; n = n->next)
-        if (n->cur != NULL && strcmp((const char *)n->cur, label) == 0)
-            return;
-    char *dup = strdup(label);
-    if (dup != NULL) {
-        ListNode_t *node = calloc(1, sizeof(ListNode_t));
-        if (node != NULL) {
-            node->cur = dup;
-            if (g_unresolved_method_stubs == NULL)
-                g_unresolved_method_stubs = node;
-            else
-                PushListNodeBack(g_unresolved_method_stubs, node);
-        } else {
-            free(dup);
-        }
-    }
-}
-
-void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms)
-{
-    (void)out;
-    (void)emitted_subprograms;
-    /* Stubs removed: unresolved method references should produce linker
-     * errors so that codegen bugs are caught instead of hidden. */
-    ListNode_t *cur = g_unresolved_method_stubs;
-    while (cur != NULL) {
-        ListNode_t *next = cur->next;
-        free(cur->cur);
-        free(cur);
-        cur = next;
-    }
-    g_unresolved_method_stubs = NULL;
-}
-
 /* Helper function to get RecordType from HashNode */
 static inline struct RecordType* codegen_get_record_type_from_node(HashNode_t *node)
 {
@@ -11379,10 +11337,6 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                     }
                     if (method_label != NULL)
                     {
-                        /* Record this method label so we can emit a weak
-                         * stub in the final pass if no real definition
-                         * appears in the assembly output. */
-                        codegen_add_unresolved_method_stub(method_label);
                         *offset = 0;
                         {
                             char method_buffer[384];

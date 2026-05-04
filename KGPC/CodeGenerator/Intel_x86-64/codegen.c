@@ -4368,12 +4368,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     codegen_main(prgm_name, ctx);
 
-    /* Emit weak stubs for method labels that were referenced (e.g., via
-     * @MethodName) but whose bodies are not available in this compilation.
-     * Must run AFTER codegen_program so all method refs are collected. */
-    codegen_emit_unresolved_method_stubs(ctx->output_file,
-        ctx->emitted_subprograms);
-
     codegen_program_footer(ctx);
 
     if (ctx->emitted_subprograms != NULL)
