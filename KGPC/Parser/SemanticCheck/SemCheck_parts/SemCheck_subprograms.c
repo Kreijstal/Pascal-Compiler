@@ -56,6 +56,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
      * the declaration, not in the implementation. */
     copy_method_decl_defaults_to_impl(symtab, subprogram);
 
+    /* Pascal allows constructor implementations to omit the `constructor`
+     * keyword when the class declaration already specifies it; reconcile the
+     * AST flag against the class's method_templates so callers can read the
+     * flag directly without consulting templates themselves. */
+    semcheck_reconcile_is_constructor_flag(symtab, subprogram);
+
     /* Record lexical nesting depth so codegen can reason about static links accurately.
      * Store depth as parent depth + 1 so the top-level program has depth 1 and
      * nested subprograms continue to increase. */

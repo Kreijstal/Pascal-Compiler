@@ -297,6 +297,13 @@ ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *dec
 void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_t *impl_params);
 void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram);
 void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram);
+/* Reconcile subprogram->is_constructor with the class's method_templates.
+ * Pascal allows constructor implementations to omit the `constructor` keyword
+ * when the class declaration already specifies it; in that case the AST flag
+ * arrives as 0. This pass consults the owning class's method templates
+ * (walking parent classes) and promotes the flag to 1 when appropriate, so
+ * downstream code can treat the AST flag as authoritative. */
+void semcheck_reconcile_is_constructor_flag(SymTab_t *symtab, Tree_t *subprogram);
 enum VarType get_var_type_from_node(HashNode_t *node);
 void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias);
 void mark_hashnode_source_unit(HashNode_t *node, int unit_index);

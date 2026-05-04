@@ -598,6 +598,47 @@ void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
     add_class_vars_to_method_scope_for(symtab, subprogram, 1);
 }
 
+void semcheck_reconcile_is_constructor_flag(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (symtab == NULL || subprogram == NULL)
+        return;
+    if (subprogram->type != TREE_SUBPROGRAM)
+        return;
+    if (subprogram->tree_data.subprogram_data.is_constructor)
+        return;
+
+    const char *owner_full = subprogram->tree_data.subprogram_data.owner_class_full;
+    const char *owner = subprogram->tree_data.subprogram_data.owner_class;
+    const char *owner_name = owner_full != NULL ? owner_full : owner;
+    const char *method_name = subprogram->tree_data.subprogram_data.method_name;
+    if (owner_name == NULL || method_name == NULL || method_name[0] == '\0')
+        return;
+
+    HashNode_t *class_node = NULL;
+    if (FindSymbol(&class_node, symtab, (char *)owner_name) == 0 || class_node == NULL)
+        return;
+
+    struct RecordType *record = get_record_type_from_node(class_node);
+    while (record != NULL)
+    {
+        struct MethodTemplate *tmpl = from_cparser_get_method_template(record,
+            method_name);
+        if (tmpl != NULL)
+        {
+            if (tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                subprogram->tree_data.subprogram_data.is_constructor = 1;
+            return;
+        }
+        if (record->parent_class_name == NULL)
+            break;
+        HashNode_t *parent_node = NULL;
+        if (FindSymbol(&parent_node, symtab, record->parent_class_name) == 0 ||
+            parent_node == NULL)
+            return;
+        record = get_record_type_from_node(parent_node);
+    }
+}
+
 /**
  * For a method implementation (ClassName__MethodName), copy default parameter
  * values from the class declaration to the implementation's parameters.
