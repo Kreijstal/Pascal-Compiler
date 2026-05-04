@@ -6285,13 +6285,12 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
 
             /* Emit abstract method stub — this is the correct implementation
              * for virtual;abstract methods in old-style objects.  The dedup
-             * check above ensures we don't emit when a concrete impl exists.
-             * Use .weak so the real implementation (e.g. from a codegen cache
-             * .o) takes precedence and avoids multiple-definition errors. */
+             * checks above ensure we don't emit when a concrete impl exists
+             * or when the same stub has already been emitted in this unit. */
             fprintf(ctx->output_file,
                     "\n# Abstract method stub: %s\n", mangled_id);
             fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
-            fprintf(ctx->output_file, ".weak %s\n", mangled_id);
+            fprintf(ctx->output_file, ".globl %s\n", mangled_id);
             fprintf(ctx->output_file, "%s:\n", mangled_id);
             fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
         }
