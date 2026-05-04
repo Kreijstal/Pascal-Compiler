@@ -127,19 +127,19 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         }
         if (array_expr != NULL)
         {
-            long long fallback_size = expr_get_array_element_size(array_expr, ctx);
-            if (fallback_size <= 0 && ctx != NULL && ctx->symtab != NULL)
+            long long expr_element_size = expr_get_array_element_size(array_expr, ctx);
+            if (expr_element_size <= 0 && ctx != NULL && ctx->symtab != NULL)
             {
                 KgpcType *array_type = expr_get_kgpc_type(array_expr);
                 if (array_type != NULL && kgpc_type_is_array(array_type))
                 {
                     KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(array_type, ctx->symtab);
                     if (elem_type != NULL)
-                        fallback_size = kgpc_type_sizeof(elem_type);
+                        expr_element_size = kgpc_type_sizeof(elem_type);
                 }
             }
             /* With-stack lookup: for unresolved variables in `with` blocks */
-            if (fallback_size <= 0 && ctx != NULL && ctx->with_depth > 0 &&
+            if (expr_element_size <= 0 && ctx != NULL && ctx->with_depth > 0 &&
                 array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
             {
                 struct RecordField *with_field = codegen_lookup_with_field(ctx,
@@ -148,17 +148,17 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
                 {
                     long long elem_size = codegen_array_elem_size_from_field(with_field, ctx);
                     if (elem_size > 0)
-                        fallback_size = elem_size;
+                        expr_element_size = elem_size;
                 }
             }
-            if (fallback_size <= 0)
+            if (expr_element_size <= 0)
             {
                 codegen_report_error(ctx,
                     "ERROR: array expression is missing element-size metadata in SetLength.");
                 return inst_list;
             }
-            if (fallback_size <= INT_MAX && (element_size <= 0 || fallback_size > element_size))
-                element_size = (int)fallback_size;
+            if (expr_element_size <= INT_MAX && (element_size <= 0 || expr_element_size > element_size))
+                element_size = (int)expr_element_size;
         }
         if (element_size <= 0)
         {

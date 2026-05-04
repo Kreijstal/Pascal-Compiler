@@ -3511,7 +3511,14 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             {
                 long long elem_size = kgpc_type_get_array_element_size(dyn_node->type);
                 if (elem_size <= 0)
-                    elem_size = 1;
+                {
+                    /* kgpc_type_get_array_element_size failed; try resolving deferred element type */
+                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(dyn_node->type, symtab);
+                    if (elem_type != NULL)
+                        elem_size = kgpc_type_sizeof(elem_type);
+                    assert(elem_size > 0 &&
+                        "array_element_size must be populated by semcheck for any dynamic array reaching SizeOf");
+                }
 
                 /* Build Length(arg) call.  Reuse the original arg expression
                  * by detaching the list node holding it from the SizeOf
