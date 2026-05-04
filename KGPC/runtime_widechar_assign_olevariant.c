@@ -1,11 +1,12 @@
 #include <stdint.h>
 
-/* Fallback converter used by FPC RTL generated helpers. */
+/* Wide-char-to-PAnsiChar converter used by FPC RTL generated helpers.
+ * Returns a stub '?' byte string for code points >= 256. */
 char *widechar__op_assign_olevariant_wc(uint16_t value)
 {
     static char table[256][2];
     static int inited = 0;
-    static char fallback[2] = {'?', '\0'};
+    static char stub_widechar[2] = {'?', '\0'};
     if (!inited)
     {
         for (int i = 0; i < 256; ++i)
@@ -17,5 +18,5 @@ char *widechar__op_assign_olevariant_wc(uint16_t value)
     }
     if (value < 256)
         return table[value];
-    return fallback;
+    return stub_widechar;
 }

@@ -45,7 +45,7 @@ void *libdl = &Libdl_handle;
 #endif
 
 /* FPC I/O check functions - weak stubs for real number I/O.
- * These are provided by FPC's RTL when linked, but we provide weak fallbacks
+ * These are provided by FPC's RTL when linked, but we provide weak stubs
  * for cases where the RTL code isn't included. */
 __attribute__((weak)) void checkread_t(void) { }
 __attribute__((weak)) void readreal_t_ss(void) { }
@@ -593,11 +593,11 @@ static void kgpc_stream_cache_clear(KGPCTextRec *file)
     }
 }
 
-static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
+static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *default_stream)
 {
     kgpc_init_stdio();
     if (file == NULL)
-        return fallback;
+        return default_stream;
     /* When FPC RTL opens a file, it sets TextRec.Handle but not
      * private_data.  Use the handle to create a FILE* stream.
      * FPC mode constants: fmClosed=0xD7B0, fmInput=0xD7B1,
@@ -709,7 +709,7 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
             return stream;
         }
     }
-    return fallback;
+    return default_stream;
 }
 
 static void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream)
@@ -2071,7 +2071,7 @@ uint64_t kgpc_query_performance_frequency(void) {
     }
     return 0ULL;
 #else
-    /* CLOCK_MONOTONIC is in nanoseconds on POSIX fallback */
+    /* CLOCK_MONOTONIC is in nanoseconds on POSIX (alternative path) */
     return 1000000000ULL;
 #endif
 }
@@ -3312,7 +3312,7 @@ void kgpc_setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
         return;
     }
 
-    /* Portable fallback conversion path: keep bytes unchanged and
+    /* Portable conversion path (no iconv): keep bytes unchanged and
      * update codepage metadata. This matches FPC behavior for raw
      * byte strings when no concrete conversion backend is linked. */
     KgpcStringHeader *hdr = kgpc_string_header(str);
@@ -3333,7 +3333,7 @@ void kgpc_setcodepage_rbs_i(void *s_arg, int32_t codepage)
 static char *kgpc_cached_widechar_pchar(uint16_t value)
 {
     static char *cache[256] = {0};
-    static char *fallback = NULL;
+    static char *out_of_range_buf = NULL;
 
     if (value < 256)
     {
@@ -3349,15 +3349,15 @@ static char *kgpc_cached_widechar_pchar(uint16_t value)
         return cache[value];
     }
 
-    if (fallback == NULL)
+    if (out_of_range_buf == NULL)
     {
-        fallback = (char *)malloc(2);
-        if (fallback == NULL)
+        out_of_range_buf = (char *)malloc(2);
+        if (out_of_range_buf == NULL)
             return kgpc_alloc_empty_string();
-        fallback[0] = '?';
-        fallback[1] = '\0';
+        out_of_range_buf[0] = '?';
+        out_of_range_buf[1] = '\0';
     }
-    return fallback;
+    return out_of_range_buf;
 }
 
 char *widechar__op_assign_olevariant_wc(uint16_t value)
@@ -3551,7 +3551,7 @@ char *kgpc_windows_get_domainname_string(void)
             return kgpc_string_duplicate(dot + 1);
         }
     }
-    /* Fallback: try DNS hostname */
+    /* Alternative: try DNS hostname */
     size = sizeof(fqdn);
     if (GetComputerNameExA(ComputerNameDnsHostname, fqdn, &size))
     {
@@ -4980,7 +4980,7 @@ static void *kgpc_memory_manager_allocmem(uintptr_t size)
 
 /* GetMem dispatch — used by kgpc_new so the matching kgpc_dispose can
  * call FreeMem on the same heap.  Reads MemoryManager.GetMem (offset 8)
- * if non-NULL, otherwise falls back to libc malloc.  The fallback path
+ * if non-NULL, otherwise uses libc malloc directly.  The direct-malloc path
  * exists for very early startup before kgpc_init_memory_manager has run
  * (Pascal initialisers must not crash if reached during a constructor).
  */
@@ -6054,7 +6054,7 @@ int64_t bsrqword_i64(uint64_t value)
 
 /* bsrdword_li and bsfdword_li: FPC's system.pp provides Pascal
  * implementations compiled by KGPC.  These C versions are kept as
- * fallbacks with kgpc_ prefix to avoid duplicate symbol conflicts. */
+ * alternatives with kgpc_ prefix to avoid duplicate symbol conflicts. */
 int64_t kgpc_bsrdword_li(uint32_t value)
 {
     if (value == 0)
@@ -6486,18 +6486,18 @@ double kgpc_now(void)
     uli.HighPart = ft.dwHighDateTime;
     if (uli.QuadPart == 0)
     {
-        time_t fallback = time(NULL);
-        if (fallback < 0)
+        time_t unix_time = time(NULL);
+        if (unix_time < 0)
             return 0;
-        double unix_seconds = (double)fallback;
+        double unix_seconds = (double)unix_time;
         return (unix_seconds / 86400.0) + 25569.0;
     }
     if (uli.QuadPart <= 116444736000000000ULL)
     {
-        time_t fallback = time(NULL);
-        if (fallback < 0)
+        time_t unix_time = time(NULL);
+        if (unix_time < 0)
             return 0;
-        double unix_seconds = (double)fallback;
+        double unix_seconds = (double)unix_time;
         return (unix_seconds / 86400.0) + 25569.0;
     }
     /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
@@ -6615,20 +6615,20 @@ char *kgpc_format_datetime(const char *format, double datetime)
     errno_t err = localtime_s(&tm_value, &seconds);
     if (err != 0)
     {
-        struct tm *fallback = localtime(&seconds);
-        if (fallback != NULL)
+        struct tm *localtime_result = localtime(&seconds);
+        if (localtime_result != NULL)
         {
-            tm_value = *fallback;
+            tm_value = *localtime_result;
         }
         else
         {
             errno_t gmt_err = gmtime_s(&tm_value, &seconds);
             if (gmt_err != 0)
             {
-                struct tm *gmt_fallback = gmtime(&seconds);
-                if (gmt_fallback != NULL)
+                struct tm *gmtime_result = gmtime(&seconds);
+                if (gmtime_result != NULL)
                 {
-                    tm_value = *gmt_fallback;
+                    tm_value = *gmtime_result;
                 }
                 else
                 {
