@@ -35,15 +35,30 @@ static const char *reg_name_stripped(const char *bit_64)
  * ----------------------------------------------------------------------- */
 
 IrInst_t *ir_inst_new(const char *text,
+                      const char *tmpl,
                       Register_t **defs, int n_defs,
-                      Register_t **uses, int n_uses)
+                      Register_t **uses, int n_uses,
+                      const int *vreg_ids, int n_vreg_ids)
 {
     IrInst_t *inst = (IrInst_t *)calloc(1, sizeof(IrInst_t));
     if (inst == NULL)
         return NULL;
 
     inst->text = (text != NULL) ? strdup(text) : NULL;
+    inst->tmpl = (tmpl != NULL) ? strdup(tmpl) : NULL;
     inst->owns_regs = 0;
+
+    /* Initialise vreg_ids to -1 (unset). */
+    for (int i = 0; i < IR_MAX_DEFS + IR_MAX_USES; ++i)
+        inst->vreg_ids[i] = -1;
+    if (vreg_ids != NULL)
+    {
+        int copy = n_vreg_ids;
+        if (copy > IR_MAX_DEFS + IR_MAX_USES)
+            copy = IR_MAX_DEFS + IR_MAX_USES;
+        for (int i = 0; i < copy; ++i)
+            inst->vreg_ids[i] = vreg_ids[i];
+    }
 
     if (n_defs > IR_MAX_DEFS)
         n_defs = IR_MAX_DEFS;
@@ -66,6 +81,7 @@ void ir_inst_free(IrInst_t *inst)
         return;
 
     free(inst->text);
+    free(inst->tmpl);
 
     if (inst->owns_regs)
     {
@@ -331,6 +347,9 @@ ListNode_t *ir_parse(const char *text)
             free(line);
             break;
         }
+        /* Initialise vreg_ids to -1 (unset). */
+        for (int i = 0; i < IR_MAX_DEFS + IR_MAX_USES; ++i)
+            inst->vreg_ids[i] = -1;
 
         if (annot != NULL)
         {
@@ -410,5 +429,116 @@ void ir_free_parsed_list(ListNode_t *list)
             free(list->cur);
         free(list);
         list = next;
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * Template substitution pass
+ * ----------------------------------------------------------------------- */
+
+/* Substitute the %N placeholders in inst->tmpl with physical register names
+ * and store the result in inst->text.
+ *
+ * Register lookup: registers are ordered defs[0..n_defs-1] then
+ * uses[0..n_uses-1].  Placeholder %N refers to that combined array at
+ * index N.  The physical name used is reg->bit_64 except when the
+ * instruction mnemonic ends in 'l' (32-bit suffix), in which case
+ * reg->bit_32 is used.
+ *
+ * The mnemonic is the first token after a leading '\t' in the template.
+ * Returns 1 on success, 0 on allocation failure.
+ */
+static int ir_subst_tmpl(IrInst_t *inst)
+{
+    if (inst == NULL || inst->tmpl == NULL)
+        return 0;
+
+    /* Build the combined register array: defs then uses. */
+    int n_regs = inst->n_defs + inst->n_uses;
+    Register_t *regs[IR_MAX_DEFS + IR_MAX_USES];
+    for (int i = 0; i < inst->n_defs; ++i)
+        regs[i] = inst->defs[i];
+    for (int i = 0; i < inst->n_uses; ++i)
+        regs[inst->n_defs + i] = inst->uses[i];
+
+    /* Determine whether to use bit_32 by inspecting the mnemonic.
+     * The template starts with '\t'; the mnemonic follows up to '\t' or ' '.
+     * If the mnemonic ends in 'l' (e.g. movl, addl) use bit_32. */
+    int use_32 = 0;
+    {
+        const char *p = inst->tmpl;
+        if (*p == '\t')
+            ++p;
+        /* Scan to end of mnemonic (whitespace or end of string). */
+        const char *mnem_start = p;
+        while (*p != '\0' && *p != '\t' && *p != ' ' && *p != '\n')
+            ++p;
+        if (p > mnem_start)
+        {
+            char last = *(p - 1);
+            if (last == 'l')
+                use_32 = 1;
+        }
+    }
+
+    /* Scan tmpl, copy to output, substituting %N placeholders. */
+    const char *src = inst->tmpl;
+    /* Conservative output buffer: each %N expands to at most ~8 chars. */
+    size_t out_cap = strlen(src) + (size_t)n_regs * 16 + 1;
+    char *out = (char *)malloc(out_cap);
+    if (out == NULL)
+        return 0;
+
+    char *dst = out;
+    char *out_end = out + out_cap - 1; /* reserve 1 for '\0' */
+
+    while (*src != '\0' && dst < out_end)
+    {
+        if (src[0] == '%' && src[1] >= '0' && src[1] <= '9')
+        {
+            /* Parse the decimal index. */
+            int idx = 0;
+            const char *num_start = src + 1;
+            const char *num_end = num_start;
+            while (*num_end >= '0' && *num_end <= '9')
+                ++num_end;
+            for (const char *q = num_start; q < num_end; ++q)
+                idx = idx * 10 + (*q - '0');
+            src = num_end;
+
+            /* Look up the register. */
+            const char *reg_name = NULL;
+            if (idx >= 0 && idx < n_regs && regs[idx] != NULL)
+                reg_name = use_32 ? regs[idx]->bit_32 : regs[idx]->bit_64;
+
+            if (reg_name == NULL)
+                reg_name = "?";
+
+            /* Copy register name to output. */
+            while (*reg_name != '\0' && dst < out_end)
+                *dst++ = *reg_name++;
+        }
+        else
+        {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+
+    inst->text = out;
+    return 1;
+}
+
+void ir_emit_function(ListNode_t *inst_list)
+{
+    while (inst_list != NULL)
+    {
+        if (inst_list->type == LIST_IR_INST)
+        {
+            IrInst_t *inst = (IrInst_t *)inst_list->cur;
+            if (inst != NULL && inst->text == NULL && inst->tmpl != NULL)
+                ir_subst_tmpl(inst);
+        }
+        inst_list = inst_list->next;
     }
 }

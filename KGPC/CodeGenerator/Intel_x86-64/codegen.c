@@ -3910,11 +3910,20 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     return inst_list;
 }
 
-/* add_inst_du — emit an instruction with def/use metadata.
+/* add_inst_du — emit an instruction with def/use metadata and a template.
  *
- * Creates a LIST_IR_INST node instead of the LIST_STRING node that
- * add_inst() creates.  The formatted asm text is identical; only the
- * node type and the attached IrInst_t metadata differ.
+ * Creates a LIST_IR_INST node.  The fmt/... arguments follow printf
+ * conventions for non-register parts of the instruction text (offsets,
+ * labels, etc.).  Use %%N (which vsnprintf expands to %N) as placeholders
+ * for the virtual registers in the combined [defs[0..n_defs-1],
+ * uses[0..n_uses-1]] array.  ir_emit_function() later substitutes %N with
+ * the physical register name.
+ *
+ * Example:
+ *   Register_t *defs[] = {dst};
+ *   Register_t *uses[] = {src};
+ *   add_inst_du(list, ctx, defs, 1, uses, 1, "\tmovq\t%%1, %%0\n");
+ *   // %0 = defs[0] = dst (bit_64), %1 = uses[0] = src (bit_64)
  *
  * add_inst() is unchanged so unmigrated call sites keep working. */
 ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
@@ -3922,26 +3931,69 @@ ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
                         Register_t **uses, int n_uses,
                         const char *fmt, ...)
 {
-    (void)ctx; /* reserved for future use */
-
-    char buf[CODEGEN_MAX_INST_BUF];
+    /* Process fmt through vsnprintf: this expands %d/%s for non-register
+     * args and turns %%N into %N placeholder literals in the template. */
+    char tmpl_buf[CODEGEN_MAX_INST_BUF];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    vsnprintf(tmpl_buf, sizeof(tmpl_buf), fmt, ap);
     va_end(ap);
 
-    IrInst_t *inst = ir_inst_new(buf, defs, n_defs, uses, n_uses);
+    /* Assign vreg_ids to registers (defs first, then uses). */
+    int n_regs = 0;
+    if (n_defs > IR_MAX_DEFS) n_defs = IR_MAX_DEFS;
+    if (n_uses > IR_MAX_USES) n_uses = IR_MAX_USES;
+    n_regs = n_defs + n_uses;
+
+    int vreg_ids[IR_MAX_DEFS + IR_MAX_USES];
+    for (int i = 0; i < IR_MAX_DEFS + IR_MAX_USES; ++i)
+        vreg_ids[i] = -1;
+
+    if (ctx != NULL)
+    {
+        for (int i = 0; i < n_defs && defs != NULL; ++i)
+        {
+            if (defs[i] != NULL && defs[i]->vreg_id < 0)
+                defs[i]->vreg_id = ctx->next_vreg_id++;
+            vreg_ids[i] = (defs != NULL && defs[i] != NULL) ? defs[i]->vreg_id : -1;
+        }
+        for (int i = 0; i < n_uses && uses != NULL; ++i)
+        {
+            if (uses[i] != NULL && uses[i]->vreg_id < 0)
+                uses[i]->vreg_id = ctx->next_vreg_id++;
+            vreg_ids[n_defs + i] = (uses != NULL && uses[i] != NULL) ? uses[i]->vreg_id : -1;
+        }
+    }
+
+    /* Check if the template contains any %N placeholders.
+     * If not (e.g. pre-formatted text passed by old callers), store as text
+     * directly so ir_emit_function() knows it is already resolved. */
+    int has_placeholder = 0;
+    for (const char *p = tmpl_buf; *p != '\0'; ++p)
+    {
+        if (p[0] == '%' && p[1] >= '0' && p[1] <= '9')
+        {
+            has_placeholder = 1;
+            break;
+        }
+    }
+
+    IrInst_t *inst = ir_inst_new(
+        has_placeholder ? NULL : tmpl_buf,  /* text: NULL if template has placeholders */
+        has_placeholder ? tmpl_buf : NULL,  /* tmpl: set if placeholders present      */
+        defs, n_defs, uses, n_uses,
+        vreg_ids, n_regs);
     if (inst == NULL)
     {
         /* Fall back to plain add_inst on allocation failure. */
-        return add_inst(inst_list, buf);
+        return add_inst(inst_list, tmpl_buf);
     }
 
     ListNode_t *new_node = CreateListNode(inst, LIST_IR_INST);
     if (new_node == NULL)
     {
         ir_inst_free(inst);
-        return add_inst(inst_list, buf);
+        return add_inst(inst_list, tmpl_buf);
     }
 
     if (inst_list == NULL)
@@ -4533,6 +4585,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
         ListNode_t *inst_list = NULL;
+        ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
 
         fprintf(ctx->output_file, "\t.globl\t%s\n", init_label);
@@ -4540,6 +4593,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+        ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4618,6 +4672,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+        ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -7243,6 +7298,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     if (dump_ir_flag())
@@ -8337,6 +8393,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * with reset_reg_stack() in the cache-miss loop); making it
      * unconditional removes that hidden coupling. */
     reset_reg_stack();
+    ctx->next_vreg_id = 0;
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
@@ -8597,6 +8654,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     if (dump_ir_flag())
@@ -8684,6 +8742,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* See comment in codegen_procedure: reset the global register allocator
      * so leaks from prior functions don't poison this function's codegen. */
     reset_reg_stack();
+    ctx->next_vreg_id = 0;
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
@@ -9574,6 +9633,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     if (dump_ir_flag())
@@ -10019,6 +10079,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
 
     /* Allocate stack slots for callee-saved registers */
     ListNode_t *inst_list = NULL;
+    ctx->next_vreg_id = 0;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
     int lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
@@ -10117,6 +10178,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
     if (dump_ir_flag())

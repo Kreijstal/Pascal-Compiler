@@ -181,7 +181,10 @@ typedef struct Register
     unsigned long long last_use_seq;
     RegisterSpillCallback spill_callback;
     void *spill_context;
-    
+    /* Virtual register ID for IR template substitution.
+     * -1 = not yet assigned; assigned on first use in add_inst_du(). */
+    int vreg_id;
+
 #if USE_GRAPH_COLORING_ALLOCATOR
     /* Forward declaration from graph_coloring_allocator.h */
     struct LiveRange *current_live_range;  /* Active live range for this register */
