@@ -36,6 +36,7 @@
 #include "../../unit_registry.h"
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
+#include "ir/ir_liveness.h"
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
@@ -4561,6 +4562,14 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             cfg_print(stderr, cfg, init_label);
             cfg_free(cfg);
         }
+        if (dump_ir_liveness_flag())
+        {
+            Cfg_t *cfg = cfg_build(inst_list);
+            LivenessInfo_t *liveness = liveness_compute(cfg);
+            liveness_print(stderr, cfg, liveness, init_label);
+            liveness_free(liveness);
+            cfg_free(cfg);
+        }
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -4629,6 +4638,14 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         {
             Cfg_t *cfg = cfg_build(inst_list);
             cfg_print(stderr, cfg, final_label);
+            cfg_free(cfg);
+        }
+        if (dump_ir_liveness_flag())
+        {
+            Cfg_t *cfg = cfg_build(inst_list);
+            LivenessInfo_t *liveness = liveness_compute(cfg);
+            liveness_print(stderr, cfg, liveness, final_label);
+            liveness_free(liveness);
             cfg_free(cfg);
         }
         free_inst_list(inst_list);
@@ -7236,6 +7253,14 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         cfg_print(stderr, cfg, prgm_name);
         cfg_free(cfg);
     }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, prgm_name);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     free_inst_list(inst_list);
 
     /* Emit INITFINAL table — FPC system unit references this to run unit
@@ -8582,6 +8607,14 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         cfg_print(stderr, cfg, sub_id);
         cfg_free(cfg);
     }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, sub_id);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -9551,6 +9584,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         cfg_print(stderr, cfg, sub_id);
         cfg_free(cfg);
     }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, sub_id);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -10084,6 +10125,14 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     {
         Cfg_t *cfg = cfg_build(inst_list);
         cfg_print(stderr, cfg, anon->generated_name);
+        cfg_free(cfg);
+    }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, anon->generated_name);
+        liveness_free(liveness);
         cfg_free(cfg);
     }
     
