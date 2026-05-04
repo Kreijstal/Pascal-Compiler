@@ -44,12 +44,6 @@ void *Libdl = &Libdl_handle;
 void *libdl = &Libdl_handle;
 #endif
 
-/* FPC I/O check functions - weak stubs for real number I/O.
- * These are provided by FPC's RTL when linked, but we provide weak stubs
- * for cases where the RTL code isn't included. */
-__attribute__((weak)) void checkread_t(void) { }
-__attribute__((weak)) void readreal_t_ss(void) { }
-
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
 /* Native stdlib lowering currently materializes a qualifier symbol for
