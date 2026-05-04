@@ -35,29 +35,7 @@ jobs:
           sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev meson gdb valgrind fpc
 
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y make wget tar zstd gawk gpg gpgv wine wine64 flex bison
-          sudo apt-get install -y llvm clang lld
+      - name: Configure build
+        run: meson setup build --buildtype=debugoptimized -Dwith_gmp=enabled
 
-      - name: Clone FPC RTL source
-        run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
 
-      - name: Configure FPC RTL build
-        run: meson setup build --buildtype=debugoptimized -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true -Dfpc_rtl_dir=./FPCSource
-
-      - name: Clone quasi-msys2
-        run: |
-          git clone https://github.com/HolyBlackCat/quasi-msys2.git
-          cd quasi-msys2
-          echo "UCRT64" > msystem.txt
-
-      - name: Install MSYS2 packages via quasi-msys2
-        run: |
-          cd quasi-msys2
-          # Install GCC, GMP, and other required packages
-          make install _gcc _gmp _meson _ninja _python 
-        timeout-minutes: 30          
-
-          
