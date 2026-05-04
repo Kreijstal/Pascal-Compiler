@@ -14,6 +14,12 @@
 
 #include "List.h"
 
+/* Maximum length of an assembly mnemonic string (e.g. "jmpq" = 4 chars). */
+#define CFG_MAX_MNEMONIC_LEN 16
+
+/* Maximum length of a branch target label (generous upper bound). */
+#define CFG_MAX_TARGET_LEN 256
+
 /* -----------------------------------------------------------------------
  * Internal helpers
  * ----------------------------------------------------------------------- */
@@ -124,10 +130,10 @@ static BranchKind get_branch_kind(const char *text,
         ++p;
     size_t mnem_len = (size_t)(p - mnem_start);
 
-    if (mnem_len == 0 || mnem_len >= 16)
+    if (mnem_len == 0 || mnem_len >= CFG_MAX_MNEMONIC_LEN)
         return BR_NONE;
 
-    char mnem[16];
+    char mnem[CFG_MAX_MNEMONIC_LEN];
     memcpy(mnem, mnem_start, mnem_len);
     mnem[mnem_len] = '\0';
 
@@ -330,7 +336,7 @@ Cfg_t *cfg_build(ListNode_t *inst_list)
         }
 
         /* Classify the current instruction as a branch. */
-        char target[256];
+        char target[CFG_MAX_TARGET_LEN];
         BranchKind bk = get_branch_kind(text, target, (int)sizeof(target));
         after_branch = (bk != BR_NONE);
 
@@ -381,7 +387,7 @@ finish:
             continue;
 
         const char *text = get_node_text(b->last_inst);
-        char target[256];
+        char target[CFG_MAX_TARGET_LEN];
         BranchKind bk = get_branch_kind(text, target, (int)sizeof(target));
 
         BasicBlock_t *next_block =

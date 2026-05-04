@@ -24,6 +24,9 @@
 typedef struct List ListNode_t;
 
 #define CFG_MAX_SUCCS  2
+/* Upper bound on tracked predecessors.  Matches the spec (preds[16]).
+ * If exceeded, additional predecessors are silently dropped from the
+ * metadata — the emitted assembly is unaffected. */
 #define CFG_MAX_PREDS  16
 
 typedef struct BasicBlock {
