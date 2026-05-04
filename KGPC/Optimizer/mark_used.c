@@ -283,19 +283,6 @@ static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
     /* Mark as used */
     sub->tree_data.subprogram_data.is_used = 1;
 
-    /* TObject.Free: codegen unconditionally appends a FreeMem(self) call
-     * after the Pascal body, routing through whatever single-arg FreeMem
-     * overload is in scope (KGPC stdlib's "procedure FreeMem(var target)"
-     * or FPC RTL's "function FreeMem(p:pointer):ptruint").  Mark FreeMem
-     * as used here so DCE doesn't strip its body before linking. */
-    if (sub->tree_data.subprogram_data.owner_class != NULL &&
-        sub->tree_data.subprogram_data.method_name != NULL &&
-        strcasecmp(sub->tree_data.subprogram_data.owner_class, "TObject") == 0 &&
-        strcasecmp(sub->tree_data.subprogram_data.method_name, "Free") == 0)
-    {
-        mark_subprograms_by_id(map, "FreeMem");
-    }
-
     /* If this node has no body, try to find the implementation by plain id.
      * This handles the case where a forward declaration (mangled_id="runerror_i")
      * and implementation (mangled_id="FPC_RUNERROR") have different mangled names
