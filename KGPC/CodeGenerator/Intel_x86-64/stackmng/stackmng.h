@@ -95,8 +95,9 @@ typedef struct RegStack
     
 #if USE_GRAPH_COLORING_ALLOCATOR
     /* Live range tracking for graph coloring */
-    ListNode_t *active_live_ranges;  /* List of LiveRange_t* currently being tracked */
-    int next_live_range_id;          /* ID counter for live ranges */
+    ListNode_t *active_live_ranges;       /* List of LiveRange_t* currently being tracked */
+    ListNode_t *active_live_ranges_tail;  /* Tail pointer for O(1) append */
+    int next_live_range_id;               /* ID counter for live ranges */
 #endif
 } RegStack_t;
 

@@ -32,6 +32,7 @@ struct LiveRange
     
     /* Interference information */
     ListNode_t *neighbors;           /* List of LiveRange_t* that interfere */
+    ListNode_t *neighbors_tail;      /* Tail pointer for O(1) neighbor append */
     int degree;                      /* Number of interfering neighbors */
     
     /* Allocation state */
@@ -43,6 +44,7 @@ struct LiveRange
 struct InterferenceGraph
 {
     ListNode_t *live_ranges;         /* List of LiveRange_t* */
+    ListNode_t *live_ranges_tail;    /* Tail pointer for O(1) live_range append */
     int num_ranges;
     int num_physical_regs;           /* Number of available registers */
 };

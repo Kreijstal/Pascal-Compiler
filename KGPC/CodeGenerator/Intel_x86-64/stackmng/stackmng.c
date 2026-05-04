@@ -824,6 +824,7 @@ RegStack_t *init_reg_stack()
 
 #if USE_GRAPH_COLORING_ALLOCATOR
     reg_stack->active_live_ranges = NULL;
+    reg_stack->active_live_ranges_tail = NULL;
     reg_stack->next_live_range_id = 1;
 #endif
 
@@ -984,12 +985,15 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
             lr->preferred_reg = reg;
             reg->current_live_range = lr;
             
-            /* Add to active live ranges list */
-            if (reg_stack->active_live_ranges == NULL)
-                reg_stack->active_live_ranges = CreateListNode(lr, LIST_UNSPECIFIED);
-            else
-                reg_stack->active_live_ranges = PushListNodeBack(reg_stack->active_live_ranges,
-                                                                 CreateListNode(lr, LIST_UNSPECIFIED));
+            /* Add to active live ranges list (O(1) via tail pointer) */
+            {
+                ListNode_t *lr_node = CreateListNode(lr, LIST_UNSPECIFIED);
+                if (reg_stack->active_live_ranges_tail != NULL)
+                    reg_stack->active_live_ranges_tail->next = lr_node;
+                else
+                    reg_stack->active_live_ranges = lr_node;
+                reg_stack->active_live_ranges_tail = lr_node;
+            }
         }
 #endif
         
