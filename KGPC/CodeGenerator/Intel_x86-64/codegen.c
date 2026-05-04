@@ -8408,18 +8408,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
     int is_constructor = proc->is_constructor;
-    if (!is_constructor &&
-        proc->owner_class != NULL &&
-        ((proc->method_name != NULL &&
-          pascal_identifier_equals(proc->method_name, "Create")) ||
-         (proc->id != NULL &&
-          pascal_identifier_equals(proc->id, "Create"))))
-    {
-        /* Some constructor methods still reach codegen without preserving the
-         * constructor bit. Treat class/object methods literally named Create as
-         * constructor-shaped so they return Self. */
-        is_constructor = 1;
-    }
+    assert(!is_constructor || proc->owner_class != NULL /* constructors must have an owner class */);
 
     if (is_constructor)
     {
@@ -9149,12 +9138,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * is the allocated instance pointer (not zero). */
     {
         int func_is_constructor = func->is_constructor;
-        if (!func_is_constructor && func->owner_class != NULL &&
-            func->method_name != NULL &&
-            strncasecmp(func->method_name, "Create", 6) == 0)
-        {
-            func_is_constructor = 1;
-        }
+        assert(!func_is_constructor || func->owner_class != NULL /* constructors must have an owner class */);
         if (func_is_constructor && return_var != NULL)
         {
             char ctor_buf[128];

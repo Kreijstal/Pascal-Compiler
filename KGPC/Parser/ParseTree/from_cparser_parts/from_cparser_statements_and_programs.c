@@ -1169,13 +1169,12 @@ Tree_t *convert_method_impl(ast_t *method_node) {
      * parser does not have a dedicated METHOD_IMPL_CONSTRUCTOR type.  Detect
      * the keyword above so constructors named e.g. Create_sym_offset (any
      * identifier — Pascal allows arbitrary constructor names) get the
-     * is_constructor flag and therefore the Self return-value epilogue.  The
-     * legacy fallbacks remain for declarations that do come through with a
-     * dedicated CONSTRUCTOR_DECL type, and for methods literally named
-     * "create" (case-insensitive) that historically relied on this. */
+     * is_constructor flag and therefore the Self return-value epilogue.
+     * Declarations that come through with a dedicated CONSTRUCTOR_DECL type
+     * (e.g. from init_pascal_method_implementation_parser) are also covered
+     * by the first condition. */
     int is_constructor = (method_node->typ == PASCAL_T_CONSTRUCTOR_DECL) ||
-        method_decl_is_constructor ||
-        (method_name != NULL && strcasecmp(method_name, "create") == 0);
+        method_decl_is_constructor;
 
     ListBuilder params_builder;
     list_builder_init(&params_builder);
