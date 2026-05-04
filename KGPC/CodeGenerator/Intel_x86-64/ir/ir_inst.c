@@ -285,7 +285,7 @@ static int parse_reg_list(const char *s, Register_t **out, int max)
     return count;
 }
 
-/* The annotation separator text we look for when parsing. */
+ListNode_t *ir_parse(const char *text)
 {
     if (text == NULL || *text == '\0')
         return NULL;
