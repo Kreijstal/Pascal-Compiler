@@ -12,6 +12,7 @@ inc_dirs = include_directories(
   'Parser/SemanticCheck/SymTab',
   'Parser/SemanticCheck',
   'CodeGenerator/Intel_x86-64',
+  'CodeGenerator/Intel_x86-64/ir',
   'Optimizer',
   '../common'
 )
@@ -85,6 +86,7 @@ kgpc_cparser_sources = [
   'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Access.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Types.c',
   'CodeGenerator/Intel_x86-64/codegen.c',
+  'CodeGenerator/Intel_x86-64/ir/ir_inst.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_infrastructure.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_assignment.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_dispatch.c',
