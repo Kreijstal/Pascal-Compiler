@@ -353,6 +353,9 @@ typedef struct CodeGenContext {
     /* Label to jump to after an 'on' exception handler body executes.
        Set by codegen_try_except, read by codegen_on_exception. */
     const char *on_except_after_label;
+
+    /* Virtual register ID counter — reset to 0 at each function entry. */
+    int next_vreg_id;
 } CodeGenContext;
 
 /* Generates a label */

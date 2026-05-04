@@ -181,6 +181,7 @@ typedef struct Register
     unsigned long long last_use_seq;
     RegisterSpillCallback spill_callback;
     void *spill_context;
+    int vreg_id;   /* -1 = not yet assigned a virtual ID */
     
 #if USE_GRAPH_COLORING_ALLOCATOR
     /* Forward declaration from graph_coloring_allocator.h */

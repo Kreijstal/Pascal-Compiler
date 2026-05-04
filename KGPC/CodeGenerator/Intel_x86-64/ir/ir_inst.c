@@ -66,6 +66,7 @@ void ir_inst_free(IrInst_t *inst)
         return;
 
     free(inst->text);
+    free(inst->tmpl);
 
     if (inst->owns_regs)
     {
@@ -212,6 +213,7 @@ static Register_t *make_synthetic_reg(const char *name)
     Register_t *r = (Register_t *)calloc(1, sizeof(Register_t));
     if (r == NULL)
         return NULL;
+    r->vreg_id = -1;
 
     /* Allocate bit_64 = "%" + name */
     size_t nlen = strlen(name);
@@ -410,5 +412,105 @@ void ir_free_parsed_list(ListNode_t *list)
             free(list->cur);
         free(list);
         list = next;
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * Virtual-register template substitution
+ * ----------------------------------------------------------------------- */
+
+/* Determine whether the mnemonic suffix implies 32-bit (ends with 'l' but
+ * not 'call', 'jl', etc.).  This is a best-effort heuristic: if the tmpl
+ * contains a 'l' suffix instruction (e.g. "\tmovl\t") we use bit_32,
+ * otherwise bit_64.
+ *
+ * Strategy: scan for the first '\t' after the opening '\t', extract the
+ * mnemonic, and check its last character. */
+static int tmpl_uses_32bit(const char *tmpl)
+{
+    if (tmpl == NULL)
+        return 0;
+    /* Skip leading whitespace/tabs */
+    const char *p = tmpl;
+    while (*p == '\t' || *p == ' ')
+        ++p;
+    /* Collect the mnemonic (up to next whitespace) */
+    const char *mstart = p;
+    while (*p != '\0' && *p != '\t' && *p != ' ' && *p != '\n')
+        ++p;
+    if (p == mstart)
+        return 0;
+    char last = *(p - 1);
+    return last == 'l';
+}
+
+void ir_emit_function(ListNode_t *inst_list)
+{
+    for (ListNode_t *n = inst_list; n; n = n->next)
+    {
+        if (n->type != LIST_IR_INST)
+            continue;
+        IrInst_t *inst = (IrInst_t *)n->cur;
+        if (!inst || !inst->tmpl)
+            continue;
+
+        /* Determine bit width from mnemonic suffix */
+        int use_32bit = tmpl_uses_32bit(inst->tmpl);
+
+        /* Build a lookup table: vreg_id -> physical register name string */
+        /* We need to find, for each placeholder index i, the Register_t whose
+         * vreg_id matches vreg_ids[i].  Search defs then uses. */
+
+        /* Substitute %0, %1, ... with physical register names */
+        const char *tmpl = inst->tmpl;
+        char buf[1024];
+        char *out = buf;
+        char *end = buf + sizeof(buf) - 1;
+        const char *p = tmpl;
+
+        while (*p != '\0' && out < end)
+        {
+            if (*p == '%' && p[1] >= '0' && p[1] <= '9')
+            {
+                int idx = p[1] - '0';
+                p += 2;
+
+                const char *regname = NULL;
+                if (idx < inst->n_placeholders)
+                {
+                    int target_vreg = inst->vreg_ids[idx];
+                    /* Search defs */
+                    for (int i = 0; i < inst->n_defs && regname == NULL; ++i)
+                    {
+                        if (inst->defs[i] && inst->defs[i]->vreg_id == target_vreg)
+                            regname = use_32bit ? inst->defs[i]->bit_32 : inst->defs[i]->bit_64;
+                    }
+                    /* Search uses */
+                    for (int i = 0; i < inst->n_uses && regname == NULL; ++i)
+                    {
+                        if (inst->uses[i] && inst->uses[i]->vreg_id == target_vreg)
+                            regname = use_32bit ? inst->uses[i]->bit_32 : inst->uses[i]->bit_64;
+                    }
+                }
+
+                if (regname == NULL)
+                    regname = "?";
+
+                size_t rlen = strlen(regname);
+                if (out + rlen > end)
+                    rlen = (size_t)(end - out);
+                memcpy(out, regname, rlen);
+                out += rlen;
+            }
+            else
+            {
+                *out++ = *p++;
+            }
+        }
+        *out = '\0';
+
+        /* Write result back into inst->text */
+        free(inst->text);
+        inst->text = strdup(buf);
     }
 }
