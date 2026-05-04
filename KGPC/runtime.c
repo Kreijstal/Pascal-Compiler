@@ -50,9 +50,6 @@ void *libdl = &Libdl_handle;
 __attribute__((weak)) void checkread_t(void) { }
 __attribute__((weak)) void readreal_t_ss(void) { }
 
-/* FPC errno setter - weak stub */
-__attribute__((weak)) void FPC_SYS_SETERRNO(int err) { errno = err; }
-
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
 /* Native stdlib lowering currently materializes a qualifier symbol for
