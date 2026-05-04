@@ -1422,6 +1422,37 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 }
                 if (coerced_to_real)
                     value_is_qword = 1;
+                /* Array-of-char decay to pchar/pointer: when the source is
+                 * an array expression (e.g. `pr^.code` where `code` is an
+                 * `array of char` field), codegen_record_access yields the
+                 * field's ADDRESS — a 64-bit pointer — rather than a value.
+                 * The expression's resolved kgpc_type is the array, which
+                 * is not "qword" by primitive-type-tag check, but the value
+                 * in the register IS qword. Truncating it via the 32→64
+                 * fallback below would corrupt the address (notably on
+                 * Win64 where data-section addresses are >32 bits, e.g.
+                 * 0x140030004). Treat array-typed sources as qword when the
+                 * destination is qword (pchar/pointer/etc.) — Pascal's
+                 * array-of-char-to-pchar decay rule. */
+                if (!value_is_qword && assign_expr != NULL &&
+                    (assign_expr->is_array_expr ||
+                     (assign_expr->resolved_kgpc_type != NULL &&
+                      kgpc_type_is_array(assign_expr->resolved_kgpc_type))))
+                {
+                    value_is_qword = 1;
+                }
+                /* Record-field access whose field is an array also decays
+                 * to its address (handled by codegen_record_access). The
+                 * is_array_expr / resolved_kgpc_type checks above may not
+                 * cover this when the field's array-ness lives only in the
+                 * RecordField metadata. */
+                if (!value_is_qword && assign_expr != NULL &&
+                    assign_expr->type == EXPR_RECORD_ACCESS)
+                {
+                    struct RecordField *fmeta = codegen_lookup_record_field(assign_expr);
+                    if (fmeta != NULL && fmeta->is_array)
+                        value_is_qword = 1;
+                }
                 /* Check for procedural var calls with pointer return type */
                 if (!value_is_qword && assign_expr != NULL &&
                     assign_expr->type == EXPR_FUNCTION_CALL &&

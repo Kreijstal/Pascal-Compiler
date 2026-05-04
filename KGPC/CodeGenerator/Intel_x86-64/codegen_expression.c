@@ -7245,9 +7245,27 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
      * mis-emit `mov[lq] (%addr), %reg` and read 4-or-8 bytes of array
      * contents as if they were a primitive value (root cause of taicpu
      * gencode SIGSEGV when assigning insentry^.code, an array of char,
-     * to a pchar codes variable). */
+     * to a pchar codes variable).
+     *
+     * Detection priority: prefer `expr->resolved_kgpc_type` when it
+     * carries the array type, but fall back to the RecordField metadata
+     * (`field->is_array`) when the resolved type is missing or has been
+     * narrowed to a primitive (e.g. by an enclosing assignment-target
+     * coercion). RecordField metadata is the canonical truth for the
+     * field's declared shape regardless of any expression-level rewrites. */
+    int field_is_array_kind = 0;
     if (expr->resolved_kgpc_type != NULL &&
         kgpc_type_is_array(expr->resolved_kgpc_type))
+    {
+        field_is_array_kind = 1;
+    }
+    else
+    {
+        struct RecordField *fmeta = codegen_lookup_record_field_expr(expr, ctx);
+        if (fmeta != NULL && fmeta->is_array)
+            field_is_array_kind = 1;
+    }
+    if (field_is_array_kind)
     {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
