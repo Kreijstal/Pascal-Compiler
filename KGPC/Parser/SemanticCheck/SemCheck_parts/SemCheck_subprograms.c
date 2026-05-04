@@ -216,8 +216,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             already_declared = (existing_decl != NULL);
         }
         
-        /* Fallback to simple lookup if no mangled name or no match found */
-        if (!already_declared)
+        /* Fallback to simple lookup only when no mangled name was computed
+         * (e.g. external cname functions with a single overload).  When a
+         * mangled name exists but the overload lookup found no match, do NOT
+         * fall back to unmangled lookup — that would silently bind to a
+         * different overload. */
+        if (!already_declared && subprogram->tree_data.subprogram_data.mangled_id == NULL)
             already_declared = (FindSymbol(&existing_decl, symtab, id_to_use_for_lookup) != 0);
     }
 
