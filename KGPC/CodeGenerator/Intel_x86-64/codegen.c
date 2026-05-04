@@ -292,10 +292,7 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
                 cand->type->kind != TYPE_KIND_PROCEDURE)
                 continue;
             /* Strip unit$$ prefix from candidate mangled_id for comparison */
-            const char *cand_base = cand->mangled_id;
-            const char *cand_sep = strstr(cand_base, "$$");
-            if (cand_sep != NULL)
-                cand_base = cand_sep + 2;
+            const char *cand_base = mangled_id_get_base(cand->mangled_id);
             if (strncmp(cand_base, stale_target, prefix_len) != 0)
                 continue;
             Tree_t *def = cand->type->info.proc_info.definition;
@@ -439,7 +436,7 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
      * codegen_apply_unit_mangled_prefixes pre-pass, look up the correct
      * unit-qualified label.  This handles cases where semcheck cached a
      * mangled_id before codegen added the unit$$ prefix. */
-    if (call_target != NULL && strstr(call_target, "$$") == NULL &&
+    if (call_target != NULL && !mangled_id_has_unit_prefix(call_target) &&
         ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.function_call_data.id != NULL)
     {
@@ -451,10 +448,9 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
             if (cand == NULL || cand->mangled_id == NULL)
                 continue;
             /* Check if cand->mangled_id has the form "unit$$call_target" */
-            const char *sep = strstr(cand->mangled_id, "$$");
-            if (sep == NULL)
+            if (!mangled_id_has_unit_prefix(cand->mangled_id))
                 continue;
-            const char *base = sep + 2;
+            const char *base = mangled_id_get_base(cand->mangled_id);
             if (strcmp(base, call_target) == 0)
             {
                 /* Verify this candidate has a real implementation */

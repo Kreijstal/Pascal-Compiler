@@ -137,6 +137,30 @@ static inline const char *codegen_text_section_resume(void)
     return function_sections_flag() ? "\t.previous" : "\t.text";
 }
 
+/* ---------------------------------------------------------------------------
+ * Unit-prefix helpers for mangled names ("unitname$$base_mangled" format).
+ *
+ * The codegen pre-pass (codegen_apply_collision_prefixes) qualifies colliding
+ * cross-unit symbols by prepending "unitname$$".  Code that needs to test or
+ * strip that prefix must use these helpers instead of open-coding strstr.
+ * ---------------------------------------------------------------------------*/
+
+/* Returns 1 if the mangled name has a unit-qualification prefix ("$$" present). */
+static inline int mangled_id_has_unit_prefix(const char *mangled_id)
+{
+    return mangled_id != NULL && strstr(mangled_id, "$$") != NULL;
+}
+
+/* Returns a pointer to the base name (after "$$"), or the original string if
+ * there is no unit prefix.  Never returns NULL when the input is non-NULL. */
+static inline const char *mangled_id_get_base(const char *mangled_id)
+{
+    if (mangled_id == NULL)
+        return NULL;
+    const char *sep = strstr(mangled_id, "$$");
+    return sep != NULL ? sep + 2 : mangled_id;
+}
+
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
 #define NORMAL_JMP -1

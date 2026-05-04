@@ -4886,7 +4886,7 @@ cleanup_constructor:
          * candidate from the same unit to avoid cross-unit collisions
          * (e.g. comprsrc.initglobals vs globals.initglobals). */
         char *collision_label = NULL;
-        if (proc_label != NULL && strstr(proc_label, "$$") == NULL &&
+        if (proc_label != NULL && !mangled_id_has_unit_prefix(proc_label) &&
             ctx != NULL && ctx->symtab != NULL)
         {
             const char *lookup_id = expr->expr_data.addr_of_proc_data.proc_id;
@@ -4905,10 +4905,9 @@ cleanup_constructor:
                             continue;
                         if (cand->source_unit_index != target_unit)
                             continue;
-                        const char *sep = strstr(cand->mangled_id, "$$");
-                        if (sep == NULL)
+                        if (!mangled_id_has_unit_prefix(cand->mangled_id))
                             continue;
-                        if (strcmp(sep + 2, proc_label) == 0 &&
+                        if (strcmp(mangled_id_get_base(cand->mangled_id), proc_label) == 0 &&
                             cand->type != NULL &&
                             cand->type->kind == TYPE_KIND_PROCEDURE &&
                             cand->type->info.proc_info.definition != NULL &&
@@ -4929,10 +4928,9 @@ cleanup_constructor:
                         HashNode_t *cand = (HashNode_t *)c->cur;
                         if (cand == NULL || cand->mangled_id == NULL)
                             continue;
-                        const char *sep = strstr(cand->mangled_id, "$$");
-                        if (sep == NULL)
+                        if (!mangled_id_has_unit_prefix(cand->mangled_id))
                             continue;
-                        if (strcmp(sep + 2, proc_label) == 0 &&
+                        if (strcmp(mangled_id_get_base(cand->mangled_id), proc_label) == 0 &&
                             cand->type != NULL &&
                             cand->type->kind == TYPE_KIND_PROCEDURE &&
                             cand->type->info.proc_info.definition != NULL &&

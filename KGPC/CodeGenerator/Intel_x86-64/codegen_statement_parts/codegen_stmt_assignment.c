@@ -587,7 +587,6 @@ int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenConte
 {
     const char *expr_id = NULL;
     const char *current_id = NULL;
-    const char *suffix = NULL;
     HashNode_t *shadow_node = NULL;
 
     if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID)
@@ -621,21 +620,6 @@ int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenConte
     if (ctx->current_subprogram_result_name != NULL &&
         pascal_identifier_equals(expr_id, ctx->current_subprogram_result_name))
         return 1;
-
-    suffix = strstr(current_id, "__");
-    if (suffix != NULL)
-    {
-        while (suffix != NULL)
-        {
-            const char *next = strstr(suffix + 2, "__");
-            if (next == NULL)
-                break;
-            suffix = next;
-        }
-        suffix += 2;
-        if (*suffix != '\0' && pascal_identifier_equals(expr_id, suffix))
-            return 1;
-    }
 
     return 0;
 }
