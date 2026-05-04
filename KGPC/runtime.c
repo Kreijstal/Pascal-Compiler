@@ -8746,18 +8746,9 @@ void kgpc_readwritebarrier(void) {}
  * Not meaningful in a CLI/batch context; no-op. */
 void SysBeep(void) {}
 
-/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization.
- * The body is Finalize(TArray<TPtrWrapper>) which is a no-op for
- * TPtrWrapper (a simple record with no managed fields). */
-void tmarshal__unfixarray_u_tptrwrapper(void) {}
-
 /* FindComponentClass — FPC TReader class method referenced but not
  * exercised in test programs. Raises abstract method error if called. */
 void FindComponentClass(void) { __kgpc_abstract_method_error(); }
-
-/* ReadDeltaStream — FPC TReader class method referenced but not
- * exercised in test programs. Raises abstract method error if called. */
-void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
 
 /* Default IInterface implementations for non-reference-counted classes.
  * Classes that implement interfaces without inheriting from TInterfacedObject
