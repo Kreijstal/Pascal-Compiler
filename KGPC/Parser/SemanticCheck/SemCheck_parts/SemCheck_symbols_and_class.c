@@ -1039,19 +1039,19 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
 
     if (!skip_owner_qualify && matches == NULL)
     {
-        int allow_owner_fallback = 0;
+        int try_owner_qualify = 0;
         if (type_ref == NULL)
         {
-            allow_owner_fallback = 1;
+            try_owner_qualify = 1;
         }
         else if (type_ref->name != NULL &&
                  type_ref->name->count == 1 &&
                  !semcheck_is_explicit_unit_qualified_type_ref(type_ref))
         {
-            allow_owner_fallback = 1;
+            try_owner_qualify = 1;
         }
 
-        if (allow_owner_fallback)
+        if (try_owner_qualify)
         {
             const char *owner_id = semcheck_get_current_method_owner();
             if (owner_id != NULL)

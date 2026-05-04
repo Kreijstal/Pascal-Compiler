@@ -71,10 +71,15 @@ static char *sanitize_type_id(const char *type_id)
     return out;
 }
 
-static const char *type_ref_base_name_or_id(const TypeRef *ref, const char *fallback)
+/* Return the base name from type_ref when available, else the raw type_id string.
+ * If type_ref is non-NULL its base_name must be non-NULL (TypeRef invariant). */
+static const char *type_ref_resolved_name(const TypeRef *ref, const char *raw_type_id)
 {
+    if (ref == NULL)
+        return raw_type_id;
     const char *base = type_ref_base_name(ref);
-    return base != NULL ? base : fallback;
+    assert(base != NULL && "TypeRef.base_name must be populated by type resolution");
+    return base;
 }
 
 static int mangle_type_id_is_extended(const char *type_id)
@@ -423,7 +428,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 else if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
                 {
                     resolved_type = MapBuiltinTypeNameToVarType(
-                        type_ref_base_name_or_id(inline_alias->array_element_type_ref,
+                        type_ref_resolved_name(inline_alias->array_element_type_ref,
                             element_type_id));
                     if (resolved_type == HASHVAR_UNTYPED)
                     {
@@ -459,13 +464,13 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
 
                 // First try to map built-in type names directly
                 resolved_type = MapBuiltinTypeNameToVarType(
-                    type_ref_base_name_or_id(type_ref, type_id));
+                    type_ref_resolved_name(type_ref, type_id));
                 if (resolved_type == HASHVAR_REAL &&
-                    mangle_type_id_is_extended(type_ref_base_name_or_id(type_ref, type_id)))
+                    mangle_type_id_is_extended(type_ref_resolved_name(type_ref, type_id)))
                     record_type_id = "Extended";
                 if (resolved_type == HASHVAR_REAL && record_type_id == NULL)
                 {
-                    const char *base = type_ref_base_name_or_id(type_ref, type_id);
+                    const char *base = type_ref_resolved_name(type_ref, type_id);
                     if (base != NULL && strcasecmp(base, "Single") == 0)
                         record_type_id = "Single";
                 }
@@ -629,7 +634,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             {
                 /* Try to map element type from type_id */
                 resolved_type = MapBuiltinTypeNameToVarType(
-                    type_ref_base_name_or_id(element_type_ref, element_type_id));
+                    type_ref_resolved_name(element_type_ref, element_type_id));
                 if (resolved_type == HASHVAR_UNTYPED)
                 {
                     /* Look up in symbol table */
