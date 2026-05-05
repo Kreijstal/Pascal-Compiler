@@ -3910,38 +3910,60 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     return inst_list;
 }
 
-/* add_inst_du — emit an instruction with def/use metadata.
+/* add_inst_du — emit an instruction template with def/use metadata.
  *
- * Creates a LIST_IR_INST node instead of the LIST_STRING node that
- * add_inst() creates.  The formatted asm text is identical; only the
- * node type and the attached IrInst_t metadata differ.
+ * fmt is a template string where %0, %1, ... are placeholders for
+ * the physical register names of the def/use registers.  Placeholders
+ * are substituted by ir_emit_function() before code emission.
  *
- * add_inst() is unchanged so unmigrated call sites keep working. */
+ * defs[0..n_defs-1] are written by this instruction.
+ * uses[0..n_uses-1] are read by this instruction.
+ * vreg_ids[] is filled in defs-first order: [defs[0], ..., uses[0], ...].
+ * Each register without an assigned vreg_id (vreg_id == -1) receives a
+ * fresh ID from ctx->next_vreg_id++.
+ *
+ * The trailing ... is accepted but ignored (kept for signature compatibility). */
 ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
                         Register_t **defs, int n_defs,
                         Register_t **uses, int n_uses,
                         const char *fmt, ...)
 {
-    (void)ctx; /* reserved for future use */
-
-    char buf[CODEGEN_MAX_INST_BUF];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-
-    IrInst_t *inst = ir_inst_new(buf, defs, n_defs, uses, n_uses);
+    IrInst_t *inst = ir_inst_new(NULL, defs, n_defs, uses, n_uses);
     if (inst == NULL)
+        return inst_list;
+
+    /* Store template string */
+    inst->tmpl = fmt ? strdup(fmt) : NULL;
+    inst->text = NULL;
+
+    /* Assign vreg_ids: defs first, then uses.
+     * If ctx is available, assign fresh IDs to unassigned registers. */
+    int placeholder = 0;
+    for (int i = 0; i < n_defs && i < IR_MAX_DEFS && placeholder < (int)(sizeof(inst->vreg_ids)/sizeof(inst->vreg_ids[0])); ++i, ++placeholder)
     {
-        /* Fall back to plain add_inst on allocation failure. */
-        return add_inst(inst_list, buf);
+        if (defs[i] != NULL)
+        {
+            if (ctx != NULL && defs[i]->vreg_id == -1)
+                defs[i]->vreg_id = ctx->next_vreg_id++;
+            inst->vreg_ids[placeholder] = defs[i]->vreg_id;
+        }
     }
+    for (int i = 0; i < n_uses && i < IR_MAX_USES && placeholder < (int)(sizeof(inst->vreg_ids)/sizeof(inst->vreg_ids[0])); ++i, ++placeholder)
+    {
+        if (uses[i] != NULL)
+        {
+            if (ctx != NULL && uses[i]->vreg_id == -1)
+                uses[i]->vreg_id = ctx->next_vreg_id++;
+            inst->vreg_ids[placeholder] = uses[i]->vreg_id;
+        }
+    }
+    inst->n_placeholders = placeholder;
 
     ListNode_t *new_node = CreateListNode(inst, LIST_IR_INST);
     if (new_node == NULL)
     {
         ir_inst_free(inst);
-        return add_inst(inst_list, buf);
+        return inst_list;
     }
 
     if (inst_list == NULL)
@@ -6796,11 +6818,22 @@ static int codegen_max_rbp_stack_ref(ListNode_t *inst_list)
 
     while (inst_list != NULL)
     {
+        const char *text = NULL;
         if (inst_list->type == LIST_STRING && inst_list->cur != NULL)
         {
-            const char *text = (const char *)inst_list->cur;
-            const char *cursor = text;
+            text = (const char *)inst_list->cur;
+        }
+        else if (inst_list->type == LIST_IR_INST && inst_list->cur != NULL)
+        {
+            IrInst_t *ir = (IrInst_t *)inst_list->cur;
+            /* Prefer the pre-formatted template (contains concrete %rbp offsets)
+             * over the post-substitution text (not available yet at this point). */
+            text = ir->tmpl ? ir->tmpl : ir->text;
+        }
 
+        if (text != NULL)
+        {
+            const char *cursor = text;
             while ((cursor = strchr(cursor, '-')) != NULL)
             {
                 const char *digits = cursor + 1;
