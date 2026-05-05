@@ -4718,7 +4718,13 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGe
         { Register_t *du[] = {byte_index_reg}; inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tshrl\t$3, %0\n"); }
         { Register_t *d[] = {bit_reg}; Register_t *u[] = {idx_reg}; inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, "\tmovl\t%1, %0\n"); }
         { Register_t *du[] = {bit_reg}; inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tandl\t$7, %0\n"); }
-        { Register_t *d[] = {byte_val_reg}; Register_t *u[] = {base_reg, byte_index_reg}; inst_list = add_inst_du(inst_list, ctx, d, 1, u, 2, "\tmovzbl\t(%1,%2,1), %0\n"); }
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovzbl\t(%s,%s,1), %%0\n", base_reg->bit_64, byte_index_reg->bit_64);
+            Register_t *d[] = {byte_val_reg};
+            Register_t *u[] = {base_reg, byte_index_reg};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, u, 2, tmpl);
+        }
         { Register_t *d[] = {mask_reg}; inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovl\t$1, %0\n"); }
         bit_byte_reg = register_name8(bit_reg);
         if (bit_byte_reg == NULL) {
