@@ -374,21 +374,23 @@ void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, Sy
 ListNode_t *add_inst(ListNode_t *, const char *);
 void add_inst_invalidate_cache(void);
 
-/* add_inst_du — emit an instruction and record def/use metadata.
+/* add_inst_du — emit an instruction template and record def/use metadata.
  *
  * defs[0..n_defs-1] are the Register_t* written by this instruction.
  * uses[0..n_uses-1] are the Register_t* read by this instruction.
  * Either array may be NULL when the corresponding count is 0.
- * ctx is reserved for future use (may be NULL).
- * fmt/... are printf-style format arguments that produce the asm text.
+ * fmt is a template string with %0, %1, ... as register placeholders.
+ *   %N is replaced by the physical register name of the N-th entry in
+ *   the combined (defs first, then uses) array at emit time.
+ *   All other text (including %rax, %rbp, etc.) passes through literally.
+ * The trailing ... is accepted but ignored.
  *
  * The resulting ListNode_t has type LIST_IR_INST.
  * add_inst() is unchanged and continues to produce LIST_STRING nodes. */
 ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
                         Register_t **defs, int n_defs,
                         Register_t **uses, int n_uses,
-                        const char *fmt, ...)
-    __attribute__((format(printf, 7, 8)));
+                        const char *fmt, ...);
 
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 

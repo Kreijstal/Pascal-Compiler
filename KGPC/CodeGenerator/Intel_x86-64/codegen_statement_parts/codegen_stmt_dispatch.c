@@ -1087,7 +1087,6 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
 
                 if (result_reg != NULL && codegen_had_error(ctx) == 0)
                 {
-                    char buffer[128];
                     int expr_is_real = expr_has_type_tag(return_expr, REAL_TYPE) ||
                         expr_has_type_tag(return_expr, EXTENDED_TYPE);
                     int is_real = return_is_real || expr_is_real;
@@ -1122,10 +1121,17 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                 result_reg->bit_32, result_reg->bit_64);
 
                         if (use_qword)
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", result_reg->bit_64);
+                        {
+                            Register_t *uses_arr[] = {result_reg};
+                            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                                "\tmovq\t%0, %rax\n");
+                        }
                         else
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            Register_t *uses_arr[] = {result_reg};
+                            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                                "\tmovl\t%0, %eax\n");
+                        }
                     }
                     else
                     {
@@ -1134,8 +1140,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                          * 64-bit bit pattern into a GPR.  Always copy GPR → xmm0 so
                          * the caller sees the correct float return value regardless of
                          * which expression form was used. */
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", result_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            Register_t *uses_arr[] = {result_reg};
+                            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                                "\tmovq\t%0, %xmm0\n");
+                        }
                     }
 
                     free_reg(get_reg_stack(), result_reg);

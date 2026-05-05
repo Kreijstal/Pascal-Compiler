@@ -193,12 +193,18 @@ ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for 64-bit compare immediate.");
 
-        snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n",
-            imm_value, imm_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, -%d(%%rbp)\n",
-            imm_reg->bit_64, spill_offset);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovabsq\t$%lld, %%0\n", imm_value);
+            Register_t *defs_arr[] = {imm_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tcmpq\t%%0, -%d(%%rbp)\n", spill_offset);
+            Register_t *uses_arr[] = {imm_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, tmpl);
+        }
         free_reg(get_reg_stack(), imm_reg);
         return inst_list;
     }
@@ -1322,19 +1328,31 @@ static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenCont
     char buffer[128];
     if (codegen_target_is_windows())
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            Register_t *uses_arr[] = {dest_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rcx\n");
+        }
+        {
+            Register_t *uses_arr[] = {src_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rdx\n");
+        }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            Register_t *uses_arr[] = {dest_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rdi\n");
+        }
+        {
+            Register_t *uses_arr[] = {src_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rsi\n");
+        }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
         inst_list = add_inst(inst_list, buffer);
     }
@@ -1354,19 +1372,31 @@ static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
     char buffer[128];
     if (codegen_target_is_windows())
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", temp_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            Register_t *uses_arr[] = {dest_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rcx\n");
+        }
+        {
+            Register_t *uses_arr[] = {temp_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rdx\n");
+        }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", temp_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            Register_t *uses_arr[] = {dest_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rdi\n");
+        }
+        {
+            Register_t *uses_arr[] = {temp_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                "\tmovq\t%0, %rsi\n");
+        }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
         inst_list = add_inst(inst_list, buffer);
     }
@@ -1401,10 +1431,12 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             "ERROR: Unable to allocate spill slot for dynamic array assignment.");
     }
 
-    char buffer[96];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        dest_reg->bit_64, dest_temp->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+        char tmpl[96];
+        snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", dest_temp->offset);
+        Register_t *uses_arr[] = {dest_reg};
+        inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, tmpl);
+    }
     free_reg(get_reg_stack(), dest_reg);
     dest_reg = NULL;
 
@@ -1452,13 +1484,19 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for dynamic array destination.");
         }
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-            dest_temp->offset, dest_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", dest_temp->offset);
+            Register_t *defs_arr[] = {dest_reload};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
 
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-            zero_desc->offset, zero_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n", zero_desc->offset);
+            Register_t *defs_arr[] = {zero_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
 
         inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, zero_reg, descriptor_size);
         free_reg(get_reg_stack(), zero_reg);
@@ -1492,9 +1530,12 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
                 "ERROR: Unable to allocate register for dynamic array destination.");
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-            dest_temp->offset, dest_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", dest_temp->offset);
+            Register_t *defs_arr[] = {dest_reload};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
 
         inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, src_reg, descriptor_size);
         free_reg(get_reg_stack(), src_reg);
@@ -1526,9 +1567,12 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
                 "ERROR: Unable to allocate register for dynamic array destination.");
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-            dest_temp->offset, dest_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", dest_temp->offset);
+            Register_t *defs_arr[] = {dest_reload};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
 
         /* Array literals materialize their data on the stack. For typed
          * constants and other storage that outlives the current frame,
@@ -1543,10 +1587,16 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             char deep_buf[128];
             if (codegen_target_is_windows())
             {
-                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rcx\n", dest_reload->bit_64);
-                inst_list = add_inst(inst_list, deep_buf);
-                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-                inst_list = add_inst(inst_list, deep_buf);
+                {
+                    Register_t *uses_arr[] = {dest_reload};
+                    inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                        "\tmovq\t%0, %rcx\n");
+                }
+                {
+                    Register_t *uses_arr[] = {value_reg};
+                    inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                        "\tmovq\t%0, %rdx\n");
+                }
                 snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%r8d\n", descriptor_size);
                 inst_list = add_inst(inst_list, deep_buf);
                 snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%r9d\n", elem_size);
@@ -1554,10 +1604,16 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             }
             else
             {
-                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rdi\n", dest_reload->bit_64);
-                inst_list = add_inst(inst_list, deep_buf);
-                snprintf(deep_buf, sizeof(deep_buf), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-                inst_list = add_inst(inst_list, deep_buf);
+                {
+                    Register_t *uses_arr[] = {dest_reload};
+                    inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                        "\tmovq\t%0, %rdi\n");
+                }
+                {
+                    Register_t *uses_arr[] = {value_reg};
+                    inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+                        "\tmovq\t%0, %rsi\n");
+                }
                 snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%edx\n", descriptor_size);
                 inst_list = add_inst(inst_list, deep_buf);
                 snprintf(deep_buf, sizeof(deep_buf), "\tmovl\t$%d, %%ecx\n", elem_size);
@@ -1642,9 +1698,11 @@ ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
             inst_list = codegen_zero_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_32);
     }
 
-    char buffer[96];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, kgpc_current_exception(%%rip)\n", value_reg->bit_64);
-    return add_inst(inst_list, buffer);
+    {
+        Register_t *uses_arr[] = {value_reg};
+        return add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+            "\tmovq\t%0, kgpc_current_exception(%rip)\n");
+    }
 }
 
 ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
@@ -1712,9 +1770,10 @@ ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_lis
         return inst_list;
     }
 
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", value_reg->bit_32, value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
+    {
+        Register_t *uses_arr[] = {value_reg};
+        inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, "\ttestl\t%0, %0\n");
+    }
     free_reg(get_reg_stack(), value_reg);
 
     if (relop_type != NULL)
@@ -1752,25 +1811,31 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     goto cleanup;
                 }
 
-                char buffer[96];
                 if (return_var->is_static)
                 {
                     const char *label = (return_var->static_label != NULL) ?
                         return_var->static_label : return_var->label;
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                        label, addr_reg->bit_64);
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n", label);
+                    Register_t *defs_arr[] = {addr_reg};
+                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
                 }
                 else if (return_var->is_reference)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                        return_var->offset, addr_reg->bit_64);
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                        return_var->offset);
+                    Register_t *defs_arr[] = {addr_reg};
+                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
                 }
                 else
                 {
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                        return_var->offset, addr_reg->bit_64);
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                        return_var->offset);
+                    Register_t *defs_arr[] = {addr_reg};
+                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
                 }
-                inst_list = add_inst(inst_list, buffer);
                 *out_reg = addr_reg;
                 goto cleanup;
             }
@@ -1793,10 +1858,12 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 goto cleanup;
             }
 
-            char buffer[96];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
-                builtin_file_ptr, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%s(%%rip), %%0\n", builtin_file_ptr);
+                Register_t *defs_arr[] = {addr_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
             *out_reg = addr_reg;
             goto cleanup;
         }
@@ -1832,10 +1899,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     goto cleanup;
                 }
 
-                char buffer[96];
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                    const_node->const_set_label, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n",
+                        const_node->const_set_label);
+                    Register_t *defs_arr[] = {addr_reg};
+                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                }
                 *out_reg = addr_reg;
                 goto cleanup;
             }
@@ -1875,10 +1945,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         goto cleanup;
                     }
 
-                    char buffer[96];
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                        proc_node->mangled_id, addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
+                    {
+                        char tmpl[96];
+                        snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n",
+                            proc_node->mangled_id);
+                        Register_t *defs_arr[] = {addr_reg};
+                        inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                    }
                     *out_reg = addr_reg;
                     goto cleanup;
                 }
@@ -1913,10 +1986,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         goto cleanup;
                     }
 
-                    char buffer[96];
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                        const_node->const_set_label, addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
+                    {
+                        char tmpl[96];
+                        snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n",
+                            const_node->const_set_label);
+                        Register_t *defs_arr[] = {addr_reg};
+                        inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                    }
                     *out_reg = addr_reg;
                     goto cleanup;
                 }
@@ -1951,10 +2027,12 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         readonly_section, label, str_const_node->const_string_value, codegen_text_section_resume());
                     inst_list = add_inst(inst_list, add_rodata);
 
-                    char buffer[96];
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                        label, addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
+                    {
+                        char tmpl[96];
+                        snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n", label);
+                        Register_t *defs_arr[] = {addr_reg};
+                        inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                    }
                     *out_reg = addr_reg;
                     goto cleanup;
                 }
@@ -1975,10 +2053,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         goto cleanup;
                     }
                 }
-                char buffer[64];
-                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
-                    current_non_local_reg64(), addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%s), %%0\n",
+                        offset, current_non_local_reg64());
+                    Register_t *defs_arr[] = {addr_reg};
+                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                }
                 *out_reg = addr_reg;
                 goto cleanup;
             }
@@ -2049,8 +2130,6 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
         }
 
-        char buffer[96];
-        
         const char *static_label = NULL;
         if (var_node->is_static)
             static_label = (var_node->static_label != NULL) ? var_node->static_label : var_node->label;
@@ -2059,9 +2138,10 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         {
             /* Static/global variables live at a fixed address; even when used for
              * var parameters we need the address, not the first qword of storage. */
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                static_label, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n", static_label);
+            Register_t *defs_arr[] = {addr_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
             *out_reg = addr_reg;
             goto cleanup;
         }
@@ -2076,24 +2156,35 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     "ERROR: Failed to acquire static link for variable %s.",
                     expr->expr_data.id);
                 /* Fallback to local access (will be wrong but prevents crash) */
-                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                    var_node->offset, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                        var_node->offset);
+                    Register_t *defs_arr[] = {addr_reg};
+                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                }
                 *out_reg = addr_reg;
                 goto cleanup;
             }
             
             if (treat_as_reference)
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
-                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%1), %%0\n",
+                    var_node->offset);
+                Register_t *defs_arr[] = {addr_reg};
+                Register_t *uses_arr[] = {frame_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, uses_arr, 1, tmpl);
             }
             else
             {
-                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
-                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%1), %%0\n",
+                    var_node->offset);
+                Register_t *defs_arr[] = {addr_reg};
+                Register_t *uses_arr[] = {frame_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, uses_arr, 1, tmpl);
             }
-            inst_list = add_inst(inst_list, buffer);
             *out_reg = addr_reg;
             goto cleanup;
         }
@@ -2105,16 +2196,20 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             {
                 const char *label = var_node->static_label != NULL ?
                     var_node->static_label : var_node->label;
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
-                    label != NULL ? label : "",
-                    addr_reg->bit_64);
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%s(%%rip), %%0\n",
+                    label != NULL ? label : "");
+                Register_t *defs_arr[] = {addr_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
             }
             else
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    var_node->offset, addr_reg->bit_64);
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                    var_node->offset);
+                Register_t *defs_arr[] = {addr_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
             }
-            inst_list = add_inst(inst_list, buffer);
             *out_reg = addr_reg;
             goto cleanup;
         }
@@ -2122,16 +2217,20 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         {
             const char *label = var_node->static_label != NULL ?
                 var_node->static_label : var_node->label;
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                label != NULL ? label : "",
-                addr_reg->bit_64);
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n",
+                label != NULL ? label : "");
+            Register_t *defs_arr[] = {addr_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                var_node->offset, addr_reg->bit_64);
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                var_node->offset);
+            Register_t *defs_arr[] = {addr_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
         }
-        inst_list = add_inst(inst_list, buffer);
         *out_reg = addr_reg;
         goto cleanup;
     }
@@ -2390,9 +2489,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 goto cleanup;
             }
         }
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-            temp_slot->offset, addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                temp_slot->offset);
+            Register_t *defs_arr[] = {addr_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
         *out_reg = addr_reg;
         goto cleanup;
     }
@@ -2507,15 +2610,20 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 goto cleanup;
             }
 
-            char buffer[96];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                value_reg->bit_64, temp_slot->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", temp_slot->offset);
+                Register_t *uses_arr[] = {value_reg};
+                inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, tmpl);
+            }
 
             Register_t *addr_reg = value_reg;
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                temp_slot->offset, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n", temp_slot->offset);
+                Register_t *defs_arr[] = {addr_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
             *out_reg = addr_reg;
             goto cleanup;
         }
