@@ -450,7 +450,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
-        inst_list = codegen_call_mpint_assign(inst_list, addr_reg, value_reg);
+        inst_list = codegen_call_mpint_assign(inst_list, ctx, addr_reg, value_reg);
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reg);
         free_arg_regs();
