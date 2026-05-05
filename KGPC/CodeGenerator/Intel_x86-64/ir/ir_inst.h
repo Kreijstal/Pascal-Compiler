@@ -40,6 +40,15 @@ typedef struct IrInst {
     /* When non-zero, this instance owns its Register_t objects (used by
      * ir_parse() which creates synthetic register nodes). */
     int owns_regs;
+
+    /* Template fields for future virtual-register substitution.
+     * tmpl is a format string like "\tmovq\t%0, %1\n" where %N refers to
+     * vreg_ids[N].  When tmpl is NULL the instruction is emitted verbatim
+     * from text.  ir_emit_function() substitutes physical register names
+     * and writes the result back into text. */
+    char *tmpl;                                        /* format template; NULL = no substitution */
+    int   vreg_ids[IR_MAX_DEFS + IR_MAX_USES];         /* which vreg_id maps to %0, %1, ... */
+    int   n_placeholders;
 } IrInst_t;
 
 /* Allocate and initialise a new IrInst_t.
@@ -85,5 +94,11 @@ ListNode_t *ir_parse(const char *text);
 
 /* Free a list returned by ir_parse().  Handles LIST_IR_INST payloads. */
 void ir_free_parsed_list(ListNode_t *list);
+
+/* Substitute %0, %1, ... placeholders in tmpl with physical register names
+ * and write the result into inst->text (freeing the old text).
+ * Instructions without a tmpl are left unchanged.
+ * Called once per function after all instructions have been emitted. */
+void ir_emit_function(ListNode_t *inst_list);
 
 #endif /* IR_INST_H */

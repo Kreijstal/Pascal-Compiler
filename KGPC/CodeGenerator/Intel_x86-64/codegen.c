@@ -4533,6 +4533,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
         ListNode_t *inst_list = NULL;
+        ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
 
         fprintf(ctx->output_file, "\t.globl\t%s\n", init_label);
@@ -4540,6 +4541,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+        ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4611,6 +4613,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
         ListNode_t *inst_list = NULL;
+        ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
 
         fprintf(ctx->output_file, "\t.globl\t%s\n", final_label);
@@ -4618,6 +4621,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+        ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -7173,6 +7177,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * aliases needed — the cache .o is self-contained. */
 
     inst_list = NULL;
+    ctx->next_vreg_id = 0;
     /* Emit var initializers from loaded units first, then program. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
@@ -7243,6 +7248,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     if (dump_ir_flag())
@@ -8358,6 +8364,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
+    ctx->next_vreg_id = 0;
 
     /* Callee-save slots are allocated AFTER arguments and locals (below)
      * so that the t-section offsets account for the z and x section sizes. */
@@ -8597,6 +8604,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     if (dump_ir_flag())
@@ -8705,6 +8713,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
+    ctx->next_vreg_id = 0;
 
     /* Callee-save slots are allocated AFTER arguments and locals (below)
      * so that the t-section offsets account for the z and x section sizes. */
@@ -9574,6 +9583,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     if (dump_ir_flag())
@@ -10019,6 +10029,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
 
     /* Allocate stack slots for callee-saved registers */
     ListNode_t *inst_list = NULL;
+    ctx->next_vreg_id = 0;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
     int lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
@@ -10117,6 +10128,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
     if (dump_ir_flag())

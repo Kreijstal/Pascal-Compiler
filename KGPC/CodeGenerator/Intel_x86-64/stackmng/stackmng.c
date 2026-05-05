@@ -751,6 +751,7 @@ RegStack_t *init_reg_stack()
     rbx->last_use_seq = 0;
     rbx->spill_callback = NULL;
     rbx->spill_context = NULL;
+    rbx->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     rbx->current_live_range = NULL;
 #endif
@@ -764,6 +765,7 @@ RegStack_t *init_reg_stack()
     r12->last_use_seq = 0;
     r12->spill_callback = NULL;
     r12->spill_context = NULL;
+    r12->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r12->current_live_range = NULL;
 #endif
@@ -777,6 +779,7 @@ RegStack_t *init_reg_stack()
     r13->last_use_seq = 0;
     r13->spill_callback = NULL;
     r13->spill_context = NULL;
+    r13->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r13->current_live_range = NULL;
 #endif
@@ -790,6 +793,7 @@ RegStack_t *init_reg_stack()
     r14->last_use_seq = 0;
     r14->spill_callback = NULL;
     r14->spill_context = NULL;
+    r14->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r14->current_live_range = NULL;
 #endif
@@ -803,6 +807,7 @@ RegStack_t *init_reg_stack()
     r15->last_use_seq = 0;
     r15->spill_callback = NULL;
     r15->spill_context = NULL;
+    r15->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r15->current_live_range = NULL;
 #endif
