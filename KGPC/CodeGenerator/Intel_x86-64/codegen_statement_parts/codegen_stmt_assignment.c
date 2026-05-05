@@ -2242,6 +2242,10 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
                 if (record_size <= 4)
                 {
+                    /* For movl, ir_emit_function uses bit_32 for ALL placeholders.
+                     * The address register in (%1) must remain 64-bit on x86-64, so
+                     * dest_reg->bit_64 is embedded in the template string directly.
+                     * value_reg uses %0 which correctly expands to bit_32 for movl. */
                     char tmpl[64];
                     snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n", dest_reg->bit_64);
                     Register_t *u[] = {value_reg};
