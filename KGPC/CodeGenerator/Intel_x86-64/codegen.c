@@ -120,6 +120,11 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
     /* ------------------------------------------------------------------ */
 #define IR_LIV_MAX_VREGS 64
     Register_t *vregs[IR_LIV_MAX_VREGS];
+    /* Original physical register names, captured at collection time while the
+     * Register_t* objects are still valid.  Used by Step 5 to apply the
+     * coloring result via string comparison (safe after reset_reg_stack). */
+    char vreg_names_64[IR_LIV_MAX_VREGS][IR_REG_NAME_BUF];
+    char vreg_names_32[IR_LIV_MAX_VREGS][IR_REG_NAME_BUF];
     int n_vregs = 0;
 
     for (ListNode_t *n = inst_list; n != NULL; n = n->next)
@@ -139,7 +144,18 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
             for (int j = 0; j < n_vregs; ++j)
                 if (vregs[j] == r) { found = 1; break; }
             if (!found && n_vregs < IR_LIV_MAX_VREGS)
-                vregs[n_vregs++] = r;
+            {
+                vregs[n_vregs] = r;
+                if (r->bit_64) {
+                    strncpy(vreg_names_64[n_vregs], r->bit_64, IR_REG_NAME_BUF - 1);
+                    vreg_names_64[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
+                } else { vreg_names_64[n_vregs][0] = '\0'; }
+                if (r->bit_32) {
+                    strncpy(vreg_names_32[n_vregs], r->bit_32, IR_REG_NAME_BUF - 1);
+                    vreg_names_32[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
+                } else { vreg_names_32[n_vregs][0] = '\0'; }
+                n_vregs++;
+            }
         }
         for (int i = 0; i < inst->n_uses; ++i)
         {
@@ -150,7 +166,18 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
             for (int j = 0; j < n_vregs; ++j)
                 if (vregs[j] == r) { found = 1; break; }
             if (!found && n_vregs < IR_LIV_MAX_VREGS)
-                vregs[n_vregs++] = r;
+            {
+                vregs[n_vregs] = r;
+                if (r->bit_64) {
+                    strncpy(vreg_names_64[n_vregs], r->bit_64, IR_REG_NAME_BUF - 1);
+                    vreg_names_64[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
+                } else { vreg_names_64[n_vregs][0] = '\0'; }
+                if (r->bit_32) {
+                    strncpy(vreg_names_32[n_vregs], r->bit_32, IR_REG_NAME_BUF - 1);
+                    vreg_names_32[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
+                } else { vreg_names_32[n_vregs][0] = '\0'; }
+                n_vregs++;
+            }
         }
     }
 
@@ -295,22 +322,64 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
         DestroyList(spilled);
 
     /* ------------------------------------------------------------------ */
-    /* Step 5: Record coloring result.                                     */
+    /* Step 5: Apply coloring result.                                      */
     /*                                                                     */
-    /* The assigned color (physical register slot index) is already stored */
-    /* in lr->assigned_reg_num by the coloring loop above.  Each           */
-    /* lr->preferred_reg points to the corresponding Register_t*.          */
-    /*                                                                     */
-    /* We intentionally do NOT modify Register_t*->vreg_id or              */
-    /* IrInst_t->vreg_ids[] here.  ir_emit_function() identifies each     */
-    /* physical register by matching IrInst_t->vreg_ids[N] against        */
-    /* Register_t*->vreg_id.  In the current hybrid codegen, the same      */
-    /* Register_t* object is reused across multiple allocation intervals   */
-    /* (even within a single function), so a vreg_id reassignment would    */
-    /* break the matching for instructions belonging to earlier intervals. */
-    /* The coloring result is available in lr_map[] for callers or future  */
-    /* passes that can safely consume it.                                  */
+    /* Update the inline reg_names_64[]/reg_names_32[] arrays in each     */
+    /* IrInst_t to reflect the assigned physical register.  These arrays  */
+    /* were copied at add_inst_du() time and are safe to modify (no       */
+    /* dangling-pointer hazard).  ir_emit_function() reads them directly. */
     /* ------------------------------------------------------------------ */
+
+    /* Safety guard: if two collected vregs share the same original name,
+     * a reset_reg_stack() was called mid-function (e.g. anonymous method).
+     * The pointer-based liveness would be wrong, so skip applying. */
+    for (int _i = 0; _i < n_vregs; ++_i)
+    {
+        for (int _j = _i + 1; _j < n_vregs; ++_j)
+        {
+            if (vreg_names_64[_i][0] != '\0' &&
+                strcmp(vreg_names_64[_i], vreg_names_64[_j]) == 0)
+                goto cleanup_lr_map;
+        }
+    }
+
+    /* Physical register names in init_reg_stack() order: rbx, r12..r15 */
+    {
+        static const char *const k_phys_64[K_GC_NUM_PHYS_REGS] =
+            { "%rbx", "%r12", "%r13", "%r14", "%r15" };
+        static const char *const k_phys_32[K_GC_NUM_PHYS_REGS] =
+            { "%ebx", "%r12d", "%r13d", "%r14d", "%r15d" };
+
+        for (ListNode_t *_n = inst_list; _n != NULL; _n = _n->next)
+        {
+            if (_n->type != LIST_IR_INST)
+                continue;
+            IrInst_t *_inst = (IrInst_t *)_n->cur;
+            if (_inst == NULL)
+                continue;
+            for (int _p = 0; _p < _inst->n_placeholders; ++_p)
+            {
+                const char *_orig = _inst->reg_names_64[_p];
+                if (_orig[0] == '\0')
+                    continue;
+                for (int _k = 0; _k < n_vregs; ++_k)
+                {
+                    if (strcmp(vreg_names_64[_k], _orig) != 0)
+                        continue;
+                    int _color = lr_map[_k]->assigned_reg_num;
+                    if (_color < 0 || _color >= K_GC_NUM_PHYS_REGS)
+                        break; /* spilled — keep original */
+                    strncpy(_inst->reg_names_64[_p], k_phys_64[_color],
+                            IR_REG_NAME_BUF - 1);
+                    _inst->reg_names_64[_p][IR_REG_NAME_BUF - 1] = '\0';
+                    strncpy(_inst->reg_names_32[_p], k_phys_32[_color],
+                            IR_REG_NAME_BUF - 1);
+                    _inst->reg_names_32[_p][IR_REG_NAME_BUF - 1] = '\0';
+                    break;
+                }
+            }
+        }
+    }
 
 cleanup_lr_map:
     free(lr_map);
