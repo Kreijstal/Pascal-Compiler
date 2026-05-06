@@ -322,64 +322,27 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
         DestroyList(spilled);
 
     /* ------------------------------------------------------------------ */
-    /* Step 5: Apply coloring result.                                      */
+    /* Step 5: Coloring result is available in lr_map[].                  */
     /*                                                                     */
-    /* Update the inline reg_names_64[]/reg_names_32[] arrays in each     */
-    /* IrInst_t to reflect the assigned physical register.  These arrays  */
-    /* were copied at add_inst_du() time and are safe to modify (no       */
-    /* dangling-pointer hazard).  ir_emit_function() reads them directly. */
+    /* Applying the coloring by rewriting reg_names_64[]/reg_names_32[]   */
+    /* in IrInst_t nodes is currently unsafe.  Many codegen paths emit    */
+    /* callee-saved register references through add_inst() (LIST_STRING   */
+    /* nodes) rather than add_inst_du() (LIST_IR_INST nodes).  The        */
+    /* graph-coloring pass only sees and can update the LIST_IR_INST       */
+    /* subset; the LIST_STRING references are invisible and stay with the  */
+    /* original physical register name.  Remapping one without the other  */
+    /* breaks the coherence: e.g. a `movl $47, %0` tracked instruction    */
+    /* gets its %0 rewritten to %r12d, but the following `movb %bl, dst`  */
+    /* hardcoded in a LIST_STRING still reads the OLD %bl, producing       */
+    /* incorrect values.                                                   */
+    /*                                                                     */
+    /* To unblock this, all callee-saved register uses in the codegen must */
+    /* be migrated to add_inst_du() templates so the liveness pass can     */
+    /* see the full def/use graph.  Until then the coloring result is      */
+    /* intentionally discarded here; the pass still exercises the CFG,    */
+    /* liveness, and interference-graph infrastructure for correctness     */
+    /* testing.                                                            */
     /* ------------------------------------------------------------------ */
-
-    /* Safety guard: if two collected vregs share the same original name,
-     * a reset_reg_stack() was called mid-function (e.g. anonymous method).
-     * The pointer-based liveness would be wrong, so skip applying. */
-    for (int _i = 0; _i < n_vregs; ++_i)
-    {
-        for (int _j = _i + 1; _j < n_vregs; ++_j)
-        {
-            if (vreg_names_64[_i][0] != '\0' &&
-                strcmp(vreg_names_64[_i], vreg_names_64[_j]) == 0)
-                goto cleanup_lr_map;
-        }
-    }
-
-    /* Physical register names in init_reg_stack() order: rbx, r12..r15 */
-    {
-        static const char *const k_phys_64[K_GC_NUM_PHYS_REGS] =
-            { "%rbx", "%r12", "%r13", "%r14", "%r15" };
-        static const char *const k_phys_32[K_GC_NUM_PHYS_REGS] =
-            { "%ebx", "%r12d", "%r13d", "%r14d", "%r15d" };
-
-        for (ListNode_t *_n = inst_list; _n != NULL; _n = _n->next)
-        {
-            if (_n->type != LIST_IR_INST)
-                continue;
-            IrInst_t *_inst = (IrInst_t *)_n->cur;
-            if (_inst == NULL)
-                continue;
-            for (int _p = 0; _p < _inst->n_placeholders; ++_p)
-            {
-                const char *_orig = _inst->reg_names_64[_p];
-                if (_orig[0] == '\0')
-                    continue;
-                for (int _k = 0; _k < n_vregs; ++_k)
-                {
-                    if (strcmp(vreg_names_64[_k], _orig) != 0)
-                        continue;
-                    int _color = lr_map[_k]->assigned_reg_num;
-                    if (_color < 0 || _color >= K_GC_NUM_PHYS_REGS)
-                        break; /* spilled — keep original */
-                    strncpy(_inst->reg_names_64[_p], k_phys_64[_color],
-                            IR_REG_NAME_BUF - 1);
-                    _inst->reg_names_64[_p][IR_REG_NAME_BUF - 1] = '\0';
-                    strncpy(_inst->reg_names_32[_p], k_phys_32[_color],
-                            IR_REG_NAME_BUF - 1);
-                    _inst->reg_names_32[_p][IR_REG_NAME_BUF - 1] = '\0';
-                    break;
-                }
-            }
-        }
-    }
 
 cleanup_lr_map:
     free(lr_map);
