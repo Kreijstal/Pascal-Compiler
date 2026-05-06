@@ -38,6 +38,10 @@ struct LiveRange
     /* Allocation state */
     int simplified;                  /* Already processed in simplification */
     int is_spilled;                  /* Marked for spilling */
+
+    /* Preferred physical-register slot (index into the pool, -1 = no preference).
+     * Used by ir_liveness_allocate() to keep existing assignments stable. */
+    int preferred_color;
 };
 
 /* Interference graph for register allocation */
@@ -83,5 +87,21 @@ LiveRange_t *find_low_degree_node(InterferenceGraph_t *graph,
 
 /* Helper: Find available color (register) for a node */
 int find_available_color(LiveRange_t *lr, int num_colors);
+
+/* Phase 6: wire IR liveness into the graph-coloring allocator.
+ *
+ * Called between codegen and ir_emit_function() when the graph-coloring
+ * allocator is enabled.  Steps:
+ *   1. cfg_build()              — build the control-flow graph
+ *   2. liveness_compute()       — backward-dataflow live-in / live-out
+ *   3. collect unique Register_t* from IR def/use metadata
+ *   4. build interference from liveness (replaces position-based edges)
+ *   5. simplify / select / spill loop
+ *   6. update each Register_t's bit_64/bit_32 from the assigned physical reg
+ *
+ * Only compiled when USE_GRAPH_COLORING_ALLOCATOR is set. */
+#if USE_GRAPH_COLORING_ALLOCATOR
+void ir_liveness_allocate(ListNode_t *inst_list);
+#endif
 
 #endif /* GRAPH_COLORING_ALLOCATOR_H */

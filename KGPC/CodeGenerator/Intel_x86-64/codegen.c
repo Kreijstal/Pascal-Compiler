@@ -37,6 +37,9 @@
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_liveness.h"
+#if USE_GRAPH_COLORING_ALLOCATOR
+#include "graph_coloring_allocator.h"
+#endif
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
@@ -4576,6 +4579,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_liveness_allocate(inst_list);
+#endif
         ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
@@ -4656,6 +4662,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_liveness_allocate(inst_list);
+#endif
         ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
@@ -7294,6 +7303,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
@@ -8650,6 +8662,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
@@ -9637,6 +9652,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
@@ -10182,6 +10200,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
