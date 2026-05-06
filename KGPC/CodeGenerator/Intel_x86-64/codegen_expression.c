@@ -4743,6 +4743,37 @@ long long codegen_expr_sret_size(const struct Expression *expr)
         expr->type == EXPR_FUNCTION_CALL)
         return 10;
 
+    /* Fallback for procedural-var calls where the call node is tagged
+     * as PROCEDURE (not RECORD_TYPE) but the callee returns a record.
+     * e.g. mgr.GetStatus().Name — the second chained call's expr node
+     * carries resolved_kgpc_type = TGetStatus (PROCEDURE), not TStatus
+     * (RECORD_TYPE), so the checks above all miss it.  Examine the
+     * procedural_var_expr directly to find the procedure's return type. */
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.is_procedural_var_call)
+    {
+        struct Expression *proc_expr =
+            expr->expr_data.function_call_data.procedural_var_expr;
+        if (proc_expr != NULL &&
+            proc_expr->resolved_kgpc_type != NULL &&
+            proc_expr->resolved_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+        {
+            KgpcType *proc_ret =
+                kgpc_type_get_return_type(proc_expr->resolved_kgpc_type);
+            if (proc_ret != NULL && kgpc_type_is_record(proc_ret))
+            {
+                long long ret_size = kgpc_type_sizeof(proc_ret);
+                /* Use exact size when available.  When kgpc_type_sizeof has not
+                 * yet computed a size for this record type, fall back to
+                 * 2 * CODEGEN_POINTER_SIZE_BYTES (16 on x86-64), matching the
+                 * same conservative fallback used in the RECORD_TYPE branch
+                 * above (line: "return 16").  Over-allocating the sret buffer
+                 * is safe; under-allocating would corrupt adjacent stack. */
+                return ret_size > 0 ? ret_size : 2 * CODEGEN_POINTER_SIZE_BYTES;
+            }
+        }
+    }
+
     return 0;
 }
 
