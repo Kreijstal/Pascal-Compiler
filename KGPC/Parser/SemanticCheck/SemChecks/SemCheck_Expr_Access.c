@@ -1874,7 +1874,15 @@ int semcheck_funccall(int *type_return,
                     HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
                         call_type->info.proc_info.return_type_id);
                     if (ret_node != NULL && ret_node->type != NULL)
+                    {
                         ret_type = ret_node->type;
+                        /* Materialize return_type so downstream codegen can find it
+                         * without needing to re-run a symbol table lookup.  Same
+                         * pattern as SemCheck_Expr_Types.c when it resolves the
+                         * implicit-funcptr-call return type. */
+                        kgpc_type_retain(ret_type);
+                        call_type->info.proc_info.return_type = ret_type;
+                    }
                 }
             }
 
