@@ -111,6 +111,13 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
 
     /* ------------------------------------------------------------------ */
     /* Step 1: Collect unique Register_t* from IrInst_t def/use metadata. */
+    /*                                                                     */
+    /* The pool of callee-saved registers (K_GC_NUM_PHYS_REGS = 5) is the */
+    /* practical upper bound.  IR_LIV_MAX_VREGS is set conservatively to  */
+    /* 64 to handle edge cases where helper code uses additional register  */
+    /* objects beyond the five callee-saved slots.  Any excess is silently */
+    /* ignored — the untracked registers simply retain their existing      */
+    /* stackmng-assigned physical register.                                */
     /* ------------------------------------------------------------------ */
 #define IR_LIV_MAX_VREGS 64
     Register_t *vregs[IR_LIV_MAX_VREGS];
@@ -189,7 +196,9 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
         add_live_range(graph, lr);
     }
 
-    /* Helper: find the lr_map index for a given Register_t* pointer. */
+    /* Helper: find the lr_map index for a given Register_t* pointer.
+     * The lookup is O(n_vregs), which is O(K_GC_NUM_PHYS_REGS) ≤ O(5)
+     * in practice — effectively constant. */
 #define FIND_VREGS_IDX(reg_ptr, out_idx)         \
     do {                                           \
         (out_idx) = -1;                            \
@@ -275,9 +284,14 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
     /*         have already added edges from liveness above).              */
     /* ------------------------------------------------------------------ */
     ListNode_t *spilled = allocate_registers_graph_coloring_prebuilt(graph);
-    /* Spilled nodes indicate registers that couldn't be colored.  The
-     * stackmng spill machinery has already handled spilling during codegen,
-     * so we simply discard the spill list here. */
+    /* Spilled nodes indicate registers the coloring algorithm could not fit
+     * within K_GC_NUM_PHYS_REGS colors.  In the current hybrid system the
+     * physical register assignment is already fixed by the stackmng (each
+     * Register_t* IS a physical register), so a coloring "spill" here only
+     * means those registers could not be recolored — not that they are
+     * actually spilled to memory.  We discard the list because ir_emit_function()
+     * will use the original stackmng-assigned bit_64/bit_32 name regardless
+     * of the coloring outcome. */
     if (spilled != NULL)
         DestroyList(spilled);
 
