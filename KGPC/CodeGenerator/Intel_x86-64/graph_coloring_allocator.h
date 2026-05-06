@@ -88,20 +88,17 @@ LiveRange_t *find_low_degree_node(InterferenceGraph_t *graph,
 /* Helper: Find available color (register) for a node */
 int find_available_color(LiveRange_t *lr, int num_colors);
 
-/* Phase 6: wire IR liveness into the graph-coloring allocator.
- *
- * Called between codegen and ir_emit_function() when the graph-coloring
- * allocator is enabled.  Steps:
- *   1. cfg_build()              — build the control-flow graph
- *   2. liveness_compute()       — backward-dataflow live-in / live-out
- *   3. collect unique Register_t* from IR def/use metadata
- *   4. build interference from liveness (replaces position-based edges)
- *   5. simplify / select / spill loop
- *   6. update each Register_t's bit_64/bit_32 from the assigned physical reg
- *
- * Only compiled when USE_GRAPH_COLORING_ALLOCATOR is set. */
-#if USE_GRAPH_COLORING_ALLOCATOR
-void ir_liveness_allocate(ListNode_t *inst_list);
-#endif
+/* Add an interference edge between two live ranges.
+ * Checks for duplicates before adding.
+ * Used by the IR-liveness-based allocator to add edges derived from
+ * liveness sets rather than instruction intervals. */
+void add_interference_edge(LiveRange_t *lr1, LiveRange_t *lr2);
+
+/* Run the simplify/select/color loop WITHOUT calling build_interference_edges().
+ * Use when edges have already been added externally (e.g., via
+ * add_interference_edge() from liveness sets).
+ * Returns list of spilled LiveRange_t* (same semantics as
+ * allocate_registers_graph_coloring). */
+ListNode_t *allocate_registers_graph_coloring_prebuilt(InterferenceGraph_t *graph);
 
 #endif /* GRAPH_COLORING_ALLOCATOR_H */
