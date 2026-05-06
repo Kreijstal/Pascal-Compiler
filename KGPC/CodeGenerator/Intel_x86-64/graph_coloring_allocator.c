@@ -377,6 +377,143 @@ ListNode_t *allocate_registers_graph_coloring(InterferenceGraph_t *graph)
     return list_builder_finish(&spilled_builder);
 }
 
+/* Add an interference edge between two live ranges, checking for duplicates. */
+void add_interference_edge(LiveRange_t *lr1, LiveRange_t *lr2)
+{
+    if (lr1 == NULL || lr2 == NULL || lr1 == lr2)
+        return;
+
+    /* Check whether the edge already exists in lr1's neighbor list. */
+    ListNode_t *cur = lr1->neighbors;
+    while (cur != NULL)
+    {
+        if (cur->cur == lr2)
+            return; /* already connected */
+        cur = cur->next;
+    }
+
+    /* Add lr2 to lr1's neighbors (O(1) via tail pointer). */
+    ListNode_t *n1 = CreateListNode(lr2, LIST_UNSPECIFIED);
+    append_neighbor(lr1, n1);
+    lr1->degree++;
+
+    /* Add lr1 to lr2's neighbors (O(1) via tail pointer). */
+    ListNode_t *n2 = CreateListNode(lr1, LIST_UNSPECIFIED);
+    append_neighbor(lr2, n2);
+    lr2->degree++;
+}
+
+/* Run the simplify/select/color loop WITHOUT calling build_interference_edges().
+ * Identical to allocate_registers_graph_coloring() except step 1 is skipped. */
+ListNode_t *allocate_registers_graph_coloring_prebuilt(InterferenceGraph_t *graph)
+{
+    assert(graph != NULL);
+
+    /* Stack for simplification order (LIFO for coloring) */
+    ListBuilder stack_builder;
+    list_builder_init(&stack_builder);
+
+    /* List of spilled nodes */
+    ListBuilder spilled_builder;
+    list_builder_init(&spilled_builder);
+
+    /* Active set (nodes not yet processed) */
+    ListBuilder active_builder;
+    list_builder_init(&active_builder);
+    {
+        ListNode_t *cur = graph->live_ranges;
+        while (cur != NULL)
+        {
+            list_builder_append(&active_builder, cur->cur, LIST_UNSPECIFIED);
+            cur = cur->next;
+        }
+    }
+    ListNode_t *active = list_builder_finish(&active_builder);
+
+    /* Simplification phase */
+    while (active != NULL)
+    {
+        LiveRange_t *low_degree = find_low_degree_node(graph, active);
+
+        if (low_degree != NULL)
+        {
+            list_builder_append(&stack_builder, low_degree, LIST_UNSPECIFIED);
+            active = remove_from_list(active, low_degree);
+            low_degree->simplified = 1;
+        }
+        else
+        {
+            /* No low-degree node – must spill. */
+            LiveRange_t *spill_candidate = NULL;
+            int max_degree = -1;
+
+            ListNode_t *cur = active;
+            while (cur != NULL)
+            {
+                LiveRange_t *lr = (LiveRange_t *)cur->cur;
+                int deg = count_active_neighbors(lr, active);
+                if (deg > max_degree)
+                {
+                    max_degree = deg;
+                    spill_candidate = lr;
+                }
+                cur = cur->next;
+            }
+
+            if (spill_candidate != NULL)
+            {
+                spill_candidate->is_spilled = 1;
+                list_builder_append(&spilled_builder, spill_candidate, LIST_UNSPECIFIED);
+                active = remove_from_list(active, spill_candidate);
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    /* Coloring phase (process stack in LIFO order). */
+    ListNode_t *stack = list_builder_finish(&stack_builder);
+    while (stack != NULL)
+    {
+        LiveRange_t *node = NULL;
+        if (stack->next == NULL)
+        {
+            node = (LiveRange_t *)stack->cur;
+            DestroyList(stack);
+            stack = NULL;
+        }
+        else
+        {
+            ListNode_t *prev = stack;
+            while (prev->next->next != NULL)
+                prev = prev->next;
+
+            node = (LiveRange_t *)prev->next->cur;
+            DestroyList(prev->next);
+            prev->next = NULL;
+        }
+
+        int color = find_available_color(node, graph->num_physical_regs);
+
+        if (color >= 0)
+        {
+            node->assigned_reg_num = color;
+        }
+        else
+        {
+            node->is_spilled = 1;
+            list_builder_append(&spilled_builder, node, LIST_UNSPECIFIED);
+        }
+    }
+
+    if (active != NULL)
+        DestroyList(active);
+
+    return list_builder_finish(&spilled_builder);
+}
+
 /* Free interference graph */
 void free_interference_graph(InterferenceGraph_t *graph)
 {
