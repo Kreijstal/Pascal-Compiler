@@ -159,8 +159,8 @@ ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 ListNode_t *codegen_builtin_writestr(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
-ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
-    Register_t *value_reg);
+ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg);
 ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
     CodeGenContext *ctx, int compare_as_qword, long long imm_value,
     int spill_offset);

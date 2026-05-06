@@ -34,6 +34,12 @@
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
+#include "ir/ir_inst.h"
+#include "ir/ir_cfg.h"
+#include "ir/ir_liveness.h"
+#if USE_GRAPH_COLORING_ALLOCATOR
+#include "graph_coloring_allocator.h"
+#endif
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
@@ -67,6 +73,19 @@ static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t
 static ListNode_t *g_codegen_available_subprograms = NULL;
 /* g_available_subprograms_set and g_available_subprograms_tail declared after
  * CodeGenStringSet definition below */
+
+#if USE_GRAPH_COLORING_ALLOCATOR
+/* This allocator is intentionally disabled.  The current liveness pipeline
+ * compares Register_t* identities stored in IrInst_t defs/uses and LiveSet_t
+ * entries after reset_reg_stack() has freed those registers, which makes the
+ * analysis use dangling pointers.  It must be reimplemented in terms of stable
+ * integer virtual-register indices before it can safely run again. */
+static void ir_liveness_allocate(ListNode_t *inst_list)
+{
+    (void)inst_list;
+    return;
+}
+#endif /* USE_GRAPH_COLORING_ALLOCATOR */
 
 /* Return a lazily-created, process-lifetime canonical KgpcType for
  * SHORTSTRING_TYPE.  This avoids allocating ad-hoc instances via
@@ -3131,10 +3150,13 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
             if (reloaded == NULL)
                 return NULL;
 
-            char buffer[64];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                ctx->static_link_spill_slot->offset, reloaded->bit_64);
-            *inst_list = add_inst(*inst_list, buffer);
+            {
+                char tmpl[64];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                    ctx->static_link_spill_slot->offset);
+                Register_t *defs_arr[] = {reloaded};
+                *inst_list = add_inst_du(*inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
 
             ctx->static_link_reg = reloaded;
             ctx->static_link_spill_slot = NULL;
@@ -3188,15 +3210,19 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
         return NULL;
     }
 
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offsets[0], reg->bit_64);
-    *inst_list = add_inst(*inst_list, buffer);
+    {
+        char tmpl[128];
+        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", offsets[0]);
+        Register_t *defs_arr[] = {reg};
+        *inst_list = add_inst_du(*inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+    }
 
     for (int i = 1; i < levels_to_traverse; ++i)
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n", offsets[i],
-            reg->bit_64, reg->bit_64);
-        *inst_list = add_inst(*inst_list, buffer);
+        char tmpl[128];
+        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%0), %%0\n", offsets[i]);
+        Register_t *du_arr[] = {reg};
+        *inst_list = add_inst_du(*inst_list, ctx, du_arr, 1, du_arr, 1, tmpl);
     }
 
     free(offsets);
@@ -3907,6 +3933,94 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     return inst_list;
 }
 
+/* add_inst_du — emit an instruction template with def/use metadata.
+ *
+ * fmt is a template string where %0, %1, ... are placeholders for
+ * the physical register names of the def/use registers.  Placeholders
+ * are substituted by ir_emit_function() before code emission.
+ *
+ * defs[0..n_defs-1] are written by this instruction.
+ * uses[0..n_uses-1] are read by this instruction.
+ * vreg_ids[] is filled in defs-first order: [defs[0], ..., uses[0], ...].
+ * Each register without an assigned vreg_id (vreg_id == -1) receives a
+ * fresh ID from ctx->next_vreg_id++.
+ *
+ * The trailing ... is accepted but ignored (kept for signature compatibility). */
+ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
+                        Register_t **defs, int n_defs,
+                        Register_t **uses, int n_uses,
+                        const char *fmt, ...)
+{
+    IrInst_t *inst = ir_inst_new(NULL, defs, n_defs, uses, n_uses);
+    if (inst == NULL)
+        return inst_list;
+
+    /* Store template string */
+    inst->tmpl = fmt ? strdup(fmt) : NULL;
+    inst->text = NULL;
+
+    /* Assign vreg_ids: defs first, then uses.
+     * If ctx is available, assign fresh IDs to unassigned registers.
+     * Also copy physical register names (bit_64/bit_32) into the instruction
+     * so that ir_emit_function() can resolve placeholder names without
+     * dereferencing the borrowed Register_t pointers (which may be freed by
+     * reset_reg_stack() when nested subprograms are codegen'd before
+     * ir_emit_function() is called on the outer function). */
+    int placeholder = 0;
+    for (int i = 0; i < n_defs && i < IR_MAX_DEFS && placeholder < (int)(sizeof(inst->vreg_ids)/sizeof(inst->vreg_ids[0])); ++i, ++placeholder)
+    {
+        if (defs[i] != NULL)
+        {
+            if (ctx != NULL && defs[i]->vreg_id == -1)
+                defs[i]->vreg_id = ctx->next_vreg_id++;
+            inst->vreg_ids[placeholder] = defs[i]->vreg_id;
+            if (defs[i]->bit_64) snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s", defs[i]->bit_64);
+            else inst->reg_names_64[placeholder][0] = '\0';
+            if (defs[i]->bit_32) snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s", defs[i]->bit_32);
+            else inst->reg_names_32[placeholder][0] = '\0';
+        }
+    }
+    for (int i = 0; i < n_uses && i < IR_MAX_USES && placeholder < (int)(sizeof(inst->vreg_ids)/sizeof(inst->vreg_ids[0])); ++i, ++placeholder)
+    {
+        if (uses[i] != NULL)
+        {
+            if (ctx != NULL && uses[i]->vreg_id == -1)
+                uses[i]->vreg_id = ctx->next_vreg_id++;
+            inst->vreg_ids[placeholder] = uses[i]->vreg_id;
+            if (uses[i]->bit_64) snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s", uses[i]->bit_64);
+            else inst->reg_names_64[placeholder][0] = '\0';
+            if (uses[i]->bit_32) snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s", uses[i]->bit_32);
+            else inst->reg_names_32[placeholder][0] = '\0';
+        }
+    }
+    inst->n_placeholders = placeholder;
+
+    ListNode_t *new_node = CreateListNode(inst, LIST_IR_INST);
+    if (new_node == NULL)
+    {
+        ir_inst_free(inst);
+        return inst_list;
+    }
+
+    if (inst_list == NULL)
+    {
+        inst_list = new_node;
+    }
+    else if (g_inst_head == inst_list && g_inst_tail != NULL && g_inst_tail->next == NULL)
+    {
+        g_inst_tail->next = new_node;
+    }
+    else
+    {
+        PushListNodeBack(inst_list, new_node);
+    }
+    g_inst_head = inst_list;
+    g_inst_tail = new_node;
+
+    return inst_list;
+}
+
+
 ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
     CodeGenContext *ctx, const struct RecordType *class_record,
     const char *class_type_id, Register_t *instance_reg)
@@ -3934,19 +4048,25 @@ ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
     if (ivtbl_reg == NULL)
         return inst_list;
 
-    char buffer[CODEGEN_MAX_INST_BUF];
     int slot_idx = 0;
     for (int ii = 0; ii < class_record->num_interfaces; ++ii)
     {
         if (class_record->interface_names[ii] == NULL)
             continue;
         long long offset = base_size + slot_idx * 8;
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s_INTF_%s_VTABLE(%%rip), %s\n",
-            class_type_id, class_record->interface_names[ii], ivtbl_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %lld(%s)\n",
-            ivtbl_reg->bit_64, offset, instance_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char tmpl[CODEGEN_MAX_INST_BUF];
+            snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s_INTF_%s_VTABLE(%%rip), %%0\n",
+                class_type_id, class_record->interface_names[ii]);
+            Register_t *defs_arr[] = {ivtbl_reg};
+            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        }
+        {
+            char tmpl[CODEGEN_MAX_INST_BUF];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, %lld(%%1)\n", offset);
+            Register_t *uses_arr[] = {ivtbl_reg, instance_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 2, tmpl);
+        }
         slot_idx++;
     }
 
@@ -4055,7 +4175,10 @@ void free_inst_list(ListNode_t *inst_list)
     cur = inst_list;
     while(cur != NULL)
     {
-        free(cur->cur);
+        if (cur->type == LIST_IR_INST)
+            ir_inst_free((IrInst_t *)cur->cur);
+        else
+            free(cur->cur);
         cur = cur->next;
     }
 
@@ -4368,12 +4491,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     codegen_main(prgm_name, ctx);
 
-    /* Emit weak stubs for method labels that were referenced (e.g., via
-     * @MethodName) but whose bodies are not available in this compilation.
-     * Must run AFTER codegen_program so all method refs are collected. */
-    codegen_emit_unresolved_method_stubs(ctx->output_file,
-        ctx->emitted_subprograms);
-
     codegen_program_footer(ctx);
 
     if (ctx->emitted_subprograms != NULL)
@@ -4479,7 +4596,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r14_offset = r14_slot->offset;
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
+        reset_reg_stack();
         ListNode_t *inst_list = NULL;
+        ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
 
         fprintf(ctx->output_file, "\t.globl\t%s\n", init_label);
@@ -4487,6 +4606,10 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_liveness_allocate(inst_list);
+#endif
+        ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4501,6 +4624,22 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
 
+        if (dump_ir_flag())
+            ir_print_function(stderr, init_label, inst_list);
+        if (dump_ir_cfg_flag())
+        {
+            Cfg_t *cfg = cfg_build(inst_list);
+            cfg_print(stderr, cfg, init_label);
+            cfg_free(cfg);
+        }
+        if (dump_ir_liveness_flag())
+        {
+            Cfg_t *cfg = cfg_build(inst_list);
+            LivenessInfo_t *liveness = liveness_compute(cfg);
+            liveness_print(stderr, cfg, liveness, init_label);
+            liveness_free(liveness);
+            cfg_free(cfg);
+        }
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -4541,7 +4680,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r14_offset = r14_slot->offset;
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
+        reset_reg_stack();
         ListNode_t *inst_list = NULL;
+        ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
 
         fprintf(ctx->output_file, "\t.globl\t%s\n", final_label);
@@ -4549,6 +4690,10 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_liveness_allocate(inst_list);
+#endif
+        ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4563,6 +4708,22 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
 
+        if (dump_ir_flag())
+            ir_print_function(stderr, final_label, inst_list);
+        if (dump_ir_cfg_flag())
+        {
+            Cfg_t *cfg = cfg_build(inst_list);
+            cfg_print(stderr, cfg, final_label);
+            cfg_free(cfg);
+        }
+        if (dump_ir_liveness_flag())
+        {
+            Cfg_t *cfg = cfg_build(inst_list);
+            LivenessInfo_t *liveness = liveness_compute(cfg);
+            liveness_print(stderr, cfg, liveness, final_label);
+            liveness_free(liveness);
+            cfg_free(cfg);
+        }
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -6285,13 +6446,12 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
 
             /* Emit abstract method stub — this is the correct implementation
              * for virtual;abstract methods in old-style objects.  The dedup
-             * check above ensures we don't emit when a concrete impl exists.
-             * Use .weak so the real implementation (e.g. from a codegen cache
-             * .o) takes precedence and avoids multiple-definition errors. */
+             * checks above ensure we don't emit when a concrete impl exists
+             * or when the same stub has already been emitted in this unit. */
             fprintf(ctx->output_file,
                     "\n# Abstract method stub: %s\n", mangled_id);
             fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
-            fprintf(ctx->output_file, ".weak %s\n", mangled_id);
+            fprintf(ctx->output_file, ".globl %s\n", mangled_id);
             fprintf(ctx->output_file, "%s:\n", mangled_id);
             fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
         }
@@ -6708,11 +6868,22 @@ static int codegen_max_rbp_stack_ref(ListNode_t *inst_list)
 
     while (inst_list != NULL)
     {
+        const char *text = NULL;
         if (inst_list->type == LIST_STRING && inst_list->cur != NULL)
         {
-            const char *text = (const char *)inst_list->cur;
-            const char *cursor = text;
+            text = (const char *)inst_list->cur;
+        }
+        else if (inst_list->type == LIST_IR_INST && inst_list->cur != NULL)
+        {
+            IrInst_t *ir = (IrInst_t *)inst_list->cur;
+            /* Prefer the pre-formatted template (contains concrete %rbp offsets)
+             * over the post-substitution text (not available yet at this point). */
+            text = ir->tmpl ? ir->tmpl : ir->text;
+        }
 
+        if (text != NULL)
+        {
+            const char *cursor = text;
             while ((cursor = strchr(cursor, '-')) != NULL)
             {
                 const char *digits = cursor + 1;
@@ -6890,16 +7061,25 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
-    char *inst;
 
     assert(ctx != NULL);
 
     while(inst_list != NULL)
     {
-        inst = (char *)inst_list->cur;
-        assert(inst != NULL);
+        const char *text;
+        if (inst_list->type == LIST_IR_INST)
+        {
+            IrInst_t *ir = (IrInst_t *)inst_list->cur;
+            assert(ir != NULL);
+            text = ir->text;
+        }
+        else
+        {
+            text = (const char *)inst_list->cur;
+        }
+        assert(text != NULL);
 
-        fprintf(ctx->output_file, "%s", inst);
+        fprintf(ctx->output_file, "%s", text);
 
         inst_list = inst_list->next;
     }
@@ -7079,7 +7259,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * now emits both the alias and mangled_id labels directly.  No .set
      * aliases needed — the cache .o is self-contained. */
 
+    reset_reg_stack();
     inst_list = NULL;
+    ctx->next_vreg_id = 0;
     /* Emit var initializers from loaded units first, then program. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
@@ -7150,8 +7332,28 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
+    if (dump_ir_flag())
+        ir_print_function(stderr, prgm_name, inst_list);
+    if (dump_ir_cfg_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        cfg_print(stderr, cfg, prgm_name);
+        cfg_free(cfg);
+    }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, prgm_name);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     free_inst_list(inst_list);
 
     /* Emit INITFINAL table — FPC system unit references this to run unit
@@ -8249,6 +8451,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
+    ctx->next_vreg_id = 0;
 
     /* Callee-save slots are allocated AFTER arguments and locals (below)
      * so that the t-section offsets account for the z and x section sizes. */
@@ -8488,8 +8691,28 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
+    if (dump_ir_flag())
+        ir_print_function(stderr, sub_id, inst_list);
+    if (dump_ir_cfg_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        cfg_print(stderr, cfg, sub_id);
+        cfg_free(cfg);
+    }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, sub_id);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -8580,6 +8803,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
+    ctx->next_vreg_id = 0;
 
     /* Callee-save slots are allocated AFTER arguments and locals (below)
      * so that the t-section offsets account for the z and x section sizes. */
@@ -9271,21 +9495,23 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                return_var->offset, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[64];
+                snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                    return_var->offset);
+                Register_t *defs_arr[] = {addr_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
 
             if (codegen_target_is_windows())
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
                 snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", dynamic_array_descriptor_size);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n"); }
                 snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%esi\n", dynamic_array_descriptor_size);
                 inst_list = add_inst(inst_list, buffer);
             }
@@ -9323,37 +9549,43 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                return_dest_slot->offset, dest_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[64];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                    return_dest_slot->offset);
+                Register_t *defs_arr[] = {dest_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
 
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                return_var->offset, src_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[64];
+                snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                    return_var->offset);
+                Register_t *defs_arr[] = {src_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
 
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                record_return_size, size_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                char tmpl[64];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%0\n",
+                    record_return_size);
+                Register_t *defs_arr[] = {size_reg};
+                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+            }
 
             if (codegen_target_is_windows())
             {
                 /* Move dest/src before size to avoid clobbering %r8. */
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {dest_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
+                { Register_t *u[] = {src_reg};  inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                { Register_t *u[] = {size_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n"); }
             }
             else
             {
                 /* Move in reverse order to avoid register conflicts when temp regs overlap with arg regs */
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {size_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                { Register_t *u[] = {src_reg};  inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n"); }
+                { Register_t *u[] = {dest_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n"); }
             }
 
             inst_list = codegen_vect_reg(inst_list, 0);
@@ -9449,8 +9681,28 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
+    if (dump_ir_flag())
+        ir_print_function(stderr, sub_id, inst_list);
+    if (dump_ir_cfg_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        cfg_print(stderr, cfg, sub_id);
+        cfg_free(cfg);
+    }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, sub_id);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -9877,7 +10129,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     push_stackscope();
 
     /* Allocate stack slots for callee-saved registers */
+    reset_reg_stack();
     ListNode_t *inst_list = NULL;
+    ctx->next_vreg_id = 0;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
     int lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
@@ -9976,8 +10230,28 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
+    ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
+    if (dump_ir_flag())
+        ir_print_function(stderr, anon->generated_name, inst_list);
+    if (dump_ir_cfg_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        cfg_print(stderr, cfg, anon->generated_name);
+        cfg_free(cfg);
+    }
+    if (dump_ir_liveness_flag())
+    {
+        Cfg_t *cfg = cfg_build(inst_list);
+        LivenessInfo_t *liveness = liveness_compute(cfg);
+        liveness_print(stderr, cfg, liveness, anon->generated_name);
+        liveness_free(liveness);
+        cfg_free(cfg);
+    }
     
     free_inst_list(inst_list);
     pop_stackscope();
@@ -10612,27 +10886,31 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             return inst_list;
                         }
 
-                        snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rbp), %s\n",
-                            stack_arg_offset, src_addr_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                            arg_stack->offset, dst_addr_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            char tmpl[64];
+                            snprintf(tmpl, sizeof(tmpl), "\tleaq\t%d(%%rbp), %%0\n",
+                                stack_arg_offset);
+                            Register_t *defs_arr[] = {src_addr_reg};
+                            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                        }
+                        {
+                            char tmpl[64];
+                            snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                                arg_stack->offset);
+                            Register_t *defs_arr[] = {dst_addr_reg};
+                            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                        }
 
                         if (codegen_target_is_windows())
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                            { Register_t *u[] = {dst_addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
+                            { Register_t *u[] = {src_addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
                             inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
                         }
                         else
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                            { Register_t *u[] = {dst_addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n"); }
+                            { Register_t *u[] = {src_addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n"); }
                             inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
                         }
                         inst_list = codegen_vect_reg(inst_list, 0);
@@ -10671,9 +10949,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                                 src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (src_ptr_reg != NULL)
                             {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    presaved_slot->offset, src_ptr_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
+                                char tmpl[64];
+                                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                                    presaved_slot->offset);
+                                Register_t *defs_arr[] = {src_ptr_reg};
+                                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
                                 source_ptr = src_ptr_reg->bit_64;
                             }
                         }
@@ -10685,9 +10965,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                                 src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (src_ptr_reg != NULL)
                             {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                                    arg_reg, src_ptr_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
+                                char tmpl[64];
+                                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%s, %%0\n", arg_reg);
+                                Register_t *defs_arr[] = {src_ptr_reg};
+                                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
                                 source_ptr = src_ptr_reg->bit_64;
                             }
                         }
@@ -10699,9 +10980,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                                 src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (src_ptr_reg != NULL)
                             {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
-                                    stack_arg_offset, src_ptr_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
+                                char tmpl[64];
+                                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%d(%%rbp), %%0\n",
+                                    stack_arg_offset);
+                                Register_t *defs_arr[] = {src_ptr_reg};
+                                inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
                                 stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
                                 source_ptr = src_ptr_reg->bit_64;
                             }
@@ -10732,28 +11015,28 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         if (ss_size <= 0) ss_size = 256;
 
                         /* leaq dest buffer address */
-                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                            arg_stack->offset, dst_addr_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            char tmpl[64];
+                            snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+                                arg_stack->offset);
+                            Register_t *defs_arr[] = {dst_addr_reg};
+                            inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+                        }
 
                         /* kgpc_shortstring_to_shortstring(dest, dest_size, src) */
                         if (codegen_target_is_windows())
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                            { Register_t *u[] = {dst_addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
                             snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", ss_size);
                             inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", source_ptr);
-                            inst_list = add_inst(inst_list, buffer);
+                            { Register_t *u[] = {src_ptr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n"); }
                         }
                         else
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                            { Register_t *u[] = {dst_addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n"); }
                             snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", ss_size);
                             inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", source_ptr);
-                            inst_list = add_inst(inst_list, buffer);
+                            { Register_t *u[] = {src_ptr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
                         }
                         inst_list = codegen_vect_reg(inst_list, 0);
                         inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");

@@ -93,6 +93,9 @@ void set_skip_unit_codegen_flag(void);
 void clear_skip_unit_codegen_flag(void);
 void set_codegen_cache_miss_flag(void);
 void clear_codegen_cache_miss_flag(void);
+void set_dump_ir_flag(void);
+void set_dump_ir_cfg_flag(void);
+void set_dump_ir_liveness_flag(void);
 
 int nonlocal_flag(void);
 int optimize_flag(void);
@@ -110,5 +113,8 @@ int goto_enabled_flag(void);
 int function_sections_flag(void);
 int skip_unit_codegen_flag(void);
 int codegen_cache_miss_flag(void);
+int dump_ir_flag(void);
+int dump_ir_cfg_flag(void);
+int dump_ir_liveness_flag(void);
 
 #endif

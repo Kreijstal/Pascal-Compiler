@@ -32,17 +32,23 @@ struct LiveRange
     
     /* Interference information */
     ListNode_t *neighbors;           /* List of LiveRange_t* that interfere */
+    ListNode_t *neighbors_tail;      /* Tail pointer for O(1) neighbor append */
     int degree;                      /* Number of interfering neighbors */
     
     /* Allocation state */
     int simplified;                  /* Already processed in simplification */
     int is_spilled;                  /* Marked for spilling */
+
+    /* Preferred physical-register slot (index into the pool, -1 = no preference).
+     * Used by ir_liveness_allocate() to keep existing assignments stable. */
+    int preferred_color;
 };
 
 /* Interference graph for register allocation */
 struct InterferenceGraph
 {
     ListNode_t *live_ranges;         /* List of LiveRange_t* */
+    ListNode_t *live_ranges_tail;    /* Tail pointer for O(1) live_range append */
     int num_ranges;
     int num_physical_regs;           /* Number of available registers */
 };
@@ -81,5 +87,18 @@ LiveRange_t *find_low_degree_node(InterferenceGraph_t *graph,
 
 /* Helper: Find available color (register) for a node */
 int find_available_color(LiveRange_t *lr, int num_colors);
+
+/* Add an interference edge between two live ranges.
+ * Checks for duplicates before adding.
+ * Used by the IR-liveness-based allocator to add edges derived from
+ * liveness sets rather than instruction intervals. */
+void add_interference_edge(LiveRange_t *lr1, LiveRange_t *lr2);
+
+/* Run the simplify/select/color loop WITHOUT calling build_interference_edges().
+ * Use when edges have already been added externally (e.g., via
+ * add_interference_edge() from liveness sets).
+ * Returns list of spilled LiveRange_t* (same semantics as
+ * allocate_registers_graph_coloring). */
+ListNode_t *allocate_registers_graph_coloring_prebuilt(InterferenceGraph_t *graph);
 
 #endif /* GRAPH_COLORING_ALLOCATOR_H */

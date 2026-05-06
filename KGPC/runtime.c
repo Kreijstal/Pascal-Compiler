@@ -44,15 +44,6 @@ void *Libdl = &Libdl_handle;
 void *libdl = &Libdl_handle;
 #endif
 
-/* FPC I/O check functions - weak stubs for real number I/O.
- * These are provided by FPC's RTL when linked, but we provide weak stubs
- * for cases where the RTL code isn't included. */
-__attribute__((weak)) void checkread_t(void) { }
-__attribute__((weak)) void readreal_t_ss(void) { }
-
-/* FPC errno setter - weak stub */
-__attribute__((weak)) void FPC_SYS_SETERRNO(int err) { errno = err; }
-
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
 /* Native stdlib lowering currently materializes a qualifier symbol for
@@ -8755,18 +8746,9 @@ void kgpc_readwritebarrier(void) {}
  * Not meaningful in a CLI/batch context; no-op. */
 void SysBeep(void) {}
 
-/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization.
- * The body is Finalize(TArray<TPtrWrapper>) which is a no-op for
- * TPtrWrapper (a simple record with no managed fields). */
-void tmarshal__unfixarray_u_tptrwrapper(void) {}
-
 /* FindComponentClass — FPC TReader class method referenced but not
  * exercised in test programs. Raises abstract method error if called. */
 void FindComponentClass(void) { __kgpc_abstract_method_error(); }
-
-/* ReadDeltaStream — FPC TReader class method referenced but not
- * exercised in test programs. Raises abstract method error if called. */
-void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
 
 /* Default IInterface implementations for non-reference-counted classes.
  * Classes that implement interfaces without inheriting from TInterfacedObject
