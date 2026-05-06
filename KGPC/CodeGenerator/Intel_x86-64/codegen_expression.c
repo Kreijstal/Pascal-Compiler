@@ -4695,6 +4695,15 @@ long long codegen_expr_sret_size(const struct Expression *expr)
         return 16;
     }
 
+    /* Secondary fallback: if we dropped through from EXPR_FUNCTION_CALL with a
+     * record ret_type but expr_has_type_tag returned false (e.g. resolved_kgpc_type
+     * was set to the accessed field's type such as String, masking the record
+     * return type), trust ret_type directly.  The two-pointer-size estimate covers
+     * all records that use SRET on Windows x64; codegen_sizeof_record_type will
+     * compute the exact size when it allocates the sret slot. */
+    if (ret_type != NULL && kgpc_type_is_record(ret_type))
+        return 2 * CODEGEN_POINTER_SIZE_BYTES;
+
     /* ShortStrings are passed via SRET because they're small fixed-size arrays.
      * Use the actual sized-shortstring storage when type metadata is available. */
     if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
