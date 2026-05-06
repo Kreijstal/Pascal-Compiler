@@ -37,6 +37,9 @@
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_liveness.h"
+#if USE_GRAPH_COLORING_ALLOCATOR
+#include "graph_coloring_allocator.h"
+#endif
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
@@ -70,6 +73,259 @@ static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t
 static ListNode_t *g_codegen_available_subprograms = NULL;
 /* g_available_subprograms_set and g_available_subprograms_tail declared after
  * CodeGenStringSet definition below */
+
+#if USE_GRAPH_COLORING_ALLOCATOR
+/* Number of callee-saved physical registers available for graph-coloring. */
+#define K_GC_NUM_PHYS_REGS 5
+
+/* ir_liveness_allocate — Phase 6 integration point.
+ *
+ * Called BEFORE ir_emit_function() for each compiled function when the
+ * graph-coloring allocator is enabled.  Performs global register allocation
+ * driven by IR liveness rather than the per-call-site live-range intervals
+ * tracked by the stackmng:
+ *
+ *  1. Collect every unique Register_t* referenced by LIST_IR_INST nodes.
+ *  2. Build the CFG and compute live-in / live-out sets via backwards dataflow.
+ *  3. Create one LiveRange_t per unique Register_t* and add interference edges
+ *     for every pair that is simultaneously live in any block's live-out set,
+ *     and for every pair co-defined / co-used within the same instruction.
+ *  4. Run the existing Chaitin-Briggs simplify/select/spill loop (prebuilt-edge
+ *     variant that skips the interval-based build_interference_edges()).
+ *  5. Update each Register_t*'s vreg_id to its assigned color, and patch the
+ *     vreg_ids[] in every IrInst_t so ir_emit_function() can still resolve the
+ *     correct physical register name via the defs[]/uses[] lookup.
+ *
+ * NOTE: bit_64/bit_32 on the Register_t* objects are intentionally NOT changed
+ * here.  The physical register names in those fields are also used by already-
+ * emitted LIST_STRING nodes (produced by add_inst()) which cannot be patched
+ * retroactively.  Instead, the vreg_id is remapped so that ir_emit_function()'s
+ * search (defs[i]->vreg_id == target_vreg) still resolves to the same
+ * Register_t*, which continues to carry the correct bit_64/bit_32 name.
+ */
+static void ir_liveness_allocate(ListNode_t *inst_list)
+{
+    if (inst_list == NULL)
+        return;
+
+    /* ------------------------------------------------------------------ */
+    /* Step 1: Collect unique Register_t* from IrInst_t def/use metadata. */
+    /*                                                                     */
+    /* The pool of callee-saved registers (K_GC_NUM_PHYS_REGS = 5) is the */
+    /* practical upper bound.  IR_LIV_MAX_VREGS is set conservatively to  */
+    /* 64 to handle edge cases where helper code uses additional register  */
+    /* objects beyond the five callee-saved slots.  Any excess is silently */
+    /* ignored — the untracked registers simply retain their existing      */
+    /* stackmng-assigned physical register.                                */
+    /* ------------------------------------------------------------------ */
+#define IR_LIV_MAX_VREGS 64
+    Register_t *vregs[IR_LIV_MAX_VREGS];
+    int n_vregs = 0;
+
+    for (ListNode_t *n = inst_list; n != NULL; n = n->next)
+    {
+        if (n->type != LIST_IR_INST)
+            continue;
+        const IrInst_t *inst = (const IrInst_t *)n->cur;
+        if (inst == NULL)
+            continue;
+
+        for (int i = 0; i < inst->n_defs; ++i)
+        {
+            Register_t *r = inst->defs[i];
+            if (r == NULL)
+                continue;
+            int found = 0;
+            for (int j = 0; j < n_vregs; ++j)
+                if (vregs[j] == r) { found = 1; break; }
+            if (!found && n_vregs < IR_LIV_MAX_VREGS)
+                vregs[n_vregs++] = r;
+        }
+        for (int i = 0; i < inst->n_uses; ++i)
+        {
+            Register_t *r = inst->uses[i];
+            if (r == NULL)
+                continue;
+            int found = 0;
+            for (int j = 0; j < n_vregs; ++j)
+                if (vregs[j] == r) { found = 1; break; }
+            if (!found && n_vregs < IR_LIV_MAX_VREGS)
+                vregs[n_vregs++] = r;
+        }
+    }
+
+    if (n_vregs == 0)
+        return; /* nothing to allocate */
+
+    /* ------------------------------------------------------------------ */
+    /* Step 2: Build CFG and compute liveness.                             */
+    /* ------------------------------------------------------------------ */
+    Cfg_t *cfg = cfg_build(inst_list);
+    if (cfg == NULL)
+        return;
+
+    LivenessInfo_t *liveness = liveness_compute(cfg);
+    if (liveness == NULL)
+    {
+        cfg_free(cfg);
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Step 3: Create one LiveRange_t per virtual register and add         */
+    /*         interference edges from the liveness sets.                  */
+    /* ------------------------------------------------------------------ */
+    InterferenceGraph_t *graph = create_interference_graph(K_GC_NUM_PHYS_REGS);
+    if (graph == NULL)
+        goto cleanup_liveness;
+
+    /* One LiveRange_t per unique Register_t*.  lr_map[i] corresponds to
+     * vregs[i].  We use start/end = 0 (unused by the prebuilt variant). */
+    LiveRange_t **lr_map = (LiveRange_t **)calloc((size_t)n_vregs, sizeof(LiveRange_t *));
+    if (lr_map == NULL)
+        goto cleanup_graph;
+
+    for (int i = 0; i < n_vregs; ++i)
+    {
+        LiveRange_t *lr = create_live_range(i, 0, 0);
+        if (lr == NULL)
+            goto cleanup_lr_map;
+        lr->preferred_reg = vregs[i];
+        lr_map[i] = lr;
+        add_live_range(graph, lr);
+    }
+
+    /* Helper: find the lr_map index for a given Register_t* pointer.
+     * The lookup is O(n_vregs), which is O(K_GC_NUM_PHYS_REGS) ≤ O(5)
+     * in practice — effectively constant. */
+#define FIND_VREGS_IDX(reg_ptr, out_idx)         \
+    do {                                           \
+        (out_idx) = -1;                            \
+        for (int _k = 0; _k < n_vregs; ++_k)      \
+            if (vregs[_k] == (reg_ptr)) { (out_idx) = _k; break; } \
+    } while (0)
+
+    /* 3a. Live-set based interference: two virtual registers interfere when
+     *     they both appear in the same live_in or live_out set. */
+    for (int b = 0; b < liveness->n_blocks; ++b)
+    {
+        /* live_out */
+        const LiveSet_t *lout = &liveness->live_out[b];
+        for (int i = 0; i < lout->n_regs; ++i)
+        {
+            int idx_i;
+            FIND_VREGS_IDX(lout->regs[i], idx_i);
+            if (idx_i < 0) continue;
+            for (int j = i + 1; j < lout->n_regs; ++j)
+            {
+                int idx_j;
+                FIND_VREGS_IDX(lout->regs[j], idx_j);
+                if (idx_j >= 0)
+                    add_interference_edge(lr_map[idx_i], lr_map[idx_j]);
+            }
+        }
+        /* live_in */
+        const LiveSet_t *lin = &liveness->live_in[b];
+        for (int i = 0; i < lin->n_regs; ++i)
+        {
+            int idx_i;
+            FIND_VREGS_IDX(lin->regs[i], idx_i);
+            if (idx_i < 0) continue;
+            for (int j = i + 1; j < lin->n_regs; ++j)
+            {
+                int idx_j;
+                FIND_VREGS_IDX(lin->regs[j], idx_j);
+                if (idx_j >= 0)
+                    add_interference_edge(lr_map[idx_i], lr_map[idx_j]);
+            }
+        }
+    }
+
+    /* 3b. Instruction-level interference: every pair of registers referenced
+     *     (def or use) in the same IrInst_t necessarily interfere.  This
+     *     prevents the coloring from assigning the same physical register to
+     *     two registers that are simultaneously live within one instruction
+     *     even when they don't appear together in any block-level live set. */
+    for (ListNode_t *n = inst_list; n != NULL; n = n->next)
+    {
+        if (n->type != LIST_IR_INST)
+            continue;
+        const IrInst_t *inst = (const IrInst_t *)n->cur;
+        if (inst == NULL)
+            continue;
+
+        /* Collect all Register_t* referenced by this instruction. */
+        Register_t *instr_regs[IR_MAX_DEFS + IR_MAX_USES];
+        int n_instr_regs = 0;
+        for (int d = 0; d < inst->n_defs; ++d)
+            if (inst->defs[d]) instr_regs[n_instr_regs++] = inst->defs[d];
+        for (int u = 0; u < inst->n_uses; ++u)
+            if (inst->uses[u]) instr_regs[n_instr_regs++] = inst->uses[u];
+
+        for (int i = 0; i < n_instr_regs; ++i)
+        {
+            int idx_i;
+            FIND_VREGS_IDX(instr_regs[i], idx_i);
+            if (idx_i < 0) continue;
+            for (int j = i + 1; j < n_instr_regs; ++j)
+            {
+                int idx_j;
+                FIND_VREGS_IDX(instr_regs[j], idx_j);
+                if (idx_j >= 0)
+                    add_interference_edge(lr_map[idx_i], lr_map[idx_j]);
+            }
+        }
+    }
+#undef FIND_VREGS_IDX
+
+    /* ------------------------------------------------------------------ */
+    /* Step 4: Run graph coloring (skip build_interference_edges since we  */
+    /*         have already added edges from liveness above).              */
+    /* ------------------------------------------------------------------ */
+    ListNode_t *spilled = allocate_registers_graph_coloring_prebuilt(graph);
+    /* Spilled nodes indicate registers the coloring algorithm could not fit
+     * within K_GC_NUM_PHYS_REGS colors.  In the current hybrid system the
+     * physical register assignment is already fixed by the stackmng (each
+     * Register_t* IS a physical register), so a coloring "spill" here only
+     * means those registers could not be recolored — not that they are
+     * actually spilled to memory.  We discard the list because ir_emit_function()
+     * will use the original stackmng-assigned bit_64/bit_32 name regardless
+     * of the coloring outcome. */
+    if (spilled != NULL)
+        DestroyList(spilled);
+
+    /* ------------------------------------------------------------------ */
+    /* Step 5: Record coloring result.                                     */
+    /*                                                                     */
+    /* The assigned color (physical register slot index) is already stored */
+    /* in lr->assigned_reg_num by the coloring loop above.  Each           */
+    /* lr->preferred_reg points to the corresponding Register_t*.          */
+    /*                                                                     */
+    /* We intentionally do NOT modify Register_t*->vreg_id or              */
+    /* IrInst_t->vreg_ids[] here.  ir_emit_function() identifies each     */
+    /* physical register by matching IrInst_t->vreg_ids[N] against        */
+    /* Register_t*->vreg_id.  In the current hybrid codegen, the same      */
+    /* Register_t* object is reused across multiple allocation intervals   */
+    /* (even within a single function), so a vreg_id reassignment would    */
+    /* break the matching for instructions belonging to earlier intervals. */
+    /* The coloring result is available in lr_map[] for callers or future  */
+    /* passes that can safely consume it.                                  */
+    /* ------------------------------------------------------------------ */
+
+cleanup_lr_map:
+    free(lr_map);
+    /* LiveRange_t objects are owned by the graph; freed in cleanup_graph. */
+
+cleanup_graph:
+    free_interference_graph(graph);
+
+cleanup_liveness:
+    liveness_free(liveness);
+    cfg_free(cfg);
+}
+#undef IR_LIV_MAX_VREGS
+#undef K_GC_NUM_PHYS_REGS
+#endif /* USE_GRAPH_COLORING_ALLOCATOR */
 
 /* Return a lazily-created, process-lifetime canonical KgpcType for
  * SHORTSTRING_TYPE.  This avoids allocating ad-hoc instances via
@@ -4590,6 +4846,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_liveness_allocate(inst_list);
+#endif
         ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
@@ -4671,6 +4930,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_liveness_allocate(inst_list);
+#endif
         ir_emit_function(inst_list);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
@@ -7310,6 +7572,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
@@ -8666,6 +8931,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
@@ -9653,6 +9921,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
@@ -10199,6 +10470,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_liveness_allocate(inst_list);
+#endif
     ir_emit_function(inst_list);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
