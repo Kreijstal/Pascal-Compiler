@@ -49,6 +49,17 @@ typedef struct IrInst {
     char *tmpl;                                        /* format template; NULL = no substitution */
     int   vreg_ids[IR_MAX_DEFS + IR_MAX_USES];         /* which vreg_id maps to %0, %1, ... */
     int   n_placeholders;
+
+    /* Physical register name copies for each placeholder, in the same order
+     * as vreg_ids[].  Copied from the Register_t at add_inst_du() time so
+     * that ir_emit_function() does not need to dereference the borrowed
+     * defs[]/uses[] pointers (which may have been freed by reset_reg_stack()
+     * when nested subprograms are codegen'd before ir_emit_function runs).
+     * Fixed-size inline buffers avoid heap allocation overhead for pp.pas-
+     * scale compilations (hundreds of thousands of add_inst_du calls). */
+#define IR_REG_NAME_BUF 12
+    char reg_names_64[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
+    char reg_names_32[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
 } IrInst_t;
 
 /* Allocate and initialise a new IrInst_t.

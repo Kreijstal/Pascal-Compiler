@@ -4200,7 +4200,12 @@ ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
     inst->text = NULL;
 
     /* Assign vreg_ids: defs first, then uses.
-     * If ctx is available, assign fresh IDs to unassigned registers. */
+     * If ctx is available, assign fresh IDs to unassigned registers.
+     * Also copy physical register names (bit_64/bit_32) into the instruction
+     * so that ir_emit_function() can resolve placeholder names without
+     * dereferencing the borrowed Register_t pointers (which may be freed by
+     * reset_reg_stack() when nested subprograms are codegen'd before
+     * ir_emit_function() is called on the outer function). */
     int placeholder = 0;
     for (int i = 0; i < n_defs && i < IR_MAX_DEFS && placeholder < (int)(sizeof(inst->vreg_ids)/sizeof(inst->vreg_ids[0])); ++i, ++placeholder)
     {
@@ -4209,6 +4214,10 @@ ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
             if (ctx != NULL && defs[i]->vreg_id == -1)
                 defs[i]->vreg_id = ctx->next_vreg_id++;
             inst->vreg_ids[placeholder] = defs[i]->vreg_id;
+            if (defs[i]->bit_64) snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s", defs[i]->bit_64);
+            else inst->reg_names_64[placeholder][0] = '\0';
+            if (defs[i]->bit_32) snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s", defs[i]->bit_32);
+            else inst->reg_names_32[placeholder][0] = '\0';
         }
     }
     for (int i = 0; i < n_uses && i < IR_MAX_USES && placeholder < (int)(sizeof(inst->vreg_ids)/sizeof(inst->vreg_ids[0])); ++i, ++placeholder)
@@ -4218,6 +4227,10 @@ ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
             if (ctx != NULL && uses[i]->vreg_id == -1)
                 uses[i]->vreg_id = ctx->next_vreg_id++;
             inst->vreg_ids[placeholder] = uses[i]->vreg_id;
+            if (uses[i]->bit_64) snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s", uses[i]->bit_64);
+            else inst->reg_names_64[placeholder][0] = '\0';
+            if (uses[i]->bit_32) snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s", uses[i]->bit_32);
+            else inst->reg_names_32[placeholder][0] = '\0';
         }
     }
     inst->n_placeholders = placeholder;
@@ -4823,6 +4836,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r14_offset = r14_slot->offset;
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
+        reset_reg_stack();
         ListNode_t *inst_list = NULL;
         ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
@@ -4906,6 +4920,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r14_offset = r14_slot->offset;
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
+        reset_reg_stack();
         ListNode_t *inst_list = NULL;
         ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
@@ -7484,6 +7499,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * now emits both the alias and mangled_id labels directly.  No .set
      * aliases needed — the cache .o is self-contained. */
 
+    reset_reg_stack();
     inst_list = NULL;
     ctx->next_vreg_id = 0;
     /* Emit var initializers from loaded units first, then program. */
@@ -10353,6 +10369,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     push_stackscope();
 
     /* Allocate stack slots for callee-saved registers */
+    reset_reg_stack();
     ListNode_t *inst_list = NULL;
     ctx->next_vreg_id = 0;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
