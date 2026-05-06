@@ -3659,11 +3659,51 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             has_record_return = 1;
         }
+        /* Fallback for proc-var calls returning a non-shortstring record.
+         * codegen_expr_sret_size() has no ctx, so it can't resolve return_type_id
+         * through the symbol table.  Do it here where ctx is available. */
+        long long procvar_sret_size = 0;
+        if (!has_record_return && !force_scalar_string_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call)
+        {
+            struct Expression *pve = expr->expr_data.function_call_data.procedural_var_expr;
+            if (pve != NULL)
+            {
+                KgpcType *pv_type = expr_tree_proc_type_from_record_field(ctx, pve);
+                if (pv_type == NULL)
+                    pv_type = expr_get_kgpc_type(pve);
+                if (pv_type != NULL && pv_type->kind == TYPE_KIND_POINTER &&
+                    pv_type->info.points_to != NULL)
+                    pv_type = pv_type->info.points_to;
+                if (pv_type != NULL && pv_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *pv_ret = kgpc_type_get_return_type(pv_type);
+                    if (pv_ret == NULL &&
+                        pv_type->info.proc_info.return_type_id != NULL &&
+                        ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *ret_sym = NULL;
+                        if (FindSymbol(&ret_sym, ctx->symtab,
+                                pv_type->info.proc_info.return_type_id) != 0 &&
+                            ret_sym != NULL)
+                            pv_ret = ret_sym->type;
+                    }
+                    if (pv_ret != NULL && kgpc_type_is_record(pv_ret))
+                    {
+                        has_record_return = 1;
+                        procvar_sret_size = kgpc_type_sizeof(pv_ret);
+                        if (procvar_sret_size <= 0)
+                            procvar_sret_size = 2 * CODEGEN_POINTER_SIZE_BYTES;
+                    }
+                }
+            }
+        }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)
         {
-            long long sret_size = codegen_expr_sret_size(expr);
+            long long sret_size = procvar_sret_size > 0 ?
+                procvar_sret_size : codegen_expr_sret_size(expr);
             if (sret_size <= 0 &&
                 expr_tree_virtual_call_returns_shortstring(ctx, expr))
                 sret_size = 256;
