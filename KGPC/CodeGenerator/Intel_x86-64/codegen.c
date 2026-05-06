@@ -146,14 +146,12 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
             if (!found && n_vregs < IR_LIV_MAX_VREGS)
             {
                 vregs[n_vregs] = r;
-                if (r->bit_64) {
-                    strncpy(vreg_names_64[n_vregs], r->bit_64, IR_REG_NAME_BUF - 1);
-                    vreg_names_64[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
-                } else { vreg_names_64[n_vregs][0] = '\0'; }
-                if (r->bit_32) {
-                    strncpy(vreg_names_32[n_vregs], r->bit_32, IR_REG_NAME_BUF - 1);
-                    vreg_names_32[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
-                } else { vreg_names_32[n_vregs][0] = '\0'; }
+                /* Use the pre-copied inline arrays rather than r->bit_64/bit_32:
+                 * defs[i] corresponds to placeholder i in the instruction. */
+                strncpy(vreg_names_64[n_vregs], inst->reg_names_64[i], IR_REG_NAME_BUF - 1);
+                vreg_names_64[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
+                strncpy(vreg_names_32[n_vregs], inst->reg_names_32[i], IR_REG_NAME_BUF - 1);
+                vreg_names_32[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
                 n_vregs++;
             }
         }
@@ -168,14 +166,12 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
             if (!found && n_vregs < IR_LIV_MAX_VREGS)
             {
                 vregs[n_vregs] = r;
-                if (r->bit_64) {
-                    strncpy(vreg_names_64[n_vregs], r->bit_64, IR_REG_NAME_BUF - 1);
-                    vreg_names_64[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
-                } else { vreg_names_64[n_vregs][0] = '\0'; }
-                if (r->bit_32) {
-                    strncpy(vreg_names_32[n_vregs], r->bit_32, IR_REG_NAME_BUF - 1);
-                    vreg_names_32[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
-                } else { vreg_names_32[n_vregs][0] = '\0'; }
+                /* uses[i] corresponds to placeholder n_defs + i. */
+                int p = inst->n_defs + i;
+                strncpy(vreg_names_64[n_vregs], inst->reg_names_64[p], IR_REG_NAME_BUF - 1);
+                vreg_names_64[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
+                strncpy(vreg_names_32[n_vregs], inst->reg_names_32[p], IR_REG_NAME_BUF - 1);
+                vreg_names_32[n_vregs][IR_REG_NAME_BUF - 1] = '\0';
                 n_vregs++;
             }
         }
