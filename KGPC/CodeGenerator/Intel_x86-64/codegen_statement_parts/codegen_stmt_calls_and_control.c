@@ -4744,7 +4744,7 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGe
             Register_t *u[] = {bit_reg};
             inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
         }
-        { Register_t *du[] = {mask_reg}; inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tshll\t%%cl, %0\n"); }
+        { Register_t *du[] = {mask_reg}; inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tshll\t%cl, %0\n"); }
         { Register_t *u[] = {mask_reg, byte_val_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\ttestl\t%0, %1\n"); }
         snprintf(buffer, sizeof(buffer), "\tjz\t%s\n", skip_body_label);
         inst_list = add_inst(inst_list, buffer);

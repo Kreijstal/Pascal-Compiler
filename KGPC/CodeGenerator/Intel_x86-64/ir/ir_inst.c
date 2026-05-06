@@ -68,6 +68,9 @@ void ir_inst_free(IrInst_t *inst)
     free(inst->text);
     free(inst->tmpl);
 
+    /* reg_names_64[] and reg_names_32[] are inline fixed-size char arrays —
+     * no heap to free. */
+
     if (inst->owns_regs)
     {
         for (int i = 0; i < inst->n_defs; ++i)
@@ -486,19 +489,15 @@ void ir_emit_function(ListNode_t *inst_list)
                 const char *regname = NULL;
                 if (idx < inst->n_placeholders)
                 {
-                    int target_vreg = inst->vreg_ids[idx];
-                    /* Search defs */
-                    for (int i = 0; i < inst->n_defs && regname == NULL; ++i)
-                    {
-                        if (inst->defs[i] && inst->defs[i]->vreg_id == target_vreg)
-                            regname = use_32bit ? inst->defs[i]->bit_32 : inst->defs[i]->bit_64;
-                    }
-                    /* Search uses */
-                    for (int i = 0; i < inst->n_uses && regname == NULL; ++i)
-                    {
-                        if (inst->uses[i] && inst->uses[i]->vreg_id == target_vreg)
-                            regname = use_32bit ? inst->uses[i]->bit_32 : inst->uses[i]->bit_64;
-                    }
+                    /* Use the physical register name copied at add_inst_du() time.
+                     * These are inline char arrays (not pointers), so they are
+                     * never NULL — an empty string means unset (treat as '?').
+                     * This avoids dereferencing the borrowed defs[]/uses[] pointers
+                     * which may have been freed by reset_reg_stack() when nested
+                     * subprograms were generated before ir_emit_function() runs. */
+                    const char *name = use_32bit ? inst->reg_names_32[idx] : inst->reg_names_64[idx];
+                    if (name[0] != '\0')
+                        regname = name;
                 }
 
                 if (regname == NULL)
