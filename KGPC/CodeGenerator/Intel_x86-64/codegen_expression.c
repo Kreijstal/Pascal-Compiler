@@ -4664,10 +4664,22 @@ long long codegen_expr_sret_size(const struct Expression *expr)
                 long long ret_size = kgpc_type_sizeof(ret_type);
                 if (ret_size > 0)
                     return ret_size;
+                /* ret_type says record/array but the cached size is absent
+                 * (has_cached_size == 0 on the RecordType).  For records,
+                 * fall through to the expr-tag path below which always has
+                 * a safe fallback of 16.  For static arrays / shortstring
+                 * aliases the size should always be known after semcheck,
+                 * so return 0 conservatively for those. */
+                if (!kgpc_type_is_record(ret_type))
+                    return 0;
+                /* Record with uncached size: drop through to outer checks. */
             }
-            if (kgpc_type_is_extended(ret_type))
-                return 10;
-            return 0;
+            else
+            {
+                if (kgpc_type_is_extended(ret_type))
+                    return 10;
+                return 0;
+            }
         }
     }
 
