@@ -3442,8 +3442,15 @@ int semcheck_funccall(int *type_return,
                             HashNode_t *ret_node =
                                 semcheck_find_preferred_type_node(symtab, proc_type->info.proc_info.return_type_id);
                             if (ret_node != NULL && ret_node->type != NULL)
+                            {
                                 ret_type = ret_node->type;
+                                kgpc_type_retain(ret_type);
+                                proc_type->info.proc_info.return_type = ret_type;
+                            }
                         }
+                        /* Update hash type now that return_type is materialized */
+                        if (ret_type != NULL)
+                            expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
                         /* Resolve alias metadata to get the underlying type */
                         if (ret_type != NULL) {
                             struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
