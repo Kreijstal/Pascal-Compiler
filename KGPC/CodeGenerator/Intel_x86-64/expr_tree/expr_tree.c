@@ -3751,15 +3751,28 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     procvar_sret_size = rf->cached_proc_return_sret_size;
                 }
             }
-            /* Write back sret size to RecordField cache so that a later call to the
-             * same proc-var field (e.g. second mgr.GetStatus() call) can use Fix 3
-             * above when proc KgpcType is freed between the two codegen traversals. */
-            if (has_record_return && procvar_sret_size > 8 &&
-                pve != NULL && pve->type == EXPR_RECORD_ACCESS)
+        }
+        /* Write back sret size to RecordField cache so that a later call to the
+         * same proc-var field (e.g. second mgr.GetStatus() call) can use Fix 3
+         * when proc KgpcType is freed between the two codegen traversals.
+         * Placed OUTSIDE the !has_record_return guard because has_record_return
+         * may have been set by expr_returns_sret() (path #1) before the guard,
+         * in which case procvar_sret_size stays 0 and the inner writeback is skipped.
+         * Fall back to cached_procvar_sret_size which semcheck stored on the node. */
+        if (has_record_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call)
+        {
+            long long wb_sret = procvar_sret_size > 8 ? procvar_sret_size :
+                expr->expr_data.function_call_data.cached_procvar_sret_size;
+            struct Expression *pve_wb =
+                expr->expr_data.function_call_data.procedural_var_expr;
+            if (wb_sret > 8 && pve_wb != NULL &&
+                pve_wb->type == EXPR_RECORD_ACCESS)
             {
-                struct RecordField *rf_wb = codegen_lookup_record_field_expr(pve, ctx);
+                struct RecordField *rf_wb =
+                    codegen_lookup_record_field_expr(pve_wb, ctx);
                 if (rf_wb != NULL && rf_wb->cached_proc_return_sret_size == 0)
-                    rf_wb->cached_proc_return_sret_size = procvar_sret_size;
+                    rf_wb->cached_proc_return_sret_size = wb_sret;
             }
         }
         int ctor_has_record_return = (is_constructor && has_record_return);
