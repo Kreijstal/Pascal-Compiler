@@ -3556,12 +3556,17 @@ int semcheck_funccall(int *type_return,
                             kgpc_type_retain(ret_type);
                             expr->resolved_kgpc_type = ret_type;
                             long long sz = kgpc_type_sizeof(ret_type);
-                            expr->expr_data.function_call_data.cached_procvar_sret_size =
-                                (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                            long long new_sret = (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                            /* If a prior semcheck already cached a valid sret size, trust it over
+                             * the current computation — on bare MSYS2 the freed proc_type slot may
+                             * be reused for a different KgpcType, giving the wrong record size. */
+                            if (field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                                new_sret = field_desc->cached_proc_return_sret_size;
+                            expr->expr_data.function_call_data.cached_procvar_sret_size = new_sret;
                             if (field_desc != NULL)
                             {
-                                field_desc->cached_proc_return_sret_size =
-                                    expr->expr_data.function_call_data.cached_procvar_sret_size;
+                                if (field_desc->cached_proc_return_sret_size == 0)
+                                    field_desc->cached_proc_return_sret_size = new_sret;
                                 /* Retain the return type so subsequent calls can recover it
                                  * even after proc_type has been freed (bare MSYS2 UAF). */
                                 if (field_desc->cached_proc_return_kgpc_type == NULL)
