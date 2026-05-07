@@ -2452,7 +2452,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         (expr_has_type_tag(expr, RECORD_TYPE) || expr_has_type_tag(expr, SHORTSTRING_TYPE) ||
          (expr->resolved_kgpc_type != NULL &&
           expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
-          !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))))
+          !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type)) ||
+         expr_returns_sret(expr)))
     {
         /* Record-valued function calls fall into two cases:
          *
