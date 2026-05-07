@@ -3438,6 +3438,11 @@ int semcheck_funccall(int *type_return,
                     proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
                     proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
                     proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
+                    /* Cache the RecordType (AST node) on the receiver so codegen can find
+                     * the field without going through KgpcType (which may be freed on bare
+                     * MSYS2 between semcheck and codegen). */
+                    if (recv_record != NULL)
+                        receiver_expr->record_type = recv_record;
                     semcheck_expr_set_resolved_type(proc_expr, PROCEDURE);
 
                     /* Validate arguments against the procedural type if available */

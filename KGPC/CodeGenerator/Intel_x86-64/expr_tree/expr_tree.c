@@ -3687,7 +3687,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (pv_type != NULL && pv_type->kind == TYPE_KIND_PROCEDURE)
                 {
                     KgpcType *pv_ret = kgpc_type_get_return_type(pv_type);
-                    if (pv_ret == NULL &&
+                    /* Also fall back when pv_ret is a stale freed pointer —
+                     * MALLOC_PERTURB_ fills freed memory so kind != TYPE_KIND_RECORD
+                     * but the pointer is non-NULL (bare MSYS2 UAF). */
+                    if (!kgpc_type_is_record(pv_ret) &&
                         pv_type->info.proc_info.return_type_id != NULL &&
                         ctx != NULL && ctx->symtab != NULL)
                     {
@@ -3719,7 +3722,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (ck != NULL && ck->kind == TYPE_KIND_PROCEDURE)
                 {
                     KgpcType *ck_ret = kgpc_type_get_return_type(ck);
-                    if (ck_ret == NULL &&
+                    /* Fall back to symbol-table lookup when ck_ret is NULL or is a
+                     * stale freed pointer (MALLOC_PERTURB_ fills freed memory so
+                     * kind != TYPE_KIND_RECORD but pointer is non-NULL, bare MSYS2). */
+                    if (!kgpc_type_is_record(ck_ret) &&
                         ck->info.proc_info.return_type_id != NULL &&
                         ctx != NULL && ctx->symtab != NULL)
                     {
