@@ -3697,6 +3697,38 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     }
                 }
             }
+            /* call_kgpc_type is set by semcheck field detection and holds the proc
+             * type with return_type_id even when resolved_kgpc_type was overwritten
+             * (e.g. mgr.GetStatus().Name on MSYS overwrites the inner call node's
+             * resolved_kgpc_type to String, masking the record return). */
+            if (!has_record_return)
+            {
+                KgpcType *ck = expr->expr_data.function_call_data.call_kgpc_type;
+                if (ck != NULL && ck->kind == TYPE_KIND_POINTER &&
+                    ck->info.points_to != NULL)
+                    ck = ck->info.points_to;
+                if (ck != NULL && ck->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ck_ret = kgpc_type_get_return_type(ck);
+                    if (ck_ret == NULL &&
+                        ck->info.proc_info.return_type_id != NULL &&
+                        ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *ret_sym = NULL;
+                        if (FindSymbol(&ret_sym, ctx->symtab,
+                                ck->info.proc_info.return_type_id) != 0 &&
+                            ret_sym != NULL)
+                            ck_ret = ret_sym->type;
+                    }
+                    if (ck_ret != NULL && kgpc_type_is_record(ck_ret))
+                    {
+                        has_record_return = 1;
+                        procvar_sret_size = kgpc_type_sizeof(ck_ret);
+                        if (procvar_sret_size <= 0)
+                            procvar_sret_size = 2 * CODEGEN_POINTER_SIZE_BYTES;
+                    }
+                }
+            }
         }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
