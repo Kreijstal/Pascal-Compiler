@@ -4749,6 +4749,11 @@ int expr_returns_sret(const struct Expression *expr)
     {
         if (expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS)
             return 0;
+        /* Semcheck cached the sret size to survive allocator zeroing freed
+         * KgpcType memory (bare MSYS2).  Check before pointer-based paths. */
+        if (expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.cached_procvar_sret_size > 8)
+            return 1;
     }
 
     long long sret_size = codegen_expr_sret_size(expr);
