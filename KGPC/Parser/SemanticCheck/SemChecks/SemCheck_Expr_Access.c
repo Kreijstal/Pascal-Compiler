@@ -3351,6 +3351,14 @@ int semcheck_funccall(int *type_return,
                     is_proc_field = 1;
                 }
 
+                /* Last-resort recovery: a prior semcheck of this same field successfully
+                 * resolved proc_type and cached the sret size in the RecordField.  Use that
+                 * to recognise the field as procedural even when the KgpcType is no longer
+                 * reachable (bare MSYS2 MALLOC_PERTURB_ use-after-free scenario). */
+                if (!is_proc_field && proc_type == NULL &&
+                    field_desc->cached_proc_return_sret_size > 0)
+                    is_proc_field = 1;
+
                 if (is_proc_field)
                 {
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -3492,6 +3500,11 @@ int semcheck_funccall(int *type_return,
                             long long sz = kgpc_type_sizeof(ret_type);
                             expr->expr_data.function_call_data.cached_procvar_sret_size =
                                 (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                            /* Write-through cache: persist sret size so subsequent accesses to
+                             * the same field survive proc_type being freed (bare MSYS2 UAF). */
+                            if (field_desc != NULL)
+                                field_desc->cached_proc_return_sret_size =
+                                    expr->expr_data.function_call_data.cached_procvar_sret_size;
                         }
                         else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
                         {
@@ -3505,17 +3518,42 @@ int semcheck_funccall(int *type_return,
                         }
                         else if (ret_type != NULL)
                         {
-                            /* Fallback - unhandled type kind */
-                            *type_return = PROCEDURE;
-                            semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                            /* Fallback - unhandled or corrupted return type kind.
+                             * On bare MSYS2 (MALLOC_PERTURB_=48), a freed TStatus
+                             * KgpcType gets 0x30-filled so its kind != TYPE_KIND_RECORD.
+                             * If a prior semcheck of this field cached the sret size,
+                             * use it to restore sret allocation without re-dereferencing
+                             * the corrupted type. */
+                            if (field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                            {
+                                *type_return = RECORD_TYPE;
+                                expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                    field_desc->cached_proc_return_sret_size;
+                            }
+                            else
+                            {
+                                *type_return = PROCEDURE;
+                                semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                            }
                         }
                         /* If ret_type is NULL and we didn't set type_return above (from alias),
-                         * keep whatever was set */
+                         * fall through to the cache check below. */
+                        if (expr->expr_data.function_call_data.cached_procvar_sret_size == 0 &&
+                            field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                        {
+                            expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                field_desc->cached_proc_return_sret_size;
+                        }
                     }
                     else
                     {
                         *type_return = PROCEDURE;
                         semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                        /* proc_type was unavailable (freed/corrupted on bare MSYS2).
+                         * Use the sret size cached by a prior access to this same field. */
+                        if (field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                            expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                field_desc->cached_proc_return_sret_size;
                     }
 
                     expr->expr_data.function_call_data.is_procedural_var_call = 1;

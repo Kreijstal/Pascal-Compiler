@@ -133,6 +133,7 @@ struct RecordField
     long long cached_size;     /* Cached field size (valid when has_cached_layout=1) */
     int cached_alignment;      /* Cached field alignment (valid when has_cached_layout=1) */
     int has_cached_layout;     /* 1 if cached_size and cached_alignment are valid */
+    long long cached_proc_return_sret_size; /* Cached sret return size for PROCEDURE fields; set on first successful proc_type resolution */
 };
 
 struct ClassProperty
