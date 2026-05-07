@@ -3331,6 +3331,17 @@ int semcheck_funccall(int *type_return,
                         kgpc_type_retain(proc_type);
                         is_proc_field = 1;
                     }
+                    /* FindSymbol may fail to match TYPE_KIND_PROCEDURE on some hosts
+                     * (e.g. bare MSYS2 where freed-KgpcType memory is zeroed/perturbed).
+                     * field_desc->proc_type is pre-retained by semcheck_env_types and is
+                     * always the correct fallback. */
+                    if (proc_type == NULL && field_desc->proc_type != NULL &&
+                        field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        proc_type = field_desc->proc_type;
+                        kgpc_type_retain(proc_type);
+                        is_proc_field = 1;
+                    }
                 }
                 else if (field_desc->proc_type != NULL &&
                          field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
