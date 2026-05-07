@@ -3138,6 +3138,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     expr->expr_data.function_call_data.call_qualifier = NULL;
+    expr->expr_data.function_call_data.cached_procvar_sret_size = 0;
     expr->expr_data.typecast_data.target_type_ref = NULL;
     expr->expr_data.is_data.target_type_ref = NULL;
     expr->expr_data.as_data.target_type_ref = NULL;

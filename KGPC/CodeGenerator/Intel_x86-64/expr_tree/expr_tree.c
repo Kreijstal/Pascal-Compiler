@@ -3663,6 +3663,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
          * codegen_expr_sret_size() has no ctx, so it can't resolve return_type_id
          * through the symbol table.  Do it here where ctx is available. */
         long long procvar_sret_size = 0;
+        /* Fast path: semcheck cached the sret size directly — avoids pointer
+         * validity issues when the allocator zeroes freed KgpcType memory. */
+        if (!has_record_return && !force_scalar_string_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.cached_procvar_sret_size > 8)
+        {
+            has_record_return = 1;
+            procvar_sret_size = expr->expr_data.function_call_data.cached_procvar_sret_size;
+        }
         if (!has_record_return && !force_scalar_string_return &&
             expr->expr_data.function_call_data.is_procedural_var_call)
         {

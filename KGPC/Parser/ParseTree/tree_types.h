@@ -589,6 +589,9 @@ struct Expression
             int is_bare_inherited;             /* 1 if bare "inherited" (no explicit method name) — forward enclosing args */
             int is_operator_call;              /* 1 if this call targets an operator (set by parser) */
             enum BuiltinCallLowering builtin_call_lowering; /* Special lowering rule set by semcheck builtins */
+            /* Cached sret size for proc-var calls returning records, set during semcheck.
+             * Avoids relying on call_kgpc_type pointer validity at codegen time. */
+            long long cached_procvar_sret_size;
         } function_call_data;
 
         /* Integer number */

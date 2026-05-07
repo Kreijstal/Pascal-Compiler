@@ -3478,6 +3478,9 @@ int semcheck_funccall(int *type_return,
                                 destroy_kgpc_type(expr->resolved_kgpc_type);
                             kgpc_type_retain(ret_type);
                             expr->resolved_kgpc_type = ret_type;
+                            long long sz = kgpc_type_sizeof(ret_type);
+                            expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                (sz > 0) ? sz : 2 * (long long)sizeof(void *);
                         }
                         else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
                         {
