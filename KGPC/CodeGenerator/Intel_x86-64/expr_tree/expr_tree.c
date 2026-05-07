@@ -3629,7 +3629,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
         int force_scalar_string_return =
-            expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS;
+            expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS &&
+            !expr->expr_data.function_call_data.is_procedural_var_call;
         int has_record_return = expr_returns_sret(expr);
         if (force_scalar_string_return)
             has_record_return = 0;
@@ -3785,12 +3786,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     rf_wb->cached_proc_return_sret_size = wb_sret;
             }
         }
-        if (expr->expr_data.function_call_data.is_procedural_var_call)
-            fprintf(stderr,
-                "[SRET-CG] procvar call id=%s cached_sret=%lld has_record_return=%d\n",
-                expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)",
-                (long long)expr->expr_data.function_call_data.cached_procvar_sret_size,
-                has_record_return);
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)

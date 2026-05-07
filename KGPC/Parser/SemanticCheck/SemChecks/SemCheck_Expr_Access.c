@@ -3411,15 +3411,6 @@ int semcheck_funccall(int *type_return,
                 if (!is_proc_field && proc_type == NULL &&
                     field_desc->cached_proc_return_sret_size > 0)
                     is_proc_field = 1;
-                fprintf(stderr,
-                    "[SRET-SC] field=%s is_proc_field=%d proc_type=%p"
-                    " proc_type_kind=%d fd_cached_sret=%lld fd_cached_kt=%p\n",
-                    field_lookup ? field_lookup : "(null)", is_proc_field,
-                    (void*)proc_type,
-                    proc_type ? (int)proc_type->kind : -1,
-                    field_desc ? (long long)field_desc->cached_proc_return_sret_size : -1LL,
-                    field_desc ? (void*)field_desc->cached_proc_return_kgpc_type : NULL);
-
                 if (is_proc_field)
                 {
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -3648,11 +3639,6 @@ int semcheck_funccall(int *type_return,
                         }
                     }
 
-                    fprintf(stderr,
-                        "[SRET-SC] done field=%s cached_procvar_sret=%lld type_return=%d\n",
-                        field_lookup ? field_lookup : "(null)",
-                        (long long)expr->expr_data.function_call_data.cached_procvar_sret_size,
-                        type_return ? *type_return : -1);
                     expr->expr_data.function_call_data.is_procedural_var_call = 1;
                     expr->expr_data.function_call_data.procedural_var_symbol = NULL;
                     expr->expr_data.function_call_data.procedural_var_expr = proc_expr;
