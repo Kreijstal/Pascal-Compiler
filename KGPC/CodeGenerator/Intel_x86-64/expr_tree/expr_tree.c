@@ -3751,6 +3751,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     procvar_sret_size = rf->cached_proc_return_sret_size;
                 }
             }
+            /* Write back sret size to RecordField cache so that a later call to the
+             * same proc-var field (e.g. second mgr.GetStatus() call) can use Fix 3
+             * above when proc KgpcType is freed between the two codegen traversals. */
+            if (has_record_return && procvar_sret_size > 8 &&
+                pve != NULL && pve->type == EXPR_RECORD_ACCESS)
+            {
+                struct RecordField *rf_wb = codegen_lookup_record_field_expr(pve, ctx);
+                if (rf_wb != NULL && rf_wb->cached_proc_return_sret_size == 0)
+                    rf_wb->cached_proc_return_sret_size = procvar_sret_size;
+            }
         }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
