@@ -439,6 +439,8 @@ static void destroy_record_field(struct RecordField *field)
         destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
+    if (field->cached_proc_return_kgpc_type != NULL)
+        kgpc_type_release(field->cached_proc_return_kgpc_type);
     destroy_record_type(field->nested_record);
     destroy_record_type(field->array_element_record);
     if (field->array_element_kgpc_type != NULL)

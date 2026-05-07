@@ -1550,7 +1550,8 @@ static KgpcType *expr_tree_proc_type_from_record_field(CodeGenContext *ctx,
         codegen_lookup_record_field_expr((struct Expression *)expr, ctx);
     if (resolved_field != NULL)
     {
-        if (resolved_field->proc_type != NULL)
+        if (resolved_field->proc_type != NULL &&
+            resolved_field->proc_type->kind == TYPE_KIND_PROCEDURE)
             return resolved_field->proc_type;
         if (resolved_field->type == PROCEDURE && resolved_field->type_id != NULL &&
             ctx != NULL && ctx->symtab != NULL)

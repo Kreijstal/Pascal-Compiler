@@ -481,6 +481,8 @@ struct Expression *clone_expression(const struct Expression *expr)
                 expr->expr_data.function_call_data.is_bare_inherited;
             clone->expr_data.function_call_data.is_operator_call =
                 expr->expr_data.function_call_data.is_operator_call;
+            clone->expr_data.function_call_data.cached_procvar_sret_size =
+                expr->expr_data.function_call_data.cached_procvar_sret_size;
             clone->expr_data.function_call_data.call_qualifier =
                 expr->expr_data.function_call_data.call_qualifier != NULL ?
                     strdup(expr->expr_data.function_call_data.call_qualifier) : NULL;

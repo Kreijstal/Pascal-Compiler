@@ -134,6 +134,7 @@ struct RecordField
     int cached_alignment;      /* Cached field alignment (valid when has_cached_layout=1) */
     int has_cached_layout;     /* 1 if cached_size and cached_alignment are valid */
     long long cached_proc_return_sret_size; /* Cached sret return size for PROCEDURE fields; set on first successful proc_type resolution */
+    struct KgpcType *cached_proc_return_kgpc_type; /* Retained return KgpcType; survives proc_type being freed (MSYS2 UAF) */
 };
 
 struct ClassProperty
