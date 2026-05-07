@@ -1550,7 +1550,8 @@ static KgpcType *expr_tree_proc_type_from_record_field(CodeGenContext *ctx,
         codegen_lookup_record_field_expr((struct Expression *)expr, ctx);
     if (resolved_field != NULL)
     {
-        if (resolved_field->proc_type != NULL)
+        if (resolved_field->proc_type != NULL &&
+            resolved_field->proc_type->kind == TYPE_KIND_PROCEDURE)
             return resolved_field->proc_type;
         if (resolved_field->type == PROCEDURE && resolved_field->type_id != NULL &&
             ctx != NULL && ctx->symtab != NULL)
@@ -3628,7 +3629,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
         int force_scalar_string_return =
-            expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS;
+            expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS &&
+            !expr->expr_data.function_call_data.is_procedural_var_call;
         int has_record_return = expr_returns_sret(expr);
         if (force_scalar_string_return)
             has_record_return = 0;
@@ -3659,11 +3661,137 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             has_record_return = 1;
         }
+        /* Fallback for proc-var calls returning a non-shortstring record.
+         * codegen_expr_sret_size() has no ctx, so it can't resolve return_type_id
+         * through the symbol table.  Do it here where ctx is available. */
+        long long procvar_sret_size = 0;
+        /* Fast path: semcheck cached the sret size directly — avoids pointer
+         * validity issues when the allocator zeroes freed KgpcType memory. */
+        if (!has_record_return && !force_scalar_string_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.cached_procvar_sret_size > 8)
+        {
+            has_record_return = 1;
+            procvar_sret_size = expr->expr_data.function_call_data.cached_procvar_sret_size;
+        }
+        if (!has_record_return && !force_scalar_string_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call)
+        {
+            struct Expression *pve = expr->expr_data.function_call_data.procedural_var_expr;
+            if (pve != NULL)
+            {
+                KgpcType *pv_type = expr_tree_proc_type_from_record_field(ctx, pve);
+                if (pv_type == NULL)
+                    pv_type = expr_get_kgpc_type(pve);
+                if (pv_type != NULL && pv_type->kind == TYPE_KIND_POINTER &&
+                    pv_type->info.points_to != NULL)
+                    pv_type = pv_type->info.points_to;
+                if (pv_type != NULL && pv_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *pv_ret = kgpc_type_get_return_type(pv_type);
+                    /* Also fall back when pv_ret is a stale freed pointer —
+                     * MALLOC_PERTURB_ fills freed memory so kind != TYPE_KIND_RECORD
+                     * but the pointer is non-NULL (bare MSYS2 UAF). */
+                    if (!kgpc_type_is_record(pv_ret) &&
+                        pv_type->info.proc_info.return_type_id != NULL &&
+                        ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *ret_sym = NULL;
+                        if (FindSymbol(&ret_sym, ctx->symtab,
+                                pv_type->info.proc_info.return_type_id) != 0 &&
+                            ret_sym != NULL)
+                            pv_ret = ret_sym->type;
+                    }
+                    if (pv_ret != NULL && kgpc_type_is_record(pv_ret))
+                    {
+                        has_record_return = 1;
+                        procvar_sret_size = kgpc_type_sizeof(pv_ret);
+                        if (procvar_sret_size <= 0)
+                            procvar_sret_size = 2 * CODEGEN_POINTER_SIZE_BYTES;
+                    }
+                }
+            }
+            /* call_kgpc_type is set by semcheck field detection and holds the proc
+             * type with return_type_id even when resolved_kgpc_type was overwritten
+             * (e.g. mgr.GetStatus().Name on MSYS overwrites the inner call node's
+             * resolved_kgpc_type to String, masking the record return). */
+            if (!has_record_return)
+            {
+                KgpcType *ck = expr->expr_data.function_call_data.call_kgpc_type;
+                if (ck != NULL && ck->kind == TYPE_KIND_POINTER &&
+                    ck->info.points_to != NULL)
+                    ck = ck->info.points_to;
+                if (ck != NULL && ck->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ck_ret = kgpc_type_get_return_type(ck);
+                    /* Fall back to symbol-table lookup when ck_ret is NULL or is a
+                     * stale freed pointer (MALLOC_PERTURB_ fills freed memory so
+                     * kind != TYPE_KIND_RECORD but pointer is non-NULL, bare MSYS2). */
+                    if (!kgpc_type_is_record(ck_ret) &&
+                        ck->info.proc_info.return_type_id != NULL &&
+                        ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *ret_sym = NULL;
+                        if (FindSymbol(&ret_sym, ctx->symtab,
+                                ck->info.proc_info.return_type_id) != 0 &&
+                            ret_sym != NULL)
+                            ck_ret = ret_sym->type;
+                    }
+                    if (ck_ret != NULL && kgpc_type_is_record(ck_ret))
+                    {
+                        has_record_return = 1;
+                        procvar_sret_size = kgpc_type_sizeof(ck_ret);
+                        if (procvar_sret_size <= 0)
+                            procvar_sret_size = 2 * CODEGEN_POINTER_SIZE_BYTES;
+                    }
+                }
+            }
+            /* Last-resort: check RecordField->cached_proc_return_sret_size, which is
+             * stored in the AST (not a KgpcType) and survives allocator zeroing on bare
+             * MSYS2.  All KgpcType-based paths above can fail when proc_type and
+             * call_kgpc_type are both freed between semcheck and codegen. */
+            if (!has_record_return && pve != NULL && pve->type == EXPR_RECORD_ACCESS)
+            {
+                struct RecordField *rf = codegen_lookup_record_field_expr(pve, ctx);
+                if (rf != NULL && rf->cached_proc_return_sret_size > 8)
+                {
+                    has_record_return = 1;
+                    procvar_sret_size = rf->cached_proc_return_sret_size;
+                }
+            }
+        }
+        /* Write back sret size to RecordField cache so that a later call to the
+         * same proc-var field (e.g. second mgr.GetStatus() call) can use Fix 3
+         * when proc KgpcType is freed between the two codegen traversals.
+         * Three fallback sizes in priority order:
+         *  1. procvar_sret_size: set by pv_type/call_kgpc_type check above
+         *  2. cached_procvar_sret_size: set by semcheck (on the AST node)
+         *  3. codegen_expr_sret_size: resolves via retained call_kgpc_type when
+         *     semcheck didn't populate cached_procvar_sret_size (proc_type NULL). */
+        if (has_record_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call)
+        {
+            long long wb_sret = procvar_sret_size > 8 ? procvar_sret_size :
+                expr->expr_data.function_call_data.cached_procvar_sret_size;
+            if (wb_sret <= 8)
+                wb_sret = codegen_expr_sret_size(expr);
+            struct Expression *pve_wb =
+                expr->expr_data.function_call_data.procedural_var_expr;
+            if (wb_sret > 8 && pve_wb != NULL &&
+                pve_wb->type == EXPR_RECORD_ACCESS)
+            {
+                struct RecordField *rf_wb =
+                    codegen_lookup_record_field_expr(pve_wb, ctx);
+                if (rf_wb != NULL && rf_wb->cached_proc_return_sret_size == 0)
+                    rf_wb->cached_proc_return_sret_size = wb_sret;
+            }
+        }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)
         {
-            long long sret_size = codegen_expr_sret_size(expr);
+            long long sret_size = procvar_sret_size > 0 ?
+                procvar_sret_size : codegen_expr_sret_size(expr);
             if (sret_size <= 0 &&
                 expr_tree_virtual_call_returns_shortstring(ctx, expr))
                 sret_size = 256;

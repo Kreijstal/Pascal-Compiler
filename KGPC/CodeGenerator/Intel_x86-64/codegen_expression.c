@@ -4688,10 +4688,22 @@ long long codegen_expr_sret_size(const struct Expression *expr)
                 long long ret_size = kgpc_type_sizeof(ret_type);
                 if (ret_size > 0)
                     return ret_size;
+                /* ret_type says record/array but the cached size is absent
+                 * (has_cached_size == 0 on the RecordType).  For records,
+                 * fall through to the expr-tag path below which always has
+                 * a safe fallback of 16.  For static arrays / shortstring
+                 * aliases the size should always be known after semcheck,
+                 * so return 0 conservatively for those. */
+                if (!kgpc_type_is_record(ret_type))
+                    return 0;
+                /* Record with uncached size: drop through to outer checks. */
             }
-            if (kgpc_type_is_extended(ret_type))
-                return 10;
-            return 0;
+            else
+            {
+                if (kgpc_type_is_extended(ret_type))
+                    return 10;
+                return 0;
+            }
         }
     }
 
@@ -4706,6 +4718,15 @@ long long codegen_expr_sret_size(const struct Expression *expr)
         }
         return 16;
     }
+
+    /* Secondary fallback: if we dropped through from EXPR_FUNCTION_CALL with a
+     * record ret_type but expr_has_type_tag returned false (e.g. resolved_kgpc_type
+     * was set to the accessed field's type such as String, masking the record
+     * return type), trust ret_type directly.  The two-pointer-size estimate covers
+     * all records that use SRET on Windows x64; codegen_sizeof_record_type will
+     * compute the exact size when it allocates the sret slot. */
+    if (ret_type != NULL && kgpc_type_is_record(ret_type))
+        return 2 * CODEGEN_POINTER_SIZE_BYTES;
 
     /* ShortStrings are passed via SRET because they're small fixed-size arrays.
      * Use the actual sized-shortstring storage when type metadata is available. */
@@ -4750,6 +4771,12 @@ int expr_returns_sret(const struct Expression *expr)
 {
     if (expr != NULL && expr->type == EXPR_FUNCTION_CALL)
     {
+        /* Procvar calls take priority: a procvar returning a record keeps its
+         * sret ABI even if builtin_call_lowering was set on the same expression
+         * node (e.g. BUILTIN_CALL_STRPAS placed by WriteLn string handling). */
+        if (expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.cached_procvar_sret_size > 8)
+            return 1;
         if (expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS)
             return 0;
     }

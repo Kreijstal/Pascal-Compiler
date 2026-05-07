@@ -1874,7 +1874,45 @@ int semcheck_funccall(int *type_return,
                     HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
                         call_type->info.proc_info.return_type_id);
                     if (ret_node != NULL && ret_node->type != NULL)
+                    {
                         ret_type = ret_node->type;
+                        /* Materialize return_type so downstream codegen can find it
+                         * without needing to re-run a symbol table lookup.  Same
+                         * pattern as SemCheck_Expr_Types.c when it resolves the
+                         * implicit-funcptr-call return type. */
+                        kgpc_type_retain(ret_type);
+                        call_type->info.proc_info.return_type = ret_type;
+                    }
+                }
+            }
+
+            /* Look up the RecordField for pve so we can write-through the sret
+             * size cache (first call) and read it back (second call, freed type). */
+            struct RecordField *pve_field_desc = NULL;
+            {
+                struct Expression *pve2 =
+                    expr->expr_data.function_call_data.procedural_var_expr;
+                if (pve2 != NULL && pve2->type == EXPR_RECORD_ACCESS)
+                {
+                    struct Expression *recv2 =
+                        pve2->expr_data.record_access_data.record_expr;
+                    const char *fname2 = pve2->expr_data.record_access_data.field_id;
+                    if (recv2 != NULL && recv2->type == EXPR_VAR_ID && fname2 != NULL)
+                    {
+                        HashNode_t *rn = NULL;
+                        if (FindSymbol(&rn, symtab, recv2->expr_data.id) != 0 &&
+                            rn != NULL)
+                        {
+                            struct RecordType *rrt = get_record_type_from_node(rn);
+                            if (rrt != NULL)
+                            {
+                                long long foff = 0;
+                                resolve_record_field(symtab, rrt, fname2,
+                                                     &pve_field_desc, &foff,
+                                                     expr->line_num, 1);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1887,6 +1925,17 @@ int semcheck_funccall(int *type_return,
             {
                 *type_return = RECORD_TYPE;
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                if (expr->expr_data.function_call_data.cached_procvar_sret_size == 0)
+                {
+                    long long sz = kgpc_type_sizeof(ret_type);
+                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                }
+                /* Write-through: persist sret size in RecordField AST cache so
+                 * codegen can recover when proc_type is freed (MSYS2 UAF). */
+                if (pve_field_desc != NULL)
+                    pve_field_desc->cached_proc_return_sret_size =
+                        expr->expr_data.function_call_data.cached_procvar_sret_size;
             }
             else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
             {
@@ -1904,8 +1953,20 @@ int semcheck_funccall(int *type_return,
             }
             else
             {
-                *type_return = PROCEDURE;
-                semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                /* Read-back: if proc_type was freed (MSYS2 UAF), recover the sret
+                 * size that a prior semcheck pass wrote into the RecordField cache. */
+                if (pve_field_desc != NULL &&
+                    pve_field_desc->cached_proc_return_sret_size > 0)
+                {
+                    *type_return = RECORD_TYPE;
+                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                        pve_field_desc->cached_proc_return_sret_size;
+                }
+                else
+                {
+                    *type_return = PROCEDURE;
+                    semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                }
             }
         }
         return 0;
@@ -3323,6 +3384,17 @@ int semcheck_funccall(int *type_return,
                         kgpc_type_retain(proc_type);
                         is_proc_field = 1;
                     }
+                    /* FindSymbol may fail to match TYPE_KIND_PROCEDURE on some hosts
+                     * (e.g. bare MSYS2 where freed-KgpcType memory is zeroed/perturbed).
+                     * field_desc->proc_type is pre-retained by semcheck_env_types and is
+                     * always the correct fallback. */
+                    if (proc_type == NULL && field_desc->proc_type != NULL &&
+                        field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        proc_type = field_desc->proc_type;
+                        kgpc_type_retain(proc_type);
+                        is_proc_field = 1;
+                    }
                 }
                 else if (field_desc->proc_type != NULL &&
                          field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
@@ -3332,6 +3404,13 @@ int semcheck_funccall(int *type_return,
                     is_proc_field = 1;
                 }
 
+                /* Last-resort recovery: a prior semcheck of this same field successfully
+                 * resolved proc_type and cached the sret size in the RecordField.  Use that
+                 * to recognise the field as procedural even when the KgpcType is no longer
+                 * reachable (bare MSYS2 MALLOC_PERTURB_ use-after-free scenario). */
+                if (!is_proc_field && proc_type == NULL &&
+                    field_desc->cached_proc_return_sret_size > 0)
+                    is_proc_field = 1;
                 if (is_proc_field)
                 {
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -3358,6 +3437,11 @@ int semcheck_funccall(int *type_return,
                     proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
                     proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
                     proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
+                    /* Cache the RecordType (AST node) on the receiver so codegen can find
+                     * the field without going through KgpcType (which may be freed on bare
+                     * MSYS2 between semcheck and codegen). */
+                    if (recv_record != NULL)
+                        receiver_expr->record_type = recv_record;
                     semcheck_expr_set_resolved_type(proc_expr, PROCEDURE);
 
                     /* Validate arguments against the procedural type if available */
@@ -3434,8 +3518,15 @@ int semcheck_funccall(int *type_return,
                             HashNode_t *ret_node =
                                 semcheck_find_preferred_type_node(symtab, proc_type->info.proc_info.return_type_id);
                             if (ret_node != NULL && ret_node->type != NULL)
+                            {
                                 ret_type = ret_node->type;
+                                kgpc_type_retain(ret_type);
+                                proc_type->info.proc_info.return_type = ret_type;
+                            }
                         }
+                        /* Update hash type now that return_type is materialized */
+                        if (ret_type != NULL)
+                            expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
                         /* Resolve alias metadata to get the underlying type */
                         if (ret_type != NULL) {
                             struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
@@ -3463,6 +3554,26 @@ int semcheck_funccall(int *type_return,
                                 destroy_kgpc_type(expr->resolved_kgpc_type);
                             kgpc_type_retain(ret_type);
                             expr->resolved_kgpc_type = ret_type;
+                            long long sz = kgpc_type_sizeof(ret_type);
+                            long long new_sret = (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                            /* If a prior semcheck already cached a valid sret size, trust it over
+                             * the current computation — on bare MSYS2 the freed proc_type slot may
+                             * be reused for a different KgpcType, giving the wrong record size. */
+                            if (field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                                new_sret = field_desc->cached_proc_return_sret_size;
+                            expr->expr_data.function_call_data.cached_procvar_sret_size = new_sret;
+                            if (field_desc != NULL)
+                            {
+                                if (field_desc->cached_proc_return_sret_size == 0)
+                                    field_desc->cached_proc_return_sret_size = new_sret;
+                                /* Retain the return type so subsequent calls can recover it
+                                 * even after proc_type has been freed (bare MSYS2 UAF). */
+                                if (field_desc->cached_proc_return_kgpc_type == NULL)
+                                {
+                                    kgpc_type_retain(ret_type);
+                                    field_desc->cached_proc_return_kgpc_type = ret_type;
+                                }
+                            }
                         }
                         else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
                         {
@@ -3476,17 +3587,56 @@ int semcheck_funccall(int *type_return,
                         }
                         else if (ret_type != NULL)
                         {
-                            /* Fallback - unhandled type kind */
-                            *type_return = PROCEDURE;
-                            semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                            /* Fallback - unhandled or corrupted return type kind.
+                             * On bare MSYS2 (MALLOC_PERTURB_=48), a freed TStatus
+                             * KgpcType gets 0x30-filled so its kind != TYPE_KIND_RECORD.
+                             * If a prior semcheck of this field cached the sret size,
+                             * use it to restore sret allocation without re-dereferencing
+                             * the corrupted type. */
+                            if (field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                            {
+                                *type_return = RECORD_TYPE;
+                                expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                    field_desc->cached_proc_return_sret_size;
+                            }
+                            else
+                            {
+                                *type_return = PROCEDURE;
+                                semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                            }
                         }
                         /* If ret_type is NULL and we didn't set type_return above (from alias),
-                         * keep whatever was set */
+                         * fall through to the cache check below. */
+                        if (expr->expr_data.function_call_data.cached_procvar_sret_size == 0 &&
+                            field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                        {
+                            expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                field_desc->cached_proc_return_sret_size;
+                        }
                     }
                     else
                     {
-                        *type_return = PROCEDURE;
-                        semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                        /* proc_type was unavailable (freed/corrupted on bare MSYS2).
+                         * If a prior semcheck retained the return KgpcType, use it to
+                         * produce RECORD_TYPE so the outer field-chain access resolves. */
+                        if (field_desc != NULL && field_desc->cached_proc_return_kgpc_type != NULL)
+                        {
+                            *type_return = RECORD_TYPE;
+                            if (expr->resolved_kgpc_type != NULL)
+                                destroy_kgpc_type(expr->resolved_kgpc_type);
+                            kgpc_type_retain(field_desc->cached_proc_return_kgpc_type);
+                            expr->resolved_kgpc_type = field_desc->cached_proc_return_kgpc_type;
+                            expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                field_desc->cached_proc_return_sret_size;
+                        }
+                        else
+                        {
+                            *type_return = PROCEDURE;
+                            semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                            if (field_desc != NULL && field_desc->cached_proc_return_sret_size > 0)
+                                expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                    field_desc->cached_proc_return_sret_size;
+                        }
                     }
 
                     expr->expr_data.function_call_data.is_procedural_var_call = 1;
@@ -4284,6 +4434,12 @@ int semcheck_funccall(int *type_return,
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                if (ret->kind == TYPE_KIND_RECORD)
+                                {
+                                    long long sz = kgpc_type_sizeof(ret);
+                                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                                }
                             }
                             else
                             {
@@ -4931,6 +5087,12 @@ int semcheck_funccall(int *type_return,
                                 {
                                     *type_return = semcheck_tag_from_kgpc(ret);
                                     semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                    if (ret->kind == TYPE_KIND_RECORD)
+                                    {
+                                        long long sz = kgpc_type_sizeof(ret);
+                                        expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                            (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                                    }
                                 }
                                 else
                                 {
@@ -6062,6 +6224,9 @@ int semcheck_funccall(int *type_return,
                 else if (return_type->kind == TYPE_KIND_RECORD)
                 {
                     *type_return = RECORD_TYPE;
+                    long long sz = kgpc_type_sizeof(return_type);
+                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
                 }
                 else if (return_type->kind == TYPE_KIND_POINTER)
                 {
@@ -6080,7 +6245,7 @@ int semcheck_funccall(int *type_return,
                 /* It's a procedure (no return value) */
                 *type_return = PROCEDURE;
             }
-            
+
             /* Mark this as a procedural variable call */
             expr->expr_data.function_call_data.is_procedural_var_call = 1;
             expr->expr_data.function_call_data.procedural_var_symbol = first_candidate;
@@ -6698,6 +6863,12 @@ method_call_resolved:
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                if (ret->kind == TYPE_KIND_RECORD)
+                                {
+                                    long long sz = kgpc_type_sizeof(ret);
+                                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                                }
                             }
 
                             /* Convert to procedural variable call */
