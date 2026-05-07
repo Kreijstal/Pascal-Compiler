@@ -4302,6 +4302,12 @@ int semcheck_funccall(int *type_return,
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                if (ret->kind == TYPE_KIND_RECORD)
+                                {
+                                    long long sz = kgpc_type_sizeof(ret);
+                                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                                }
                             }
                             else
                             {
@@ -4949,6 +4955,12 @@ int semcheck_funccall(int *type_return,
                                 {
                                     *type_return = semcheck_tag_from_kgpc(ret);
                                     semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                    if (ret->kind == TYPE_KIND_RECORD)
+                                    {
+                                        long long sz = kgpc_type_sizeof(ret);
+                                        expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                            (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                                    }
                                 }
                                 else
                                 {
@@ -6719,6 +6731,12 @@ method_call_resolved:
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                if (ret->kind == TYPE_KIND_RECORD)
+                                {
+                                    long long sz = kgpc_type_sizeof(ret);
+                                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                                }
                             }
 
                             /* Convert to procedural variable call */
