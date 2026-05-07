@@ -1886,6 +1886,36 @@ int semcheck_funccall(int *type_return,
                 }
             }
 
+            /* Look up the RecordField for pve so we can write-through the sret
+             * size cache (first call) and read it back (second call, freed type). */
+            struct RecordField *pve_field_desc = NULL;
+            {
+                struct Expression *pve2 =
+                    expr->expr_data.function_call_data.procedural_var_expr;
+                if (pve2 != NULL && pve2->type == EXPR_RECORD_ACCESS)
+                {
+                    struct Expression *recv2 =
+                        pve2->expr_data.record_access_data.record_expr;
+                    const char *fname2 = pve2->expr_data.record_access_data.field_id;
+                    if (recv2 != NULL && recv2->type == EXPR_VAR_ID && fname2 != NULL)
+                    {
+                        HashNode_t *rn = NULL;
+                        if (FindSymbol(&rn, symtab, recv2->expr_data.id) != 0 &&
+                            rn != NULL)
+                        {
+                            struct RecordType *rrt = get_record_type_from_node(rn);
+                            if (rrt != NULL)
+                            {
+                                long long foff = 0;
+                                resolve_record_field(symtab, rrt, fname2,
+                                                     &pve_field_desc, &foff,
+                                                     expr->line_num, 1);
+                            }
+                        }
+                    }
+                }
+            }
+
             if (ret_type != NULL && ret_type->kind == TYPE_KIND_PRIMITIVE)
             {
                 *type_return = kgpc_type_get_primitive_tag(ret_type);
@@ -1901,6 +1931,11 @@ int semcheck_funccall(int *type_return,
                     expr->expr_data.function_call_data.cached_procvar_sret_size =
                         (sz > 0) ? sz : 2 * (long long)sizeof(void *);
                 }
+                /* Write-through: persist sret size in RecordField AST cache so
+                 * codegen can recover when proc_type is freed (MSYS2 UAF). */
+                if (pve_field_desc != NULL)
+                    pve_field_desc->cached_proc_return_sret_size =
+                        expr->expr_data.function_call_data.cached_procvar_sret_size;
             }
             else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
             {
@@ -1918,8 +1953,20 @@ int semcheck_funccall(int *type_return,
             }
             else
             {
-                *type_return = PROCEDURE;
-                semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                /* Read-back: if proc_type was freed (MSYS2 UAF), recover the sret
+                 * size that a prior semcheck pass wrote into the RecordField cache. */
+                if (pve_field_desc != NULL &&
+                    pve_field_desc->cached_proc_return_sret_size > 0)
+                {
+                    *type_return = RECORD_TYPE;
+                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                        pve_field_desc->cached_proc_return_sret_size;
+                }
+                else
+                {
+                    *type_return = PROCEDURE;
+                    semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                }
             }
         }
         return 0;
