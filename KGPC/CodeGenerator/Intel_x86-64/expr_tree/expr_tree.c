@@ -3738,6 +3738,19 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     }
                 }
             }
+            /* Last-resort: check RecordField->cached_proc_return_sret_size, which is
+             * stored in the AST (not a KgpcType) and survives allocator zeroing on bare
+             * MSYS2.  All KgpcType-based paths above can fail when proc_type and
+             * call_kgpc_type are both freed between semcheck and codegen. */
+            if (!has_record_return && pve != NULL && pve->type == EXPR_RECORD_ACCESS)
+            {
+                struct RecordField *rf = codegen_lookup_record_field_expr(pve, ctx);
+                if (rf != NULL && rf->cached_proc_return_sret_size > 8)
+                {
+                    has_record_return = 1;
+                    procvar_sret_size = rf->cached_proc_return_sret_size;
+                }
+            }
         }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
