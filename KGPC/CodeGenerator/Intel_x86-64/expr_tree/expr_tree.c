@@ -3755,15 +3755,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Write back sret size to RecordField cache so that a later call to the
          * same proc-var field (e.g. second mgr.GetStatus() call) can use Fix 3
          * when proc KgpcType is freed between the two codegen traversals.
-         * Placed OUTSIDE the !has_record_return guard because has_record_return
-         * may have been set by expr_returns_sret() (path #1) before the guard,
-         * in which case procvar_sret_size stays 0 and the inner writeback is skipped.
-         * Fall back to cached_procvar_sret_size which semcheck stored on the node. */
+         * Three fallback sizes in priority order:
+         *  1. procvar_sret_size: set by pv_type/call_kgpc_type check above
+         *  2. cached_procvar_sret_size: set by semcheck (on the AST node)
+         *  3. codegen_expr_sret_size: resolves via retained call_kgpc_type when
+         *     semcheck didn't populate cached_procvar_sret_size (proc_type NULL). */
         if (has_record_return &&
             expr->expr_data.function_call_data.is_procedural_var_call)
         {
             long long wb_sret = procvar_sret_size > 8 ? procvar_sret_size :
                 expr->expr_data.function_call_data.cached_procvar_sret_size;
+            if (wb_sret <= 8)
+                wb_sret = codegen_expr_sret_size(expr);
             struct Expression *pve_wb =
                 expr->expr_data.function_call_data.procedural_var_expr;
             if (wb_sret > 8 && pve_wb != NULL &&
