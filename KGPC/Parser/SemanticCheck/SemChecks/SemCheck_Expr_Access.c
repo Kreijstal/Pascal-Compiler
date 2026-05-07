@@ -6080,6 +6080,9 @@ int semcheck_funccall(int *type_return,
                 else if (return_type->kind == TYPE_KIND_RECORD)
                 {
                     *type_return = RECORD_TYPE;
+                    long long sz = kgpc_type_sizeof(return_type);
+                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
                 }
                 else if (return_type->kind == TYPE_KIND_POINTER)
                 {
@@ -6098,7 +6101,7 @@ int semcheck_funccall(int *type_return,
                 /* It's a procedure (no return value) */
                 *type_return = PROCEDURE;
             }
-            
+
             /* Mark this as a procedural variable call */
             expr->expr_data.function_call_data.is_procedural_var_call = 1;
             expr->expr_data.function_call_data.procedural_var_symbol = first_candidate;
