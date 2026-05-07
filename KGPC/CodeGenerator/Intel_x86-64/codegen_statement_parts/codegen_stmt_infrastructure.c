@@ -2453,7 +2453,16 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
          (expr->resolved_kgpc_type != NULL &&
           expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
           !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type)) ||
-         expr_returns_sret(expr)))
+         expr_returns_sret(expr) ||
+         /* Procvar call whose call_kgpc_type reveals a record return — covers cases
+          * where resolved_kgpc_type was overwritten (e.g. mgr.GetStatus().Name on
+          * Windows/MSYS2) and cached_procvar_sret_size was not yet populated. */
+         (expr->expr_data.function_call_data.is_procedural_var_call &&
+          expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+          expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+          kgpc_type_get_return_type(expr->expr_data.function_call_data.call_kgpc_type) != NULL &&
+          kgpc_type_is_record(
+              kgpc_type_get_return_type(expr->expr_data.function_call_data.call_kgpc_type)))))
     {
         /* Record-valued function calls fall into two cases:
          *

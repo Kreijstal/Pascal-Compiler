@@ -1895,6 +1895,12 @@ int semcheck_funccall(int *type_return,
             {
                 *type_return = RECORD_TYPE;
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                if (expr->expr_data.function_call_data.cached_procvar_sret_size == 0)
+                {
+                    long long sz = kgpc_type_sizeof(ret_type);
+                    expr->expr_data.function_call_data.cached_procvar_sret_size =
+                        (sz > 0) ? sz : 2 * (long long)sizeof(void *);
+                }
             }
             else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
             {
