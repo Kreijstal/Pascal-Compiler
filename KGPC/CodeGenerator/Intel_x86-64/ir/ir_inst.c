@@ -216,6 +216,102 @@ void ir_print_function(FILE *out, const char *fn_name, ListNode_t *inst_list)
     fprintf(out, "; --- End: %s ---\n", fn_name ? fn_name : "<unknown>");
 }
 
+void ir_print_vregs(FILE *out, const char *fn_name, ListNode_t *inst_list)
+{
+    assert(out != NULL);
+
+    fprintf(out, "; --- vregs: %s ---\n", fn_name ? fn_name : "<unknown>");
+
+    while (inst_list != NULL)
+    {
+        if (inst_list->type == LIST_IR_INST)
+        {
+            IrInst_t *inst = (IrInst_t *)inst_list->cur;
+            if (inst == NULL)
+            {
+                inst_list = inst_list->next;
+                continue;
+            }
+
+            int has_vregs = 0;
+            for (int i = 0; i < inst->n_defs && !has_vregs; ++i)
+                if (inst->defs[i] != NULL && inst->defs[i]->vreg_id >= 0)
+                    has_vregs = 1;
+            for (int i = 0; i < inst->n_uses && !has_vregs; ++i)
+                if (inst->uses[i] != NULL && inst->uses[i]->vreg_id >= 0)
+                    has_vregs = 1;
+
+            if (!has_vregs)
+            {
+                const char *text = inst->text ? inst->text : "";
+                fputs(text, out);
+            }
+            else
+            {
+                /* Strip trailing newline from text for inline annotation. */
+                const char *text = inst->text ? inst->text : "";
+                size_t len = strlen(text);
+                if (len > 0 && text[len - 1] == '\n')
+                    --len;
+                fwrite(text, 1, len, out);
+
+                int col = 40;
+                if ((int)len < col)
+                    for (int i = (int)len; i < col; ++i)
+                        fputc(' ', out);
+                else
+                    fputc(' ', out);
+
+                fputs("; defs:", out);
+                if (inst->n_defs == 0)
+                {
+                    fputs(" -", out);
+                }
+                else
+                {
+                    for (int i = 0; i < inst->n_defs; ++i)
+                    {
+                        Register_t *r = inst->defs[i];
+                        if (r != NULL && r->vreg_id >= 0)
+                            fprintf(out, " vreg_%d(%s)", r->vreg_id,
+                                    reg_name_stripped(r->bit_64));
+                        else
+                            fputs(" -", out);
+                    }
+                }
+
+                fputs(", uses:", out);
+                if (inst->n_uses == 0)
+                {
+                    fputs(" -", out);
+                }
+                else
+                {
+                    for (int i = 0; i < inst->n_uses; ++i)
+                    {
+                        Register_t *r = inst->uses[i];
+                        if (r != NULL && r->vreg_id >= 0)
+                            fprintf(out, " vreg_%d(%s)", r->vreg_id,
+                                    reg_name_stripped(r->bit_64));
+                        else
+                            fputs(" -", out);
+                    }
+                }
+                fputc('\n', out);
+            }
+        }
+        else
+        {
+            const char *text = (const char *)inst_list->cur;
+            if (text != NULL)
+                fputs(text, out);
+        }
+        inst_list = inst_list->next;
+    }
+
+    fprintf(out, "; --- End vregs: %s ---\n", fn_name ? fn_name : "<unknown>");
+}
+
 /* -----------------------------------------------------------------------
  * Deserialisation
  * ----------------------------------------------------------------------- */

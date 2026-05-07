@@ -236,6 +236,10 @@ static int FLAG_DUMP_IR_CFG = 0;
  * after each function's code generation. */
 static int FLAG_DUMP_IR_LIVENESS = 0;
 
+/* Flag for --dump-ir-after=vregs: dump virtual register ID assignments to
+ * stderr after each function's code generation. */
+static int FLAG_DUMP_IR_VREGS = 0;
+
 void set_codegen_cache_miss_flag(void)
 {
     FLAG_CODEGEN_CACHE_MISS = 1;
@@ -279,4 +283,14 @@ void set_dump_ir_liveness_flag(void)
 int dump_ir_liveness_flag(void)
 {
     return FLAG_DUMP_IR_LIVENESS;
+}
+
+void set_dump_ir_vregs_flag(void)
+{
+    FLAG_DUMP_IR_VREGS = 1;
+}
+
+int dump_ir_vregs_flag(void)
+{
+    return FLAG_DUMP_IR_VREGS;
 }

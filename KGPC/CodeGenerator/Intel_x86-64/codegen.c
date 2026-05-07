@@ -4624,6 +4624,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             liveness_free(liveness);
             cfg_free(cfg);
         }
+        if (dump_ir_vregs_flag())
+            ir_print_vregs(stderr, init_label, inst_list);
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -4703,6 +4705,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             liveness_free(liveness);
             cfg_free(cfg);
         }
+        if (dump_ir_vregs_flag())
+            ir_print_vregs(stderr, final_label, inst_list);
         free_inst_list(inst_list);
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
@@ -7317,6 +7321,8 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         liveness_free(liveness);
         cfg_free(cfg);
     }
+    if (dump_ir_vregs_flag())
+        ir_print_vregs(stderr, prgm_name, inst_list);
     free_inst_list(inst_list);
 
     /* Emit INITFINAL table — FPC system unit references this to run unit
@@ -8673,6 +8679,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         liveness_free(liveness);
         cfg_free(cfg);
     }
+    if (dump_ir_vregs_flag())
+        ir_print_vregs(stderr, sub_id, inst_list);
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -9652,6 +9660,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         liveness_free(liveness);
         cfg_free(cfg);
     }
+    if (dump_ir_vregs_flag())
+        ir_print_vregs(stderr, sub_id, inst_list);
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -10197,7 +10207,8 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
         liveness_free(liveness);
         cfg_free(cfg);
     }
-    
+    if (dump_ir_vregs_flag())
+        ir_print_vregs(stderr, anon->generated_name, inst_list);
     free_inst_list(inst_list);
     pop_stackscope();
     

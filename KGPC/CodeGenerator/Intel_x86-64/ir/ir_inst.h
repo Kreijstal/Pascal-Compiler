@@ -99,6 +99,13 @@ void ir_print_inst(FILE *out, const IrInst_t *inst);
  * (IrInst_t*).  The function emits a header/footer comment block. */
 void ir_print_function(FILE *out, const char *fn_name, ListNode_t *inst_list);
 
+/* Print virtual register ID assignments for each instruction in inst_list.
+ * For each LIST_IR_INST node that has defs or uses with assigned vreg_ids,
+ * emits a line of the form:
+ *   vreg_N(regname) [def|use] ...  <instruction-text>
+ * Instructions with no vreg metadata are printed verbatim. */
+void ir_print_vregs(FILE *out, const char *fn_name, ListNode_t *inst_list);
+
 /* -----------------------------------------------------------------------
  * Deserialisation
  * ----------------------------------------------------------------------- */
