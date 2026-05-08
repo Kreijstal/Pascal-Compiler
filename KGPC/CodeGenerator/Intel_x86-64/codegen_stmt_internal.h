@@ -27,6 +27,7 @@
 #include "asm_emit.h"
 #include "expr_tree/expr_tree.h"
 #include "codegen_expression.h"
+#include "codegen_expr_sizeof.h"
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
@@ -193,7 +194,6 @@ ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
     struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list,
     int *coerced_to_real);
 ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg);
-long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx);
 ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
     const int *int_offsets, const int *xmm_offsets);
 int codegen_set_iteration_upper_bound(CodeGenContext *ctx, KgpcType *set_type);
