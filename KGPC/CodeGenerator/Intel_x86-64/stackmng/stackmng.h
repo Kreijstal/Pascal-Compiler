@@ -95,8 +95,9 @@ typedef struct RegStack
     
 #if USE_GRAPH_COLORING_ALLOCATOR
     /* Live range tracking for graph coloring */
-    ListNode_t *active_live_ranges;  /* List of LiveRange_t* currently being tracked */
-    int next_live_range_id;          /* ID counter for live ranges */
+    ListNode_t *active_live_ranges;       /* List of LiveRange_t* currently being tracked */
+    ListNode_t *active_live_ranges_tail;  /* Tail pointer for O(1) append */
+    int next_live_range_id;               /* ID counter for live ranges */
 #endif
 } RegStack_t;
 
@@ -180,6 +181,7 @@ typedef struct Register
     unsigned long long last_use_seq;
     RegisterSpillCallback spill_callback;
     void *spill_context;
+    int vreg_id;   /* -1 = not yet assigned a virtual ID */
     
 #if USE_GRAPH_COLORING_ALLOCATOR
     /* Forward declaration from graph_coloring_allocator.h */

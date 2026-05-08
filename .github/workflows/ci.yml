@@ -97,7 +97,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
+        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev fp-compiler
         pip install meson ninja
 
     - name: Cache FPC RTL source

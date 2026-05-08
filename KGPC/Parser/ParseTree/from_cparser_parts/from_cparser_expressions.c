@@ -72,6 +72,106 @@ char *collect_asm_text(ast_t *block_node) {
     return buffer;
 }
 
+/*
+ * Look up the High/Low of a builtin type by name.
+ * Returns 1 if known, 0 otherwise.  Output values are written even on
+ * 32-bit hosts so callers can resolve subranges that reference target
+ * (x86-64) widths.  Mirrors get_builtin_type_bounds in SemCheck_const_eval
+ * but is needed in the early from_cparser phase where semcheck isn't
+ * yet available.
+ */
+static int extract_builtin_type_bounds(const char *name,
+    long long *low_out, long long *high_out)
+{
+    if (name == NULL)
+        return 0;
+    /* Pointer-sized types: target is x86-64, treat as 64-bit. */
+    if (pascal_identifier_equals(name, "PtrInt") ||
+        pascal_identifier_equals(name, "SizeInt") ||
+        pascal_identifier_equals(name, "NativeInt"))
+    {
+        *low_out = (-9223372036854775807LL - 1);
+        *high_out = 9223372036854775807LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "PtrUInt") ||
+        pascal_identifier_equals(name, "SizeUInt") ||
+        pascal_identifier_equals(name, "NativeUInt"))
+    {
+        *low_out = 0LL;
+        /* Const evaluator is signed long long; clamp to INT64_MAX. */
+        *high_out = 9223372036854775807LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "Int64"))
+    {
+        *low_out = (-9223372036854775807LL - 1);
+        *high_out = 9223372036854775807LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "QWord") ||
+        pascal_identifier_equals(name, "UInt64"))
+    {
+        *low_out = 0LL;
+        *high_out = 9223372036854775807LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "LongInt") ||
+        pascal_identifier_equals(name, "Integer") ||
+        pascal_identifier_equals(name, "ValSInt"))
+    {
+        *low_out = -2147483648LL;
+        *high_out = 2147483647LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "Cardinal") ||
+        pascal_identifier_equals(name, "LongWord") ||
+        pascal_identifier_equals(name, "DWord"))
+    {
+        *low_out = 0LL;
+        *high_out = 4294967295LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "SmallInt"))
+    {
+        *low_out = -32768LL;
+        *high_out = 32767LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "Word"))
+    {
+        *low_out = 0LL;
+        *high_out = 65535LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "ShortInt"))
+    {
+        *low_out = -128LL;
+        *high_out = 127LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "Byte"))
+    {
+        *low_out = 0LL;
+        *high_out = 255LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "Boolean"))
+    {
+        *low_out = 0LL;
+        *high_out = 1LL;
+        return 1;
+    }
+    if (pascal_identifier_equals(name, "Char") ||
+        pascal_identifier_equals(name, "AnsiChar"))
+    {
+        *low_out = 0LL;
+        *high_out = 255LL;
+        return 1;
+    }
+    return 0;
+}
+
 int extract_constant_int(struct Expression *expr, long long *out_value) {
     if (expr == NULL || out_value == NULL)
         return 1;
@@ -124,6 +224,29 @@ int extract_constant_int(struct Expression *expr, long long *out_value) {
         if (expr->expr_data.mulop_data.mulop_type == STAR) {
             *out_value = left_value * right_value;
             return 0;
+        }
+        return 1;
+    }
+    case EXPR_FUNCTION_CALL: {
+        /* Resolve High(T)/Low(T) for builtin numeric types using the
+           target machine's widths.  Without this, subrange types like
+           "0..high(ptrint)" lose their upper bound during early type
+           construction and end up tagged as 32-bit (truncating heap
+           bookkeeping fields). */
+        const char *fname = expr->expr_data.function_call_data.id;
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        int is_high = (fname != NULL && pascal_identifier_equals(fname, "High"));
+        int is_low  = (fname != NULL && pascal_identifier_equals(fname, "Low"));
+        if ((is_high || is_low) && args != NULL && args->cur != NULL) {
+            struct Expression *arg = (struct Expression *)args->cur;
+            if (arg != NULL && arg->type == EXPR_VAR_ID && arg->expr_data.id != NULL) {
+                long long low_val = 0;
+                long long high_val = 0;
+                if (extract_builtin_type_bounds(arg->expr_data.id, &low_val, &high_val)) {
+                    *out_value = is_high ? high_val : low_val;
+                    return 0;
+                }
+            }
         }
         return 1;
     }

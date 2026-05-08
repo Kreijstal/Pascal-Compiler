@@ -2604,6 +2604,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             temp_alias.array_element_storage_size = (int)esize;
                     }
 
+                    /* For dynamic arrays: ensure array_element_storage_size is populated on the
+                     * TypeAlias so kgpc_type_get_array_element_size can always return the correct
+                     * value without requiring symtab (covers deferred/forward-reference cases). */
+                    if (has_alias && temp_alias.array_element_storage_size == 0 &&
+                        element_type != NULL &&
+                        kgpc_type_is_dynamic_array(array_type))
+                    {
+                        long long esize = kgpc_type_sizeof(element_type);
+                        if (esize > 0 && esize <= INT_MAX)
+                            temp_alias.array_element_storage_size = (int)esize;
+                    }
+
                     if (has_alias)
                         kgpc_type_set_type_alias(array_type, &temp_alias);
 

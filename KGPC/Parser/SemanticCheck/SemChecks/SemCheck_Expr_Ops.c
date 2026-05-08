@@ -695,7 +695,7 @@ int semcheck_relop(int *type_return,
                     type_first != CHAR_TYPE && type_first != BOOL &&
                     type_first != UNKNOWN_TYPE)
                 {
-                    /* Fallback: check KgpcType for char/integer (e.g. PPAnsiChar^[i] indexing) */
+                    /* Secondary check: KgpcType for char/integer (e.g. PPAnsiChar^[i] indexing) */
                     int in_ok = 0;
                     if (expr1 != NULL && expr1->resolved_kgpc_type != NULL)
                     {
@@ -730,7 +730,7 @@ int semcheck_relop(int *type_return,
 
                     record_type_name = get_expr_type_name(record_expr, symtab);
                     if (record_type_name == NULL)
-                        goto relop_fallback;
+                        goto relop_implicit_conversion;
 
                     if (record_type_name != NULL)
                     {
@@ -796,7 +796,7 @@ int semcheck_relop(int *type_return,
                                 semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
                                 operator_node != NULL)
                             {
-                                /* fallback for return-type-disambiguated names not indexed by base id */
+                                /* prefix search: finds return-type-disambiguated names not indexed by base id */
                             }
                             if (operator_node != NULL)
                             {
@@ -845,7 +845,7 @@ int semcheck_relop(int *type_return,
                         }
                     }
                 }
-relop_fallback:
+relop_implicit_conversion:
                 
                 semcheck_coerce_char_string_operands(&type_first, expr1, &type_second, expr2);
 
@@ -1081,7 +1081,7 @@ relop_fallback:
                         unknown_nil_ok = 1;
                 }
 
-                /* Fallback for record/scalar equality where only implicit casts are
+                /* Implicit conversion path for record/scalar equality: only implicit casts are
                  * available at this point (e.g. TUInt24Rec overload bodies in FPC RTL).
                  * Try to cast the record operand to the scalar operand type and re-check. */
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok &&
@@ -1198,7 +1198,7 @@ relop_fallback:
                                 semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
                                 operator_node != NULL)
                             {
-                                /* fallback */
+                                /* prefix search: finds return-type-disambiguated names not indexed by base id */
                             }
                             if (operator_node != NULL && operator_node->type != NULL &&
                                 kgpc_type_is_procedure(operator_node->type))
@@ -1372,8 +1372,8 @@ relop_fallback:
                     }
                 }
 
-                /* Record/scalar implicit conversion fallback for ordering relops.
-                 * Same pattern as the equality relop fallback above (lines ~925-959). */
+                /* Implicit conversion path for record/scalar ordering relops.
+                 * Same pattern as the equality relop implicit conversion above (lines ~925-959). */
                 if (!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok &&
                     !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok &&
                     !record_ok && !set_ok &&
@@ -2359,7 +2359,7 @@ static struct RecordType *semcheck_resolve_helper_self_record(SymTab_t *symtab,
         {
             self_record = helper_record;
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                fprintf(stderr, "[SemCheck] varid fallback: Using type helper %s for Self\n",
+                fprintf(stderr, "[SemCheck] varid type-helper lookup: Using type helper %s for Self\n",
                     helper_record->type_id ? helper_record->type_id : "(null)");
             }
         }
@@ -3130,7 +3130,7 @@ int semcheck_varid(int *type_return,
                     if (trace_nonlocal != NULL && pascal_identifier_equals(id, trace_nonlocal))
                     {
                         fprintf(stderr,
-                            "[KGPC_TRACE_NONLOCAL] sem_varid self-fallback id=%s self_node=%p self_hash=%d\n",
+                            "[KGPC_TRACE_NONLOCAL] sem_varid self-lookup id=%s self_node=%p self_hash=%d\n",
                             id, (void *)self_node, self_node->hash_type);
                     }
                 }
@@ -3325,7 +3325,7 @@ resolved:;
     {
         if (!scope_return)
         {
-            /* FPC-style module property fallback: resolve Foo as GetFoo() when present. */
+            /* FPC-style module property getter: resolve Foo as GetFoo() when present. */
             if (with_status != 0 && id != NULL)
             {
                 size_t id_len = strlen(id);
@@ -3337,7 +3337,7 @@ resolved:;
                     int getter_found = (FindSymbol(&getter_node, symtab, getter_id) != 0);
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
-                        fprintf(stderr, "[SemCheck] varid fallback: id=%s getter=%s found=%d hash=%d\n",
+                        fprintf(stderr, "[SemCheck] varid getter-lookup: id=%s getter=%s found=%d hash=%d\n",
                             id, getter_id, getter_found,
                             getter_node != NULL ? getter_node->hash_type : -1);
                     }
@@ -3495,23 +3495,23 @@ resolved:;
             }
             else if (id != NULL)
             {
-                HashNode_t *type_fallback = semcheck_find_preferred_type_node(symtab, id);
-                if (type_fallback == NULL && expr->id_ref != NULL &&
+                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, id);
+                if (type_node == NULL && expr->id_ref != NULL &&
                     expr->id_ref->count > 1)
                 {
                     char *qualified = qualified_ident_join(expr->id_ref, ".");
                     if (qualified != NULL)
                     {
-                        type_fallback = semcheck_find_preferred_type_node(symtab, qualified);
+                        type_node = semcheck_find_preferred_type_node(symtab, qualified);
                         free(qualified);
                     }
                 }
-                if (type_fallback != NULL && type_fallback->hash_type == HASHTYPE_TYPE)
+                if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                 {
-                    set_hash_meta(type_fallback, mutating);
-                    set_type_from_hashtype(type_return, type_fallback);
-                    if (type_fallback->type != NULL)
-                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_fallback->type);
+                    set_hash_meta(type_node, mutating);
+                    set_type_from_hashtype(type_return, type_node);
+                    if (type_node->type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
                     return return_val;
                 }
             }

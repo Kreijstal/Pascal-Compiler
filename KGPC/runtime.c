@@ -44,15 +44,6 @@ void *Libdl = &Libdl_handle;
 void *libdl = &Libdl_handle;
 #endif
 
-/* FPC I/O check functions - weak stubs for real number I/O.
- * These are provided by FPC's RTL when linked, but we provide weak fallbacks
- * for cases where the RTL code isn't included. */
-__attribute__((weak)) void checkread_t(void) { }
-__attribute__((weak)) void readreal_t_ss(void) { }
-
-/* FPC errno setter - weak stub */
-__attribute__((weak)) void FPC_SYS_SETERRNO(int err) { errno = err; }
-
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
 /* Native stdlib lowering currently materializes a qualifier symbol for
@@ -593,11 +584,11 @@ static void kgpc_stream_cache_clear(KGPCTextRec *file)
     }
 }
 
-static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
+static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *default_stream)
 {
     kgpc_init_stdio();
     if (file == NULL)
-        return fallback;
+        return default_stream;
     /* When FPC RTL opens a file, it sets TextRec.Handle but not
      * private_data.  Use the handle to create a FILE* stream.
      * FPC mode constants: fmClosed=0xD7B0, fmInput=0xD7B1,
@@ -709,7 +700,7 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
             return stream;
         }
     }
-    return fallback;
+    return default_stream;
 }
 
 static void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream)
@@ -2071,7 +2062,7 @@ uint64_t kgpc_query_performance_frequency(void) {
     }
     return 0ULL;
 #else
-    /* CLOCK_MONOTONIC is in nanoseconds on POSIX fallback */
+    /* CLOCK_MONOTONIC is in nanoseconds on POSIX (alternative path) */
     return 1000000000ULL;
 #endif
 }
@@ -2804,6 +2795,17 @@ void kgpc_raise(int64_t value)
     exit(EXIT_FAILURE);
 }
 
+/* Forward declarations: New/Dispose route through MemoryManager so that
+ * the allocator pair stays consistent regardless of whether the FPC RTL
+ * MemoryManager initializer (heap.inc) has overridden the libc-only
+ * defaults installed by kgpc_init_memory_manager.  In KGPC stdlib mode
+ * MemoryManager stays bound to libc (kgpc_mm_*), so this matches the
+ * previous behaviour byte-for-byte; in --no-stdlib + FPC RTL mode this
+ * routes New/Dispose through FPC's heap manager so they pair with
+ * GetMem/FreeMem (which also go through MemoryManager via heap.inc). */
+static void *kgpc_memory_manager_getmem(uintptr_t size);
+static void kgpc_memory_manager_freemem(void *ptr);
+
 void kgpc_new(void **target, size_t size)
 {
     if (target == NULL)
@@ -2847,7 +2849,12 @@ void kgpc_new(void **target, size_t size)
     }
     else
     {
-        memory = calloc(1, size);
+        memory = kgpc_memory_manager_getmem((uintptr_t)size);
+        /* Pascal's New zero-initialises the allocated record so that
+         * later reads of unset fields are deterministic; mirror calloc
+         * semantics here regardless of which heap manager is active. */
+        if (memory != NULL && size > 0)
+            memset(memory, 0, size);
     }
 
     if (memory == NULL)
@@ -2886,7 +2893,7 @@ void kgpc_dispose(void **target)
                 link = &(*link)->next;
             }
         }
-        free(*target);
+        kgpc_memory_manager_freemem(*target);
         *target = NULL;
     }
 }
@@ -3296,7 +3303,7 @@ void kgpc_setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
         return;
     }
 
-    /* Portable fallback conversion path: keep bytes unchanged and
+    /* Portable conversion path (no iconv): keep bytes unchanged and
      * update codepage metadata. This matches FPC behavior for raw
      * byte strings when no concrete conversion backend is linked. */
     KgpcStringHeader *hdr = kgpc_string_header(str);
@@ -3317,7 +3324,7 @@ void kgpc_setcodepage_rbs_i(void *s_arg, int32_t codepage)
 static char *kgpc_cached_widechar_pchar(uint16_t value)
 {
     static char *cache[256] = {0};
-    static char *fallback = NULL;
+    static char *out_of_range_buf = NULL;
 
     if (value < 256)
     {
@@ -3333,15 +3340,15 @@ static char *kgpc_cached_widechar_pchar(uint16_t value)
         return cache[value];
     }
 
-    if (fallback == NULL)
+    if (out_of_range_buf == NULL)
     {
-        fallback = (char *)malloc(2);
-        if (fallback == NULL)
+        out_of_range_buf = (char *)malloc(2);
+        if (out_of_range_buf == NULL)
             return kgpc_alloc_empty_string();
-        fallback[0] = '?';
-        fallback[1] = '\0';
+        out_of_range_buf[0] = '?';
+        out_of_range_buf[1] = '\0';
     }
-    return fallback;
+    return out_of_range_buf;
 }
 
 char *widechar__op_assign_olevariant_wc(uint16_t value)
@@ -3535,7 +3542,7 @@ char *kgpc_windows_get_domainname_string(void)
             return kgpc_string_duplicate(dot + 1);
         }
     }
-    /* Fallback: try DNS hostname */
+    /* Alternative: try DNS hostname */
     size = sizeof(fqdn);
     if (GetComputerNameExA(ComputerNameDnsHostname, fqdn, &size))
     {
@@ -4947,6 +4954,8 @@ static uintptr_t kgpc_mm_memsize(void *p)
 static void kgpc_mm_noop(void) {}
 
 typedef void *(*kgpc_mm_allocmem_fn)(uintptr_t size);
+typedef void *(*kgpc_mm_getmem_fn)(uintptr_t size);
+typedef uintptr_t (*kgpc_mm_freemem_fn)(void *p);
 
 static void *kgpc_memory_manager_allocmem(uintptr_t size)
 {
@@ -4958,6 +4967,44 @@ static void *kgpc_memory_manager_allocmem(uintptr_t size)
     if (alloc_fn == NULL)
         return kgpc_mm_allocmem(size);
     return alloc_fn(size);
+}
+
+/* GetMem dispatch — used by kgpc_new so the matching kgpc_dispose can
+ * call FreeMem on the same heap.  Reads MemoryManager.GetMem (offset 8)
+ * if non-NULL, otherwise uses libc malloc directly.  The direct-malloc path
+ * exists for very early startup before kgpc_init_memory_manager has run
+ * (Pascal initialisers must not crash if reached during a constructor).
+ */
+static void *kgpc_memory_manager_getmem(uintptr_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    kgpc_mm_getmem_fn get_fn = NULL;
+    memcpy(&get_fn, MemoryManager + 8, sizeof(get_fn));
+    if (get_fn == NULL)
+        return kgpc_mm_getmem(size);
+    return get_fn(size);
+}
+
+/* FreeMem dispatch — paired with kgpc_memory_manager_getmem so that
+ * Dispose() releases memory through the same allocator that New()
+ * obtained it from.  When the FPC RTL's heap manager has rebound
+ * MemoryManager (heap.inc typed const initialiser) this routes through
+ * SysFreeMem; otherwise it falls back to libc free. */
+static void kgpc_memory_manager_freemem(void *ptr)
+{
+    if (ptr == NULL)
+        return;
+
+    kgpc_mm_freemem_fn free_fn = NULL;
+    memcpy(&free_fn, MemoryManager + 16, sizeof(free_fn));
+    if (free_fn == NULL)
+    {
+        free(ptr);
+        return;
+    }
+    free_fn(ptr);
 }
 
 __attribute__((constructor))
@@ -5998,7 +6045,7 @@ int64_t bsrqword_i64(uint64_t value)
 
 /* bsrdword_li and bsfdword_li: FPC's system.pp provides Pascal
  * implementations compiled by KGPC.  These C versions are kept as
- * fallbacks with kgpc_ prefix to avoid duplicate symbol conflicts. */
+ * alternatives with kgpc_ prefix to avoid duplicate symbol conflicts. */
 int64_t kgpc_bsrdword_li(uint32_t value)
 {
     if (value == 0)
@@ -6430,18 +6477,18 @@ double kgpc_now(void)
     uli.HighPart = ft.dwHighDateTime;
     if (uli.QuadPart == 0)
     {
-        time_t fallback = time(NULL);
-        if (fallback < 0)
+        time_t unix_time = time(NULL);
+        if (unix_time < 0)
             return 0;
-        double unix_seconds = (double)fallback;
+        double unix_seconds = (double)unix_time;
         return (unix_seconds / 86400.0) + 25569.0;
     }
     if (uli.QuadPart <= 116444736000000000ULL)
     {
-        time_t fallback = time(NULL);
-        if (fallback < 0)
+        time_t unix_time = time(NULL);
+        if (unix_time < 0)
             return 0;
-        double unix_seconds = (double)fallback;
+        double unix_seconds = (double)unix_time;
         return (unix_seconds / 86400.0) + 25569.0;
     }
     /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
@@ -6559,20 +6606,20 @@ char *kgpc_format_datetime(const char *format, double datetime)
     errno_t err = localtime_s(&tm_value, &seconds);
     if (err != 0)
     {
-        struct tm *fallback = localtime(&seconds);
-        if (fallback != NULL)
+        struct tm *localtime_result = localtime(&seconds);
+        if (localtime_result != NULL)
         {
-            tm_value = *fallback;
+            tm_value = *localtime_result;
         }
         else
         {
             errno_t gmt_err = gmtime_s(&tm_value, &seconds);
             if (gmt_err != 0)
             {
-                struct tm *gmt_fallback = gmtime(&seconds);
-                if (gmt_fallback != NULL)
+                struct tm *gmtime_result = gmtime(&seconds);
+                if (gmtime_result != NULL)
                 {
-                    tm_value = *gmt_fallback;
+                    tm_value = *gmtime_result;
                 }
                 else
                 {
@@ -8699,18 +8746,9 @@ void kgpc_readwritebarrier(void) {}
  * Not meaningful in a CLI/batch context; no-op. */
 void SysBeep(void) {}
 
-/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization.
- * The body is Finalize(TArray<TPtrWrapper>) which is a no-op for
- * TPtrWrapper (a simple record with no managed fields). */
-void tmarshal__unfixarray_u_tptrwrapper(void) {}
-
 /* FindComponentClass — FPC TReader class method referenced but not
  * exercised in test programs. Raises abstract method error if called. */
 void FindComponentClass(void) { __kgpc_abstract_method_error(); }
-
-/* ReadDeltaStream — FPC TReader class method referenced but not
- * exercised in test programs. Raises abstract method error if called. */
-void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
 
 /* Default IInterface implementations for non-reference-counted classes.
  * Classes that implement interfaces without inheriting from TInterfacedObject

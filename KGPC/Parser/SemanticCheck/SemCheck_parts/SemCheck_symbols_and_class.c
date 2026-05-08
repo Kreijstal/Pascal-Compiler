@@ -598,6 +598,47 @@ void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
     add_class_vars_to_method_scope_for(symtab, subprogram, 1);
 }
 
+void semcheck_reconcile_is_constructor_flag(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (symtab == NULL || subprogram == NULL)
+        return;
+    if (subprogram->type != TREE_SUBPROGRAM)
+        return;
+    if (subprogram->tree_data.subprogram_data.is_constructor)
+        return;
+
+    const char *owner_full = subprogram->tree_data.subprogram_data.owner_class_full;
+    const char *owner = subprogram->tree_data.subprogram_data.owner_class;
+    const char *owner_name = owner_full != NULL ? owner_full : owner;
+    const char *method_name = subprogram->tree_data.subprogram_data.method_name;
+    if (owner_name == NULL || method_name == NULL || method_name[0] == '\0')
+        return;
+
+    HashNode_t *class_node = NULL;
+    if (FindSymbol(&class_node, symtab, (char *)owner_name) == 0 || class_node == NULL)
+        return;
+
+    struct RecordType *record = get_record_type_from_node(class_node);
+    while (record != NULL)
+    {
+        struct MethodTemplate *tmpl = from_cparser_get_method_template(record,
+            method_name);
+        if (tmpl != NULL)
+        {
+            if (tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                subprogram->tree_data.subprogram_data.is_constructor = 1;
+            return;
+        }
+        if (record->parent_class_name == NULL)
+            break;
+        HashNode_t *parent_node = NULL;
+        if (FindSymbol(&parent_node, symtab, record->parent_class_name) == 0 ||
+            parent_node == NULL)
+            return;
+        record = get_record_type_from_node(parent_node);
+    }
+}
+
 /**
  * For a method implementation (ClassName__MethodName), copy default parameter
  * values from the class declaration to the implementation's parameters.
@@ -1039,19 +1080,19 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
 
     if (!skip_owner_qualify && matches == NULL)
     {
-        int allow_owner_fallback = 0;
+        int try_owner_qualify = 0;
         if (type_ref == NULL)
         {
-            allow_owner_fallback = 1;
+            try_owner_qualify = 1;
         }
         else if (type_ref->name != NULL &&
                  type_ref->name->count == 1 &&
                  !semcheck_is_explicit_unit_qualified_type_ref(type_ref))
         {
-            allow_owner_fallback = 1;
+            try_owner_qualify = 1;
         }
 
-        if (allow_owner_fallback)
+        if (try_owner_qualify)
         {
             const char *owner_id = semcheck_get_current_method_owner();
             if (owner_id != NULL)
@@ -1716,6 +1757,29 @@ ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *dec
                 if (type_id != NULL)
                 {
                     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+                    /* When the typed const was declared inside a unit's implementation
+                     * section, its referenced type may live in that unit's implementation
+                     * uses (a transitive dep that's not visible from the outer program
+                     * scope).  Fall back to the declaration's source unit scope so that
+                     * cross-unit typed-const initializers like cpuelf's
+                     * `elf_target_x86_64: TElfTarget = (...)` are still semchecked
+                     * (TElfTarget lives in ogelf, which cpuelf imports privately).
+                     * Switch into the unit's scope (which has the unit's interface +
+                     * implementation uses wired in as deps) so that FindAllIdents can
+                     * traverse them. */
+                    if (type_node == NULL)
+                    {
+                        int src_unit = (tree->type == TREE_VAR_DECL)
+                            ? tree->tree_data.var_decl_data.source_unit_index
+                            : tree->tree_data.arr_decl_data.source_unit_index;
+                        if (src_unit > 0)
+                        {
+                            ScopeNode *saved_scope =
+                                semcheck_switch_to_unit_scope(symtab, src_unit);
+                            type_node = semcheck_find_preferred_type_node(symtab, type_id);
+                            semcheck_restore_scope(symtab, saved_scope);
+                        }
+                    }
                     if (type_node == NULL &&
                         semcheck_map_builtin_type_name_local(type_id) == UNKNOWN_TYPE)
                     {

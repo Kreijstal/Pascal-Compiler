@@ -46,7 +46,10 @@ typedef struct SubprogramEntry {
 
 typedef struct {
     SubprogramEntry *buckets[SUBPROG_MAP_BUCKETS];
-    /* Secondary index: keyed by lowered unmangled id for fallback lookups */
+    /* Secondary index: keyed by lowered plain id (not mangled).
+     * Used by mark_subprograms_by_id for forward-decl/impl reconciliation
+     * (forward decl and impl can share the same plain id but have different
+     * mangled names).  NOT a general unqualified-name fallback. */
     SubprogramEntry *id_buckets[SUBPROG_MAP_BUCKETS];
 } SubprogramMap;
 
@@ -158,7 +161,10 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
         }
     }
 
-    /* Fallback: try searching by unmangled id */
+    /* NOTE: id_buckets is keyed by lowered plain id, but lookup_id is the
+     * lowered mangled_id.  This secondary scan only matches when mangled_id ==
+     * plain_id (i.e. unmangled functions).  It is intentionally kept for that
+     * narrow case; it is NOT a general unqualified-fallback. */
     unsigned id_idx = subprog_hash(lookup_id);
     Tree_t *id_fallback = NULL;
     for (SubprogramEntry *e = map->id_buckets[id_idx]; e != NULL; e = e->next) {
@@ -282,19 +288,6 @@ static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
 
     /* Mark as used */
     sub->tree_data.subprogram_data.is_used = 1;
-
-    /* TObject.Free: codegen unconditionally appends a FreeMem(self) call
-     * after the Pascal body, routing through whatever single-arg FreeMem
-     * overload is in scope (KGPC stdlib's "procedure FreeMem(var target)"
-     * or FPC RTL's "function FreeMem(p:pointer):ptruint").  Mark FreeMem
-     * as used here so DCE doesn't strip its body before linking. */
-    if (sub->tree_data.subprogram_data.owner_class != NULL &&
-        sub->tree_data.subprogram_data.method_name != NULL &&
-        strcasecmp(sub->tree_data.subprogram_data.owner_class, "TObject") == 0 &&
-        strcasecmp(sub->tree_data.subprogram_data.method_name, "Free") == 0)
-    {
-        mark_subprograms_by_id(map, "FreeMem");
-    }
 
     /* If this node has no body, try to find the implementation by plain id.
      * This handles the case where a forward declaration (mangled_id="runerror_i")

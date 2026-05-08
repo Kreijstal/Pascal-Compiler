@@ -224,6 +224,18 @@ int skip_unit_codegen_flag(void)
     return FLAG_SKIP_UNIT_CODEGEN;
 }
 
+/* Flag for --dump-ir-after=def-use: dump IR with def/use annotations to stderr
+ * after each function's code generation. */
+static int FLAG_DUMP_IR = 0;
+
+/* Flag for --dump-ir-after=cfg: dump the control-flow graph to stderr
+ * after each function's code generation. */
+static int FLAG_DUMP_IR_CFG = 0;
+
+/* Flag for --dump-ir-after=liveness: dump live-in/live-out sets to stderr
+ * after each function's code generation. */
+static int FLAG_DUMP_IR_LIVENESS = 0;
+
 void set_codegen_cache_miss_flag(void)
 {
     FLAG_CODEGEN_CACHE_MISS = 1;
@@ -237,4 +249,34 @@ void clear_codegen_cache_miss_flag(void)
 int codegen_cache_miss_flag(void)
 {
     return FLAG_CODEGEN_CACHE_MISS;
+}
+
+void set_dump_ir_flag(void)
+{
+    FLAG_DUMP_IR = 1;
+}
+
+int dump_ir_flag(void)
+{
+    return FLAG_DUMP_IR;
+}
+
+void set_dump_ir_cfg_flag(void)
+{
+    FLAG_DUMP_IR_CFG = 1;
+}
+
+int dump_ir_cfg_flag(void)
+{
+    return FLAG_DUMP_IR_CFG;
+}
+
+void set_dump_ir_liveness_flag(void)
+{
+    FLAG_DUMP_IR_LIVENESS = 1;
+}
+
+int dump_ir_liveness_flag(void)
+{
+    return FLAG_DUMP_IR_LIVENESS;
 }

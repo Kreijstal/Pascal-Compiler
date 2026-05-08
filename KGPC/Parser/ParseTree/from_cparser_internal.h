@@ -309,6 +309,7 @@ int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint16_t *d
 int parse_range_bound(const char *s);
 QualifiedIdent *qualified_ident_from_ast(ast_t *node);
 char *qualified_ident_join_prefix(const QualifiedIdent *qid, int count);
+void cmb_index_alias_as_qualified(const char *unqualified_name, const char *qualified_name);
 void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
                                       int is_class_method,

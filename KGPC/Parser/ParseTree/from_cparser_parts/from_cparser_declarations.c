@@ -4141,6 +4141,8 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
                     char *qualified_id = (char *)malloc(len);
                     if (qualified_id != NULL) {
                         snprintf(qualified_id, len, "%s.%s", parent_type_name, orig_id);
+                        /* Re-register class methods under the qualified name. */
+                        cmb_index_alias_as_qualified(orig_id, qualified_id);
                         free(orig_id);
                         decl->tree_data.type_decl_data.id = qualified_id;
                         /* Set outer_type_id on record types for nested type qualification */
@@ -4209,6 +4211,10 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
                 char *qualified_id = (char *)malloc(len);
                 if (qualified_id != NULL) {
                     snprintf(qualified_id, len, "%s.%s", parent_type_name, orig_id);
+                    /* Re-register class methods under the qualified name so CMB
+                     * lookups by the fully-qualified class name succeed without
+                     * any unqualified fallback. */
+                    cmb_index_alias_as_qualified(orig_id, qualified_id);
                     free(orig_id);
                     decl->tree_data.type_decl_data.id = qualified_id;
                     if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&

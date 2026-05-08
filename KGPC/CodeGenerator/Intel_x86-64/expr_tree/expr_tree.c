@@ -38,6 +38,21 @@ int codegen_array_access_targets_shortstring(const struct Expression *expr, Code
 static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGenContext *ctx,
     long long *out_len);
 
+static int expr_tree_is_tconstexprint_payload(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        if (expr->expr_data.record_access_data.field_id != NULL &&
+            pascal_identifier_equals(expr->expr_data.record_access_data.field_id, "valueord"))
+            return 1;
+        return expr_tree_is_tconstexprint_payload(
+            expr->expr_data.record_access_data.record_expr);
+    }
+    return 0;
+}
+
 static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
 {
@@ -1535,7 +1550,8 @@ static KgpcType *expr_tree_proc_type_from_record_field(CodeGenContext *ctx,
         codegen_lookup_record_field_expr((struct Expression *)expr, ctx);
     if (resolved_field != NULL)
     {
-        if (resolved_field->proc_type != NULL)
+        if (resolved_field->proc_type != NULL &&
+            resolved_field->proc_type->kind == TYPE_KIND_PROCEDURE)
             return resolved_field->proc_type;
         if (resolved_field->type == PROCEDURE && resolved_field->type_id != NULL &&
             ctx != NULL && ctx->symtab != NULL)
@@ -3613,9 +3629,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
         int force_scalar_string_return =
-            func_mangled_name != NULL &&
-            (strcmp(func_mangled_name, "kgpc_strpas_string") == 0 ||
-             strcmp(func_mangled_name, "kgpc_strpas_len_string") == 0);
+            expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS &&
+            !expr->expr_data.function_call_data.is_procedural_var_call;
         int has_record_return = expr_returns_sret(expr);
         if (force_scalar_string_return)
             has_record_return = 0;
@@ -3646,11 +3661,137 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             has_record_return = 1;
         }
+        /* Fallback for proc-var calls returning a non-shortstring record.
+         * codegen_expr_sret_size() has no ctx, so it can't resolve return_type_id
+         * through the symbol table.  Do it here where ctx is available. */
+        long long procvar_sret_size = 0;
+        /* Fast path: semcheck cached the sret size directly — avoids pointer
+         * validity issues when the allocator zeroes freed KgpcType memory. */
+        if (!has_record_return && !force_scalar_string_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.cached_procvar_sret_size > 8)
+        {
+            has_record_return = 1;
+            procvar_sret_size = expr->expr_data.function_call_data.cached_procvar_sret_size;
+        }
+        if (!has_record_return && !force_scalar_string_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call)
+        {
+            struct Expression *pve = expr->expr_data.function_call_data.procedural_var_expr;
+            if (pve != NULL)
+            {
+                KgpcType *pv_type = expr_tree_proc_type_from_record_field(ctx, pve);
+                if (pv_type == NULL)
+                    pv_type = expr_get_kgpc_type(pve);
+                if (pv_type != NULL && pv_type->kind == TYPE_KIND_POINTER &&
+                    pv_type->info.points_to != NULL)
+                    pv_type = pv_type->info.points_to;
+                if (pv_type != NULL && pv_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *pv_ret = kgpc_type_get_return_type(pv_type);
+                    /* Also fall back when pv_ret is a stale freed pointer —
+                     * MALLOC_PERTURB_ fills freed memory so kind != TYPE_KIND_RECORD
+                     * but the pointer is non-NULL (bare MSYS2 UAF). */
+                    if (!kgpc_type_is_record(pv_ret) &&
+                        pv_type->info.proc_info.return_type_id != NULL &&
+                        ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *ret_sym = NULL;
+                        if (FindSymbol(&ret_sym, ctx->symtab,
+                                pv_type->info.proc_info.return_type_id) != 0 &&
+                            ret_sym != NULL)
+                            pv_ret = ret_sym->type;
+                    }
+                    if (pv_ret != NULL && kgpc_type_is_record(pv_ret))
+                    {
+                        has_record_return = 1;
+                        procvar_sret_size = kgpc_type_sizeof(pv_ret);
+                        if (procvar_sret_size <= 0)
+                            procvar_sret_size = 2 * CODEGEN_POINTER_SIZE_BYTES;
+                    }
+                }
+            }
+            /* call_kgpc_type is set by semcheck field detection and holds the proc
+             * type with return_type_id even when resolved_kgpc_type was overwritten
+             * (e.g. mgr.GetStatus().Name on MSYS overwrites the inner call node's
+             * resolved_kgpc_type to String, masking the record return). */
+            if (!has_record_return)
+            {
+                KgpcType *ck = expr->expr_data.function_call_data.call_kgpc_type;
+                if (ck != NULL && ck->kind == TYPE_KIND_POINTER &&
+                    ck->info.points_to != NULL)
+                    ck = ck->info.points_to;
+                if (ck != NULL && ck->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ck_ret = kgpc_type_get_return_type(ck);
+                    /* Fall back to symbol-table lookup when ck_ret is NULL or is a
+                     * stale freed pointer (MALLOC_PERTURB_ fills freed memory so
+                     * kind != TYPE_KIND_RECORD but pointer is non-NULL, bare MSYS2). */
+                    if (!kgpc_type_is_record(ck_ret) &&
+                        ck->info.proc_info.return_type_id != NULL &&
+                        ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *ret_sym = NULL;
+                        if (FindSymbol(&ret_sym, ctx->symtab,
+                                ck->info.proc_info.return_type_id) != 0 &&
+                            ret_sym != NULL)
+                            ck_ret = ret_sym->type;
+                    }
+                    if (ck_ret != NULL && kgpc_type_is_record(ck_ret))
+                    {
+                        has_record_return = 1;
+                        procvar_sret_size = kgpc_type_sizeof(ck_ret);
+                        if (procvar_sret_size <= 0)
+                            procvar_sret_size = 2 * CODEGEN_POINTER_SIZE_BYTES;
+                    }
+                }
+            }
+            /* Last-resort: check RecordField->cached_proc_return_sret_size, which is
+             * stored in the AST (not a KgpcType) and survives allocator zeroing on bare
+             * MSYS2.  All KgpcType-based paths above can fail when proc_type and
+             * call_kgpc_type are both freed between semcheck and codegen. */
+            if (!has_record_return && pve != NULL && pve->type == EXPR_RECORD_ACCESS)
+            {
+                struct RecordField *rf = codegen_lookup_record_field_expr(pve, ctx);
+                if (rf != NULL && rf->cached_proc_return_sret_size > 8)
+                {
+                    has_record_return = 1;
+                    procvar_sret_size = rf->cached_proc_return_sret_size;
+                }
+            }
+        }
+        /* Write back sret size to RecordField cache so that a later call to the
+         * same proc-var field (e.g. second mgr.GetStatus() call) can use Fix 3
+         * when proc KgpcType is freed between the two codegen traversals.
+         * Three fallback sizes in priority order:
+         *  1. procvar_sret_size: set by pv_type/call_kgpc_type check above
+         *  2. cached_procvar_sret_size: set by semcheck (on the AST node)
+         *  3. codegen_expr_sret_size: resolves via retained call_kgpc_type when
+         *     semcheck didn't populate cached_procvar_sret_size (proc_type NULL). */
+        if (has_record_return &&
+            expr->expr_data.function_call_data.is_procedural_var_call)
+        {
+            long long wb_sret = procvar_sret_size > 8 ? procvar_sret_size :
+                expr->expr_data.function_call_data.cached_procvar_sret_size;
+            if (wb_sret <= 8)
+                wb_sret = codegen_expr_sret_size(expr);
+            struct Expression *pve_wb =
+                expr->expr_data.function_call_data.procedural_var_expr;
+            if (wb_sret > 8 && pve_wb != NULL &&
+                pve_wb->type == EXPR_RECORD_ACCESS)
+            {
+                struct RecordField *rf_wb =
+                    codegen_lookup_record_field_expr(pve_wb, ctx);
+                if (rf_wb != NULL && rf_wb->cached_proc_return_sret_size == 0)
+                    rf_wb->cached_proc_return_sret_size = wb_sret;
+            }
+        }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)
         {
-            long long sret_size = codegen_expr_sret_size(expr);
+            long long sret_size = procvar_sret_size > 0 ?
+                procvar_sret_size : codegen_expr_sret_size(expr);
             if (sret_size <= 0 &&
                 expr_tree_virtual_call_returns_shortstring(ctx, expr))
                 sret_size = 256;
@@ -4871,7 +5012,7 @@ cleanup_constructor:
          * candidate from the same unit to avoid cross-unit collisions
          * (e.g. comprsrc.initglobals vs globals.initglobals). */
         char *collision_label = NULL;
-        if (proc_label != NULL && strstr(proc_label, "$$") == NULL &&
+        if (proc_label != NULL && !mangled_id_has_unit_prefix(proc_label) &&
             ctx != NULL && ctx->symtab != NULL)
         {
             const char *lookup_id = expr->expr_data.addr_of_proc_data.proc_id;
@@ -4890,10 +5031,9 @@ cleanup_constructor:
                             continue;
                         if (cand->source_unit_index != target_unit)
                             continue;
-                        const char *sep = strstr(cand->mangled_id, "$$");
-                        if (sep == NULL)
+                        if (!mangled_id_has_unit_prefix(cand->mangled_id))
                             continue;
-                        if (strcmp(sep + 2, proc_label) == 0 &&
+                        if (strcmp(mangled_id_get_base(cand->mangled_id), proc_label) == 0 &&
                             cand->type != NULL &&
                             cand->type->kind == TYPE_KIND_PROCEDURE &&
                             cand->type->info.proc_info.definition != NULL &&
@@ -4914,10 +5054,9 @@ cleanup_constructor:
                         HashNode_t *cand = (HashNode_t *)c->cur;
                         if (cand == NULL || cand->mangled_id == NULL)
                             continue;
-                        const char *sep = strstr(cand->mangled_id, "$$");
-                        if (sep == NULL)
+                        if (!mangled_id_has_unit_prefix(cand->mangled_id))
                             continue;
-                        if (strcmp(sep + 2, proc_label) == 0 &&
+                        if (strcmp(mangled_id_get_base(cand->mangled_id), proc_label) == 0 &&
                             cand->type != NULL &&
                             cand->type->kind == TYPE_KIND_PROCEDURE &&
                             cand->type->info.proc_info.definition != NULL &&
@@ -6640,6 +6779,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
                 const char *left_op = left;
                 const char *right_op = right;
+                Register_t *right_mem_tmp = NULL;
                 if (arith_suffix == 'l')
                 {
                     left_op = reg_to_reg32(left, left_reg);
@@ -6676,11 +6816,37 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right_op);
                         inst_list = add_inst(inst_list, buffer);
                     }
+
+                    /* When the right operand is a 32-bit memory reference (no register),
+                     * addq/subq would read 8 bytes from a 4-byte stack slot, getting
+                     * garbage in the upper 32 bits.  Load into a temp register and
+                     * sign/zero-extend before the 64-bit arithmetic.
+                     * (We only handle the right operand here because the left operand
+                     * is the destination — the result is written back to it, so it
+                     * must remain addressable.) */
+                    if (right_reg == NULL && right != NULL &&
+                        right[0] != '$' && right[0] != '%' &&
+                        right_expr != NULL &&
+                        !codegen_type_uses_qword(expr_get_type_tag(right_expr)) &&
+                        !expr_uses_qword_kgpctype(right_expr) &&
+                        is_integer_type(expr_get_type_tag(right_expr)))
+                    {
+                        right_mem_tmp = get_free_reg(get_reg_stack(), &inst_list);
+                        if (right_mem_tmp != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, right_mem_tmp->bit_32);
+                            inst_list = add_inst(inst_list, buffer);
+                            if (codegen_type_is_signed(expr_get_type_tag(right_expr)))
+                                inst_list = codegen_sign_extend32_to64(inst_list, right_mem_tmp->bit_32, right_mem_tmp->bit_64);
+                            right_op = right_mem_tmp->bit_64;
+                        }
+                    }
                 }
                 if (type == OR)
                 {
                     int err = 0;
                     inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "or", arith_suffix, right_op, left_op, &err);
+                    if (right_mem_tmp != NULL) free_reg(get_reg_stack(), right_mem_tmp);
                     if (err) break;
                     break;
                 }
@@ -6712,6 +6878,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     assert(0 && "Bad addop type!");
                     break;
             }
+            if (right_mem_tmp != NULL) free_reg(get_reg_stack(), right_mem_tmp);
             /* Sign-extend 32-bit result to 64-bit so negative values are
                correctly represented when stored into 64-bit slots. */
             if (!use_qword_op && left_reg != NULL &&
@@ -7074,10 +7241,38 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                     if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
                     {
+                        /* Bound-check elem against [0..31] for 32-bit register-resident
+                         * sets — register-form btl wraps mod 32, so out-of-domain
+                         * elements would falsely match.  Pascal `n in S` must be FALSE
+                         * when n is outside S's element domain. */
+                        char in_oob[18];
+                        char in_done[18];
+                        gen_label(in_oob, sizeof(in_oob), ctx);
+                        gen_label(in_done, sizeof(in_done), ctx);
+
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", bit_index);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", bit_index);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob);
+                        inst_list = add_inst(inst_list, buffer);
+
                         snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", bit_index, bit_base);
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
                         inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", in_done);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        snprintf(buffer, sizeof(buffer), "%s:\n", in_oob);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\txorb\t%s, %s\n", left8, left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "%s:\n", in_done);
+                        inst_list = add_inst(inst_list, buffer);
+
                         snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
                         inst_list = add_inst(inst_list, buffer);
                     }
@@ -7592,7 +7787,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             {
                 int left_type = (left_expr != NULL) ? expr_get_type_tag(left_expr) : UNKNOWN_TYPE;
                 int right_type = (right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE;
-                int use_qword = codegen_type_uses_qword(left_type) || codegen_type_uses_qword(right_type);
+                int left_is_tconstexprint = expr_tree_is_tconstexprint_payload(left_expr);
+                int right_is_tconstexprint = expr_tree_is_tconstexprint_payload(right_expr);
+                int use_qword = codegen_type_uses_qword(left_type) ||
+                    codegen_type_uses_qword(right_type) || left_is_tconstexprint ||
+                    right_is_tconstexprint;
                 char cmp_suffix = use_qword ? 'q' : 'l';
 
                 const char *cmp_left = left;
@@ -7600,6 +7799,20 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 Register_t *imm_reg = NULL;
                 Register_t *left_mem_tmp = NULL;
                 Register_t *right_mem_tmp = NULL;
+                if (left_is_tconstexprint && left_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+                        left_reg->bit_64, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    cmp_left = left_reg->bit_64;
+                }
+                if (right_is_tconstexprint && right_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+                        right_reg->bit_64, right_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    cmp_right = right_reg->bit_64;
+                }
                 if (use_qword)
                 {
                     const char *left_candidate = left;
@@ -7687,6 +7900,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     if (right32 != NULL)
                         cmp_right = right32;
                 }
+
+                if (left_is_tconstexprint && left_reg != NULL)
+                    cmp_left = left_reg->bit_64;
+                if (right_is_tconstexprint && right_reg != NULL)
+                    cmp_right = right_reg->bit_64;
 
                 if (use_qword && cmp_right != NULL && cmp_right[0] == '$')
                 {

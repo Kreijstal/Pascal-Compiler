@@ -953,41 +953,6 @@ enum VarType map_type_tag_to_var_type(int type_tag)
     }
 }
 
-__attribute__((unused)) static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_t *symtab,
-    const char *id)
-{
-    if (out == NULL || symtab == NULL || id == NULL)
-        return -1;
-
-    return FindSymbol(out, symtab, id);
-}
-
-__attribute__((unused)) static int semcheck_find_ident_with_qualified_fallback_ref(HashNode_t **out, SymTab_t *symtab,
-    const QualifiedIdent *id_ref)
-{
-    if (out == NULL || symtab == NULL || id_ref == NULL || id_ref->count <= 0)
-        return -1;
-
-    int found = -1;
-    char *full = qualified_ident_join(id_ref, ".");
-    if (full != NULL)
-    {
-        found = FindSymbol(out, symtab, full);
-        free(full);
-    }
-    if (found && out != NULL && *out != NULL)
-        return found;
-
-    if (id_ref->count > 1)
-    {
-        const char *last = qualified_ident_last(id_ref);
-        if (last != NULL)
-            return FindSymbol(out, symtab, last);
-    }
-
-    return found;
-}
-
 ListNode_t *semcheck_clone_string_list(const ListNode_t *src)
 {
     if (src == NULL)

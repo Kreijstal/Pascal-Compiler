@@ -41,6 +41,10 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num);
 static long long align_offset(long long offset, int alignment);
 static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int depth, int line_num);
+static int get_variant_part_alignment(SymTab_t *symtab, struct VariantPart *variant,
+    int depth, int line_num);
+static int get_record_members_alignment(SymTab_t *symtab, ListNode_t *members,
+    int depth, int line_num);
 static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, int *align_out, int depth, int line_num);
 int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value);
@@ -776,6 +780,71 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     return result;
 }
 
+/* Compute the maximum alignment requirement of any field declared in the
+ * given variant part.  This is the alignment that must be applied to the
+ * starting offset of the variant section within its enclosing record so
+ * that fields inside the variant land on properly aligned addresses. */
+static int get_variant_part_alignment(SymTab_t *symtab, struct VariantPart *variant,
+    int depth, int line_num)
+{
+    if (variant == NULL)
+        return 1;
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+        return 1;
+
+    int max_align = 1;
+    ListNode_t *cur = variant->branches;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH && cur->cur != NULL)
+        {
+            struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
+            int branch_align = get_record_members_alignment(symtab, branch->members,
+                depth + 1, line_num);
+            if (branch_align > max_align)
+                max_align = branch_align;
+        }
+        cur = cur->next;
+    }
+    return max_align;
+}
+
+/* Compute the maximum alignment requirement of a record-member list,
+ * including any nested variant parts. */
+static int get_record_members_alignment(SymTab_t *symtab, ListNode_t *members,
+    int depth, int line_num)
+{
+    if (depth > SIZEOF_RECURSION_LIMIT)
+        return 1;
+
+    int max_align = 1;
+    ListNode_t *cur = members;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field != NULL && !field->is_class_var)
+            {
+                int field_align = get_field_alignment(symtab, field, depth + 1, line_num);
+                if (field_align > max_align)
+                    max_align = field_align;
+            }
+        }
+        else if (cur->type == LIST_VARIANT_PART && cur->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            int variant_align = get_variant_part_alignment(symtab, variant,
+                depth + 1, line_num);
+            if (variant_align > max_align)
+                max_align = variant_align;
+        }
+        cur = cur->next;
+    }
+    return max_align;
+}
+
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
     long long *size_out, int is_packed, int depth, int line_num)
 {
@@ -823,6 +892,13 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         else if (cur->type == LIST_VARIANT_PART)
         {
             struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            int variant_align = get_variant_part_alignment(symtab, variant,
+                depth + 1, line_num);
+            if (variant_align > max_alignment)
+                max_alignment = variant_align;
+            if (!is_packed)
+                total = align_offset(total, variant_align);
+
             long long variant_size = 0;
             if (sizeof_from_variant_part(symtab, variant, &variant_size,
                     is_packed, depth + 1, line_num) != 0)
@@ -1000,6 +1076,16 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
         else if (cur->type == LIST_VARIANT_PART)
         {
             struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            /* Align the offset so the variant's fields land on their natural
+             * boundaries. This must match the alignment applied during
+             * sizeof_from_record_members. */
+            if (!is_packed)
+            {
+                int variant_align = get_variant_part_alignment(symtab, variant,
+                    depth + 1, line_num);
+                offset = align_offset(offset, variant_align);
+            }
+
             long long variant_field_offset = 0;
             int variant_found = 0;
             if (find_field_in_variant(symtab, variant, field_name, out_field,

@@ -4150,14 +4150,40 @@ int kgpc_type_is_signed(const KgpcType *type)
 
     if (type->type_alias != NULL && type->type_alias->range_known)
         return (type->type_alias->range_start < 0);
-    
+
     if (type->kind != TYPE_KIND_PRIMITIVE)
         return 0;
-    
+
     switch (type->info.primitive_type_tag) {
         case INT_TYPE:
         case LONGINT_TYPE:
         case INT64_TYPE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Check if a KgpcType represents an unsigned integer type.
+ * Returns 1 only for types that are explicitly unsigned (Byte, Word, LongWord/DWord/Cardinal,
+ * QWord, and subrange types whose lower bound is >= 0).
+ * Returns 0 for non-integer types (records, pointers, etc.) — NOT defined as !is_signed. */
+int kgpc_type_is_unsigned(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    if (type->type_alias != NULL && type->type_alias->range_known)
+        return (type->type_alias->range_start >= 0);
+
+    if (type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+
+    switch (type->info.primitive_type_tag) {
+        case BYTE_TYPE:
+        case WORD_TYPE:
+        case LONGWORD_TYPE:
+        case QWORD_TYPE:
             return 1;
         default:
             return 0;

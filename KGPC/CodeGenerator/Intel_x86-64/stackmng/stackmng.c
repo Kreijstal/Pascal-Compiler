@@ -751,6 +751,7 @@ RegStack_t *init_reg_stack()
     rbx->last_use_seq = 0;
     rbx->spill_callback = NULL;
     rbx->spill_context = NULL;
+    rbx->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     rbx->current_live_range = NULL;
 #endif
@@ -764,6 +765,7 @@ RegStack_t *init_reg_stack()
     r12->last_use_seq = 0;
     r12->spill_callback = NULL;
     r12->spill_context = NULL;
+    r12->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r12->current_live_range = NULL;
 #endif
@@ -777,6 +779,7 @@ RegStack_t *init_reg_stack()
     r13->last_use_seq = 0;
     r13->spill_callback = NULL;
     r13->spill_context = NULL;
+    r13->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r13->current_live_range = NULL;
 #endif
@@ -790,6 +793,7 @@ RegStack_t *init_reg_stack()
     r14->last_use_seq = 0;
     r14->spill_callback = NULL;
     r14->spill_context = NULL;
+    r14->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r14->current_live_range = NULL;
 #endif
@@ -803,6 +807,7 @@ RegStack_t *init_reg_stack()
     r15->last_use_seq = 0;
     r15->spill_callback = NULL;
     r15->spill_context = NULL;
+    r15->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r15->current_live_range = NULL;
 #endif
@@ -824,6 +829,7 @@ RegStack_t *init_reg_stack()
 
 #if USE_GRAPH_COLORING_ALLOCATOR
     reg_stack->active_live_ranges = NULL;
+    reg_stack->active_live_ranges_tail = NULL;
     reg_stack->next_live_range_id = 1;
 #endif
 
@@ -984,12 +990,15 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
             lr->preferred_reg = reg;
             reg->current_live_range = lr;
             
-            /* Add to active live ranges list */
-            if (reg_stack->active_live_ranges == NULL)
-                reg_stack->active_live_ranges = CreateListNode(lr, LIST_UNSPECIFIED);
-            else
-                reg_stack->active_live_ranges = PushListNodeBack(reg_stack->active_live_ranges,
-                                                                 CreateListNode(lr, LIST_UNSPECIFIED));
+            /* Add to active live ranges list (O(1) via tail pointer) */
+            {
+                ListNode_t *lr_node = CreateListNode(lr, LIST_UNSPECIFIED);
+                if (reg_stack->active_live_ranges_tail != NULL)
+                    reg_stack->active_live_ranges_tail->next = lr_node;
+                else
+                    reg_stack->active_live_ranges = lr_node;
+                reg_stack->active_live_ranges_tail = lr_node;
+            }
         }
 #endif
         

@@ -1,0 +1,2 @@
+OK explicit int64() cast: l=3
+OK implicit conversion: l=5

@@ -31,6 +31,15 @@
 #include "../SymTab/SymTab.h"
 #include "../../../unit_registry.h"
 #include "SemCheck_sizeof.h"
+/* WithContextEntry is defined in SemCheck_Expr_Internal.h.  We can't include
+ * that header here because of redefinition conflicts with helpers like
+ * `semcheck_is_currency_kgpc_type`/`get_type_alias_from_node` that this file
+ * also defines as static.  Instead we forward-declare the with stack here. */
+struct WithContextEntry_fwd {
+    struct Expression *context_expr;
+    struct RecordType *record_type;
+};
+extern struct WithContextEntry_fwd *with_context_stack;
 
 void semcheck_debug_expr_brief(const struct Expression *expr, const char *label);
 struct RecordType *get_record_type_from_node(HashNode_t *node);
@@ -544,54 +553,6 @@ static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNod
 #include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
-static int semcheck_current_subprogram_is_constructor_fallback(SymTab_t *symtab)
-{
-    if (semcheck_get_current_subprogram_is_constructor())
-        return 1;
-
-    const char *method_name = semcheck_get_current_subprogram_method_name();
-    const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
-    const char *owner = semcheck_get_current_subprogram_owner_class();
-    const char *owner_name = owner_full != NULL ? owner_full : owner;
-    if (symtab == NULL || method_name == NULL || owner_name == NULL)
-        return 0;
-
-    HashNode_t *self_node = NULL;
-    if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
-    {
-        struct RecordType *self_record = get_record_type_from_node(self_node);
-        if (self_record != NULL && self_record->method_templates != NULL)
-        {
-            for (ListNode_t *cur = self_record->method_templates; cur != NULL; cur = cur->next)
-            {
-                struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
-                if (tmpl != NULL && tmpl->name != NULL &&
-                    pascal_identifier_equals(tmpl->name, method_name) &&
-                    tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
-                    return 1;
-            }
-        }
-    }
-
-    HashNode_t *owner_node = NULL;
-    if (FindSymbol(&owner_node, symtab, (char *)owner_name) != 0 || owner_node == NULL)
-        return 0;
-
-    struct RecordType *record = get_record_type_from_node(owner_node);
-    if (record == NULL || record->method_templates == NULL)
-        return 0;
-
-    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
-    {
-        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
-        if (tmpl != NULL && tmpl->name != NULL &&
-            pascal_identifier_equals(tmpl->name, method_name) &&
-            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
-            return 1;
-    }
-
-    return 0;
-}
 #include <math.h>
 
 /* Check if the given KgpcType represents a Currency type.
@@ -671,9 +632,9 @@ static const char *semcheck_record_type_id_from_kgpc(KgpcType *type)
 }
 
 static const char *semcheck_record_type_id_from_expr(SymTab_t *symtab,
-    struct Expression *expr, KgpcType *fallback_type)
+    struct Expression *expr, KgpcType *hint_type)
 {
-    const char *type_id = semcheck_record_type_id_from_kgpc(fallback_type);
+    const char *type_id = semcheck_record_type_id_from_kgpc(hint_type);
     if (type_id != NULL || symtab == NULL || expr == NULL || expr->type != EXPR_VAR_ID ||
         expr->expr_data.id == NULL)
     {
@@ -1818,7 +1779,7 @@ static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
                     return 1;
             }
 
-            /* Check TypeAlias from node directly (fallback) */
+            /* Check TypeAlias from node directly (secondary path) */
             struct TypeAlias *alias = get_type_alias_from_node(node);
             if (semcheck_alias_is_widechar(alias))
                 return 1;
@@ -2286,7 +2247,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     int target_is_wide_string = 0;
 
     int target_is_string = (target_type == STRING_TYPE);
-    /* Fallback: check KgpcType for string (e.g. function result vars with overloads) */
+    /* Secondary check: KgpcType for string (e.g. function result vars with overloads) */
     if (!target_is_string && !target_is_shortstring &&
         array_expr != NULL && array_expr->resolved_kgpc_type != NULL &&
         kgpc_type_is_string(array_expr->resolved_kgpc_type))
@@ -3897,7 +3858,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (stmt->stmt_data.procedure_call_data.id != NULL &&
                 pascal_identifier_equals(stmt->stmt_data.procedure_call_data.id, "fail") &&
                 stmt->stmt_data.procedure_call_data.expr_args == NULL &&
-                semcheck_current_subprogram_is_constructor_fallback(symtab))
+                semcheck_get_current_subprogram_is_constructor())
             {
                 stmt->type = STMT_EXIT;
                 memset(&stmt->stmt_data, 0, sizeof(stmt->stmt_data));
@@ -4334,7 +4295,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                         free(call_mangled);
                                     }
 
-                                    /* Fallback: use semcheck_resolve_overload when exact mangling
+                                    /* Overload resolution path: use semcheck_resolve_overload when exact mangling
                                      * doesn't match (e.g., dynamic array types with different alias names) */
                                     if (parent_method_node == NULL)
                                     {
@@ -6376,7 +6337,7 @@ skip_type_receiver_rewrite:
      * We need to detect this pattern and transform it back to a direct procedure call.
      *
      * Pattern: proc_id starts with "__", first arg is a VAR_ID that names a known unit
-     * (preferred) or is unresolved in the symbol table (fallback heuristic), and the procedure
+     * (preferred) or is unresolved in the symbol table (secondary heuristic), and the procedure
      * name (without "__" prefix) exists in symbol table.
      */
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL)
@@ -6403,7 +6364,7 @@ skip_type_receiver_rewrite:
                 }
             }
 
-            /* Prefer explicit unit-name recognition; keep unresolved-name fallback for
+            /* Prefer explicit unit-name recognition; keep unresolved-name secondary path for
              * parser shapes where unit qualifiers are not injected into symbol tables. */
             if (!is_unit_qualifier &&
                 FindSymbol(&unit_check, symtab, potential_unit_name) == 0)
@@ -6743,6 +6704,79 @@ skip_type_receiver_rewrite:
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
                  method_node->hash_type == HASHTYPE_FUNCTION))
             {
+                /* WITH-context override: a method on the enclosing class's
+                 * Self can shadow an unqualified call inside `with X do ...`
+                 * when X's class also declares (or inherits) the same method.
+                 * In Pascal/Delphi semantics, the innermost WITH target wins
+                 * over the enclosing method's Self for unqualified method
+                 * resolution.  Re-route through the WITH receiver here.
+                 *
+                 * Notable case: TObject.Free is reachable via Self in any
+                 * method body, so without this override `with linkres do
+                 * Free;` resolves to Self.Free instead of linkres.Free,
+                 * causing a heap corruption double-free. */
+                /* Skip the WITH override when the only/innermost WITH context
+                 * is the synthetic `with Self do` wrapper that KGPC inserts
+                 * around every instance method body (see
+                 * convert_method_implementation in from_cparser_statements_and_programs.c).
+                 * In that case the WITH target IS Self, so the regular
+                 * Self-prepend path below resolves correctly with proper
+                 * overload-aware metadata.  Only override when there is an
+                 * outer user-written `with X do ...` whose target is a
+                 * different expression. */
+                int innermost_is_synthetic_self = 0;
+                if (with_context_count > 0 &&
+                    with_context_stack[with_context_count - 1].context_expr != NULL)
+                {
+                    struct Expression *innermost_ctx =
+                        with_context_stack[with_context_count - 1].context_expr;
+                    if (innermost_ctx->type == EXPR_VAR_ID &&
+                        innermost_ctx->expr_data.id != NULL &&
+                        pascal_identifier_equals(innermost_ctx->expr_data.id, "Self"))
+                    {
+                        innermost_is_synthetic_self = 1;
+                    }
+                }
+
+                if (with_context_count > 0 && !innermost_is_synthetic_self)
+                {
+                    struct Expression *with_expr = NULL;
+                    int wm = semcheck_with_try_resolve_method(proc_id, symtab,
+                        &with_expr, stmt->line_num);
+                    if (wm == 0 && with_expr != NULL)
+                    {
+                        ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                        if (self_node != NULL)
+                        {
+                            self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                            stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                            if (stmt->stmt_data.procedure_call_data.placeholder_method_name == NULL)
+                                stmt->stmt_data.procedure_call_data.placeholder_method_name = strdup(proc_id);
+                            return semcheck_proccall(symtab, stmt, max_scope_lev);
+                        }
+                        destroy_expr(with_expr);
+                    }
+                    else if (wm == 2 && with_expr != NULL)
+                    {
+                        /* Procedural field on the WITH target: rewrite as
+                         * with_expr.field(...) procedural-variable call. */
+                        struct Expression *field_access = mk_recordaccess(
+                            stmt->line_num, with_expr, strdup(proc_id));
+                        if (field_access != NULL)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                            stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                            int field_tag = UNKNOWN_TYPE;
+                            return return_val + semcheck_stmt_expr_tag(&field_tag, symtab,
+                                field_access, max_scope_lev, NO_MUTATE);
+                        }
+                        destroy_expr(with_expr);
+                    }
+                }
+
                 /* Save bare method name before rewrite for virtual dispatch check */
                 char *bare_method_name = strdup(proc_id);
 
@@ -7527,7 +7561,7 @@ skip_type_receiver_rewrite:
                 }
                 else
                 {
-                    /* Fallback: synthesize class-prefixed method id. */
+                    /* Synthesize class-prefixed method id from record type. */
                     size_t class_len = strlen(record_info->type_id);
                     size_t method_len = strlen(method_name);
                     char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
@@ -8067,10 +8101,8 @@ skip_type_receiver_rewrite:
                     }
                     
                     if (!method_found) {
-                        /* If we didn't find it in the hierarchy, fallback to the original class name 
-                         * so the error message makes sense (or maybe it's a virtual method that will be resolved later?)
-                         * Actually, if we don't find it, we should probably leave it as is or try to construct
-                         * the name for the base class to let the standard check fail with a clear message.
+                        /* Not found in hierarchy: use original class name so the standard
+                         * check produces a clear error message (or the virtual method resolves later).
                          */
                          size_t class_len = strlen(correct_class_name);
                          size_t method_len = strlen(method_name_part);
@@ -8785,7 +8817,7 @@ proccall_parent_resolve_done:
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
 
-        /* Centralized virtual dispatch fallback — catches abstract virtual methods
+        /* Centralized virtual dispatch resolution — catches abstract virtual methods
          * that weren't detected by the early Self-injection check. Only applies to
          * methods without a body (abstract) and not class/static methods (which use
          * single-indirection VMT dispatch that codegen doesn't support yet). */
@@ -8817,7 +8849,7 @@ proccall_parent_resolve_done:
             if (class_record != NULL && record_type_is_class(class_record) &&
                 class_record->methods != NULL)
             {
-                struct MethodInfo *fallback_virtual = NULL;
+                struct MethodInfo *first_virtual_match = NULL;
                 for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
                 {
                     struct MethodInfo *mi = (struct MethodInfo *)me->cur;
@@ -8825,8 +8857,8 @@ proccall_parent_resolve_done:
                         (mi->is_virtual || mi->is_override) &&
                         strcasecmp(mi->name, resolved_proc->method_name) == 0)
                     {
-                        if (fallback_virtual == NULL)
-                            fallback_virtual = mi;
+                        if (first_virtual_match == NULL)
+                            first_virtual_match = mi;
                         if (resolved_param_count >= 0 && mi->param_count >= 0 &&
                             resolved_param_count != mi->param_count)
                         {
@@ -8847,10 +8879,10 @@ proccall_parent_resolve_done:
                     }
                 }
                 if (!stmt->stmt_data.procedure_call_data.is_virtual_call &&
-                    fallback_virtual != NULL)
+                    first_virtual_match != NULL)
                 {
                     stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
-                    stmt->stmt_data.procedure_call_data.vmt_index = fallback_virtual->vmt_index;
+                    stmt->stmt_data.procedure_call_data.vmt_index = first_virtual_match->vmt_index;
                     if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                         stmt->stmt_data.procedure_call_data.self_class_name =
                             strdup(resolved_proc->owner_class);
@@ -9024,7 +9056,7 @@ proccall_parent_resolve_done:
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
 
-        /* WITH context fallback: if the procedure call couldn't be resolved in
+        /* WITH context resolution: if the procedure call couldn't be resolved in
          * normal scope, try resolving via active WITH contexts.  This handles
          * patterns like:  with SomeList.LockList do Add(Self);
          * where Add is a method of the WITH target's class. */

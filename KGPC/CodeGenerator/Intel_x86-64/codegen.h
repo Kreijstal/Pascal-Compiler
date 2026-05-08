@@ -137,6 +137,30 @@ static inline const char *codegen_text_section_resume(void)
     return function_sections_flag() ? "\t.previous" : "\t.text";
 }
 
+/* ---------------------------------------------------------------------------
+ * Unit-prefix helpers for mangled names ("unitname$$base_mangled" format).
+ *
+ * The codegen pre-pass (codegen_apply_collision_prefixes) qualifies colliding
+ * cross-unit symbols by prepending "unitname$$".  Code that needs to test or
+ * strip that prefix must use these helpers instead of open-coding strstr.
+ * ---------------------------------------------------------------------------*/
+
+/* Returns 1 if the mangled name has a unit-qualification prefix ("$$" present). */
+static inline int mangled_id_has_unit_prefix(const char *mangled_id)
+{
+    return mangled_id != NULL && strstr(mangled_id, "$$") != NULL;
+}
+
+/* Returns a pointer to the base name (after "$$"), or the original string if
+ * there is no unit prefix.  Never returns NULL when the input is non-NULL. */
+static inline const char *mangled_id_get_base(const char *mangled_id)
+{
+    if (mangled_id == NULL)
+        return NULL;
+    const char *sep = strstr(mangled_id, "$$");
+    return sep != NULL ? sep + 2 : mangled_id;
+}
+
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
 #define NORMAL_JMP -1
@@ -329,6 +353,9 @@ typedef struct CodeGenContext {
     /* Label to jump to after an 'on' exception handler body executes.
        Set by codegen_try_except, read by codegen_on_exception. */
     const char *on_except_after_label;
+
+    /* Virtual register ID counter — reset to 0 at each function entry. */
+    int next_vreg_id;
 } CodeGenContext;
 
 /* Generates a label */
@@ -346,6 +373,25 @@ void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, Sy
 
 ListNode_t *add_inst(ListNode_t *, const char *);
 void add_inst_invalidate_cache(void);
+
+/* add_inst_du — emit an instruction template and record def/use metadata.
+ *
+ * defs[0..n_defs-1] are the Register_t* written by this instruction.
+ * uses[0..n_uses-1] are the Register_t* read by this instruction.
+ * Either array may be NULL when the corresponding count is 0.
+ * fmt is a template string with %0, %1, ... as register placeholders.
+ *   %N is replaced by the physical register name of the N-th entry in
+ *   the combined (defs first, then uses) array at emit time.
+ *   All other text (including %rax, %rbp, etc.) passes through literally.
+ * The trailing ... is accepted but ignored.
+ *
+ * The resulting ListNode_t has type LIST_IR_INST.
+ * add_inst() is unchanged and continues to produce LIST_STRING nodes. */
+ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
+                        Register_t **defs, int n_defs,
+                        Register_t **uses, int n_uses,
+                        const char *fmt, ...);
+
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);

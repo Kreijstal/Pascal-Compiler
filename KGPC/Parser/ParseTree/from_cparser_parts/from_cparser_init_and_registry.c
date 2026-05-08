@@ -1480,6 +1480,27 @@ void cmb_index_reset(void)
     }
 }
 
+/* Register all bindings for unqualified_name also under qualified_name.
+ * Called when a nested type id is qualified from e.g. "TDeferBase" to
+ * "TMarshaller.TDeferBase" so CMB lookups by the qualified name succeed
+ * without any unqualified fallback. */
+void cmb_index_alias_as_qualified(const char *unqualified_name, const char *qualified_name)
+{
+    if (unqualified_name == NULL || qualified_name == NULL)
+        return;
+    const char *uq = string_intern(unqualified_name);
+    if (uq == NULL)
+        return;
+    CMBIndexEntry *src = cmb_index_find(uq);
+    if (src == NULL)
+        return;
+    const char *qn = string_intern(qualified_name);
+    if (qn == NULL)
+        return;
+    for (int i = 0; i < src->count; i++)
+        cmb_index_add(qn, src->bindings[i]);
+}
+
 /* ---- Method-name index (keyed by interned method_name pointer) ----
  *
  * Used by find_class_for_method and from_cparser_find_classes_with_method
@@ -1952,23 +1973,6 @@ int from_cparser_class_has_method_name(const char *class_name, const char *metho
                 return 1;
         }
     }
-
-    const char *dot = strrchr(class_name, '.');
-    if (dot == NULL)
-        return 0;
-    const char *unqualified = string_intern(dot + 1);
-    if (unqualified == NULL)
-        return 0;
-
-    entry = cmb_index_find(unqualified);
-    if (entry == NULL)
-        return 0;
-
-    for (int i = 0; i < entry->count; i++) {
-        ClassMethodBinding *binding = entry->bindings[i];
-        if (binding != NULL && binding->method_name == mn)
-            return 1;
-    }
     return 0;
 }
 
@@ -1984,26 +1988,11 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
 
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
-     * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
-    /* First pass: search under exact class name. */
+     * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads).
+     * Qualified nested-type names (e.g. TMarshaller.TDeferBase) are registered
+     * under their qualified key by cmb_index_alias_as_qualified in
+     * append_type_decls_from_section, so no unqualified fallback is needed. */
     CMBIndexEntry *entry = cmb_index_find(cn);
-    if (entry != NULL) {
-        for (int i = 0; i < entry->count; i++) {
-            ClassMethodBinding *binding = entry->bindings[i];
-            if (binding->method_name == mn &&
-                (binding->is_virtual || binding->is_override))
-                return 1;
-        }
-    }
-    /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
-     * registered under the unqualified name before renaming. Only try if no exact match. */
-    const char *dot = strrchr(class_name, '.');
-    if (dot == NULL)
-        return 0;
-    const char *unqualified = string_intern(dot + 1);
-    if (unqualified == NULL)
-        return 0;
-    entry = cmb_index_find(unqualified);
     if (entry != NULL) {
         for (int i = 0; i < entry->count; i++) {
             ClassMethodBinding *binding = entry->bindings[i];
@@ -2054,19 +2043,12 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
             } \
         } while (0)
 
-    /* First pass: exact class name. */
+    /* Exact class name lookup only.  Qualified nested-type names are
+     * pre-registered by cmb_index_alias_as_qualified in
+     * append_type_decls_from_section, so no unqualified fallback is needed. */
     const char *cn = string_intern(class_name);
     if (cn != NULL)
         CHECK_INDEX_FOR(cn);
-    /* Second pass: unqualified fallback — only if nothing found under exact name. */
-    if (!has_match) {
-        const char *dot = strrchr(class_name, '.');
-        if (dot != NULL) {
-            const char *uq = string_intern(dot + 1);
-            if (uq != NULL)
-                CHECK_INDEX_FOR(uq);
-        }
-    }
     #undef CHECK_INDEX_FOR
     if (has_match)
         return has_virtual;
