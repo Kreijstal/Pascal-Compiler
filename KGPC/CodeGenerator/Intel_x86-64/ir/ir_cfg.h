@@ -36,6 +36,7 @@ typedef struct BasicBlock {
     struct BasicBlock **preds;             /* heap-allocated, grown on demand */
     int                n_preds;
     int                preds_cap;
+    int                index;             /* position in cfg->blocks[] array */
 } BasicBlock_t;
 
 typedef struct Cfg {

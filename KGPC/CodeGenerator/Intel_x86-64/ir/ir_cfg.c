@@ -204,6 +204,7 @@ static int block_array_push(BlockArray *ba, BasicBlock_t *block)
         ba->blocks   = new_arr;
         ba->capacity = new_cap;
     }
+    block->index = ba->n_blocks;
     ba->blocks[ba->n_blocks++] = block;
     return 0;
 }
