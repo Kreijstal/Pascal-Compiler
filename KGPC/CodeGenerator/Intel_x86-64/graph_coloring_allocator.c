@@ -218,7 +218,8 @@ static ListNode_t *remove_from_list(ListNode_t *list, LiveRange_t *target)
     return list;
 }
 
-/* Find available color (register) for a node */
+/* Find available color (register) for a node.
+ * Tries lr->preferred_color first to keep existing assignments stable. */
 int find_available_color(LiveRange_t *lr, int num_colors)
 {
     assert(lr != NULL);
@@ -237,14 +238,24 @@ int find_available_color(LiveRange_t *lr, int num_colors)
         neighbor = neighbor->next;
     }
     
-    /* Find first available color */
     int color = -1;
-    for (int i = 0; i < num_colors; i++)
+
+    /* Try preferred color first to keep existing assignments stable */
+    if (lr->preferred_color >= 0 && lr->preferred_color < num_colors &&
+        !used[lr->preferred_color])
     {
-        if (!used[i])
+        color = lr->preferred_color;
+    }
+    else
+    {
+        /* Find first available color */
+        for (int i = 0; i < num_colors; i++)
         {
-            color = i;
-            break;
+            if (!used[i])
+            {
+                color = i;
+                break;
+            }
         }
     }
     

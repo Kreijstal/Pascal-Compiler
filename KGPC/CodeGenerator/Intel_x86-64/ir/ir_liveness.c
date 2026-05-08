@@ -9,12 +9,12 @@
  *     live_out[B] = union of live_in[succ]  for each successor
  *     live_in[B]  = use[B] union (live_out[B] \ def[B])
  *
- * use[B] = registers used before their first definition in B
- * def[B] = registers defined in B
- * Both are derived from IrInst_t def/use metadata on LIST_IR_INST nodes.
+ * use[B] = vreg IDs used before their first definition in B
+ * def[B] = vreg IDs defined in B
+ * Both are derived from IrInst_t.vreg_ids[] metadata on LIST_IR_INST nodes.
+ * vreg_ids[0..n_defs-1] are defs; vreg_ids[n_defs..n_defs+n_uses-1] are uses.
+ * A slot with vreg_id == -1 carries no register and is skipped.
  * LIST_STRING nodes carry no metadata and are skipped.
- *
- * Register identity: pointer equality (same Register_t* == same register).
  */
 
 #include "ir_liveness.h"
@@ -28,10 +28,9 @@
 
 /* Pull in full type definitions. */
 #include "List.h"
-#include "stackmng/stackmng.h"
 
 /* -----------------------------------------------------------------------
- * Internal: dynamic set of Register_t* (pointer-identity equality)
+ * Internal: dynamic set of integer vreg IDs
  *
  * We reuse LiveSet_t directly (n_regs = count, cap = capacity).
  * ----------------------------------------------------------------------- */
@@ -42,42 +41,41 @@ static int rset_init(LiveSet_t *s)
 {
     s->n_regs = 0;
     s->cap    = RSET_INIT_CAP;
-    s->regs   = (Register_t **)malloc((size_t)s->cap * sizeof(Register_t *));
-    return (s->regs != NULL) ? 0 : -1;
+    s->vreg_ids = (int *)malloc((size_t)s->cap * sizeof(int));
+    return (s->vreg_ids != NULL) ? 0 : -1;
 }
 
 static void rset_fini(LiveSet_t *s)
 {
-    free(s->regs);
-    s->regs   = NULL;
-    s->n_regs = 0;
-    s->cap    = 0;
+    free(s->vreg_ids);
+    s->vreg_ids = NULL;
+    s->n_regs   = 0;
+    s->cap      = 0;
 }
 
-static int rset_contains(const LiveSet_t *s, const Register_t *r)
+static int rset_contains(const LiveSet_t *s, int id)
 {
     for (int i = 0; i < s->n_regs; ++i)
-        if (s->regs[i] == r)
+        if (s->vreg_ids[i] == id)
             return 1;
     return 0;
 }
 
-/* Add r (non-NULL) to s if not already present.  Returns 0 on success. */
-static int rset_add(LiveSet_t *s, Register_t *r)
+/* Add id (must be >= 0) to s if not already present.  Returns 0 on success. */
+static int rset_add(LiveSet_t *s, int id)
 {
-    if (r == NULL || rset_contains(s, r))
+    if (id < 0 || rset_contains(s, id))
         return 0;
     if (s->n_regs >= s->cap)
     {
         int nc = s->cap * 2;
-        Register_t **a = (Register_t **)realloc(s->regs,
-                                                  (size_t)nc * sizeof(Register_t *));
+        int *a = (int *)realloc(s->vreg_ids, (size_t)nc * sizeof(int));
         if (a == NULL)
             return -1;
-        s->regs = a;
-        s->cap  = nc;
+        s->vreg_ids = a;
+        s->cap      = nc;
     }
-    s->regs[s->n_regs++] = r;
+    s->vreg_ids[s->n_regs++] = id;
     return 0;
 }
 
@@ -87,22 +85,22 @@ static int rset_union_into(LiveSet_t *dst, const LiveSet_t *src)
     int added = 0;
     for (int i = 0; i < src->n_regs; ++i)
     {
-        if (!rset_contains(dst, src->regs[i]))
+        if (!rset_contains(dst, src->vreg_ids[i]))
         {
-            if (rset_add(dst, src->regs[i]) == 0)
+            if (rset_add(dst, src->vreg_ids[i]) == 0)
                 added = 1;
         }
     }
     return added;
 }
 
-/* Returns 1 iff a and b contain exactly the same Register_t* values. */
+/* Returns 1 iff a and b contain exactly the same integer IDs. */
 static int rset_equal(const LiveSet_t *a, const LiveSet_t *b)
 {
     if (a->n_regs != b->n_regs)
         return 0;
     for (int i = 0; i < a->n_regs; ++i)
-        if (!rset_contains(b, a->regs[i]))
+        if (!rset_contains(b, a->vreg_ids[i]))
             return 0;
     return 1;
 }
@@ -113,16 +111,15 @@ static int rset_copy(LiveSet_t *dst, const LiveSet_t *src)
 {
     if (src->n_regs > dst->cap)
     {
-        Register_t **a = (Register_t **)realloc(dst->regs,
-                                                  (size_t)src->n_regs * sizeof(Register_t *));
+        int *a = (int *)realloc(dst->vreg_ids, (size_t)src->n_regs * sizeof(int));
         if (a == NULL)
             return -1;
-        dst->regs = a;
-        dst->cap  = src->n_regs;
+        dst->vreg_ids = a;
+        dst->cap      = src->n_regs;
     }
     dst->n_regs = src->n_regs;
     if (src->n_regs > 0)
-        memcpy(dst->regs, src->regs, (size_t)src->n_regs * sizeof(Register_t *));
+        memcpy(dst->vreg_ids, src->vreg_ids, (size_t)src->n_regs * sizeof(int));
     return 0;
 }
 
@@ -137,7 +134,12 @@ static void rset_clear(LiveSet_t *s)
 
 /* Populate def_out and use_out for one basic block by scanning its
  * LIST_IR_INST nodes from first_inst to last_inst (inclusive).
- * Both sets must already be initialised (empty) by the caller. */
+ * Both sets must already be initialised (empty) by the caller.
+ *
+ * IrInst_t.vreg_ids layout (set by add_inst_du()):
+ *   [0 .. n_defs-1]              → def slots
+ *   [n_defs .. n_defs+n_uses-1]  → use slots
+ * A slot with value -1 carries no register and is skipped. */
 static void compute_def_use(const BasicBlock_t *block,
                              LiveSet_t *def_out, LiveSet_t *use_out)
 {
@@ -148,19 +150,19 @@ static void compute_def_use(const BasicBlock_t *block,
             const IrInst_t *inst = (const IrInst_t *)node->cur;
             if (inst != NULL)
             {
-                /* Uses: registers read before they are defined in this block. */
+                /* Uses: vreg IDs read before they are defined in this block. */
                 for (int i = 0; i < inst->n_uses; ++i)
                 {
-                    Register_t *r = inst->uses[i];
-                    if (r != NULL && !rset_contains(def_out, r))
-                        rset_add(use_out, r);
+                    int id = inst->vreg_ids[inst->n_defs + i];
+                    if (id >= 0 && !rset_contains(def_out, id))
+                        rset_add(use_out, id);
                 }
-                /* Defs: registers written in this block. */
+                /* Defs: vreg IDs written in this block. */
                 for (int i = 0; i < inst->n_defs; ++i)
                 {
-                    Register_t *r = inst->defs[i];
-                    if (r != NULL)
-                        rset_add(def_out, r);
+                    int id = inst->vreg_ids[i];
+                    if (id >= 0)
+                        rset_add(def_out, id);
                 }
             }
         }
@@ -284,9 +286,9 @@ LivenessInfo_t *liveness_compute(const Cfg_t *cfg)
             rset_union_into(&new_in, &use_sets[i]);
             for (int k = 0; k < new_out.n_regs; ++k)
             {
-                Register_t *r = new_out.regs[k];
-                if (!rset_contains(&def_sets[i], r))
-                    rset_add(&new_in, r);
+                int id = new_out.vreg_ids[k];
+                if (!rset_contains(&def_sets[i], id))
+                    rset_add(&new_in, id);
             }
 
             /* Detect change and update sets. */
@@ -332,13 +334,13 @@ void liveness_free(LivenessInfo_t *info)
     if (info->live_in != NULL)
     {
         for (int i = 0; i < info->n_blocks; ++i)
-            free(info->live_in[i].regs);
+            free(info->live_in[i].vreg_ids);
         free(info->live_in);
     }
     if (info->live_out != NULL)
     {
         for (int i = 0; i < info->n_blocks; ++i)
-            free(info->live_out[i].regs);
+            free(info->live_out[i].vreg_ids);
         free(info->live_out);
     }
     free(info);
@@ -348,16 +350,6 @@ void liveness_free(LivenessInfo_t *info)
  * liveness_print
  * ----------------------------------------------------------------------- */
 
-/* Strip a leading '%' from a register name for display purposes. */
-static const char *strip_percent(const char *name)
-{
-    if (name == NULL)
-        return "?";
-    if (name[0] == '%')
-        return name + 1;
-    return name;
-}
-
 static void print_liveset(FILE *out, const LiveSet_t *ls)
 {
     fputc('[', out);
@@ -365,7 +357,7 @@ static void print_liveset(FILE *out, const LiveSet_t *ls)
     {
         if (i > 0)
             fputc(' ', out);
-        fputs(strip_percent(ls->regs[i] ? ls->regs[i]->bit_64 : NULL), out);
+        fprintf(out, "v%d", ls->vreg_ids[i]);
     }
     fputc(']', out);
 }
@@ -401,3 +393,4 @@ void liveness_print(FILE *out, const Cfg_t *cfg, const LivenessInfo_t *info,
 
     fprintf(out, "; --- End Liveness: %s ---\n", fn_name ? fn_name : "<unknown>");
 }
+

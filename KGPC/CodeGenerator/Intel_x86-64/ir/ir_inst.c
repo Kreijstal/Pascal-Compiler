@@ -42,6 +42,12 @@ IrInst_t *ir_inst_new(const char *text,
     if (inst == NULL)
         return NULL;
 
+    /* vreg_ids defaults to 0 via calloc, but 0 is a valid vreg ID.
+     * Initialise all slots to -1 (sentinel for "no register assigned")
+     * so that NULL def/use entries are distinguishable from vreg 0. */
+    for (int k = 0; k < IR_MAX_DEFS + IR_MAX_USES; ++k)
+        inst->vreg_ids[k] = -1;
+
     inst->text = (text != NULL) ? strdup(text) : NULL;
     inst->owns_regs = 0;
 

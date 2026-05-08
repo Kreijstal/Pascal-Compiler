@@ -2,12 +2,13 @@
  * ir_liveness.h — Per-block liveness sets computed by backwards dataflow.
  *
  * After cfg_build() produces a Cfg_t, call liveness_compute() to compute
- * live-in / live-out Register_t* sets at every basic block.  This is pure
- * metadata: no effect on emitted assembly.
+ * live-in / live-out virtual-register ID sets at every basic block.  This is
+ * pure metadata: no effect on emitted assembly.
  *
- * Register identity uses pointer equality (same Register_t* = same virtual
- * register).  LIST_STRING nodes in the instruction list carry no def/use
- * metadata and are treated as having empty def and use sets.
+ * Register identity uses the integer vreg_id field copied into IrInst_t at
+ * add_inst_du() time.  Entries with vreg_id == -1 are ignored (no register).
+ * LIST_STRING nodes in the instruction list carry no def/use metadata and are
+ * treated as having empty def and use sets.
  */
 
 #ifndef IR_LIVENESS_H
@@ -16,14 +17,13 @@
 #include <stdio.h>
 
 /* Forward declarations */
-typedef struct Register Register_t;
-typedef struct Cfg      Cfg_t;
+typedef struct Cfg Cfg_t;
 
-/* Per-block set of live Register_t* values. */
+/* Per-block set of live virtual-register IDs (integers). */
 typedef struct LiveSet {
-    Register_t **regs;   /* array of (borrowed) Register_t* pointers */
-    int          n_regs; /* number of elements currently in the set   */
-    int          cap;    /* allocated capacity of regs[]              */
+    int *vreg_ids;   /* array of virtual register IDs (integers) */
+    int  n_regs;     /* number of elements currently in the set  */
+    int  cap;        /* allocated capacity of vreg_ids[]         */
 } LiveSet_t;
 
 /* Liveness information for an entire function. */
