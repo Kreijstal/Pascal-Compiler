@@ -238,12 +238,12 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
             else
             {
                 /* Same vreg_id must always map to the same physical register.
-                 * A mismatch means next_vreg_id was not restored after nested
-                 * function compilation — fix the root cause, do not silently
-                 * accept corrupt coloring data. */
+                 * A mismatch indicates a compiler bug in vreg ID scoping — the
+                 * register state was not properly reset between nested function
+                 * compilations, causing stale IDs to leak into the outer
+                 * function's instruction list. */
                 assert(vreg_to_color[v] == c &&
-                       "vreg ID collision: same vreg_id maps to two physical registers; "
-                       "next_vreg_id must be saved/restored around codegen_subprograms()");
+                       "vreg ID collision: same vreg_id maps to two physical registers");
             }
         }
     }

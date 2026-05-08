@@ -246,7 +246,12 @@ static void add_pred(BasicBlock_t *block, BasicBlock_t *pred)
         BasicBlock_t **new_preds = (BasicBlock_t **)realloc(
             block->preds, (size_t)new_cap * sizeof(BasicBlock_t *));
         if (new_preds == NULL)
-            return; /* allocation failure — skip this predecessor */
+        {
+            /* Out of memory — the predecessor edge is lost, which may produce
+             * a suboptimal coloring but is not a correctness error in the
+             * emitted assembly (liveness is conservative). */
+            return;
+        }
         block->preds     = new_preds;
         block->preds_cap = new_cap;
     }
