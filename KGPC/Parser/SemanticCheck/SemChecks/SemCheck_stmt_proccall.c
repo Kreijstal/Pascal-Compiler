@@ -1456,7 +1456,6 @@ skip_type_receiver_rewrite:
         }
     }
 
-    
     /* When call_qualifier is already set to a known unit name (e.g. System.Seek
      * inside a method body), the parser may have set is_method_call_placeholder
      * with Self as the first arg.  Skip method resolution entirely and handle
@@ -1976,7 +1975,6 @@ skip_type_receiver_rewrite:
         }
     }
 
-    
     /* Re-check if proc_id is a method (may have been updated by previous block) */
     HashNode_t *type_res_method_node = NULL;
     const char *type_res_method_name = NULL;
