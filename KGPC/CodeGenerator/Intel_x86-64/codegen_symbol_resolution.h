@@ -42,4 +42,7 @@ void codegen_collect_callable_export_names(ListNode_t *sub_list);
 
 int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab);
 
+/* Defined in codegen.c — used by codegen_collect_available_subprogram_labels */
+int codegen_float_native_distance(Tree_t *sub);
+
 #endif /* CODEGEN_SYMBOL_RESOLUTION_H */

@@ -655,6 +655,94 @@ static struct RecordType *codegen_lookup_record_type_for_node(SymTab_t *symtab,
     return get_record_type_from_node(node);
 }
 
+static int codegen_parse_guid_literal(const char *guid, uint32_t *d1,
+    uint16_t *d2, uint16_t *d3, uint8_t d4[8])
+{
+    if (guid == NULL || d1 == NULL || d2 == NULL || d3 == NULL || d4 == NULL)
+        return 0;
+
+    const char *p = guid;
+    if (*p == '\'')
+        p++;
+    if (*p != '{')
+        return 0;
+    p++;
+
+    unsigned int td1 = 0, td2 = 0, td3 = 0;
+    unsigned int td4[8];
+    int matched = sscanf(p,
+        "%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x",
+        &td1, &td2, &td3,
+        &td4[0], &td4[1], &td4[2], &td4[3],
+        &td4[4], &td4[5], &td4[6], &td4[7]);
+    if (matched != 11)
+        return 0;
+
+    *d1 = (uint32_t)td1;
+    *d2 = (uint16_t)td2;
+    *d3 = (uint16_t)td3;
+    for (int i = 0; i < 8; ++i)
+        d4[i] = (uint8_t)td4[i];
+    return 1;
+}
+
+static int codegen_resolve_record_guid(SymTab_t *symtab, const struct RecordType *record,
+    uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8])
+{
+    if (record == NULL || d1 == NULL || d2 == NULL || d3 == NULL || d4 == NULL)
+        return 0;
+
+    if (record->has_guid)
+    {
+        *d1 = record->guid_d1;
+        *d2 = record->guid_d2;
+        *d3 = record->guid_d3;
+        memcpy(d4, record->guid_d4, 8);
+        return 1;
+    }
+
+    if (record->guid_string == NULL || record->guid_string[0] == '\0')
+        return 0;
+
+    if (codegen_parse_guid_literal(record->guid_string, d1, d2, d3, d4))
+        return 1;
+
+    if (symtab == NULL)
+        return 0;
+
+    ListNode_t *matches = FindAllIdents(symtab, record->guid_string);
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node == NULL || node->hash_type != HASHTYPE_CONST ||
+            node->const_string_value == NULL)
+            continue;
+        if (codegen_parse_guid_literal(node->const_string_value, d1, d2, d3, d4))
+        {
+            if (matches != NULL)
+                DestroyList(matches);
+            return 1;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return 0;
+}
+
+static int codegen_template_matches_methodinfo(const struct MethodTemplate *tmpl,
+    const struct MethodInfo *method)
+{
+    if (tmpl == NULL || method == NULL || tmpl->name == NULL || method->name == NULL)
+        return 0;
+    if (strcasecmp(method->name, tmpl->name) != 0)
+        return 0;
+
+    int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+    if (wanted_params >= 0 && method->param_count >= 0)
+        return wanted_params == method->param_count;
+    return 1;
+}
+
 static struct RecordType *codegen_lookup_record_type_by_name(SymTab_t *symtab,
     const char *type_name, int prefer_guid)
 {
@@ -7396,7 +7484,7 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
  * parameters and KGPC's native float size (8 bytes per param).  A distance of 0
  * means all value float params are Double/Real (8 bytes) — the KGPC-native size.
  * Used by has_later_override to prefer Double sincos over Single or Extended. */
-static int codegen_float_native_distance(Tree_t *sub)
+int codegen_float_native_distance(Tree_t *sub)
 {
     int n_value = 0;
     int total_declared = 0;
