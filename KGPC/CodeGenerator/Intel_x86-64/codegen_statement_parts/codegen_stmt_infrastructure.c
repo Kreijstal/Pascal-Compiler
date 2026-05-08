@@ -776,61 +776,6 @@ struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_a
     return NULL;
 }
 
-/* Best-effort field size honoring packed/range aliases */
-long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
-{
-    if (expr == NULL || ctx == NULL)
-        return expr_effective_size_bytes(expr);
-
-    long long size = expr_effective_size_bytes(expr);
-    struct RecordField *field = codegen_lookup_record_field_expr(expr, ctx);
-    long long field_size = 0;
-    if (field != NULL && !field->is_array)
-    {
-        const char *field_type_id = field->type_id;
-        if (field_type_id == NULL && field->type_ref != NULL)
-            field_type_id = type_ref_base_name(field->type_ref);
-
-        if (field->type == REAL_TYPE && field_type_id != NULL)
-        {
-            if (pascal_identifier_equals(field_type_id, "Single"))
-                return 4;
-            if (pascal_identifier_equals(field_type_id, "Double") ||
-                pascal_identifier_equals(field_type_id, "Real"))
-                return 8;
-        }
-
-        if (ctx->symtab != NULL && field_type_id != NULL)
-        {
-            HashNode_t *type_node = NULL;
-            if (FindSymbol(&type_node, ctx->symtab, field_type_id) != 0 &&
-                type_node != NULL && type_node->type != NULL)
-            {
-                long long type_size = kgpc_type_sizeof(type_node->type);
-                if (type_size > 0 &&
-                    type_node->type->kind == TYPE_KIND_PRIMITIVE &&
-                    type_node->type->info.primitive_type_tag == ENUM_TYPE)
-                    return type_size;
-                if (type_size > 0 && !(field->has_cached_layout && field->cached_size > 0))
-                    return type_size;
-            }
-        }
-
-        if (field->has_cached_layout && field->cached_size > 0)
-            return field->cached_size;
-
-        struct RecordType *nested = field->nested_record;
-        if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
-            field_size > 0)
-            return field_size;
-    }
-
-    if (size > 0)
-        return size;
-    return field_size;
-}
-
-
 int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
 {
     if (record_type == NULL || field_name == NULL)
