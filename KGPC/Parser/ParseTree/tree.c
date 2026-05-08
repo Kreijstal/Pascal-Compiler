@@ -439,6 +439,8 @@ static void destroy_record_field(struct RecordField *field)
         destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
+    if (field->cached_proc_return_kgpc_type != NULL)
+        kgpc_type_release(field->cached_proc_return_kgpc_type);
     destroy_record_type(field->nested_record);
     destroy_record_type(field->array_element_record);
     if (field->array_element_kgpc_type != NULL)
@@ -3138,6 +3140,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     expr->expr_data.function_call_data.call_qualifier = NULL;
+    expr->expr_data.function_call_data.cached_procvar_sret_size = 0;
     expr->expr_data.typecast_data.target_type_ref = NULL;
     expr->expr_data.is_data.target_type_ref = NULL;
     expr->expr_data.as_data.target_type_ref = NULL;

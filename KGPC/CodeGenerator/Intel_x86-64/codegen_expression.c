@@ -4771,6 +4771,12 @@ int expr_returns_sret(const struct Expression *expr)
 {
     if (expr != NULL && expr->type == EXPR_FUNCTION_CALL)
     {
+        /* Procvar calls take priority: a procvar returning a record keeps its
+         * sret ABI even if builtin_call_lowering was set on the same expression
+         * node (e.g. BUILTIN_CALL_STRPAS placed by WriteLn string handling). */
+        if (expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.cached_procvar_sret_size > 8)
+            return 1;
         if (expr->expr_data.function_call_data.builtin_call_lowering == BUILTIN_CALL_STRPAS)
             return 0;
     }

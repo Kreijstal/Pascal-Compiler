@@ -2344,12 +2344,14 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
                         type_ref_free(field->pointer_type_ref);
                     if (field->proc_type != NULL)
                         kgpc_type_release(field->proc_type);
+                    if (field->cached_proc_return_kgpc_type != NULL)
+                        kgpc_type_release(field->cached_proc_return_kgpc_type);
                     free(field);
                     free(temp);
                 }
                 return 1;
             }
-            
+
             cloned_field->name = original_field->name ? strdup(original_field->name) : NULL;
             cloned_field->type = original_field->type;
             cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
@@ -2359,6 +2361,10 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
             cloned_field->proc_type = original_field->proc_type;
             if (cloned_field->proc_type != NULL)
                 kgpc_type_retain(cloned_field->proc_type);
+            cloned_field->cached_proc_return_sret_size = original_field->cached_proc_return_sret_size;
+            cloned_field->cached_proc_return_kgpc_type = original_field->cached_proc_return_kgpc_type;
+            if (cloned_field->cached_proc_return_kgpc_type != NULL)
+                kgpc_type_retain(cloned_field->cached_proc_return_kgpc_type);
             cloned_field->is_array = original_field->is_array;
             cloned_field->array_start = original_field->array_start;
             cloned_field->array_end = original_field->array_end;
@@ -2398,8 +2404,10 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
                     type_ref_free(cloned_field->pointer_type_ref);
                 if (cloned_field->proc_type != NULL)
                     kgpc_type_release(cloned_field->proc_type);
+                if (cloned_field->cached_proc_return_kgpc_type != NULL)
+                    kgpc_type_release(cloned_field->cached_proc_return_kgpc_type);
                 free(cloned_field);
-                
+
                 /* Clean up previously allocated fields */
                 while (cloned_parent_fields != NULL)
                 {
@@ -2411,12 +2419,14 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
                     free(field->array_element_type_id);
                     if (field->proc_type != NULL)
                         kgpc_type_release(field->proc_type);
+                    if (field->cached_proc_return_kgpc_type != NULL)
+                        kgpc_type_release(field->cached_proc_return_kgpc_type);
                     free(field);
                     free(temp);
                 }
                 return 1;
             }
-            
+
             new_node->type = LIST_RECORD_FIELD;
             new_node->cur = cloned_field;
             new_node->next = NULL;

@@ -5513,6 +5513,11 @@ FIELD_RESOLVED:
         {
             semcheck_expr_set_resolved_kgpc_type_shared(expr, proc_type_node->type);
         }
+        else if (field_desc->proc_type != NULL &&
+                 field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, field_desc->proc_type);
+        }
     }
     else if (field_type == PROCEDURE && field_desc->proc_type != NULL)
     {
