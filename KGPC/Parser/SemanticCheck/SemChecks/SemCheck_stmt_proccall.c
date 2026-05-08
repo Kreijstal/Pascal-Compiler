@@ -32,9 +32,8 @@
 #include "../../../unit_registry.h"
 #include "SemCheck_sizeof.h"
 /* WithContextEntry is defined in SemCheck_Expr_Internal.h.  We can't include
- * that header here because of redefinition conflicts with helpers like
- * `semcheck_is_currency_kgpc_type`/`get_type_alias_from_node` that this file
- * also defines as static.  Instead we forward-declare the with stack here. */
+ * that header here because of redefinition conflicts with helpers defined
+ * statically in SemCheck_stmt.c.  Instead we forward-declare the with stack here. */
 struct WithContextEntry_fwd {
     struct Expression *context_expr;
     struct RecordType *record_type;
