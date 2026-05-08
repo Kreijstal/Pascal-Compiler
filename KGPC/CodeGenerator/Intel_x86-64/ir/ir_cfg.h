@@ -24,10 +24,8 @@
 typedef struct List ListNode_t;
 
 #define CFG_MAX_SUCCS  2
-/* Upper bound on tracked predecessors.  Matches the spec (preds[16]).
- * If exceeded, additional predecessors are silently dropped from the
- * metadata — the emitted assembly is unaffected. */
-#define CFG_MAX_PREDS  16
+/* Predecessors are tracked in a heap-allocated array that grows on demand,
+ * so there is no fixed upper limit. */
 
 typedef struct BasicBlock {
     char              *label;              /* block label (no colon), NULL for entry */
@@ -35,8 +33,9 @@ typedef struct BasicBlock {
     ListNode_t        *last_inst;          /* last  ListNode_t of this block (borrowed) */
     struct BasicBlock *succs[CFG_MAX_SUCCS];
     int                n_succs;
-    struct BasicBlock *preds[CFG_MAX_PREDS];
+    struct BasicBlock **preds;             /* heap-allocated, grown on demand */
     int                n_preds;
+    int                preds_cap;
 } BasicBlock_t;
 
 typedef struct Cfg {

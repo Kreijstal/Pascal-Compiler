@@ -235,12 +235,21 @@ static void add_pred(BasicBlock_t *block, BasicBlock_t *pred)
 {
     if (block == NULL || pred == NULL)
         return;
-    if (block->n_preds >= CFG_MAX_PREDS)
-        return;
     /* Avoid duplicates. */
     for (int i = 0; i < block->n_preds; ++i)
         if (block->preds[i] == pred)
             return;
+    /* Grow the predecessors array on demand. */
+    if (block->n_preds >= block->preds_cap)
+    {
+        int new_cap = (block->preds_cap == 0) ? 4 : block->preds_cap * 2;
+        BasicBlock_t **new_preds = (BasicBlock_t **)realloc(
+            block->preds, (size_t)new_cap * sizeof(BasicBlock_t *));
+        if (new_preds == NULL)
+            return; /* allocation failure — skip this predecessor */
+        block->preds     = new_preds;
+        block->preds_cap = new_cap;
+    }
     block->preds[block->n_preds++] = pred;
 }
 
@@ -309,6 +318,7 @@ Cfg_t *cfg_build(ListNode_t *inst_list)
                 {
                     /* Allocation failed — clean up and return what we have. */
                     free(current->label);
+                    free(current->preds);
                     free(current);
                     goto finish;
                 }
@@ -317,6 +327,7 @@ Cfg_t *cfg_build(ListNode_t *inst_list)
             {
                 /* Empty block (shouldn't normally happen) — discard. */
                 free(current->label);
+                free(current->preds);
                 free(current);
             }
 
@@ -350,12 +361,14 @@ Cfg_t *cfg_build(ListNode_t *inst_list)
         if (block_array_push(&ba, current) != 0)
         {
             free(current->label);
+            free(current->preds);
             free(current);
         }
     }
     else
     {
         free(current->label);
+        free(current->preds);
         free(current);
     }
 
@@ -369,6 +382,7 @@ finish:
         for (int i = 0; i < ba.n_blocks; ++i)
         {
             free(ba.blocks[i]->label);
+            free(ba.blocks[i]->preds);
             free(ba.blocks[i]);
         }
         free(ba.blocks);
@@ -455,6 +469,7 @@ void cfg_free(Cfg_t *cfg)
         if (cfg->blocks[i] != NULL)
         {
             free(cfg->blocks[i]->label);
+            free(cfg->blocks[i]->preds);
             free(cfg->blocks[i]);
         }
     }

@@ -205,14 +205,10 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
     for (int i = 0; i < n_vregs; ++i)
         vreg_to_color[i] = -1;
 
-    /* Detect vreg ID collisions: when ctx->next_vreg_id is reset by nested
-     * function compilation, the same integer ID may be reused for two
-     * logically different virtual registers in the same instruction list.
-     * If that happens, the same vreg_id appears with different physical
-     * register names — applying the coloring would corrupt code.  Detect
-     * this early and bail out (keep existing LRU assignment). */
-    int collision = 0;
-    for (ListNode_t *n = inst_list; n != NULL && !collision; n = n->next)
+    /* Build vreg_id → preferred color (= pool index) map by scanning the
+     * instruction list.  All occurrences of the same vreg_id must map to the
+     * same physical register; any divergence is a compiler bug. */
+    for (ListNode_t *n = inst_list; n != NULL; n = n->next)
     {
         if (n->type != LIST_IR_INST) continue;
         const IrInst_t *inst = (const IrInst_t *)n->cur;
@@ -239,21 +235,17 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
             {
                 vreg_to_color[v] = c;
             }
-            else if (vreg_to_color[v] != c)
+            else
             {
-                /* Same vreg_id → two different physical registers: collision. */
-                collision = 1;
-                break;
+                /* Same vreg_id must always map to the same physical register.
+                 * A mismatch means next_vreg_id was not restored after nested
+                 * function compilation — fix the root cause, do not silently
+                 * accept corrupt coloring data. */
+                assert(vreg_to_color[v] == c &&
+                       "vreg ID collision: same vreg_id maps to two physical registers; "
+                       "next_vreg_id must be saved/restored around codegen_subprograms()");
             }
         }
-    }
-
-    if (collision)
-    {
-        free(vreg_to_color);
-        liveness_free(liveness);
-        cfg_free(cfg);
-        return;
     }
 
     /* ------------------------------------------------------------------ */
@@ -367,14 +359,16 @@ static void ir_liveness_allocate(ListNode_t *inst_list)
     /* Step 6: run graph coloring                                          */
     /* ------------------------------------------------------------------ */
     ListNode_t *spilled = allocate_registers_graph_coloring_prebuilt(graph);
-    int has_spills = (spilled != NULL);
-    if (spilled != NULL)
-        DestroyList(spilled);
+    /* The register pool consists solely of the callee-saved registers that
+     * the LRU allocator has already pre-assigned.  With preferred colors
+     * locked in, graph coloring is effectively just a consistency check and
+     * should never produce spills.  A spill here indicates a compiler bug. */
+    assert(spilled == NULL &&
+           "graph coloring produced spills — impossible with pre-allocated callee-saved registers");
 
     /* ------------------------------------------------------------------ */
-    /* Step 7: apply coloring (only when every vreg received a color)     */
+    /* Step 7: apply coloring                                              */
     /* ------------------------------------------------------------------ */
-    if (!has_spills)
     {
         for (ListNode_t *n = inst_list; n != NULL; n = n->next)
         {
@@ -8879,8 +8873,18 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->callee_save_r15_offset = r15_slot->offset;
     }
 
-    /* Recursively generate nested subprograms */
-    codegen_subprograms(proc->subprograms, ctx, symtab);
+    /* Recursively generate nested subprograms.  Save and restore
+     * next_vreg_id, and reset the reg_stack so that stale vreg_ids from
+     * nested compilations do not contaminate the outer function's register
+     * tracking.  The instructions emitted so far already have register names
+     * copied into them (not borrowed pointers), so resetting the reg_stack
+     * is safe. */
+    {
+        int saved_vreg_id = ctx->next_vreg_id;
+        codegen_subprograms(proc->subprograms, ctx, symtab);
+        reset_reg_stack();
+        ctx->next_vreg_id = saved_vreg_id;
+    }
 
     /* Set up asm parameter mapping for nostackframe functions.
        These functions skip the frame prologue, so inline asm should use
@@ -9746,13 +9750,21 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->callee_save_r15_offset = r15_slot->offset;
     }
 
-    /* Recursively generate nested subprograms */
+    /* Recursively generate nested subprograms.  Save and restore
+     * next_vreg_id, and reset the reg_stack so that stale vreg_ids from
+     * nested compilations do not contaminate the outer function's register
+     * tracking.  The instructions emitted so far already have register names
+     * copied into them (not borrowed pointers), so resetting the reg_stack
+     * is safe. */
     {
+        int saved_vreg_id = ctx->next_vreg_id;
         int saved_returns_dynamic_array = ctx->returns_dynamic_array;
         int saved_dynamic_array_descriptor_size = ctx->dynamic_array_descriptor_size;
         codegen_subprograms(func->subprograms, ctx, symtab);
         ctx->returns_dynamic_array = saved_returns_dynamic_array;
         ctx->dynamic_array_descriptor_size = saved_dynamic_array_descriptor_size;
+        reset_reg_stack();
+        ctx->next_vreg_id = saved_vreg_id;
     }
 
     /* Set up asm parameter mapping for nostackframe functions. */
