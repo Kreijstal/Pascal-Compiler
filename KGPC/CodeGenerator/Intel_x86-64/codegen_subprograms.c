@@ -3255,10 +3255,18 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             /* Try to compute from range */
                             int s = arg_decl->tree_data.arr_decl_data.s_range;
                             int e = arg_decl->tree_data.arr_decl_data.e_range;
-                            if (e >= s && (e - s + 1) > 1)
-                                ss_size = e - s + 1;
+                            if (e >= s)
+                            {
+                                long long diff = (long long)e - (long long)s;
+                                if (diff >= 1 && diff <= (long long)INT_MAX - 1)
+                                    ss_size = (int)(diff + 1);
+                                else
+                                    ss_size = 256;
+                            }
                             else
+                            {
                                 ss_size = 256;
+                            }
                         }
                         arg_stack = add_l_z_bytes((char *)arg_ids->cur, ss_size);
                         /* NOT setting is_reference — local value copy */
