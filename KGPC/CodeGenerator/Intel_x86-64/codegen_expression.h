@@ -4,17 +4,36 @@
 #include "codegen.h"
 #include "codegen_expr_relop.h"
 #include "codegen_expr_sizeof.h"
+#include "codegen_expr_arguments.h"
+
+/* Shared helpers exposed from codegen_expression.c */
+const struct RecordType *codegen_record_class_var_owner_named(SymTab_t *symtab,
+    struct RecordType *record, const char *field_id);
+ListNode_t *codegen_emit_classvar_base_address_named(ListNode_t *inst_list,
+    const char *addr_reg64, const struct RecordType *record, long long field_offset);
+int codegen_record_matches_owner_class(CodeGenContext *ctx,
+    const struct RecordType *record);
+int codegen_nonstatic_class_method_owner_field_uses_classvar(CodeGenContext *ctx,
+    const struct RecordType *record, const struct Expression *record_expr);
+int codegen_expr_is_class_vmt_value(const struct Expression *expr, CodeGenContext *ctx);
+int codegen_expr_needs_class_method_vmt_self(const struct Expression *expr,
+    CodeGenContext *ctx);
+ListNode_t *codegen_expr_maybe_convert_int_like_to_real(int target_type,
+    struct Expression *arg_expr, Register_t *top_reg, ListNode_t *inst_list,
+    CodeGenContext *ctx);
+int codegen_expr_align_to(int value, int alignment);
+StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size);
+ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+StackNode_t *codegen_alloc_record_temp(long long size);
+int expr_is_signed_kgpctype(const struct Expression *expr);
+const char *describe_expression_kind(const struct Expression *expr);
+
 
 /*
     Expression-related code generation functions
 */
 
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
-    CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
-    int arg_start_index, const struct Expression *call_expr,
-    int is_class_method_call_hint);
-ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx);
-ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *, CodeGenContext *);
 HashNode_t *codegen_prefer_visible_var_over_const(CodeGenContext *ctx,
     const char *id, HashNode_t *node);
 

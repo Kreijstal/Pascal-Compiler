@@ -95,6 +95,7 @@ kgpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_builtins.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_calls_and_control.c',
   'CodeGenerator/Intel_x86-64/codegen_expression.c',
+  'CodeGenerator/Intel_x86-64/codegen_expr_arguments.c',
   'CodeGenerator/Intel_x86-64/codegen_expr_array.c',
   'CodeGenerator/Intel_x86-64/codegen_expr_relop.c',
   'CodeGenerator/Intel_x86-64/codegen_expr_sizeof.c',
