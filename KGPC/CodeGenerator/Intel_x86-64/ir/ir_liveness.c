@@ -270,15 +270,7 @@ LivenessInfo_t *liveness_compute(const Cfg_t *cfg)
             for (int s = 0; s < b->n_succs; ++s)
             {
                 const BasicBlock_t *succ = b->succs[s];
-                /* Locate successor index by pointer comparison. */
-                for (int k = 0; k < n; ++k)
-                {
-                    if (cfg->blocks[k] == succ)
-                    {
-                        rset_union_into(&new_out, &info->live_in[k]);
-                        break;
-                    }
-                }
+                rset_union_into(&new_out, &info->live_in[succ->index]);
             }
 
             /* new_in[B] = use[B] | (new_out \ def[B]) */

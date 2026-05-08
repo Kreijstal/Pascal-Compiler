@@ -54,14 +54,16 @@ IrInst_t *ir_inst_new(const char *text,
     if (n_defs > IR_MAX_DEFS)
         n_defs = IR_MAX_DEFS;
     inst->n_defs = n_defs;
-    for (int i = 0; i < n_defs; ++i)
-        inst->defs[i] = defs[i];
+    if (defs != NULL)
+        for (int i = 0; i < n_defs; ++i)
+            inst->defs[i] = defs[i];
 
     if (n_uses > IR_MAX_USES)
         n_uses = IR_MAX_USES;
     inst->n_uses = n_uses;
-    for (int i = 0; i < n_uses; ++i)
-        inst->uses[i] = uses[i];
+    if (uses != NULL)
+        for (int i = 0; i < n_uses; ++i)
+            inst->uses[i] = uses[i];
 
     return inst;
 }
