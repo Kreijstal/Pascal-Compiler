@@ -11,6 +11,8 @@
 /* Forward declarations of shared helpers defined in SemCheck_stmt.c
  * and used by SemCheck_stmt_proccall.c. */
 
+void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
+
 /* transform_two_arg_new_dispose was extracted from SemCheck_stmt.c into
  * SemCheck_stmt_proccall.c together with semcheck_proccall. */
 struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, int *is_dispose);
