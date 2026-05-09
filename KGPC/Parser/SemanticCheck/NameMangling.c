@@ -666,8 +666,6 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             KGPC_SEMCHECK_HARD_ASSERT(0,
                 "GetFlatTypeListForMangling: unsupported parameter decl tree type %d",
                 decl_tree->type);
-            arg_cur = arg_cur->next;
-            continue;
         }
 
         if (resolved_type < 100)
