@@ -2092,6 +2092,17 @@ class TestCompiler(unittest.TestCase):
         )
         self.assertIn("bad", stderr)
 
+    def test_tdd_goto_undefined_label_reports_error(self):
+        """Goto to an undeclared label should fail semantic checking."""
+        input_file, asm_file, _ = self._get_test_paths("tdd_goto_undefined_label")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        lower = stderr.lower()
+        self.assertIn("goto target label '2' not declared in scope", lower)
+
     def test_classof_nonclass_target_reports_error(self):
         """'class of Integer' must be rejected - Integer is not a class type."""
         input_file, asm_file, _ = self._get_test_paths("bug_classof_nonclass_target")
