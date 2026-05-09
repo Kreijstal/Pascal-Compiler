@@ -42,7 +42,21 @@ void serialize_expression_recursive(FILE *fp, struct Expression *expr) {
             break;
         case EXPR_FUNCTION_CALL:
             fprintf(fp, "%s\n", expr->expr_data.function_call_data.id);
-            // Not serializing args for now to keep it simple
+            {
+                int arg_count = 0;
+                ListNode_t *arg_node = expr->expr_data.function_call_data.args_expr;
+                while (arg_node != NULL) {
+                    arg_count++;
+                    arg_node = arg_node->next;
+                }
+
+                fprintf(fp, "%d\n", arg_count);
+                arg_node = expr->expr_data.function_call_data.args_expr;
+                while (arg_node != NULL) {
+                    serialize_expression_recursive(fp, (struct Expression *)arg_node->cur);
+                    arg_node = arg_node->next;
+                }
+            }
             break;
         case EXPR_TYPECAST:
             fprintf(fp, "%d ", expr->expr_data.typecast_data.target_type);
