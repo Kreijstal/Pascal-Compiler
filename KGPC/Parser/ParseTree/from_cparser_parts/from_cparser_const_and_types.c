@@ -612,7 +612,7 @@ record_ctor_cleanup:
                 free(field);
             }
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
         }
     }

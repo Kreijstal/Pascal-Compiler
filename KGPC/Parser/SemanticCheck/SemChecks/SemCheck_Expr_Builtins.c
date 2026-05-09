@@ -1427,7 +1427,7 @@ void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr)
         ListNode_t *next = args->next;
         if (args->cur != NULL && args->cur != preserve_expr)
             destroy_expr((struct Expression *)args->cur);
-        free(args);
+        FreeListNodeStorage(args);
         args = next;
     }
 }

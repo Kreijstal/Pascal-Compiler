@@ -3877,7 +3877,7 @@ static ListNode_t *copy_string_list(const ListNode_t *src)
     {
         if (cur->type == LIST_STRING && cur->cur != NULL)
         {
-            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            ListNode_t *new_node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
             if (new_node == NULL)
             {
                 /* Free already allocated nodes on failure */

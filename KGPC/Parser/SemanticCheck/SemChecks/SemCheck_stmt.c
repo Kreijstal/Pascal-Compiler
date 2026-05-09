@@ -2075,7 +2075,7 @@ int try_resolve_builtin_procedure(SymTab_t *symtab,
         ListNode_t *remaining_args = args->next;
         destroy_expr(qualifier_expr);
         args->cur = NULL;
-        free(args);
+        FreeListNodeStorage(args);
         stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
 
         if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))

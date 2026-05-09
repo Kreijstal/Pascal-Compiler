@@ -2004,7 +2004,7 @@ int semcheck_transform_property_getter_call(int *type_return,
             /* Restore object_expr ownership before freeing arg_node */
             object_expr = (struct Expression *)arg_node->cur;
             arg_node->cur = NULL;
-            free(arg_node);
+            FreeListNodeStorage(arg_node);
             expr->expr_data.record_access_data.record_expr = object_expr;
         }
         *type_return = UNKNOWN_TYPE;
@@ -2183,7 +2183,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     {
         ListNode_t *next = to_free->next;
         to_free->cur = NULL;
-        free(to_free);
+        FreeListNodeStorage(to_free);
         to_free = next;
     }
     expr->expr_data.function_call_data.args_expr = NULL;

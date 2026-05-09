@@ -135,7 +135,7 @@ void operator_registry_cleanup(void) {
             free(overload->return_type);
             free(overload);
         }
-        free(cur);
+        FreeListNodeStorage(cur);
         cur = next;
     }
     operator_overloads = NULL;

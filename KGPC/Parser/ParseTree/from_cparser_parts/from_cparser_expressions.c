@@ -998,7 +998,7 @@ tuple_cleanup:
             ListNode_t *next = elements->next;
             if (elements->cur != NULL)
                 destroy_expr((struct Expression *)elements->cur);
-            free(elements);
+            FreeListNodeStorage(elements);
             elements = next;
         }
         return NULL;
@@ -1222,7 +1222,7 @@ tuple_cleanup:
         if (arg_count == 1 && args != NULL)
         {
             inner_expr = (struct Expression *)args->cur;
-            free(args);
+            FreeListNodeStorage(args);
         }
         else
         {

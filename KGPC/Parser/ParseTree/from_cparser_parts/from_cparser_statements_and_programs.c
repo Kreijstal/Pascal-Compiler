@@ -2260,7 +2260,7 @@ void from_cparser_cleanup(void)
             free(entry->base_type_id);
             free(entry);
         }
-        free(type_helper_mappings);
+        FreeListNodeStorage(type_helper_mappings);
         type_helper_mappings = next;
     }
 
@@ -2273,7 +2273,7 @@ void from_cparser_cleanup(void)
         if (binding != NULL && binding->param_sig != NULL)
             free(binding->param_sig);
         free(binding); /* ClassMethodBinding struct */
-        free(class_method_bindings);
+        FreeListNodeStorage(class_method_bindings);
         class_method_bindings = next;
     }
 

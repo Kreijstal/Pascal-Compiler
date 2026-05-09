@@ -2286,7 +2286,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
 
     for (int i = 0; i < entry->count; i++) {
         ClassMethodBinding *binding = entry->bindings[i];
-        ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+        ListNode_t *node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
         if (node != NULL) {
             node->type = LIST_UNSPECIFIED;
             node->cur = binding;

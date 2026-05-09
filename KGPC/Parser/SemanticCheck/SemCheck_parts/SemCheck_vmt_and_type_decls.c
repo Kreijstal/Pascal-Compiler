@@ -89,7 +89,7 @@ if (record_info->parent_class_name != NULL) {
                                 cloned->resolved_mangled_id = NULL;
                             }
                             
-                            ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+                            ListNode_t *node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
                             if (node != NULL) {
                                 node->type = LIST_UNSPECIFIED;
                                 node->cur = cloned;
@@ -255,7 +255,7 @@ if (record_info->parent_class_name != NULL) {
                      * Virtual methods start at offset 96 (slot 12). */
 	                    new_method->vmt_index = max_vmt_index + 1;
 
-                    ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+                    ListNode_t *node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
                     if (node != NULL) {
                         node->type = LIST_UNSPECIFIED;
                         node->cur = new_method;

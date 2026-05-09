@@ -244,7 +244,7 @@ if (ctx->id != NULL && pascal_identifier_equals(ctx->id, "supports") &&
             ListNode_t *captured_arg_node = arg2->expr_data.function_call_data.args_expr;
             struct Expression *captured_arg = (struct Expression *)captured_arg_node->cur;
             captured_arg_node->cur = NULL;
-            free(captured_arg_node);
+            FreeListNodeStorage(captured_arg_node);
             arg2->expr_data.function_call_data.args_expr = NULL;
 
             if (arg2->expr_data.function_call_data.mangled_id != NULL)
@@ -343,7 +343,7 @@ if (ctx->id != NULL && ctx->args_given != NULL)
             ListNode_t *remaining_args = ctx->args_given->next;
             destroy_expr(first_arg);
             ctx->args_given->cur = NULL;
-            free(ctx->args_given);
+            FreeListNodeStorage(ctx->args_given);
             ctx->expr->expr_data.function_call_data.args_expr = remaining_args;
             ctx->args_given = remaining_args;
             ctx->was_unit_qualified = 1;

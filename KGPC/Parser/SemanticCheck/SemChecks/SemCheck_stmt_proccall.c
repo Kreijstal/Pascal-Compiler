@@ -283,7 +283,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             ListNode_t *remaining_args = args_given->next;
                             destroy_expr(first_arg);
                             args_given->cur = NULL;
-                            free(args_given);
+                            FreeListNodeStorage(args_given);
                             stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
 
                             stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
@@ -346,7 +346,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             ListNode_t *remaining_args = args_given->next;
                             destroy_expr(first_arg);
                             args_given->cur = NULL;
-                            free(args_given);
+                            FreeListNodeStorage(args_given);
                             stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
                             args_given = remaining_args;
                             static_arg_already_removed = 1;
@@ -470,7 +470,7 @@ skip_type_receiver_rewrite:
                         ListNode_t *remaining_args = args_given->next;
                         destroy_expr(first_arg);
                         args_given->cur = NULL;
-                        free(args_given);
+                        FreeListNodeStorage(args_given);
 
                         stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
                         free(proc_id);
@@ -523,7 +523,7 @@ skip_type_receiver_rewrite:
                          * freeing args_given doesn't affect it. */
                         destroy_expr(first_arg);
                         args_given->cur = NULL;
-                        free(args_given);
+                        FreeListNodeStorage(args_given);
 
                         /* Update the statement with the transformed call */
                         stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
@@ -562,7 +562,7 @@ skip_type_receiver_rewrite:
 
                             destroy_expr(first_arg);
                             args_given->cur = NULL;
-                            free(args_given);
+                            FreeListNodeStorage(args_given);
 
                             stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
 
@@ -637,7 +637,7 @@ skip_type_receiver_rewrite:
         {
             ListNode_t *next = args_given->next;
             args_given->cur = NULL;
-            free(args_given);
+            FreeListNodeStorage(args_given);
             args_given = next;
         }
 
@@ -1357,7 +1357,7 @@ skip_type_receiver_rewrite:
                         ListNode_t *remaining_args = args_given->next;
                         stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
                         args_given->cur = NULL;
-                        free(args_given);
+                        FreeListNodeStorage(args_given);
 
                         /* Build record access expression for the procedural field */
                         struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
@@ -1702,7 +1702,7 @@ skip_type_receiver_rewrite:
                         ListNode_t *old_head = args_given;
                         args_given = old_head->next;
                         old_head->cur = NULL; /* Don't free first_arg, we reuse it */
-                        free(old_head);
+                        FreeListNodeStorage(old_head);
                         stmt->stmt_data.procedure_call_data.expr_args = args_given;
 
                         /* Build record access expression for the procedural field */
@@ -2209,7 +2209,7 @@ skip_method_placeholder_resolution:
                 ListNode_t *call_args = args_given->next;
                 args_given->next = NULL;
                 args_given->cur = NULL;
-                free(args_given);  /* Free only the ListNode_t, not the Expression */
+                FreeListNodeStorage(args_given);  /* Free only the ListNode_t, not the Expression */
                 stmt->stmt_data.procedure_call_data.expr_args = call_args;
                 args_given = call_args;
 
@@ -3865,7 +3865,7 @@ struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, int *is_
     args->next->cur = NULL;
     ListNode_t *second_node = args->next;
     args->next = NULL;
-    free(second_node);
+    FreeListNodeStorage(second_node);
 
     /* Build the method call statement: p^.Method(args) */
     if (method_expr == NULL || ptr_expr == NULL)
@@ -3938,4 +3938,3 @@ struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, int *is_
 
     return method_call;
 }
-

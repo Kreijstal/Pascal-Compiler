@@ -26,7 +26,7 @@ static void destroy_expr_list(ListNode_t *head)
         ListNode_t *next = cur->next;
         if (cur->cur != NULL)
             destroy_expr((struct Expression *)cur->cur);
-        free(cur);
+        FreeListNodeStorage(cur);
         cur = next;
     }
 }

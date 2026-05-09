@@ -1761,7 +1761,7 @@ else
                     ctx->expr->expr_data.function_call_data.args_expr = first_arg_node->next;
                     first_arg_node->next = NULL;
                     destroy_expr(first_arg);
-                    free(first_arg_node);
+                    FreeListNodeStorage(first_arg_node);
                     ctx->args_given = ctx->expr->expr_data.function_call_data.args_expr;
                     if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && ctx->id != NULL &&
                         pascal_identifier_equals(ctx->id, "Format"))

@@ -134,6 +134,17 @@ kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,
   c_args: kgpc_c_args,
 )
 
+list_tests = executable('list_tests',
+  [
+    'Parser/List/UnitTest.c',
+    'Parser/List/List.c',
+    '../common/arena.c',
+  ],
+  include_directories: inc_dirs,
+)
+
+test('list unit tests', list_tests)
+
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
 runtime_sources = [

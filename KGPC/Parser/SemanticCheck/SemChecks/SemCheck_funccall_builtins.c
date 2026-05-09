@@ -529,7 +529,7 @@ if (ctx->expr->expr_data.function_call_data.is_method_call_placeholder && ctx->a
                     ListNode_t *remaining_args = ctx->args_given->next;
                     destroy_expr(first_arg);
                     ctx->args_given->cur = NULL;
-                    free(ctx->args_given);
+                    FreeListNodeStorage(ctx->args_given);
 
                     ctx->expr->expr_data.function_call_data.args_expr = remaining_args;
                     ctx->args_given = remaining_args;
@@ -601,7 +601,7 @@ if (ctx->expr->expr_data.function_call_data.is_method_call_placeholder && ctx->a
                             ListNode_t *remaining_args = ctx->args_given->next;
                             destroy_expr(first_arg);
                             ctx->args_given->cur = NULL;
-                            free(ctx->args_given);
+                            FreeListNodeStorage(ctx->args_given);
 
                             ctx->expr->expr_data.function_call_data.args_expr = remaining_args;
                             ctx->args_given = remaining_args;
@@ -805,7 +805,7 @@ if (is_unit_qualifier)
             ListNode_t *remaining_args = ctx->args_given->next;
             destroy_expr(first_arg);
             ctx->args_given->cur = NULL;
-            free(ctx->args_given);
+            FreeListNodeStorage(ctx->args_given);
 
             ctx->expr->expr_data.function_call_data.args_expr = remaining_args;
             ctx->args_given = remaining_args;

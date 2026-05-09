@@ -2029,8 +2029,8 @@ int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
         value_arg->next = NULL;
         destroy_expr(object_expr);
         destroy_expr(value_expr);
-        free(value_arg);
-        free(self_arg);
+        FreeListNodeStorage(value_arg);
+        FreeListNodeStorage(self_arg);
         return 1;
     }
 
@@ -2276,7 +2276,7 @@ int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
         destroy_expr(index_expr);
         destroy_expr(rhs);
         if (args_head != NULL)
-            free(args_head);
+            FreeListNodeStorage(args_head);
         return 1;
     }
     if (args_tail != NULL)

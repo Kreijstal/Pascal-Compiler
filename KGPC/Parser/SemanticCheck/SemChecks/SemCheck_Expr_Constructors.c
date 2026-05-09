@@ -136,7 +136,7 @@ int semcheck_convert_set_literal_to_array_literal(struct Expression *expr)
         if (element != NULL)
             destroy_set_element(element);
         ListNode_t *next = cur->next;
-        free(cur);
+        FreeListNodeStorage(cur);
         cur = next;
     }
 

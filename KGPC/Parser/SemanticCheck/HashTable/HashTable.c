@@ -564,7 +564,7 @@ void DestroyHashTable(HashTable_t *table)
 
             free(cur->cur);
             temp = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
 
             cur = temp;
         }

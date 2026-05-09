@@ -151,7 +151,7 @@ static void DestroyMangleTypeList(ListNode_t* list) {
             free(mt);
         }
         ListNode_t* next = cur->next;
-        free(cur);
+        FreeListNodeStorage(cur);
         cur = next;
     }
 }

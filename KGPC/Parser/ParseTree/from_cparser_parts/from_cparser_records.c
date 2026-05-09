@@ -187,7 +187,7 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
         }
 
         ListNode_t *next_name = name_node->next;
-        free(name_node);
+        FreeListNodeStorage(name_node);
         name_node = next_name;
     }
 
@@ -1653,7 +1653,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
         }
 
         ListNode_t *next_name = name_node->next;
-        free(name_node);
+        FreeListNodeStorage(name_node);
         name_node = next_name;
     }
 
@@ -2179,7 +2179,7 @@ char *pop_last_identifier(ListNode_t **ids) {
     else
         *ids = NULL;
 
-    free(cur);
+    FreeListNodeStorage(cur);
     return value;
 }
 

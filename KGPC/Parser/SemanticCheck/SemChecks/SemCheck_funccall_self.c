@@ -829,7 +829,7 @@ if (ctx->id != NULL && ctx->args_given != NULL)
                 ListNode_t *remaining_args = ctx->args_given->next;
                 ctx->expr->expr_data.function_call_data.args_expr = remaining_args;
                 ctx->args_given->cur = NULL;
-                free(ctx->args_given);
+                FreeListNodeStorage(ctx->args_given);
 
                 /* Build a record-access expression to the procedural field */
                 struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
@@ -1069,7 +1069,7 @@ if (ctx->id != NULL && ctx->args_given != NULL)
                 /* Detach receiver from the argument list before converting */
                 ctx->args_given->cur = NULL;
                 ctx->expr->expr_data.function_call_data.args_expr = NULL;
-                free(ctx->args_given);
+                FreeListNodeStorage(ctx->args_given);
 
                 /* Convert the node from EXPR_FUNCTION_CALL to EXPR_RECORD_ACCESS */
                 char *field_id_copy = strdup(field_lookup);

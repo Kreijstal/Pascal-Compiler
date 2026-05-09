@@ -23,6 +23,7 @@ typedef struct List
 {
     enum ListType type;
     void *cur;
+    unsigned char arena_allocated;
 
     ListNode_t *next;
 } ListNode_t;
@@ -50,6 +51,9 @@ ListNode_t *PopListHeadNode(ListNode_t *head);
 
 /* Returns pointer to the next node */
 ListNode_t *DeleteListNode(ListNode_t *node, ListNode_t *prev);
+
+/* Releases only the node storage, not cur or next */
+void FreeListNodeStorage(ListNode_t *node);
 
 void DestroyList(ListNode_t *head_node);
 

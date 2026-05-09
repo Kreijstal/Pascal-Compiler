@@ -1278,7 +1278,7 @@ void destroy_list(ListNode_t *list)
             }
             prev = cur;
             cur = cur->next;
-            free(prev);
+            FreeListNodeStorage(prev);
         }
     }
 }
@@ -1828,7 +1828,7 @@ void destroy_expr(struct Expression *expr)
             if (cur->cur != NULL)
               destroy_expr((struct Expression *)cur->cur);
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
           }
           expr->expr_data.array_literal_data.elements = NULL;
@@ -1851,7 +1851,7 @@ void destroy_expr(struct Expression *expr)
                 free(field);
             }
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
           }
           expr->expr_data.record_constructor_data.fields = NULL;
@@ -2033,7 +2033,7 @@ void destroy_record_type(struct RecordType *record_type)
             struct ClassProperty *property = (struct ClassProperty *)cur->cur;
             destroy_class_property(property);
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
         }
     }
@@ -2056,7 +2056,7 @@ void destroy_record_type(struct RecordType *record_type)
                 free(method);
             }
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
         }
     }
@@ -2087,7 +2087,7 @@ void destroy_record_type(struct RecordType *record_type)
             struct ClassProperty *property = (struct ClassProperty *)cur->cur;
             destroy_class_property(property);
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
         }
     }

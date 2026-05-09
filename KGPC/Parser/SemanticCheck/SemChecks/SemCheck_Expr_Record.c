@@ -220,7 +220,7 @@ static void semcheck_merge_candidate_lists_dedup_seen(ListNode_t **combined_head
         }
         else
         {
-            free(cur);
+            FreeListNodeStorage(cur);
         }
 
         cur = next;
@@ -703,7 +703,7 @@ void semcheck_merge_candidate_lists_dedup(ListNode_t **existing,
         while (cur != NULL)
         {
             ListNode_t *next = cur->next;
-            free(cur);
+            FreeListNodeStorage(cur);
             cur = next;
         }
         return;

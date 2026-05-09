@@ -364,7 +364,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
             prev->next = NULL;
             free(iter->cur);
-            free(iter);
+            FreeListNodeStorage(iter);
         }
     }
 

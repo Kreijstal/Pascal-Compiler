@@ -593,7 +593,7 @@ if (!ctx->was_unit_qualified &&
                             ctx->args_given = old_head->next;
                             old_head->next = NULL;
                             old_head->cur = NULL; /* Don't free first_arg, we reuse it */
-                            free(old_head);
+                            FreeListNodeStorage(old_head);
                             ctx->expr->expr_data.function_call_data.args_expr = ctx->args_given;
 
                             /* Build a record-access expression: first_arg.field_name */

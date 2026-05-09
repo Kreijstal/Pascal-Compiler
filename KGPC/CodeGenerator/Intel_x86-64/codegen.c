@@ -4868,7 +4868,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         while (tmp != NULL) {
             ListNode_t *next = tmp->next;
             tmp->cur = NULL;
-            free(tmp);
+            FreeListNodeStorage(tmp);
             tmp = next;
         }
     }

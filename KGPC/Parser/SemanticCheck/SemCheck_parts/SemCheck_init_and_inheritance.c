@@ -2390,7 +2390,7 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
             cloned_field->enum_literals = NULL;
             
             /* Create list node for cloned field */
-            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            ListNode_t *new_node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
             if (new_node == NULL)
             {
                 free(cloned_field->name);

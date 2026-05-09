@@ -328,7 +328,7 @@ void remove_last_l_x(char *label)
             free(node->label);
         free(node);
     }
-    free(last_match);
+    FreeListNodeStorage(last_match);
 }
 
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound)
@@ -695,7 +695,7 @@ static void apply_register_limit(RegStack_t *reg_stack)
             free(reg->bit_32);
             free(reg);
         }
-        free(cur);
+        FreeListNodeStorage(cur);
         cur = next;
     }
 
@@ -1275,7 +1275,7 @@ void free_reg_stack(RegStack_t *reg_stack)
         free(reg->bit_64);
         free(reg->bit_32);
         free(reg);
-        free(cur);
+        FreeListNodeStorage(cur);
     }
 
     /* Just in case something was left allocated */
@@ -1289,7 +1289,7 @@ void free_reg_stack(RegStack_t *reg_stack)
         free(reg->bit_64);
         free(reg->bit_32);
         free(reg);
-        free(cur);
+        FreeListNodeStorage(cur);
     }
 
     /* Free live ranges tracked by the graph coloring allocator */
@@ -1299,7 +1299,7 @@ void free_reg_stack(RegStack_t *reg_stack)
         cur = reg_stack->active_live_ranges;
         reg_stack->active_live_ranges = cur->next;
         free_live_range((LiveRange_t *)cur->cur);
-        free(cur);
+        FreeListNodeStorage(cur);
     }
 #endif
 
