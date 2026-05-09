@@ -68,7 +68,15 @@ struct Expression *deserialize_expression(FILE *fp) {
         }
         case EXPR_FUNCTION_CALL: {
             char *id = (char *)malloc(100); // Assume max length
-            fscanf(fp, "%s", id);
+            if (id == NULL) {
+                free(expr);
+                return NULL;
+            }
+            if (fscanf(fp, "%99s", id) != 1) {
+                free(id);
+                free(expr);
+                return NULL;
+            }
             int arg_count = 0;
             if (fscanf(fp, "%d", &arg_count) != 1 || arg_count < 0) {
                 free(id);
