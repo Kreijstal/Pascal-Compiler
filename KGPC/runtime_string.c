@@ -12,11 +12,25 @@
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
+#ifdef _WIN32
+#include <windows.h>
+#include <time.h>
+#include <conio.h>
+#include <io.h>
+#include <fcntl.h>
+#include <direct.h>
+#else
 #include <unistd.h>
-#include "runtime_internal.h"
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
+#include <sys/utsname.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#endif
 #include <limits.h>
+#include "runtime_internal.h"
 #include "format_arg.h"
 
 static void *const KGPC_STRING_TOMBSTONE = (void *)1;
