@@ -124,7 +124,7 @@ static void test_deserialize_long_identifier_tokens(void) {
 
     free(serialized);
 
-    serialized = format_text("%d %s\n", EXPR_FUNCTION_CALL, identifier);
+    serialized = format_text("%d %s\n0\n", EXPR_FUNCTION_CALL, identifier);
     if (serialized == NULL) {
         free(identifier);
         return;
