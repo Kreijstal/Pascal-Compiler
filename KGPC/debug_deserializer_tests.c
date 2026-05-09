@@ -6,6 +6,8 @@
 #include <stdarg.h>
 #include <string.h>
 
+enum { SPACE_INTERVAL = 41 };
+
 static char *make_repeated_text(size_t length, int with_spaces) {
     char *buffer = (char *)malloc(length + 1);
     size_t i;
@@ -16,7 +18,7 @@ static char *make_repeated_text(size_t length, int with_spaces) {
     }
 
     for (i = 0; i < length; ++i) {
-        if (with_spaces && i != 0 && (i % 41) == 0) {
+        if (with_spaces && i != 0 && (i % SPACE_INTERVAL) == 0) {
             buffer[i] = ' ';
         } else {
             buffer[i] = (char)('a' + (i % 26));

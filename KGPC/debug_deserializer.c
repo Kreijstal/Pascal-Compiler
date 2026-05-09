@@ -10,11 +10,9 @@
 
 static int append_char(char **buffer, size_t *length, size_t *capacity, int ch) {
     if (*length + 1 >= *capacity) {
-        size_t new_capacity = (*capacity == 0) ? 16 : (*capacity * 2);
+        size_t new_capacity = (*capacity == 0) ? 64 : (*capacity * 2);
         char *new_buffer = (char *)realloc(*buffer, new_capacity);
         if (new_buffer == NULL) {
-            free(*buffer);
-            *buffer = NULL;
             return 0;
         }
         *buffer = new_buffer;
@@ -41,6 +39,7 @@ static char *read_token(FILE *fp) {
 
     while (ch != EOF && !isspace((unsigned char)ch)) {
         if (!append_char(&buffer, &length, &capacity, ch)) {
+            free(buffer);
             return NULL;
         }
         ch = fgetc(fp);
@@ -51,6 +50,7 @@ static char *read_token(FILE *fp) {
     }
 
     if (!append_char(&buffer, &length, &capacity, '\0')) {
+        free(buffer);
         return NULL;
     }
 
@@ -77,11 +77,13 @@ static char *read_quoted_string(FILE *fp) {
     while ((ch = fgetc(fp)) != EOF) {
         if (ch == '"') {
             if (!append_char(&buffer, &length, &capacity, '\0')) {
+                free(buffer);
                 return NULL;
             }
             return buffer;
         }
         if (!append_char(&buffer, &length, &capacity, ch)) {
+            free(buffer);
             return NULL;
         }
     }
