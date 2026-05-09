@@ -189,18 +189,18 @@ struct Expression *deserialize_expression(FILE *fp) {
                 struct Expression *arg_expr = deserialize_expression(fp);
                 if (arg_expr == NULL) {
                     free(id);
-                    DestroyList(args);
                     free(expr);
                     return NULL;
                 }
-                ListNode_t *arg_node = CreateListNode(arg_expr, LIST_EXPR);
+                ListNode_t *arg_node = (ListNode_t *)malloc(sizeof(ListNode_t));
                 if (arg_node == NULL) {
                     free(id);
-                    destroy_expr(arg_expr);
-                    DestroyList(args);
                     free(expr);
                     return NULL;
                 }
+                arg_node->type = LIST_EXPR;
+                arg_node->cur = arg_expr;
+                arg_node->next = NULL;
                 if (args == NULL)
                     args = arg_node;
                 else
