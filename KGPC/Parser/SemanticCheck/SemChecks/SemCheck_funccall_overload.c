@@ -452,11 +452,13 @@ if (ctx->overload_candidates != NULL && ctx->overload_candidates->cur != NULL)
             semcheck_error_with_context_at(ctx->expr->line_num, ctx->expr->col_num, ctx->expr->source_index, "Error on line %d, call to procedural variable %s: expected %d arguments, got %d\n",
                 ctx->expr->line_num, ctx->id, semcheck_count_total_params(formal_params), ListLength(ctx->args_given));
             destroy_list(ctx->overload_candidates);
+            ctx->overload_candidates = NULL;
             if (ctx->mangled_name != NULL) free(ctx->mangled_name);
+            ctx->mangled_name = NULL;
             *ctx->type_return = UNKNOWN_TYPE;
             do { ctx->final_status = ++ctx->return_val; return FC_CLEANUP; } while (0);
         }
-        
+
         /* Check argument types */
         ListNode_t *formal = formal_params;
         ListNode_t *actual = ctx->args_given;
@@ -497,12 +499,14 @@ if (ctx->overload_candidates != NULL && ctx->overload_candidates->cur != NULL)
                         type_tag_to_string(actual_type),
                         type_tag_to_string(formal_type));
                     destroy_list(ctx->overload_candidates);
+                    ctx->overload_candidates = NULL;
                     if (ctx->mangled_name != NULL) free(ctx->mangled_name);
+                    ctx->mangled_name = NULL;
                     *ctx->type_return = UNKNOWN_TYPE;
                     do { ctx->final_status = ++ctx->return_val; return FC_CLEANUP; } while (0);
                 }
             }
-            
+
             formal = formal->next;
             actual = actual->next;
         }
@@ -544,8 +548,10 @@ if (ctx->overload_candidates != NULL && ctx->overload_candidates->cur != NULL)
         ctx->expr->expr_data.function_call_data.procedural_var_symbol = first_candidate;
         
         destroy_list(ctx->overload_candidates);
+        ctx->overload_candidates = NULL;
         if (ctx->mangled_name != NULL) free(ctx->mangled_name);
-        return 0;  /* Success */
+        ctx->mangled_name = NULL;
+        do { ctx->final_status = ctx->return_val; return FC_CLEANUP; } while (0);
     }
 }
 
@@ -555,13 +561,13 @@ if (ctx->id == NULL) {
     if (ctx->expr->is_default_initializer)
     {
         *ctx->type_return = semcheck_tag_from_kgpc(ctx->expr->resolved_kgpc_type);
-        if (ctx->overload_candidates != NULL) destroy_list(ctx->overload_candidates);
-        if (ctx->mangled_name != NULL) free(ctx->mangled_name);
+        if (ctx->overload_candidates != NULL) { destroy_list(ctx->overload_candidates); ctx->overload_candidates = NULL; }
+        if (ctx->mangled_name != NULL) { free(ctx->mangled_name); ctx->mangled_name = NULL; }
         do { ctx->final_status = 0; return FC_CLEANUP; } while (0);
     }
     semcheck_error_with_context_at(ctx->expr->line_num, ctx->expr->col_num, ctx->expr->source_index, "Error on line %d: function call with NULL id\n", ctx->expr->line_num);
     *ctx->type_return = UNKNOWN_TYPE;
-    if (ctx->overload_candidates != NULL) destroy_list(ctx->overload_candidates);
+    if (ctx->overload_candidates != NULL) { destroy_list(ctx->overload_candidates); ctx->overload_candidates = NULL; }
     do { ctx->final_status = ++ctx->return_val; return FC_CLEANUP; } while (0);
 }
 ctx->mangled_name = MangleFunctionNameFromCallSite(ctx->id, ctx->args_given, ctx->symtab, ctx->max_scope_lev);
@@ -570,6 +576,7 @@ if (ctx->mangled_name == NULL)
     fprintf(stderr, "Error: failed to mangle function name for call to %s\n", ctx->id);
     *ctx->type_return = UNKNOWN_TYPE;
     destroy_list(ctx->overload_candidates);
+    ctx->overload_candidates = NULL;
     do { ctx->final_status = ++ctx->return_val; return FC_CLEANUP; } while (0);
 }
 
