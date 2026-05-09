@@ -1838,6 +1838,19 @@ class TestCompiler(unittest.TestCase):
         self.assertRegex(optimized_asm, r"\bmov[lq]\s+\$20\b")
         self.assertRegex(optimized_asm, r"\bmov[lq]\s+\$3\b")
 
+    def test_expr_tree_constant_simplify_dispatch(self):
+        """Constant folding folds ADDOP/MULOP/RELOP at -O1; leaves pass through unchanged."""
+        input_file = os.path.join(TEST_CASES_DIR, "tdd_expr_tree_constant_simplify_dispatch.p")
+        asm_o1 = os.path.join(TEST_OUTPUT_DIR, "tdd_expr_tree_constant_simplify_dispatch_o1.s")
+        run_compiler(input_file, asm_o1, flags=["-O1"])
+        asm_text = read_file_content(asm_o1)
+        # 2+3=5, 8-3=5
+        self.assertIn("$5", asm_text)
+        # 2*3=6
+        self.assertIn("$6", asm_text)
+        # ord(#65)=65
+        self.assertIn("$65", asm_text)
+
     def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
         """Verify that the constructor codegen emits exactly one Self-move into
         the first argument register before the constructor call, and that no
