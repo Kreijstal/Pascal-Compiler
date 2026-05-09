@@ -1298,6 +1298,11 @@ static void expr_tree_register_spill_handler(Register_t *reg, StackNode_t *spill
 static Register_t *expr_tree_try_get_temp_reg(ListNode_t **inst_list, Register_t *avoid_reg)
 {
     Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == avoid_reg)
+    {
+        free_reg(get_reg_stack(), reg);
+        reg = NULL;
+    }
     if (reg == NULL)
         reg = get_reg_with_spill(get_reg_stack(), inst_list);
     if (reg == avoid_reg)
