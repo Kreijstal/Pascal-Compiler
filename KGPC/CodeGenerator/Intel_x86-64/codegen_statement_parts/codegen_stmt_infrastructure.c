@@ -2100,15 +2100,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 codegen_report_error(ctx,
                     "ERROR: Failed to acquire static link for variable %s.",
                     expr->expr_data.id);
-                /* Fallback to local access (will be wrong but prevents crash) */
-                {
-                    char tmpl[96];
-                    snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
-                        var_node->offset);
-                    Register_t *defs_arr[] = {addr_reg};
-                    inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
-                }
-                *out_reg = addr_reg;
+                free_reg(get_reg_stack(), addr_reg);
+                *out_reg = NULL;
                 goto cleanup;
             }
             
