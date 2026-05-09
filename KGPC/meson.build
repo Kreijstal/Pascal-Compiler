@@ -90,6 +90,7 @@ kgpc_cparser_sources = [
   'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Types.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Types_recordaccess.c',
   'CodeGenerator/Intel_x86-64/codegen.c',
+  'CodeGenerator/Intel_x86-64/codegen_vmt.c',
   'CodeGenerator/Intel_x86-64/codegen_subprograms.c',
   'CodeGenerator/Intel_x86-64/codegen_string_set.c',
   'CodeGenerator/Intel_x86-64/codegen_symbol_resolution.c',
