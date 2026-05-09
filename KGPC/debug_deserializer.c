@@ -10,6 +10,8 @@
 
 static int append_char(char **buffer, size_t *length, size_t *capacity, int ch) {
     if (*length + 1 >= *capacity) {
+        /* Start with a small stack-friendly chunk and grow geometrically so
+         * arbitrarily long serialized tokens/strings stay linear-time. */
         size_t new_capacity = (*capacity == 0) ? 64 : (*capacity * 2);
         char *new_buffer = (char *)realloc(*buffer, new_capacity);
         if (new_buffer == NULL) {
