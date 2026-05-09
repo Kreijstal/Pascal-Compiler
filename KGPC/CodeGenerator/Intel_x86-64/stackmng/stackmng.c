@@ -633,14 +633,13 @@ StackNode_t *find_in_temp(char *label)
     return cur_node;
 }
 
-/* TODO: Does not find variables outside the current scope */
 StackNode_t *find_label(const char *label)
 {
     int depth = 0;
     return find_label_with_depth(label, &depth);
 }
 
-/* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
+/* Returns static-link depth (0 = current frame, 1 = parent frame, etc.) */
 StackNode_t *find_label_with_depth(const char *label, int *depth)
 {
     assert(global_stackmng != NULL);
@@ -650,7 +649,7 @@ StackNode_t *find_label_with_depth(const char *label, int *depth)
 
     StackScope_t *cur_scope;
     StackNode_t *cur_node;
-    int scope_depth = 0;
+    int static_link_depth = 0;
 
     cur_scope = global_stackmng->cur_scope;
 
@@ -659,26 +658,30 @@ StackNode_t *find_label_with_depth(const char *label, int *depth)
         cur_node = stackscope_find_z(cur_scope, label);
         if(cur_node != NULL)
         {
-            *depth = scope_depth;
+            *depth = static_link_depth;
             return cur_node;
         }
 
         cur_node = stackscope_find_x(cur_scope, label);
         if(cur_node != NULL)
         {
-            *depth = scope_depth;
+            *depth = static_link_depth;
             return cur_node;
         }
 
         cur_node = stackscope_find_t(cur_scope, label);
         if(cur_node != NULL)
         {
-            *depth = scope_depth;
+            *depth = static_link_depth;
             return cur_node;
         }
 
+        /* Crossing a scope that owns a static-link slot means moving to the
+         * next lexical frame in the parent chain. */
+        if (stackscope_find_x(cur_scope, "__static_link__") != NULL)
+            static_link_depth++;
+
         cur_scope = cur_scope->prev_scope;
-        scope_depth++;
     }
 
     return NULL;

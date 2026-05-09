@@ -77,7 +77,7 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
 StackNode_t *add_static_var(char *label, int size, const char *static_label);
 StackNode_t *find_in_temp(char *);
 StackNode_t *find_label(const char *);
-/* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
+/* Returns static-link depth (0 = current frame, 1 = parent frame, etc.). */
 StackNode_t *find_label_with_depth(const char *label, int *depth);
 RegStack_t *get_reg_stack();
 void reset_reg_stack(void);
