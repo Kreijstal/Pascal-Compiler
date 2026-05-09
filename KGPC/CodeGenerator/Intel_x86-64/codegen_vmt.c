@@ -1643,7 +1643,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
      * should emit from the unit's own declared types, not arbitrary symtab
      * entries that may include incomplete or transient records.
      * When --skip-unit-codegen is active, codegen_vmt returns early above. */
-    if (tree->type == TREE_PROGRAM_TYPE)
+    if (ctx->is_whole_program)
     {
         for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
         {
@@ -1657,6 +1657,14 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                 continue;
             codegen_emit_vmts_from_hash_table(ctx, symtab, unit_scope->table, &emitted_classes);
         }
+    }
+    else
+    {
+        /* Direct unit codegen must not use this symtab-scan fallback:
+         * the symbol table may contain incomplete or transient records from
+         * other units.  Emit only from the unit's own declared types above. */
+        assert(tree->type == TREE_UNIT &&
+               "symtab VMT fallback reached in non-unit, non-whole-program context");
     }
 
     /* Emit GUID data for ALL interfaces with GUIDs found in the symbol table.
