@@ -1295,6 +1295,10 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                      * 2-byte range type instead of an 8-byte pointer. */
                     if (!alias->is_pointer)
                     {
+                        /* Apply target-type metadata first, then alias-name metadata.
+                         * This allows declarations like Boolean16 = type Boolean
+                         * to inherit BOOL semantics from the target and override
+                         * storage size from the alias identifier. */
                         if (alias->target_type_id != NULL)
                             apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
                         if (type_id != NULL)
