@@ -132,7 +132,7 @@ static void wire_program_scope_all_units(SymTab_t *symtab, ScopeNode *scope)
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
-    int return_val;
+    int return_val, push_result;
     assert(tree != NULL);
     assert(symtab != NULL);
     assert(tree->type == TREE_PROGRAM_TYPE);
@@ -159,9 +159,16 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
     semcheck_timing_step("id check", &t0);
 
-    /* TODO: Push program name onto scope */
+    push_result = PushVarOntoScope_Typed(symtab,
+        tree->tree_data.program_data.program_id, NULL);
+    if (push_result > 0)
+    {
+        semcheck_error_with_context_at(tree->line_num, 0, tree->source_index,
+            "Error on line %d, redeclaration of name %s!\n",
+            tree->line_num, tree->tree_data.program_data.program_id);
+        return_val += push_result;
+    }
 
-    /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
     return_val += semcheck_register_declared_labels(symtab,
