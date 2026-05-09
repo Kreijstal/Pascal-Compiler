@@ -282,7 +282,46 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_GOTO:
-            /* TODO: Validate that the target label exists within scope */
+            {
+                const char *label_name = stmt->stmt_data.goto_data.label;
+                const char *scope_name = semcheck_label_scope_name(semcheck_get_current_subprogram_id());
+                HashNode_t *label_symbol = NULL;
+                char *symbol_id;
+
+                if (label_name == NULL || label_name[0] == '\0')
+                {
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                        "Error on line %d, goto target label is missing.\n", stmt->line_num);
+                    ++return_val;
+                    break;
+                }
+
+                symbol_id = semcheck_build_label_symbol_id(scope_name, label_name);
+                if (symbol_id == NULL)
+                {
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                        "Error on line %d, failed to allocate goto label lookup for '%s'.\n",
+                        stmt->line_num, label_name);
+                    ++return_val;
+                    break;
+                }
+
+                if (FindSymbol(&label_symbol, symtab, symbol_id) == 0 || label_symbol == NULL)
+                {
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                        "Error on line %d, goto target label '%s' not declared in scope.\n",
+                        stmt->line_num, label_name);
+                    ++return_val;
+                }
+                else if (label_symbol->hash_type != HASHTYPE_CONST || label_symbol->type != NULL)
+                {
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                        "Error on line %d, goto target '%s' is not a label declaration.\n",
+                        stmt->line_num, label_name);
+                    ++return_val;
+                }
+                free(symbol_id);
+            }
             break;
 
         case STMT_IF_THEN:

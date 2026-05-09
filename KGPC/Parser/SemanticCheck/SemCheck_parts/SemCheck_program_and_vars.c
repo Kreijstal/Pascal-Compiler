@@ -1,5 +1,39 @@
 #include "../SemCheck_internal.h"
 
+static int semcheck_register_declared_labels(SymTab_t *symtab, ListNode_t *labels,
+    const char *subprogram_id)
+{
+    int errors = 0;
+    const char *scope_name = semcheck_label_scope_name(subprogram_id);
+    HashTable_t *target_table = SymTab_GetTargetTable(symtab);
+
+    for (ListNode_t *cur = labels; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_STRING || cur->cur == NULL)
+            continue;
+
+        const char *label_name = (const char *)cur->cur;
+        char *symbol_id = semcheck_build_label_symbol_id(scope_name, label_name);
+        if (symbol_id == NULL)
+        {
+            semcheck_error_with_context("Failed to allocate goto-label symbol for '%s'.\n",
+                label_name);
+            ++errors;
+            continue;
+        }
+
+        if (AddIdentToTable(target_table, symbol_id, NULL, HASHTYPE_CONST, NULL) != 0)
+        {
+            semcheck_error_with_context("Duplicate label declaration '%s' in scope.\n",
+                label_name);
+            ++errors;
+        }
+        free(symbol_id);
+    }
+
+    return errors;
+}
+
 static double semcheck_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
@@ -130,6 +164,8 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
+    return_val += semcheck_register_declared_labels(symtab,
+        tree->tree_data.program_data.label_declaration, NULL);
     semcheck_timing_step("args", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
