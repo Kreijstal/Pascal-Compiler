@@ -8,26 +8,17 @@
 #include <assert.h>
 
 #include "List.h"
-#include "arena.h"
 
 /* Creates a list node */
 ListNode_t *CreateListNode(void *new_obj, enum ListType type)
 {
     ListNode_t *new_node;
-    arena_t *arena = arena_get_global();
 
-    if (arena != NULL)
-    {
-        new_node = (ListNode_t *)arena_alloc(arena, sizeof(ListNode_t));
-        assert(new_node != NULL);
-        new_node->arena_allocated = 1;
-    }
-    else
-    {
-        new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
-        assert(new_node != NULL);
-        new_node->arena_allocated = 0;
-    }
+    /* Arena allocation is intentionally avoided for ListNodes: the arena
+     * lifetime does not match list lifetime (arena is destroyed while lists
+     * built under it are still alive), causing use-after-free on destruction. */
+    new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+    assert(new_node != NULL);
 
     new_node->type = type;
     new_node->cur = new_obj;
@@ -104,18 +95,9 @@ ListNode_t *DeleteListNode(ListNode_t *node, ListNode_t *prev)
     if(prev != NULL)
         prev->next = next;
 
-    FreeListNodeStorage(node);
+    free(node);
 
     return next;
-}
-
-void FreeListNodeStorage(ListNode_t *node)
-{
-    if(node == NULL)
-        return;
-
-    if(!node->arena_allocated)
-        free(node);
 }
 
 void DestroyList(ListNode_t *head_node)
