@@ -906,6 +906,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
 
         /* Create array type even if element type is NULL (forward reference) */
         result = create_array_type(element_type, start, end);
+        kgpc_type_release(element_type);
         if (result != NULL) {
             kgpc_type_set_type_alias(result, alias);
             /* Store element type ID for deferred resolution if element_type is NULL */
@@ -1318,6 +1319,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                     !(type_node->type->kind == TYPE_KIND_PRIMITIVE &&
                       type_node->type->info.primitive_type_tag == UNKNOWN_TYPE))
                 {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
                     kgpc_type_retain(type_node->type);
                     return type_node->type;
                 }
@@ -1334,6 +1337,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                     type_node->type != NULL &&
                     type_node->type->kind == TYPE_KIND_PRIMITIVE)
                 {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
                     kgpc_type_retain(type_node->type);
                     return type_node->type;
                 }
@@ -1401,16 +1406,17 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 if (pointee_shared)
                     kgpc_type_retain(pointee_type);
                 KgpcType *pointer_type = create_pointer_type(pointee_type);
+                destroy_kgpc_type(pointee_type);
                 if (pointer_type != NULL)
                 {
                     if (owns_type != NULL)
                         *owns_type = 1;
                     return pointer_type;
                 }
-                if (!pointee_shared)
-                    destroy_kgpc_type(pointee_type);
             }
         }
+        if (owns_type != NULL)
+            *owns_type = 1;
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
         return var_decl->tree_data.var_decl_data.cached_kgpc_type;
     }
@@ -1476,7 +1482,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             /* Create a new array KgpcType - caller owns this */
             if (owns_type != NULL)
                 *owns_type = 1;
-            return create_array_type(elem_type, start, end);
+            KgpcType *array_type = create_array_type(elem_type, start, end);
+            destroy_kgpc_type(elem_type);
+            return array_type;
         }
 
         return NULL;
@@ -1502,7 +1510,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             size_node->type->kind != TYPE_KIND_RECORD)
         {
             if (owns_type != NULL)
-                *owns_type = 0;
+                *owns_type = 1;
             kgpc_type_retain(size_node->type);
             return size_node->type;
         }
@@ -1570,7 +1578,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             kgpc_type_retain(pointee_type);
         if (owns_type != NULL)
             *owns_type = 1;
-        return create_pointer_type(pointee_type);
+        KgpcType *pointer_type = create_pointer_type(pointee_type);
+        destroy_kgpc_type(pointee_type);
+        return pointer_type;
     }
 
     /* Handle named type references using the symbol table */
@@ -1595,9 +1605,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                     return alias_type;
                 }
             }
-            /* Return a shared reference from the symbol table - caller doesn't own it */
+            /* Return a retained reference to the shared symbol-table type. */
             if (owns_type != NULL)
-                *owns_type = 0;
+                *owns_type = 1;
             kgpc_type_retain(type_node->type);
             return type_node->type;
         }
