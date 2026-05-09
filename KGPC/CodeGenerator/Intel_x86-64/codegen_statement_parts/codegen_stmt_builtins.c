@@ -1488,6 +1488,26 @@ ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list
     return inst_list;
 }
 
+typedef struct {
+    int type_tag;
+    const char *regular;
+    const char *shortstring;
+} ValHelperEntry;
+
+static const ValHelperEntry val_helper_table[] = {
+    { BYTE_TYPE,     "kgpc_val_integer",  "kgpc_val_integer_ss"  },
+    { WORD_TYPE,     "kgpc_val_integer",  "kgpc_val_integer_ss"  },
+    { INT_TYPE,      "kgpc_val_integer",  "kgpc_val_integer_ss"  },
+    { LONGWORD_TYPE, "kgpc_val_integer",  "kgpc_val_integer_ss"  },
+    { CHAR_TYPE,     "kgpc_val_longint",  "kgpc_val_longint_ss"  },
+    { BOOL,          "kgpc_val_longint",  "kgpc_val_longint_ss"  },
+    { LONGINT_TYPE,  "kgpc_val_longint",  "kgpc_val_longint_ss"  },
+    { INT64_TYPE,    "kgpc_val_longint",  "kgpc_val_longint_ss"  },
+    { QWORD_TYPE,    "kgpc_val_qword",    "kgpc_val_qword_ss"    },
+    { REAL_TYPE,     "kgpc_val_real",     "kgpc_val_real_ss"     },
+    { EXTENDED_TYPE, "kgpc_val_extended", "kgpc_val_extended_ss" },
+};
+
 ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -1551,35 +1571,18 @@ ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, C
             (value_kgpc != NULL && kgpc_type_is_extended(value_kgpc)) ||
             codegen_expr_involves_extended(value_expr);
     }
-    switch (value_type_tag)
+    for (size_t i = 0; i < sizeof(val_helper_table) / sizeof(val_helper_table[0]); i++)
     {
-        case BYTE_TYPE:
-        case WORD_TYPE:
-        case INT_TYPE:
-        case LONGWORD_TYPE:
-            call_target = source_is_shortstring ? "kgpc_val_integer_ss" : "kgpc_val_integer";
-            break;
-        case CHAR_TYPE:
-        case BOOL:
-        case LONGINT_TYPE:
-        case INT64_TYPE:
-            call_target = source_is_shortstring ? "kgpc_val_longint_ss" : "kgpc_val_longint";
-            break;
-        case QWORD_TYPE:
-            call_target = source_is_shortstring ? "kgpc_val_qword_ss" : "kgpc_val_qword";
-            break;
-        case REAL_TYPE:
+        if (val_helper_table[i].type_tag == value_type_tag)
+        {
             call_target = source_is_shortstring
-                ? (target_is_extended ? "kgpc_val_extended_ss" : "kgpc_val_real_ss")
-                : (target_is_extended ? "kgpc_val_extended" : "kgpc_val_real");
+                ? val_helper_table[i].shortstring
+                : val_helper_table[i].regular;
             break;
-        case EXTENDED_TYPE:
-            call_target = source_is_shortstring ? "kgpc_val_extended_ss" : "kgpc_val_extended";
-            break;
-        default:
-            call_target = NULL;
-            break;
+        }
     }
+    if (value_type_tag == REAL_TYPE && target_is_extended)
+        call_target = source_is_shortstring ? "kgpc_val_extended_ss" : "kgpc_val_extended";
 
     if (call_target == NULL)
     {
