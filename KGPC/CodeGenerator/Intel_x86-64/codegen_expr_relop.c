@@ -126,33 +126,34 @@ static const char *codegen_register_name8(const Register_t *reg)
     return codegen_register_id_to_8bit(reg->reg_id);
 }
 
+typedef struct {
+    int relop;         /* EQ, NE, LT, … */
+    int inverse;       /* the logical inverse relop */
+    const char *setcc; /* x86 SETcc mnemonic */
+} RelopEntry;
+
+static const RelopEntry relop_table[] = {
+    { EQ,   NE,   "sete"  },
+    { NE,   EQ,   "setne" },
+    { LT,   GE,   "setl"  },
+    { LE,   GT,   "setle" },
+    { GT,   LE,   "setg"  },
+    { GE,   LT,   "setge" },
+    { LT_U, GE_U, "setnz" },
+    { LE_U, GT_U, "setnz" },
+    { GT_U, LE_U, "setnz" },
+    { GE_U, LT_U, "setnz" },
+};
+#define RELOP_TABLE_SIZE ((int)(sizeof(relop_table) / sizeof(relop_table[0])))
+
 static int invert_relop_type(int relop_kind)
 {
-    switch (relop_kind)
+    for (int i = 0; i < RELOP_TABLE_SIZE; i++)
     {
-        case EQ:
-            return NE;
-        case NE:
-            return EQ;
-        case LT:
-            return GE;
-        case LE:
-            return GT;
-        case GT:
-            return LE;
-        case GE:
-            return LT;
-        case LT_U:
-            return GE_U;
-        case LE_U:
-            return GT_U;
-        case GT_U:
-            return LE_U;
-        case GE_U:
-            return LT_U;
-        default:
-            return relop_kind;
+        if (relop_table[i].relop == relop_kind)
+            return relop_table[i].inverse;
     }
+    return relop_kind;
 }
 
 /* Code generation for simple relops */
@@ -1295,29 +1296,13 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
     const char *set_instr = "setnz"; /* Default for set membership */
     
     /* Convert flags to value based on relop type */
-    switch (relop_type)
+    for (int i = 0; i < RELOP_TABLE_SIZE; i++)
     {
-        case EQ:
-            set_instr = "sete";
+        if (relop_table[i].relop == relop_type)
+        {
+            set_instr = relop_table[i].setcc;
             break;
-        case NE:
-            set_instr = "setne";
-            break;
-        case LT:
-            set_instr = "setl";
-            break;
-        case LE:
-            set_instr = "setle";
-            break;
-        case GT:
-            set_instr = "setg";
-            break;
-        case GE:
-            set_instr = "setge";
-            break;
-        default:
-            set_instr = "setnz";
-            break;
+        }
     }
 
     const char *reg8 = codegen_register_name8(result_reg);
