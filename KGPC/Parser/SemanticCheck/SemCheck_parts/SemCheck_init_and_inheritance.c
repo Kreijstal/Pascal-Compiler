@@ -1297,7 +1297,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         if (alias->target_type_id != NULL)
                             apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
-                        else if (type_id != NULL)
+                        if (type_id != NULL)
                             apply_builtin_integer_alias_metadata(alias, type_id);
                     }
 

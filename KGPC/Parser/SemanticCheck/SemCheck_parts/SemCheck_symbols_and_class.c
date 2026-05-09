@@ -103,6 +103,30 @@ void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const char *t
         alias->range_end = LLONG_MAX;
         alias->storage_size = 8;
     }
+    else if (pascal_identifier_equals(type_name, "Boolean8") ||
+             pascal_identifier_equals(type_name, "ByteBool"))
+    {
+        alias->base_type = BOOL;
+        alias->storage_size = 1;
+    }
+    else if (pascal_identifier_equals(type_name, "Boolean16") ||
+             pascal_identifier_equals(type_name, "WordBool"))
+    {
+        alias->base_type = BOOL;
+        alias->storage_size = 2;
+    }
+    else if (pascal_identifier_equals(type_name, "Boolean32") ||
+             pascal_identifier_equals(type_name, "LongBool"))
+    {
+        alias->base_type = BOOL;
+        alias->storage_size = 4;
+    }
+    else if (pascal_identifier_equals(type_name, "Boolean64") ||
+             pascal_identifier_equals(type_name, "QWordBool"))
+    {
+        alias->base_type = BOOL;
+        alias->storage_size = 8;
+    }
 }
 
 void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
