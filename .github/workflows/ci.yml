@@ -5,6 +5,7 @@ on:
     branches: [ "**" ]
   push:
     branches: [ "master" ]
+  workflow_dispatch:
 
 env:
   # Pin FPCSource to a known-good commit to avoid upstream breakage.
