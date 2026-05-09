@@ -119,12 +119,94 @@ GenericSpecialization* generic_registry_find_specialization(const char* generic_
 }
 
 KgpcType* generic_substitute_type_parameter(KgpcType* type, const char* param_name, KgpcType* concrete_type) {
-    // TODO: Implement type parameter substitution
-    // This will recursively walk the KgpcType tree and replace occurrences of param_name
-    // with concrete_type
-    
-    // For now, return the original type (Phase 3 implementation)
-    return type;
+    if (type == NULL || param_name == NULL || concrete_type == NULL) {
+        return type != NULL ? kgpc_type_clone_shallow_owned(type) : NULL;
+    }
+
+    struct TypeAlias *alias = type->type_alias;
+    if (alias != NULL) {
+        if ((alias->alias_name != NULL && strcasecmp(alias->alias_name, param_name) == 0) ||
+            (alias->target_type_id != NULL && strcasecmp(alias->target_type_id, param_name) == 0) ||
+            (alias->pointer_type_id != NULL && strcasecmp(alias->pointer_type_id, param_name) == 0) ||
+            (alias->array_element_type_id != NULL && strcasecmp(alias->array_element_type_id, param_name) == 0) ||
+            (alias->set_element_type_id != NULL && strcasecmp(alias->set_element_type_id, param_name) == 0) ||
+            (alias->file_type_id != NULL && strcasecmp(alias->file_type_id, param_name) == 0)) {
+            return kgpc_type_clone_shallow_owned(concrete_type);
+        }
+    }
+
+    if (type->kind == TYPE_KIND_RECORD &&
+        type->info.record_info != NULL &&
+        type->info.record_info->type_id != NULL &&
+        strcasecmp(type->info.record_info->type_id, param_name) == 0) {
+        return kgpc_type_clone_shallow_owned(concrete_type);
+    }
+
+    KgpcType *result = kgpc_type_clone_shallow_owned(type);
+    if (result == NULL) {
+        return NULL;
+    }
+
+    switch (type->kind) {
+        case TYPE_KIND_POINTER:
+            if (type->info.points_to != NULL) {
+                KgpcType *substituted = generic_substitute_type_parameter(
+                    type->info.points_to, param_name, concrete_type);
+                if (substituted == NULL) {
+                    destroy_kgpc_type(result);
+                    return NULL;
+                }
+                destroy_kgpc_type(result->info.points_to);
+                result->info.points_to = substituted;
+            }
+            break;
+        case TYPE_KIND_ARRAY:
+            if (type->info.array_info.element_type != NULL) {
+                KgpcType *substituted = generic_substitute_type_parameter(
+                    type->info.array_info.element_type, param_name, concrete_type);
+                if (substituted == NULL) {
+                    destroy_kgpc_type(result);
+                    return NULL;
+                }
+                destroy_kgpc_type(result->info.array_info.element_type);
+                result->info.array_info.element_type = substituted;
+            } else if (type->info.array_info.element_type_id != NULL &&
+                       strcasecmp(type->info.array_info.element_type_id, param_name) == 0) {
+                KgpcType *substituted = kgpc_type_clone_shallow_owned(concrete_type);
+                if (substituted == NULL) {
+                    destroy_kgpc_type(result);
+                    return NULL;
+                }
+                result->info.array_info.element_type = substituted;
+            }
+            break;
+        case TYPE_KIND_PROCEDURE:
+            if (type->info.proc_info.return_type != NULL) {
+                KgpcType *substituted = generic_substitute_type_parameter(
+                    type->info.proc_info.return_type, param_name, concrete_type);
+                if (substituted == NULL) {
+                    destroy_kgpc_type(result);
+                    return NULL;
+                }
+                destroy_kgpc_type(result->info.proc_info.return_type);
+                result->info.proc_info.return_type = substituted;
+            } else if (type->info.proc_info.return_type_id != NULL &&
+                       strcasecmp(type->info.proc_info.return_type_id, param_name) == 0) {
+                KgpcType *substituted = kgpc_type_clone_shallow_owned(concrete_type);
+                if (substituted == NULL) {
+                    destroy_kgpc_type(result);
+                    return NULL;
+                }
+                result->info.proc_info.return_type = substituted;
+            }
+            break;
+        case TYPE_KIND_PRIMITIVE:
+        case TYPE_KIND_RECORD:
+        case TYPE_KIND_ARRAY_OF_CONST:
+            break;
+    }
+
+    return result;
 }
 
 int generic_registry_is_type_param(const char *name) {
