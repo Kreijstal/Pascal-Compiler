@@ -2636,8 +2636,6 @@ else
     }
 }
 
-ctx->final_status = ctx->return_val;
-
     ctx->final_status = ctx->return_val;
     return FC_CLEANUP;
 }
