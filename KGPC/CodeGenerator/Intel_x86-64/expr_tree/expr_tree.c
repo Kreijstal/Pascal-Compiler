@@ -2,7 +2,6 @@
     Damon Gwinn
     Tree of simple expressions for the gencode algorithm
     TODO: Does not handle real numbers
-    TODO: Does not handle panic case (not enough registers)
 */
 
 #include <stdlib.h>
@@ -1294,6 +1293,16 @@ static void expr_tree_register_spill_handler(Register_t *reg, StackNode_t *spill
         return;
     node->spill_slot = spill_slot;
     node->reg = NULL;
+}
+
+static Register_t *expr_tree_try_get_temp_reg(ListNode_t **inst_list, Register_t *avoid_reg)
+{
+    Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), inst_list);
+    if (reg == avoid_reg)
+        return NULL;
+    return reg;
 }
 
 static int leaf_expr_requires_reference_value(struct Expression *expr, CodeGenContext *ctx)
@@ -5812,12 +5821,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (!leaf_expr_is_simple(right_expr) || rhs_requires_reference)
     {
-        Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (rhs_reg == target_reg)
-        {
-            free_reg(get_reg_stack(), rhs_reg);
-            rhs_reg = NULL;
-        }
+        Register_t *rhs_reg = expr_tree_try_get_temp_reg(&inst_list, target_reg);
         if (rhs_reg == NULL)
         {
             StackNode_t *spill_loc = add_l_t("rhs");
@@ -5882,12 +5886,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(left_expr != NULL);
     assert(right_expr != NULL);
 
-    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (temp_reg == target_reg)
-    {
-        free_reg(get_reg_stack(), temp_reg);
-        temp_reg = NULL;
-    }
+    temp_reg = expr_tree_try_get_temp_reg(&inst_list, target_reg);
     if(temp_reg == NULL)
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
@@ -5940,12 +5939,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(right_expr != NULL);
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (temp_reg == target_reg)
-    {
-        free_reg(get_reg_stack(), temp_reg);
-        temp_reg = NULL;
-    }
+    temp_reg = expr_tree_try_get_temp_reg(&inst_list, target_reg);
 
     if(temp_reg == NULL)
     {
