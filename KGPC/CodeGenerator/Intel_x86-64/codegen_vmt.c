@@ -145,6 +145,57 @@ static int codegen_emit_interface_guid(CodeGenContext *ctx,
     return 1;
 }
 
+static int codegen_iface_name_list_contains(const char **iface_names,
+    int iface_count, const char *iface_name)
+{
+    if (iface_names == NULL || iface_name == NULL || iface_count <= 0)
+        return 0;
+    for (int i = 0; i < iface_count; i++) {
+        if (iface_names[i] != NULL &&
+            pascal_identifier_equals(iface_names[i], iface_name))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_class_overrides_inherited_interface_method(SymTab_t *symtab,
+    const struct RecordType *record, const char *class_label,
+    const struct RecordType *parent_record, const char *iface_name)
+{
+    if (symtab == NULL || record == NULL || parent_record == NULL || iface_name == NULL)
+        return 0;
+
+    struct RecordType *iface_record =
+        codegen_lookup_record_type_by_name(symtab, iface_name, 0);
+    if (iface_record == NULL || iface_record->method_templates == NULL)
+        return 0;
+
+    const char *parent_label = parent_record->type_id;
+    if (parent_label == NULL)
+        parent_label = record->parent_class_name;
+
+    for (ListNode_t *method_cur = iface_record->method_templates;
+         method_cur != NULL;
+         method_cur = method_cur->next) {
+        struct MethodTemplate *method_tmpl =
+            (struct MethodTemplate *)method_cur->cur;
+        if (method_tmpl == NULL || method_tmpl->name == NULL)
+            continue;
+
+        const char *child_impl = codegen_find_class_method_impl_id(
+            symtab, record, class_label, iface_name, method_tmpl->name);
+        const char *parent_impl = codegen_find_class_method_impl_id(
+            symtab, parent_record, parent_label, iface_name, method_tmpl->name);
+        if (child_impl == NULL && parent_impl == NULL)
+            continue;
+        if (child_impl == NULL || parent_impl == NULL ||
+            strcmp(child_impl, parent_impl) != 0)
+            return 1;
+    }
+
+    return 0;
+}
+
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
     EmittedClassSet *emitted_classes)
@@ -171,6 +222,53 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     int effective_iface_count = record_info->num_interfaces;
     int free_effective_iface_names = 0;
     long long base_instance_size = 0;
+
+    int effective_iface_append_failed = 0;
+    const struct RecordType *parent_record = codegen_record_parent(record_info, symtab);
+    for (const struct RecordType *iface_parent = parent_record;
+         iface_parent != NULL;
+         iface_parent = codegen_record_parent(iface_parent, symtab)) {
+        if (effective_iface_append_failed)
+            break;
+        if (iface_parent->num_interfaces <= 0 || iface_parent->interface_names == NULL)
+            continue;
+        for (int iidx = 0; iidx < iface_parent->num_interfaces; iidx++) {
+            const char *iface_name = iface_parent->interface_names[iidx];
+            if (iface_name == NULL ||
+                codegen_iface_name_list_contains(effective_iface_names,
+                    effective_iface_count, iface_name))
+                continue;
+            if (!codegen_class_overrides_inherited_interface_method(symtab,
+                    record_info, class_label, parent_record, iface_name))
+                continue;
+
+            if (!free_effective_iface_names) {
+                const char **copied = NULL;
+                if (effective_iface_count > 0) {
+                    copied = (const char **)malloc(sizeof(char *) * effective_iface_count);
+                    if (copied == NULL) {
+                        effective_iface_append_failed = 1;
+                        break;
+                    }
+                    memcpy((void *)copied, effective_iface_names,
+                        sizeof(char *) * effective_iface_count);
+                }
+                effective_iface_names = copied;
+                free_effective_iface_names = 1;
+            }
+
+            const char **grown = (const char **)realloc((void *)effective_iface_names,
+                sizeof(char *) * (effective_iface_count + 1));
+            if (grown == NULL) {
+                effective_iface_append_failed = 1;
+                break;
+            }
+            effective_iface_names = grown;
+            effective_iface_names[effective_iface_count] = iface_name;
+            effective_iface_count++;
+        }
+    }
+
     if (effective_iface_count > 0) {
         /* First pass: emit standalone GUID constants for each interface
          * (deduplicated via emitted_classes set with "__kgpc_guid_" prefix). */
