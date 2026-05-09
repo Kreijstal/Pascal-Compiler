@@ -40,6 +40,7 @@ int semcheck_var_decl_is_untyped(Tree_t *decl);
 int semcheck_stmt_has_single_overload(SymTab_t *symtab, const char *proc_id);
 int semcheck_stmt_try_set_method_mangled_id(SymTab_t *symtab, struct Statement *stmt, const char *proc_id, const char *mangled_id);
 int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int rewrite_tfpglist_constructor_if_needed(SymTab_t *symtab, int max_scope_lev, struct Expression *lhs, struct Expression **rhs_ptr);
 int try_resolve_builtin_procedure(SymTab_t *symtab, struct Statement *stmt, const char *expected_name, builtin_semcheck_handler_t handler, int max_scope_lev, int *handled);
 int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
@@ -79,5 +80,25 @@ struct Expression *get_param_default_value_stmt(Tree_t *decl);
 struct Expression *copy_default_expr(struct Expression *src);
 KgpcType *resolve_param_type_with_owner(Tree_t *param_decl, SymTab_t *symtab, const char *owner_full, const char *owner_outer, int *param_type_owned);
 HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates, const char *proc_id, const char *call_mangled);
+
+
+/* Declarations for functions moved to SemCheck_stmt_main.c */
+int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+
+/* Declarations for helpers promoted from static in SemCheck_stmt.c */
+int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
+int semcheck_is_currency_kgpc_type(KgpcType *type);
+int semcheck_type_is_recordish(KgpcType *type);
+void semcheck_maybe_promote_index0_string_var_to_shortstring(SymTab_t *symtab, struct Statement *stmt);
+int semcheck_collection_is_enumerator_class(SymTab_t *symtab, KgpcType *collection_kgpc_type, KgpcType **out_current_type);
+int semcheck_expr_best_context(const struct Expression *expr, int *out_line, int *out_col, int *out_source_index);
+const char *semcheck_record_type_id_from_kgpc(KgpcType *type);
+int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr);
+int semcheck_type_is_char_like(KgpcType *type);
+int semcheck_force_char_case_builtin_in_assignment(struct Expression *expr);
+int semcheck_expr_is_char_ordinal_const(SymTab_t *symtab, struct Expression *expr);
 
 #endif /* SEMCHECK_STMT_INTERNAL_H */

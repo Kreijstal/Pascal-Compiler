@@ -72,6 +72,7 @@ kgpc_cparser_sources = [
   'Parser/SemanticCheck/SymTab/SymTab.c',
   'Parser/SemanticCheck/NameMangling.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_stmt.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_stmt_main.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_stmt_proccall.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_expr.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_overload.c',
