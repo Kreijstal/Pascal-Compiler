@@ -2297,24 +2297,39 @@ int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, int max
         }
         else if (array_expr != NULL && array_expr->type == EXPR_RECORD_ACCESS)
         {
-            /* Record field access - if semantic check passed, assume it's valid
-             * TODO: Could enhance this to verify the field is actually a dynamic array */
-            is_valid_array = 1;
+            /* Record field access - verify the field is actually a dynamic array */
+            if (array_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
+            {
+                is_valid_array = 1;
+            }
         }
         else if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
         {
             /* Array access result - valid for nested dynamic arrays (array of array of ...) */
-            is_valid_array = 1;
+            if (array_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
+            {
+                is_valid_array = 1;
+            }
         }
         else if (array_expr != NULL && array_expr->type == EXPR_POINTER_DEREF)
         {
-            /* Pointer dereference - could point to a dynamic array */
-            is_valid_array = 1;
+            /* Pointer dereference - valid if it resolves to a dynamic array */
+            if (array_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
+            {
+                is_valid_array = 1;
+            }
         }
         else if (array_expr != NULL && array_expr->type == EXPR_FUNCTION_CALL)
         {
             /* Function call result that returns a dynamic array reference */
-            is_valid_array = 1;
+            if (array_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
+            {
+                is_valid_array = 1;
+            }
         }
         
         if (!is_valid_array)
