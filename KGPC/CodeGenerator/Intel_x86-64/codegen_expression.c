@@ -464,7 +464,6 @@ static int codegen_bare_method_returns_shortstring(CodeGenContext *ctx,
     return 0;
 }
 
-static long long codegen_sizeof_type_tag(int type_tag);
 static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
     const char *field_id, struct RecordType **out_record);
 struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
@@ -3153,7 +3152,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     {
         long long tag_size = -1;
         if (expr->array_element_type != UNKNOWN_TYPE)
-            tag_size = codegen_sizeof_type_tag(expr->array_element_type);
+            tag_size = get_type_tag_size(expr->array_element_type);
         if (tag_size <= 0 || expr->array_element_size != tag_size ||
             (expr->array_element_type_id != NULL &&
              (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
@@ -3188,7 +3187,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     {
         if (expr->array_element_size > 0)
         {
-            long long tag_size = codegen_sizeof_type_tag(expr->array_element_type);
+            long long tag_size = get_type_tag_size(expr->array_element_type);
             if (expr->array_element_size != tag_size ||
                 (expr->array_element_type_id != NULL &&
                  (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
@@ -3206,13 +3205,13 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             {
                 long long node_size = kgpc_type_sizeof(type_node->type);
                 if (node_size > 0 &&
-                    node_size != codegen_sizeof_type_tag(expr->array_element_type))
+                    node_size != get_type_tag_size(expr->array_element_type))
                 {
                     return node_size;
                 }
             }
         }
-        long long tag_size = codegen_sizeof_type_tag(expr->array_element_type);
+        long long tag_size = get_type_tag_size(expr->array_element_type);
         if (tag_size > 0)
             return tag_size;
     }
@@ -3397,7 +3396,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
 
         if (expr->pointer_subtype != UNKNOWN_TYPE)
         {
-            long long tag_size = codegen_sizeof_type_tag(expr->pointer_subtype);
+            long long tag_size = get_type_tag_size(expr->pointer_subtype);
             if (tag_size > 0)
                 return tag_size;
         }
@@ -3933,44 +3932,6 @@ int codegen_sizeof_named_array_alias(CodeGenContext *ctx, const struct TypeAlias
     return codegen_sizeof_array_type_kgpc(ctx, node->type, size_out);
 }
 
-static long long codegen_sizeof_type_tag(int type_tag)
-{
-    switch (type_tag)
-    {
-        case INT_TYPE:
-        case BOOL:
-        case SET_TYPE:
-        case ENUM_TYPE:
-            return 4;
-        case INT64_TYPE:
-        case QWORD_TYPE:
-            return 8;
-        case LONGINT_TYPE:
-        case LONGWORD_TYPE:
-            return 4;  // Match FPC's 32-bit LongInt/LongWord
-        case WORD_TYPE:
-            return 2;
-        case BYTE_TYPE:
-            return 1;
-        case REAL_TYPE:
-            return 8;
-        case STRING_TYPE:
-        case POINTER_TYPE:
-        case FILE_TYPE:
-        case TEXT_TYPE:
-        case PROCEDURE:
-            return CODEGEN_POINTER_SIZE_BYTES;
-        case SHORTSTRING_TYPE:
-            return 256;  // ShortString is 256 bytes (1 byte length + 255 chars)
-        case CHAR_TYPE:
-            return 1;
-        case RECORD_TYPE:
-            return -1;
-        default:
-            return -1;
-    }
-}
-
 static long long codegen_default_set_storage_size_for_high(long long high)
 {
     if (high < 32)
@@ -4078,7 +4039,7 @@ int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
 
     if (type_tag != UNKNOWN_TYPE)
     {
-        long long base = codegen_sizeof_type_tag(type_tag);
+        long long base = get_type_tag_size(type_tag);
         if (base >= 0)
         {
             *size_out = base;
@@ -4290,7 +4251,7 @@ long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenC
     {
         if (field->pointer_type != UNKNOWN_TYPE)
         {
-            long long tag_size = codegen_sizeof_type_tag(field->pointer_type);
+            long long tag_size = get_type_tag_size(field->pointer_type);
             if (tag_size > 0)
                 return tag_size;
         }
@@ -4335,7 +4296,7 @@ long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenC
     {
         if (field->array_element_type != UNKNOWN_TYPE)
         {
-            long long tag_size = codegen_sizeof_type_tag(field->array_element_type);
+            long long tag_size = get_type_tag_size(field->array_element_type);
             if (tag_size > 0)
                 return tag_size;
         }
