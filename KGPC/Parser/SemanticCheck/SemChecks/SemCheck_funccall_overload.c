@@ -5,6 +5,29 @@
 #include <limits.h>
 #include "SemCheck_funccall_internal.h"
 
+static int semcheck_funccall_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *candidate)
+{
+    if (symtab == NULL || candidate == NULL || symtab->current_scope == NULL)
+        return 0;
+
+    int scope_level = 1;
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent, ++scope_level)
+    {
+        if (scope->table != NULL && FindIdentPtrInTable(scope->table, candidate))
+            return scope_level;
+
+        for (int i = 0; i < scope->num_deps; ++i)
+        {
+            ScopeNode *dep_scope = scope->dep_scopes != NULL ? scope->dep_scopes[i] : NULL;
+            if (dep_scope != NULL && dep_scope->table != NULL &&
+                FindIdentPtrInTable(dep_scope->table, candidate))
+                return scope_level;
+        }
+    }
+
+    return 0;
+}
+
 FunccallState funccall_state_overload_setup(FunccallCtx *ctx)
 {
 /* If constructor was already resolved above, skip overload resolution */
@@ -1103,7 +1126,7 @@ if (num_best_matches == 1)
     semcheck_sync_function_call_target_to_mangled(ctx->expr, ctx->symtab);
     semcheck_mark_call_requires_static_link(best_match);
     ctx->hash_return = best_match;
-    ctx->scope_return = 1; // FIXME
+    ctx->scope_return = semcheck_funccall_scope_level_for_candidate(ctx->symtab, best_match);
 }
 else if (num_best_matches == 0)
 {
