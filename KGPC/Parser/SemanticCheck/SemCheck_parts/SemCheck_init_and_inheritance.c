@@ -1190,12 +1190,12 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                     else
                                                     {
                                                         /* Non-hidden field from forward decl - shouldn't happen, just free */
-                                                        free(existing_fields);
+                                                        FreeListNodeStorage(existing_fields);
                                                     }
                                                 }
                                                 else
                                                 {
-                                                    free(existing_fields);
+                                                    FreeListNodeStorage(existing_fields);
                                                 }
                                                 existing_fields = next;
                                             }
@@ -2347,7 +2347,7 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
                     if (field->cached_proc_return_kgpc_type != NULL)
                         kgpc_type_release(field->cached_proc_return_kgpc_type);
                     free(field);
-                    free(temp);
+                    FreeListNodeStorage(temp);
                 }
                 return 1;
             }
@@ -2422,7 +2422,7 @@ int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, 
                     if (field->cached_proc_return_kgpc_type != NULL)
                         kgpc_type_release(field->cached_proc_return_kgpc_type);
                     free(field);
-                    free(temp);
+                    FreeListNodeStorage(temp);
                 }
                 return 1;
             }

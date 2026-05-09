@@ -2240,7 +2240,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             }
             while (nested_type_sections != NULL) {
                 ListNode_t *next = nested_type_sections->next;
-                free(nested_type_sections);
+                FreeListNodeStorage(nested_type_sections);
                 nested_type_sections = next;
             }
         } else if (class_spec != NULL) {
@@ -2263,7 +2263,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             /* Clean up the section list (don't destroy AST nodes, just the list) */
             while (nested_type_sections != NULL) {
                 ListNode_t *next = nested_type_sections->next;
-                free(nested_type_sections);
+                FreeListNodeStorage(nested_type_sections);
                 nested_type_sections = next;
             }
         } else {
@@ -2295,7 +2295,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                 }
                 while (nested_type_sections != NULL) {
                     ListNode_t *next = nested_type_sections->next;
-                    free(nested_type_sections);
+                    FreeListNodeStorage(nested_type_sections);
                     nested_type_sections = next;
                 }
             } else {
@@ -2743,7 +2743,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
                     /* Clean up section list (not AST nodes) */
                     while (nested_type_sections != NULL) {
                         ListNode_t *next = nested_type_sections->next;
-                        free(nested_type_sections);
+                        FreeListNodeStorage(nested_type_sections);
                         nested_type_sections = next;
                     }
                 }

@@ -91,9 +91,9 @@ int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                 if (base_stmt != NULL)
                     free(base_stmt);
                 if (first != NULL)
-                    free(first);
+                    FreeListNodeStorage(first);
                 if (second != NULL)
-                    free(second);
+                    FreeListNodeStorage(second);
                 destroy_stmt(extra_stmt);
                 semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                     "Error on line %d, unable to allocate statement nodes for New/Dispose transform.\n",
@@ -703,7 +703,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                                     self_arg->next = NULL;
                                     destroy_expr(self_expr);
-                                    free(self_arg);
+                                    FreeListNodeStorage(self_arg);
 
                                     DestroyList(parent_candidates);
                                 }
@@ -2009,7 +2009,7 @@ int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
             stmt->line_num);
         destroy_expr(object_expr);
         destroy_expr(value_expr);
-        free(self_arg);
+        FreeListNodeStorage(self_arg);
         return 1;
     }
     self_arg->next = value_arg;

@@ -1736,7 +1736,7 @@ void destroy_expr(struct Expression *expr)
                   ListNode_t *next = idx->next;
                   if (idx->cur != NULL)
                       destroy_expr((struct Expression *)idx->cur);
-                  free(idx);
+                  FreeListNodeStorage(idx);
                   idx = next;
               }
           }

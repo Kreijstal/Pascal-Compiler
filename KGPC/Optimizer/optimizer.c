@@ -387,7 +387,7 @@ static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *
             {
                 free(decl_ids->cur);
                 ListNode_t *next = decl_ids->next;
-                free(decl_ids);
+                FreeListNodeStorage(decl_ids);
                 decl_ids = next;
                 if (prev == NULL)
                     var_decl->tree_data.var_decl_data.ids = decl_ids;
@@ -482,7 +482,7 @@ static int remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet 
             ++removed;
 
             ListNode_t *next = statement_list->next;
-            free(statement_list);
+            FreeListNodeStorage(statement_list);
             statement_list = next;
 
             if (prev == NULL)

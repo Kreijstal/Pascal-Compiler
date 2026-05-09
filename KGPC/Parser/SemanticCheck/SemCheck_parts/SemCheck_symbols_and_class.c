@@ -567,7 +567,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
     while (class_methods != NULL)
     {
         ListNode_t *next = class_methods->next;
-        free(class_methods);
+        FreeListNodeStorage(class_methods);
         class_methods = next;
     }
 

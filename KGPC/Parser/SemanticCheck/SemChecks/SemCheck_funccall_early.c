@@ -171,7 +171,7 @@ if (ctx->expr->expr_data.function_call_data.is_inherited_call && ctx->id != NULL
                         }
                         tmp_self_arg->next = NULL;
                         destroy_expr(tmp_self);
-                        free(tmp_self_arg);
+                        FreeListNodeStorage(tmp_self_arg);
                         DestroyList(candidates);
                     }
                 }

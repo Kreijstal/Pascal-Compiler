@@ -408,7 +408,7 @@ if (record_info->parent_class_name != NULL) {
     /* Clean up class_methods list (shallow - we don't own the bindings) */
     while (class_methods != NULL) {
         ListNode_t *next = class_methods->next;
-        free(class_methods);
+        FreeListNodeStorage(class_methods);
         class_methods = next;
     }
     
