@@ -2067,7 +2067,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         KgpcType *inline_kgpc = create_record_type(alias_info->inline_record_type);
                         if (record_type_is_class(alias_info->inline_record_type))
-                            inline_kgpc = create_pointer_type(inline_kgpc);
+                        {
+                            KgpcType *record_kgpc = inline_kgpc;
+                            inline_kgpc = create_pointer_type(record_kgpc);
+                            destroy_kgpc_type(record_kgpc);
+                        }
                         kgpc_type_set_type_alias(inline_kgpc, alias_info);
                         if (tree->tree_data.type_decl_data.kgpc_type != NULL)
                             destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
