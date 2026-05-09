@@ -2646,7 +2646,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             body = mk_compoundstatement(cur->line, NULL);
         }
         
-        Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
+        int program_line = (program_header_node != NULL) ? program_header_node->line : cur->line;
+        Tree_t *tree = mk_program(program_line, program_id, args, uses, label_decls, const_decls,
                                   list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
         final_tree = tree;
         /* Clear borrowed AST pointers before the caller frees the raw AST. */
