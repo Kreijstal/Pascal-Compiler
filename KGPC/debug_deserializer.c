@@ -177,8 +177,38 @@ struct Expression *deserialize_expression(FILE *fp) {
                 free(expr);
                 return NULL;
             }
+            int arg_count = 0;
+            if (fscanf(fp, "%d", &arg_count) != 1 || arg_count < 0) {
+                free(id);
+                free(expr);
+                return NULL;
+            }
+            ListNode_t *args = NULL;
+            ListNode_t *tail = NULL;
+            for (int i = 0; i < arg_count; i++) {
+                struct Expression *arg_expr = deserialize_expression(fp);
+                if (arg_expr == NULL) {
+                    free(id);
+                    DestroyList(args);
+                    free(expr);
+                    return NULL;
+                }
+                ListNode_t *arg_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (arg_node == NULL) {
+                    free(id);
+                    destroy_expr(arg_expr);
+                    DestroyList(args);
+                    free(expr);
+                    return NULL;
+                }
+                if (args == NULL)
+                    args = arg_node;
+                else
+                    tail->next = arg_node;
+                tail = arg_node;
+            }
             expr->expr_data.function_call_data.id = id;
-            expr->expr_data.function_call_data.args_expr = NULL; // Not deserializing args
+            expr->expr_data.function_call_data.args_expr = args;
             expr->expr_data.function_call_data.resolved_func = NULL;
             expr->expr_data.function_call_data.mangled_id = NULL;
             expr->expr_data.function_call_data.is_call_info_valid = 0;
