@@ -147,9 +147,16 @@ static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *
 static int remove_dead_variables_batch(SymTab_t *symtab, ListNode_t *vars_to_remove, struct Statement *stmt_root, ListNode_t *var_decls);
 
 static optimizer_runner_fn g_optimizer_runner = optimizer_pass_manager_run;
+static SymTab_t *g_simplify_symtab = NULL;
+static Tree_t *g_simplify_tree = NULL;
 
 void simplify_stmt_expr(struct Statement *);
 int simplify_expr(struct Expression **);
+static void simplify_decl_initializers(Tree_t *tree);
+static struct Expression *copy_constant_expr(const struct Expression *expr, int line_num);
+static Tree_t *find_typed_const_array_decl(const char *id);
+static struct Expression *find_typed_const_array_element_expr(Tree_t *arr_decl,
+    const char *array_id, long long index_value);
 
 void decrement_self_references(SymTab_t *symtab, struct Statement *stmt);
 
@@ -339,8 +346,13 @@ void optimizer_pass_dead_code_elimination(SymTab_t *symtab, Tree_t *tree)
 
 void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree)
 {
-    (void)symtab;
+    assert(symtab != NULL);
     assert(tree != NULL);
+
+    g_simplify_symtab = symtab;
+    g_simplify_tree = tree;
+
+    simplify_decl_initializers(tree);
 
     switch (tree->type)
     {
@@ -357,6 +369,155 @@ void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree)
         default:
             break;
     }
+
+    g_simplify_tree = NULL;
+    g_simplify_symtab = NULL;
+}
+
+static void simplify_decl_initializers(Tree_t *tree)
+{
+    if (tree == NULL)
+        return;
+
+    ListNode_t *decls = NULL;
+    if (tree->type == TREE_PROGRAM_TYPE)
+        decls = tree->tree_data.program_data.var_declaration;
+    else if (tree->type == TREE_SUBPROGRAM)
+        decls = tree->tree_data.subprogram_data.declarations;
+    else
+        return;
+
+    while (decls != NULL)
+    {
+        Tree_t *decl = (Tree_t *)decls->cur;
+        if (decl != NULL)
+        {
+            if (decl->type == TREE_VAR_DECL &&
+                decl->tree_data.var_decl_data.initializer != NULL)
+            {
+                simplify_stmt_expr(decl->tree_data.var_decl_data.initializer);
+            }
+            else if (decl->type == TREE_ARR_DECL &&
+                     decl->tree_data.arr_decl_data.initializer != NULL)
+            {
+                simplify_stmt_expr(decl->tree_data.arr_decl_data.initializer);
+            }
+        }
+        decls = decls->next;
+    }
+}
+
+static struct Expression *copy_constant_expr(const struct Expression *expr, int line_num)
+{
+    if (expr == NULL)
+        return NULL;
+
+    switch (expr->type)
+    {
+        case EXPR_INUM:
+            return mk_inum(line_num, expr->expr_data.i_num);
+        case EXPR_RNUM:
+            return mk_rnum(line_num, expr->expr_data.r_num);
+        case EXPR_BOOL:
+            return mk_bool(line_num, expr->expr_data.bool_value);
+        case EXPR_CHAR_CODE:
+            return mk_charcode(line_num, expr->expr_data.char_code);
+        case EXPR_NIL:
+            return mk_nil(line_num);
+        case EXPR_STRING:
+            if (expr->expr_data.string == NULL)
+                return NULL;
+            return mk_string(line_num, strdup(expr->expr_data.string));
+        default:
+            break;
+    }
+
+    return NULL;
+}
+
+static Tree_t *find_typed_const_array_decl(const char *id)
+{
+    if (id == NULL || g_simplify_tree == NULL)
+        return NULL;
+
+    ListNode_t *decls = NULL;
+    if (g_simplify_tree->type == TREE_PROGRAM_TYPE)
+        decls = g_simplify_tree->tree_data.program_data.var_declaration;
+    else if (g_simplify_tree->type == TREE_SUBPROGRAM)
+        decls = g_simplify_tree->tree_data.subprogram_data.declarations;
+
+    while (decls != NULL)
+    {
+        Tree_t *decl = (Tree_t *)decls->cur;
+        if (decl != NULL &&
+            decl->type == TREE_ARR_DECL &&
+            decl->tree_data.arr_decl_data.is_typed_const)
+        {
+            ListNode_t *ids = decl->tree_data.arr_decl_data.ids;
+            while (ids != NULL)
+            {
+                const char *decl_id = (const char *)ids->cur;
+                if (decl_id != NULL && pascal_identifier_equals(decl_id, id))
+                    return decl;
+                ids = ids->next;
+            }
+        }
+        decls = decls->next;
+    }
+
+    return NULL;
+}
+
+static struct Expression *find_typed_const_array_element_expr(Tree_t *arr_decl,
+    const char *array_id, long long index_value)
+{
+    if (arr_decl == NULL || array_id == NULL || arr_decl->type != TREE_ARR_DECL)
+        return NULL;
+    if (arr_decl->tree_data.arr_decl_data.initializer == NULL)
+        return NULL;
+    if (index_value < arr_decl->tree_data.arr_decl_data.s_range ||
+        index_value > arr_decl->tree_data.arr_decl_data.e_range)
+    {
+        return NULL;
+    }
+
+    struct Statement *init = arr_decl->tree_data.arr_decl_data.initializer;
+    ListNode_t *stmts = NULL;
+    if (init->type == STMT_COMPOUND_STATEMENT)
+        stmts = init->stmt_data.compound_statement;
+    else
+        stmts = CreateListNode(init, LIST_STMT);
+
+    struct Expression *result = NULL;
+    ListNode_t *cur = stmts;
+    while (cur != NULL)
+    {
+        struct Statement *stmt = (struct Statement *)cur->cur;
+        if (stmt != NULL && stmt->type == STMT_VAR_ASSIGN &&
+            stmt->stmt_data.var_assign_data.var != NULL &&
+            stmt->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS)
+        {
+            struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+            struct Expression *base = lhs->expr_data.array_access_data.array_expr;
+            struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
+            if (base != NULL && base->type == EXPR_VAR_ID &&
+                base->expr_data.id != NULL &&
+                pascal_identifier_equals(base->expr_data.id, array_id) &&
+                idx != NULL && idx->type == EXPR_INUM &&
+                idx->expr_data.i_num == index_value &&
+                lhs->expr_data.array_access_data.extra_indices == NULL)
+            {
+                result = stmt->stmt_data.var_assign_data.expr;
+                break;
+            }
+        }
+        cur = cur->next;
+    }
+
+    if (init->type != STMT_COMPOUND_STATEMENT && stmts != NULL)
+        DestroyList(stmts);
+
+    return result;
 }
 
 /* Checks variables for self-references and decrements (ex: c := c+1) */
@@ -735,6 +896,83 @@ int simplify_expr(struct Expression **expr)
             }
 
             return 0;
+
+        case EXPR_ARRAY_ACCESS:
+        {
+            struct Expression *array_expr = (*expr)->expr_data.array_access_data.array_expr;
+            struct Expression *index_expr = (*expr)->expr_data.array_access_data.index_expr;
+            if (array_expr != NULL)
+                simplify_expr(&(*expr)->expr_data.array_access_data.array_expr);
+            if (index_expr != NULL)
+                simplify_expr(&(*expr)->expr_data.array_access_data.index_expr);
+
+            array_expr = (*expr)->expr_data.array_access_data.array_expr;
+            index_expr = (*expr)->expr_data.array_access_data.index_expr;
+            if (array_expr == NULL || index_expr == NULL ||
+                array_expr->type != EXPR_VAR_ID || array_expr->expr_data.id == NULL ||
+                index_expr->type != EXPR_INUM ||
+                (*expr)->expr_data.array_access_data.extra_indices != NULL ||
+                g_simplify_symtab == NULL)
+            {
+                return 0;
+            }
+
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, g_simplify_symtab, array_expr->expr_data.id) == 0 ||
+                node == NULL || !node->is_typed_const || !hashnode_is_array(node) ||
+                hashnode_is_dynamic_array(node))
+            {
+                return 0;
+            }
+
+            Tree_t *arr_decl = find_typed_const_array_decl(array_expr->expr_data.id);
+            struct Expression *element_expr = find_typed_const_array_element_expr(arr_decl,
+                array_expr->expr_data.id, index_expr->expr_data.i_num);
+            struct Expression *folded = copy_constant_expr(element_expr, (*expr)->line_num);
+            if (folded == NULL)
+                return 0;
+
+            destroy_expr(*expr);
+            *expr = folded;
+            return 1;
+        }
+
+        case EXPR_FUNCTION_CALL:
+        {
+            char *id = (*expr)->expr_data.function_call_data.id;
+            ListNode_t *args = (*expr)->expr_data.function_call_data.args_expr;
+            if (id == NULL || !pascal_identifier_equals(id, "Length") ||
+                args == NULL || args->next != NULL || args->cur == NULL ||
+                g_simplify_symtab == NULL)
+            {
+                return 0;
+            }
+
+            struct Expression *arg = (struct Expression *)args->cur;
+            simplify_expr(&arg);
+            args->cur = arg;
+            if (arg->type != EXPR_VAR_ID || arg->expr_data.id == NULL)
+                return 0;
+
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, g_simplify_symtab, arg->expr_data.id) == 0 ||
+                node == NULL || !hashnode_is_array(node) || hashnode_is_dynamic_array(node))
+            {
+                return 0;
+            }
+
+            int start = 0;
+            int end = -1;
+            hashnode_get_array_bounds(node, &start, &end);
+            if (end < start)
+                return 0;
+
+            long long length = (long long)end - (long long)start + 1;
+            new_expr = mk_inum((*expr)->line_num, length);
+            destroy_expr(*expr);
+            *expr = new_expr;
+            return 1;
+        }
 
         default:
             return 0;

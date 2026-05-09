@@ -1826,6 +1826,18 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "4.0\n1\n")
 
+    def test_constant_folding_typed_const_array_access_and_length_o1(self):
+        """Typed-const array index and Length() should fold under -O1."""
+        input_file = os.path.join(TEST_CASES_DIR, "optimizer_typed_const_array_fold.p")
+        optimized_output_file = os.path.join(
+            TEST_OUTPUT_DIR, "optimizer_typed_const_array_fold_optimized_o1.s"
+        )
+        run_compiler(input_file, optimized_output_file, flags=["-O1"])
+        optimized_asm = read_file_content(optimized_output_file)
+
+        self.assertRegex(optimized_asm, r"\bmov[lq]\s+\$20\b")
+        self.assertRegex(optimized_asm, r"\bmov[lq]\s+\$3\b")
+
     def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
         """Verify that the constructor codegen emits exactly one Self-move into
         the first argument register before the constructor call, and that no
