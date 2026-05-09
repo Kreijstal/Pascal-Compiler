@@ -168,7 +168,7 @@ static inline int is_64bit_integer_type(int type_tag)
  * consolidating logic previously duplicated across multiple modules.
  *
  * @param type_tag The type tag to get the size for
- * @return Size in bytes, or 0 if the type tag is not a fixed-size primitive type
+ * @return Size in bytes, or -1 if the type tag is not a fixed-size primitive type
  */
 static inline int get_type_tag_size(int type_tag)
 {
@@ -184,6 +184,7 @@ static inline int get_type_tag_size(int type_tag)
         case INT_TYPE:
         case LONGWORD_TYPE:
         case ENUM_TYPE:
+        case SET_TYPE:
             return 4;
         case INT64_TYPE:
         case QWORD_TYPE:
@@ -191,11 +192,13 @@ static inline int get_type_tag_size(int type_tag)
         case PROCEDURE:
         case FILE_TYPE:
         case REAL_TYPE:
+        case STRING_TYPE:  /* AnsiString is a pointer-sized reference */
+        case TEXT_TYPE:    /* Text file handle is a pointer-sized reference */
             return 8;
         case SHORTSTRING_TYPE:
             return 256;  /* ShortString is 256 bytes (length byte + 255 chars) */
         default:
-            return 0;  /* Unknown or composite types need special handling */
+            return -1;  /* Unknown or composite types need special handling */
     }
 }
 
