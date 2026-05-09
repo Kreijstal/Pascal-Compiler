@@ -22,6 +22,7 @@
 #include "pass_manager.h"
 #include "../Parser/ParseTree/tree.h"
 #include "../Parser/ParseTree/tree_types.h"
+#include "../Parser/ParseTree/KgpcType.h"
 #include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../Parser/ParseTree/type_tags.h"
@@ -157,6 +158,43 @@ void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr);
 
 void set_vars_lists(SymTab_t *, ListNode_t *, ListNode_t **, ListNode_t **);
 void add_to_list(ListNode_t **, void *obj);
+
+static int expr_is_real_constant(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->type == EXPR_RNUM)
+        return 1;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        int primitive_tag = kgpc_type_get_primitive_tag(expr->resolved_kgpc_type);
+        return primitive_tag == REAL_TYPE || primitive_tag == EXTENDED_TYPE;
+    }
+
+    return 0;
+}
+
+static int expr_constant_to_double(const struct Expression *expr, double *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return 0;
+
+    switch (expr->type)
+    {
+        case EXPR_INUM:
+            *out_value = (double)expr->expr_data.i_num;
+            return 1;
+
+        case EXPR_RNUM:
+            *out_value = expr->expr_data.r_num;
+            return 1;
+
+        default:
+            return 0;
+    }
+}
 
 /* The main entry point for the optimizer */
 void optimizer_set_runner(optimizer_runner_fn runner)
@@ -542,6 +580,7 @@ int simplify_expr(struct Expression **expr)
     struct Expression *new_expr;
     int return_val, return_val2;
     long long new_val;
+    double new_real_val, left_real_val, right_real_val;
 
     assert(expr != NULL);
     assert(*expr != NULL);
@@ -562,9 +601,18 @@ int simplify_expr(struct Expression **expr)
                         (*expr)->line_num);
                 #endif
 
-                new_val = -(*expr)->expr_data.sign_term->expr_data.i_num;
+                if(expr_is_real_constant((*expr)->expr_data.sign_term))
+                {
+                    if(!expr_constant_to_double((*expr)->expr_data.sign_term, &new_real_val))
+                        return 0;
 
-                new_expr = mk_inum((*expr)->line_num, new_val);
+                    new_expr = mk_rnum((*expr)->line_num, -new_real_val);
+                }
+                else
+                {
+                    new_val = -(*expr)->expr_data.sign_term->expr_data.i_num;
+                    new_expr = mk_inum((*expr)->line_num, new_val);
+                }
 
                 destroy_expr(*expr);
                 *expr = new_expr;
@@ -584,18 +632,35 @@ int simplify_expr(struct Expression **expr)
                         (*expr)->line_num);
                 #endif
 
-                if((*expr)->expr_data.addop_data.addop_type == PLUS)
+                if(expr_is_real_constant((*expr)->expr_data.addop_data.left_expr) ||
+                    expr_is_real_constant((*expr)->expr_data.addop_data.right_term))
                 {
-                    new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num +
-                                (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
+                    if(!expr_constant_to_double((*expr)->expr_data.addop_data.left_expr, &left_real_val) ||
+                        !expr_constant_to_double((*expr)->expr_data.addop_data.right_term, &right_real_val))
+                        return 0;
+
+                    if((*expr)->expr_data.addop_data.addop_type == PLUS)
+                        new_real_val = left_real_val + right_real_val;
+                    else
+                        new_real_val = left_real_val - right_real_val;
+
+                    new_expr = mk_rnum((*expr)->line_num, new_real_val);
                 }
                 else
                 {
-                    new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num -
-                                (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
-                }
+                    if((*expr)->expr_data.addop_data.addop_type == PLUS)
+                    {
+                        new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num +
+                                    (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
+                    }
+                    else
+                    {
+                        new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num -
+                                    (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
+                    }
 
-                new_expr = mk_inum((*expr)->line_num, new_val);
+                    new_expr = mk_inum((*expr)->line_num, new_val);
+                }
 
                 destroy_expr(*expr);
                 *expr = new_expr;
@@ -615,18 +680,47 @@ int simplify_expr(struct Expression **expr)
                         (*expr)->line_num);
                 #endif
 
-                if((*expr)->expr_data.mulop_data.mulop_type == STAR)
+                if((*expr)->expr_data.mulop_data.mulop_type == MOD)
                 {
-                    new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num *
+                    if((*expr)->expr_data.mulop_data.right_factor->expr_data.i_num == 0)
+                        return 0;
+
+                    new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num %
                                 (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+                    new_expr = mk_inum((*expr)->line_num, new_val);
+                }
+                else if((*expr)->expr_data.mulop_data.mulop_type == SLASH ||
+                    expr_is_real_constant((*expr)->expr_data.mulop_data.left_term) ||
+                    expr_is_real_constant((*expr)->expr_data.mulop_data.right_factor))
+                {
+                    if(!expr_constant_to_double((*expr)->expr_data.mulop_data.left_term, &left_real_val) ||
+                        !expr_constant_to_double((*expr)->expr_data.mulop_data.right_factor, &right_real_val))
+                        return 0;
+
+                    if((*expr)->expr_data.mulop_data.mulop_type == STAR)
+                        new_real_val = left_real_val * right_real_val;
+                    else if((*expr)->expr_data.mulop_data.mulop_type == SLASH)
+                        new_real_val = left_real_val / right_real_val;
+                    else
+                        return 0;
+
+                    new_expr = mk_rnum((*expr)->line_num, new_real_val);
                 }
                 else
                 {
-                    new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num /
-                                (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
-                }
+                    if((*expr)->expr_data.mulop_data.mulop_type == STAR)
+                    {
+                        new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num *
+                                    (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+                    }
+                    else
+                    {
+                        new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num /
+                                    (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+                    }
 
-                new_expr = mk_inum((*expr)->line_num, new_val);
+                    new_expr = mk_inum((*expr)->line_num, new_val);
+                }
 
                 destroy_expr(*expr);
                 *expr = new_expr;

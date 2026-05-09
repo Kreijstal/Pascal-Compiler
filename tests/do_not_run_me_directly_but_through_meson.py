@@ -1804,6 +1804,28 @@ class TestCompiler(unittest.TestCase):
         # And we should not see the `add` instruction.
         self.assertNotIn("addl", optimized_asm)
 
+    def test_constant_folding_o1_real_and_modulus(self):
+        """Tests that -O1 folds real arithmetic and integer modulus constants."""
+        input_file = os.path.join(TEST_CASES_DIR, "constant_folding_real_mod.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "constant_folding_real_mod_o1.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"constant_folding_real_mod_o1{EXE_EXT}")
+
+        run_compiler(input_file, asm_file, flags=["-O1"])
+        self.record_failure_context(
+            input_file=input_file, asm_file=asm_file,
+            executable_file=executable_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "4.0\n1\n")
+
     def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
         """Verify that the constructor codegen emits exactly one Self-move into
         the first argument register before the constructor call, and that no
