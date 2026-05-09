@@ -133,6 +133,7 @@ gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
 runtime_sources = [
   'runtime.c',
+  'runtime_string.c',
   'runtime_baseunix.c',
 ]
 if not host_machine.system().startswith('windows')
