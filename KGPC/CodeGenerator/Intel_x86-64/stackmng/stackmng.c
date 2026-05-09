@@ -36,11 +36,18 @@ stackmng_t *global_stackmng = NULL;
 /* Helpers for getting special registers */
 static const char *arg_temp_operand(int num, int size)
 {
+    enum {
+        ARG_TEMP_LABEL_SIZE = 64,
+        ARG_TEMP_OPERAND_SIZE = 64,
+        ARG_TEMP_OPERAND_CACHE_LIMIT = 1024
+    };
+
     if (num < 0 || global_stackmng == NULL || global_stackmng->cur_scope == NULL)
         return NULL;
 
-    char label[64];
-    snprintf(label, sizeof(label), "__arg_temp_%d", num);
+    char label[ARG_TEMP_LABEL_SIZE];
+    if (snprintf(label, sizeof(label), "__arg_temp_%d", num) >= (int)sizeof(label))
+        return NULL;
 
     StackNode_t *slot = find_in_temp(label);
     if (slot == NULL)
@@ -48,8 +55,12 @@ static const char *arg_temp_operand(int num, int size)
     if (slot == NULL)
         return NULL;
 
-    static char operand[64];
-    snprintf(operand, sizeof(operand), "-%d(%%rbp)", slot->offset);
+    static char operand_cache[ARG_TEMP_OPERAND_CACHE_LIMIT][ARG_TEMP_OPERAND_SIZE];
+    static char overflow_operand[ARG_TEMP_OPERAND_SIZE];
+    char *operand = overflow_operand;
+    if (num < ARG_TEMP_OPERAND_CACHE_LIMIT)
+        operand = operand_cache[num];
+    snprintf(operand, sizeof(operand_cache[0]), "-%d(%%rbp)", slot->offset);
 
     if (num_args_alloced <= num)
         num_args_alloced = num + 1;
