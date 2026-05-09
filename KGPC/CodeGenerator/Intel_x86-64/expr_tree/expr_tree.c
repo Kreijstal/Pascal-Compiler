@@ -6084,33 +6084,33 @@ static struct Expression *expr_tree_simplify_to_literal(const struct Expression 
 
             long long lhs = left_expr->expr_data.i_num;
             long long rhs = right_expr->expr_data.i_num;
-            int folded = 0;
+            int is_true = 0;
 
             switch (expr->expr_data.relop_data.type)
             {
                 case EQ:
-                    folded = (lhs == rhs);
+                    is_true = (lhs == rhs);
                     break;
                 case NE:
-                    folded = (lhs != rhs);
+                    is_true = (lhs != rhs);
                     break;
                 case LT:
-                    folded = (lhs < rhs);
+                    is_true = (lhs < rhs);
                     break;
                 case LE:
-                    folded = (lhs <= rhs);
+                    is_true = (lhs <= rhs);
                     break;
                 case GT:
-                    folded = (lhs > rhs);
+                    is_true = (lhs > rhs);
                     break;
                 case GE:
-                    folded = (lhs >= rhs);
+                    is_true = (lhs >= rhs);
                     break;
                 default:
                     return NULL;
             }
 
-            return mk_bool(expr->line_num, folded);
+            return mk_bool(expr->line_num, is_true);
         }
 
         default:
