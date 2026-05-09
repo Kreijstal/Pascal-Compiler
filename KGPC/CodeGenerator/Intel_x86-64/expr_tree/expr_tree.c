@@ -1304,7 +1304,11 @@ static Register_t *expr_tree_try_get_temp_reg(ListNode_t **inst_list, Register_t
         reg = NULL;
     }
     if (reg == NULL)
+    {
         reg = get_reg_with_spill(get_reg_stack(), inst_list);
+        if (reg == avoid_reg)
+            reg = get_reg_with_spill(get_reg_stack(), inst_list);
+    }
     if (reg == avoid_reg)
         return NULL;
     return reg;
