@@ -1187,7 +1187,9 @@ else if (num_best_matches == 0)
                         }
 
                         DestroyList(ctx->overload_candidates);
+                        ctx->overload_candidates = NULL;
                         free(ctx->mangled_name);
+                        ctx->mangled_name = NULL;
                         do { ctx->final_status = ctx->return_val; return FC_CLEANUP; } while (0);
                     }
                     else
