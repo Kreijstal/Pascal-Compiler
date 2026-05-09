@@ -1382,7 +1382,11 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             KgpcType *inline_kgpc = create_record_type(alias->inline_record_type);
                             if (record_type_is_class(alias->inline_record_type))
-                                inline_kgpc = create_pointer_type(inline_kgpc);
+                            {
+                                KgpcType *record_kgpc = inline_kgpc;
+                                inline_kgpc = create_pointer_type(record_kgpc);
+                                destroy_kgpc_type(record_kgpc);
+                            }
 
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
@@ -1407,7 +1411,11 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Also register the alias name itself */
                         KgpcType *alias_kgpc = create_record_type(alias->inline_record_type);
                         if (record_type_is_class(alias->inline_record_type))
-                            alias_kgpc = create_pointer_type(alias_kgpc);
+                        {
+                            KgpcType *record_kgpc = alias_kgpc;
+                            alias_kgpc = create_pointer_type(record_kgpc);
+                            destroy_kgpc_type(record_kgpc);
+                        }
                         kgpc_type_set_type_alias(alias_kgpc, alias);
                         int alias_result = PushTypeOntoScope_Typed(symtab, (char *)type_id, alias_kgpc);
                         if (alias_result > 0)
