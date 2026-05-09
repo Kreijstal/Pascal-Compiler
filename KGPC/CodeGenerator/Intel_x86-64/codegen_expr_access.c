@@ -40,7 +40,6 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemCheck.h"
 #include "../../Parser/pascal_frontend.h"
-#include "../../identifier_utils.h"
 #include "../../format_arg.h"
 #include "../../unit_registry.h"
 
