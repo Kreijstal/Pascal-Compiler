@@ -55,6 +55,7 @@ type
 
   { String type aliases - compiler C code checks these names }
   AnsiString = String;
+  OpenString = String;
   UnicodeString = String;
   WideString = String;
   RawByteString = String;
@@ -148,6 +149,10 @@ type
 
   TTextLineBreakStyle = (tlbsLF, tlbsCRLF, tlbsCR);
 
+  Boolean8 = type Boolean;
+  Boolean16 = type Boolean;
+  Boolean32 = type Boolean;
+  Boolean64 = type Boolean;
   ByteBool = Boolean8;
   WordBool = Boolean16;
   LongBool = Boolean32;

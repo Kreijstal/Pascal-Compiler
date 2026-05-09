@@ -1590,25 +1590,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         add_builtin_alias_type(symtab, "Currency", INT64_TYPE, 8);
     add_builtin_from_vartype(symtab, "Real", HASHVAR_REAL);
     add_builtin_from_vartype(symtab, "Boolean", HASHVAR_BOOLEAN);
-    /* FPC-compatible extended boolean types */
-    add_builtin_alias_type(symtab, "Boolean8", BOOL, 1);
-    add_builtin_alias_type(symtab, "Boolean16", BOOL, 2);
-    add_builtin_alias_type(symtab, "Boolean32", BOOL, 4);
-    add_builtin_alias_type(symtab, "Boolean64", BOOL, 8);
-    /* FPC-compatible byte/word/long boolean types (synonyms) */
-    add_builtin_alias_type(symtab, "ByteBool", BOOL, 1);
-    add_builtin_alias_type(symtab, "WordBool", BOOL, 2);
-    add_builtin_alias_type(symtab, "LongBool", BOOL, 4);
-    add_builtin_alias_type(symtab, "QWordBool", BOOL, 8);
+    /* FPC-compatible sized boolean aliases are declared in Pascal prelude units. */
     if (!stdlib_loaded_flag())
     {
         add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);
     }
     add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
-    add_builtin_from_vartype(symtab, "AnsiChar", HASHVAR_CHAR);
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "OpenString", HASHVAR_PCHAR);
     add_builtin_string_type_with_alias(symtab, "AnsiString", HASHVAR_PCHAR, 0);
     add_builtin_shortstring_type(symtab, "ShortString");
     add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR, 0);
@@ -1626,13 +1615,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         kgpc_type_release(str_inner);
         add_builtin_type_owned(symtab, "PString", pstring);
     }
-    {
-        KgpcType *char_inner = create_primitive_type(CHAR_TYPE);
-        KgpcType *pansichar = create_pointer_type(char_inner);
-        kgpc_type_release(char_inner);
-        add_builtin_type_owned(symtab, "PAnsiChar", pansichar);
-    }
-
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
     /* Common ordinal aliases (match KGPC system.p sizes) */
@@ -2129,4 +2111,3 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
 /* Semantic check for a program */
 #define SEMCHECK_TIMINGS_ENABLED() (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
-
