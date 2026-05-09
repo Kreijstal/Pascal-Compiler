@@ -415,7 +415,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
             if (context_expr == NULL)
             {
-                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, WITH statement requires a context expression.\\n\\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, WITH statement requires a context expression.\n\n",
                     stmt->line_num);
                 ++return_val;
             }
@@ -426,7 +426,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 if (record_info == NULL)
                 {
                     fprintf(stderr,
-                        "Error on line %d, WITH context must be a record or pointer to a record.\\n\\n",
+                        "Error on line %d, WITH context must be a record or pointer to a record.\n\n",
                         stmt->line_num);
                     ++return_val;
                 }
