@@ -2159,6 +2159,7 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
     CodeGenContext *ctx, Register_t *value_reg);
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
+static struct Expression *expr_tree_simplify_to_literal(const struct Expression *expr);
 
 /* Builds an expression tree out of an expression */
 /* WARNING: Does not make deep copy of expression */
@@ -2433,6 +2434,18 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
                 src, dst);
             inst_list = add_inst(inst_list, buffer);
         }
+        return inst_list;
+    }
+
+    struct Expression *simplified_leaf = expr_tree_simplify_to_literal(node->expr);
+    if (simplified_leaf != NULL)
+    {
+        expr_node_t simplified_node = {0};
+        simplified_node.expr = simplified_leaf;
+        inst_list = gencode_case0(&simplified_node, inst_list, ctx, target_reg);
+        destroy_expr(simplified_leaf);
+        node->reg = target_reg;
+        register_set_spill_callback(target_reg, expr_tree_register_spill_handler, node);
         return inst_list;
     }
 
@@ -5980,5 +5993,127 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     return inst_list;
 }
 
-/* Returns the corresponding string and instructions for a leaf */
-/* TODO: Only supports var_id and i_num */
+/* Simplifies scalar constant expressions to a literal leaf when safe.
+ * TODO: Still does not fold reals, strings, sets, identifiers, or mixed-type constant expressions. */
+static struct Expression *expr_tree_simplify_to_literal(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+
+    switch (expr->type)
+    {
+        case EXPR_INUM:
+            return mk_inum(expr->line_num, expr->expr_data.i_num);
+
+        case EXPR_BOOL:
+            return mk_bool(expr->line_num, expr->expr_data.bool_value);
+
+        case EXPR_CHAR_CODE:
+            return mk_charcode(expr->line_num, expr->expr_data.char_code);
+
+        case EXPR_ADDOP:
+        {
+            if (optimize_flag() <= 0)
+                return NULL;
+
+            struct Expression *left_expr = expr->expr_data.addop_data.left_expr;
+            struct Expression *right_expr = expr->expr_data.addop_data.right_term;
+            if (left_expr == NULL || right_expr == NULL ||
+                left_expr->type != EXPR_INUM || right_expr->type != EXPR_INUM)
+            {
+                return NULL;
+            }
+
+            long long lhs = left_expr->expr_data.i_num;
+            long long rhs = right_expr->expr_data.i_num;
+            long long folded = 0;
+
+            if (expr->expr_data.addop_data.addop_type == PLUS)
+            {
+                if (__builtin_add_overflow(lhs, rhs, &folded))
+                    return NULL;
+                return mk_inum(expr->line_num, folded);
+            }
+            if (expr->expr_data.addop_data.addop_type == MINUS)
+            {
+                if (__builtin_sub_overflow(lhs, rhs, &folded))
+                    return NULL;
+                return mk_inum(expr->line_num, folded);
+            }
+            return NULL;
+        }
+
+        case EXPR_MULOP:
+        {
+            if (optimize_flag() <= 0)
+                return NULL;
+
+            struct Expression *left_expr = expr->expr_data.mulop_data.left_term;
+            struct Expression *right_expr = expr->expr_data.mulop_data.right_factor;
+            if (left_expr == NULL || right_expr == NULL ||
+                left_expr->type != EXPR_INUM || right_expr->type != EXPR_INUM)
+            {
+                return NULL;
+            }
+
+            if (expr->expr_data.mulop_data.mulop_type == STAR)
+            {
+                long long folded = 0;
+                if (__builtin_mul_overflow(left_expr->expr_data.i_num,
+                        right_expr->expr_data.i_num, &folded))
+                {
+                    return NULL;
+                }
+                return mk_inum(expr->line_num, folded);
+            }
+            return NULL;
+        }
+
+        case EXPR_RELOP:
+        {
+            if (optimize_flag() <= 0)
+                return NULL;
+
+            struct Expression *left_expr = expr->expr_data.relop_data.left;
+            struct Expression *right_expr = expr->expr_data.relop_data.right;
+            if (left_expr == NULL || right_expr == NULL ||
+                left_expr->type != EXPR_INUM || right_expr->type != EXPR_INUM)
+            {
+                return NULL;
+            }
+
+            long long lhs = left_expr->expr_data.i_num;
+            long long rhs = right_expr->expr_data.i_num;
+            int folded = 0;
+
+            switch (expr->expr_data.relop_data.type)
+            {
+                case EQ:
+                    folded = (lhs == rhs);
+                    break;
+                case NE:
+                    folded = (lhs != rhs);
+                    break;
+                case LT:
+                    folded = (lhs < rhs);
+                    break;
+                case LE:
+                    folded = (lhs <= rhs);
+                    break;
+                case GT:
+                    folded = (lhs > rhs);
+                    break;
+                case GE:
+                    folded = (lhs >= rhs);
+                    break;
+                default:
+                    return NULL;
+            }
+
+            return mk_bool(expr->line_num, folded);
+        }
+
+        default:
+            return NULL;
+    }
+}
