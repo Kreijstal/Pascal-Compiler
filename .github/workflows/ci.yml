@@ -4,7 +4,8 @@ on:
   pull_request:
     branches: [ "**" ]
   push:
-    branches: [ "master" ]
+    branches: [ "master", "copilot/**" ]
+  workflow_dispatch:
 
 env:
   # Pin FPCSource to a known-good commit to avoid upstream breakage.
