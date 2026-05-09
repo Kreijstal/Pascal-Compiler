@@ -223,10 +223,13 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     int free_effective_iface_names = 0;
     long long base_instance_size = 0;
 
+    int effective_iface_append_failed = 0;
     const struct RecordType *parent_record = codegen_record_parent(record_info, symtab);
     for (const struct RecordType *iface_parent = parent_record;
          iface_parent != NULL;
          iface_parent = codegen_record_parent(iface_parent, symtab)) {
+        if (effective_iface_append_failed)
+            break;
         if (iface_parent->num_interfaces <= 0 || iface_parent->interface_names == NULL)
             continue;
         for (int iidx = 0; iidx < iface_parent->num_interfaces; iidx++) {
@@ -243,8 +246,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 const char **copied = NULL;
                 if (effective_iface_count > 0) {
                     copied = (const char **)malloc(sizeof(char *) * effective_iface_count);
-                    if (copied == NULL)
-                        continue;
+                    if (copied == NULL) {
+                        effective_iface_append_failed = 1;
+                        break;
+                    }
                     memcpy((void *)copied, effective_iface_names,
                         sizeof(char *) * effective_iface_count);
                 }
@@ -254,8 +259,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
 
             const char **grown = (const char **)realloc((void *)effective_iface_names,
                 sizeof(char *) * (effective_iface_count + 1));
-            if (grown == NULL)
-                continue;
+            if (grown == NULL) {
+                effective_iface_append_failed = 1;
+                break;
+            }
             effective_iface_names = grown;
             effective_iface_names[effective_iface_count] = iface_name;
             effective_iface_count++;
