@@ -102,6 +102,26 @@ int semcheck_get_current_subprogram_is_constructor(void);
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
 ListNode_t *semcheck_clone_current_subprogram_actual_args(int include_self);
 
+static inline const char *semcheck_label_scope_name(const char *subprogram_id)
+{
+    return (subprogram_id != NULL && subprogram_id[0] != '\0')
+        ? subprogram_id
+        : "$program$";
+}
+
+static inline char *semcheck_build_label_symbol_id(const char *scope_name, const char *label_name)
+{
+    if (scope_name == NULL || label_name == NULL)
+        return NULL;
+
+    size_t needed = snprintf(NULL, 0, "__kgpc_label__%s__%s", scope_name, label_name) + 1;
+    char *symbol_id = (char *)malloc(needed);
+    if (symbol_id == NULL)
+        return NULL;
+    snprintf(symbol_id, needed, "__kgpc_label__%s__%s", scope_name, label_name);
+    return symbol_id;
+}
+
 int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr);
 int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
     unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,

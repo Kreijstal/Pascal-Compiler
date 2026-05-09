@@ -167,26 +167,6 @@ static int semcheck_continue_stmt(struct Statement *stmt)
     return 0;
 }
 
-static const char *semcheck_label_scope_name(const char *subprogram_id)
-{
-    return (subprogram_id != NULL && subprogram_id[0] != '\0')
-        ? subprogram_id
-        : "$program$";
-}
-
-static char *semcheck_build_label_symbol_id(const char *scope_name, const char *label_name)
-{
-    if (scope_name == NULL || label_name == NULL)
-        return NULL;
-
-    size_t needed = snprintf(NULL, 0, "__kgpc_label__%s__%s", scope_name, label_name) + 1;
-    char *symbol_id = (char *)malloc(needed);
-    if (symbol_id == NULL)
-        return NULL;
-    snprintf(symbol_id, needed, "__kgpc_label__%s__%s", scope_name, label_name);
-    return symbol_id;
-}
-
 
 /* Main semantic checking */
 
