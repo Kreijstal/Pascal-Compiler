@@ -1,11 +1,94 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "debug_deserializer.h"
 #include "Parser/ParseTree/tree_types.h"
 #include "Parser/ParseTree/type_tags.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/SemanticCheck/HashTable/HashTable.h"
+
+static int append_char(char **buffer, size_t *length, size_t *capacity, int ch) {
+    if (*length + 1 >= *capacity) {
+        size_t new_capacity = (*capacity == 0) ? 16 : (*capacity * 2);
+        char *new_buffer = (char *)realloc(*buffer, new_capacity);
+        if (new_buffer == NULL) {
+            free(*buffer);
+            *buffer = NULL;
+            return 0;
+        }
+        *buffer = new_buffer;
+        *capacity = new_capacity;
+    }
+
+    (*buffer)[(*length)++] = (char)ch;
+    return 1;
+}
+
+static char *read_token(FILE *fp) {
+    int ch;
+    char *buffer = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
+
+    do {
+        ch = fgetc(fp);
+    } while (ch != EOF && isspace((unsigned char)ch));
+
+    if (ch == EOF) {
+        return NULL;
+    }
+
+    while (ch != EOF && !isspace((unsigned char)ch)) {
+        if (!append_char(&buffer, &length, &capacity, ch)) {
+            return NULL;
+        }
+        ch = fgetc(fp);
+    }
+
+    if (ch != EOF && isspace((unsigned char)ch)) {
+        ungetc(ch, fp);
+    }
+
+    if (!append_char(&buffer, &length, &capacity, '\0')) {
+        return NULL;
+    }
+
+    return buffer;
+}
+
+static char *read_quoted_string(FILE *fp) {
+    int ch;
+    char *buffer = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
+
+    do {
+        ch = fgetc(fp);
+    } while (ch != EOF && isspace((unsigned char)ch));
+
+    if (ch != '"') {
+        if (ch != EOF) {
+            ungetc(ch, fp);
+        }
+        return NULL;
+    }
+
+    while ((ch = fgetc(fp)) != EOF) {
+        if (ch == '"') {
+            if (!append_char(&buffer, &length, &capacity, '\0')) {
+                return NULL;
+            }
+            return buffer;
+        }
+        if (!append_char(&buffer, &length, &capacity, ch)) {
+            return NULL;
+        }
+    }
+
+    free(buffer);
+    return NULL;
+}
 
 struct Expression *deserialize_expression(FILE *fp) {
     int type;
@@ -21,26 +104,38 @@ struct Expression *deserialize_expression(FILE *fp) {
 
     switch (type) {
         case EXPR_VAR_ID: {
-            char *id = (char *)malloc(100); // Assume max length
-            fscanf(fp, "%s", id);
+            char *id = read_token(fp);
+            if (id == NULL) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.id = id;
             break;
         }
         case EXPR_INUM: {
             long long i_num;
-            fscanf(fp, "%lld", &i_num);
+            if (fscanf(fp, "%lld", &i_num) != 1) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.i_num = i_num;
             break;
         }
         case EXPR_STRING: {
-            char *str = (char *)malloc(1024); // Assume max length
-            fscanf(fp, " \"%[^\"]\"", str);
+            char *str = read_quoted_string(fp);
+            if (str == NULL) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.string = str;
             break;
         }
         case EXPR_ADDOP: {
             int addop_type;
-            fscanf(fp, "%d", &addop_type);
+            if (fscanf(fp, "%d", &addop_type) != 1) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.addop_data.addop_type = addop_type;
             expr->expr_data.addop_data.left_expr = deserialize_expression(fp);
             expr->expr_data.addop_data.right_term = deserialize_expression(fp);
@@ -48,7 +143,10 @@ struct Expression *deserialize_expression(FILE *fp) {
         }
         case EXPR_MULOP: {
             int mulop_type;
-            fscanf(fp, "%d", &mulop_type);
+            if (fscanf(fp, "%d", &mulop_type) != 1) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.mulop_data.mulop_type = mulop_type;
             expr->expr_data.mulop_data.left_term = deserialize_expression(fp);
             expr->expr_data.mulop_data.right_factor = deserialize_expression(fp);
@@ -56,7 +154,10 @@ struct Expression *deserialize_expression(FILE *fp) {
         }
         case EXPR_RELOP: {
             int relop_type;
-            fscanf(fp, "%d", &relop_type);
+            if (fscanf(fp, "%d", &relop_type) != 1) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.relop_data.type = relop_type;
             expr->expr_data.relop_data.left = deserialize_expression(fp);
             expr->expr_data.relop_data.right = deserialize_expression(fp);
@@ -67,8 +168,11 @@ struct Expression *deserialize_expression(FILE *fp) {
             break;
         }
         case EXPR_FUNCTION_CALL: {
-            char *id = (char *)malloc(100); // Assume max length
-            fscanf(fp, "%s", id);
+            char *id = read_token(fp);
+            if (id == NULL) {
+                free(expr);
+                return NULL;
+            }
             expr->expr_data.function_call_data.id = id;
             expr->expr_data.function_call_data.args_expr = NULL; // Not deserializing args
             expr->expr_data.function_call_data.resolved_func = NULL;
@@ -85,16 +189,18 @@ struct Expression *deserialize_expression(FILE *fp) {
                 return NULL;
             }
 
-            char buffer[256];
-            if (fscanf(fp, "%255s", buffer) != 1) {
+            char *target_type_id = read_token(fp);
+            if (target_type_id == NULL) {
                 free(expr);
                 return NULL;
             }
 
-            if (strcmp(buffer, "NULL") == 0)
+            if (strcmp(target_type_id, "NULL") == 0) {
+                free(target_type_id);
                 expr->expr_data.typecast_data.target_type_id = NULL;
-            else
-                expr->expr_data.typecast_data.target_type_id = strdup(buffer);
+            } else {
+                expr->expr_data.typecast_data.target_type_id = target_type_id;
+            }
 
             expr->expr_data.typecast_data.target_type = target_type;
             expr->expr_data.typecast_data.expr = deserialize_expression(fp);
