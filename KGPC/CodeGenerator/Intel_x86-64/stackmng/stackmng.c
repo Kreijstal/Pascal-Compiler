@@ -31,20 +31,57 @@ void free_arg_regs(void)
     num_args_alloced = 0;
 }
 
+stackmng_t *global_stackmng = NULL;
+
 /* Helpers for getting special registers */
-/* TODO: Support loading arguments into temp if needed */
+static const char *arg_temp_operand(int num, int size)
+{
+    if (num < 0 || global_stackmng == NULL || global_stackmng->cur_scope == NULL)
+        return NULL;
+
+    char label[64];
+    snprintf(label, sizeof(label), "__arg_temp_%d", num);
+
+    StackNode_t *slot = find_in_temp(label);
+    if (slot == NULL)
+        slot = add_l_t_bytes(label, size);
+    if (slot == NULL)
+        return NULL;
+
+    static char operand[64];
+    snprintf(operand, sizeof(operand), "-%d(%%rbp)", slot->offset);
+
+    if (num_args_alloced <= num)
+        num_args_alloced = num + 1;
+
+    return operand;
+}
+
 const char *get_arg_reg64_num(int num)
 {
-    return current_arg_reg64(num);
+    const char *reg = current_arg_reg64(num);
+    if (reg != NULL)
+    {
+        if (num_args_alloced <= num)
+            num_args_alloced = num + 1;
+        return reg;
+    }
+    return arg_temp_operand(num, 8);
 }
 
 const char *get_arg_reg32_num(int num)
 {
-    return current_arg_reg32(num);
+    const char *reg = current_arg_reg32(num);
+    if (reg != NULL)
+    {
+        if (num_args_alloced <= num)
+            num_args_alloced = num + 1;
+        return reg;
+    }
+    return arg_temp_operand(num, 4);
 }
 
-/******** stackmng *********/
-stackmng_t *global_stackmng = NULL;
+ /******** stackmng *********/
 
 void init_stackmng()
 {
