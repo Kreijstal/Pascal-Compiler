@@ -427,7 +427,12 @@ static struct Expression *copy_constant_expr(const struct Expression *expr, int 
         case EXPR_STRING:
             if (expr->expr_data.string == NULL)
                 return NULL;
-            return mk_string(line_num, strdup(expr->expr_data.string));
+        {
+            char *copy = strdup(expr->expr_data.string);
+            if (copy == NULL)
+                return NULL;
+            return mk_string(line_num, copy);
+        }
         default:
             break;
     }
@@ -482,40 +487,54 @@ static struct Expression *find_typed_const_array_element_expr(Tree_t *arr_decl,
     }
 
     struct Statement *init = arr_decl->tree_data.arr_decl_data.initializer;
-    ListNode_t *stmts = NULL;
-    if (init->type == STMT_COMPOUND_STATEMENT)
-        stmts = init->stmt_data.compound_statement;
-    else
-        stmts = CreateListNode(init, LIST_STMT);
+    ListNode_t *stmts = (init->type == STMT_COMPOUND_STATEMENT) ?
+        init->stmt_data.compound_statement : NULL;
 
     struct Expression *result = NULL;
-    ListNode_t *cur = stmts;
-    while (cur != NULL)
+    if (stmts != NULL)
     {
-        struct Statement *stmt = (struct Statement *)cur->cur;
-        if (stmt != NULL && stmt->type == STMT_VAR_ASSIGN &&
-            stmt->stmt_data.var_assign_data.var != NULL &&
-            stmt->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS)
+        ListNode_t *cur = stmts;
+        while (cur != NULL)
         {
-            struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
-            struct Expression *base = lhs->expr_data.array_access_data.array_expr;
-            struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
-            if (base != NULL && base->type == EXPR_VAR_ID &&
-                base->expr_data.id != NULL &&
-                pascal_identifier_equals(base->expr_data.id, array_id) &&
-                idx != NULL && idx->type == EXPR_INUM &&
-                idx->expr_data.i_num == index_value &&
-                lhs->expr_data.array_access_data.extra_indices == NULL)
+            struct Statement *stmt = (struct Statement *)cur->cur;
+            if (stmt != NULL && stmt->type == STMT_VAR_ASSIGN &&
+                stmt->stmt_data.var_assign_data.var != NULL &&
+                stmt->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS)
             {
-                result = stmt->stmt_data.var_assign_data.expr;
-                break;
+                struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+                struct Expression *base = lhs->expr_data.array_access_data.array_expr;
+                struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
+                if (base != NULL && base->type == EXPR_VAR_ID &&
+                    base->expr_data.id != NULL &&
+                    pascal_identifier_equals(base->expr_data.id, array_id) &&
+                    idx != NULL && idx->type == EXPR_INUM &&
+                    idx->expr_data.i_num == index_value &&
+                    lhs->expr_data.array_access_data.extra_indices == NULL)
+                {
+                    result = stmt->stmt_data.var_assign_data.expr;
+                    break;
+                }
             }
+            cur = cur->next;
         }
-        cur = cur->next;
     }
-
-    if (init->type != STMT_COMPOUND_STATEMENT && stmts != NULL)
-        DestroyList(stmts);
+    else if (init->type == STMT_VAR_ASSIGN &&
+             init->stmt_data.var_assign_data.var != NULL &&
+             init->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS)
+    {
+        struct Expression *lhs = init->stmt_data.var_assign_data.var;
+        struct Expression *base = lhs->expr_data.array_access_data.array_expr;
+        struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
+        if (base != NULL && base->type == EXPR_VAR_ID &&
+            base->expr_data.id != NULL &&
+            pascal_identifier_equals(base->expr_data.id, array_id) &&
+            idx != NULL && idx->type == EXPR_INUM &&
+            idx->expr_data.i_num == index_value &&
+            lhs->expr_data.array_access_data.extra_indices == NULL)
+        {
+            result = init->stmt_data.var_assign_data.expr;
+        }
+    }
 
     return result;
 }
@@ -962,7 +981,7 @@ int simplify_expr(struct Expression **expr)
             }
 
             int start = 0;
-            int end = -1;
+            int end = 0;
             hashnode_get_array_bounds(node, &start, &end);
             if (end < start)
                 return 0;
