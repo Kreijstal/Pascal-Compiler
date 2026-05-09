@@ -148,6 +148,7 @@ type
 
   { String types - for FPC bootstrap compatibility }
   AnsiString = String;
+  OpenString = String;
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
@@ -512,6 +513,10 @@ type
   TSignalState = (ssNotHooked, ssHooked, ssOverridden);
 
   { Extended boolean aliases (sized boolean types) }
+  Boolean8 = type Boolean;
+  Boolean16 = type Boolean;
+  Boolean32 = type Boolean;
+  Boolean64 = type Boolean;
   ByteBool = Boolean8;
   WordBool = Boolean16;
   LongBool = Boolean32;
