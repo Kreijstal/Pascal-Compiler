@@ -65,8 +65,8 @@ static const char *alloc_integer_arg_reg(int use_64bit, int *next_index)
         return NULL;
 
     const char *reg = use_64bit ?
-        get_arg_reg64_num(*next_index) :
-        get_arg_reg32_num(*next_index);
+        current_arg_reg64(*next_index) :
+        current_arg_reg32(*next_index);
     if (reg == NULL)
         return NULL;
 
@@ -3497,7 +3497,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             {
                 if (work->arg_reg == NULL && !work->has_stack_arg)
                 {
-                    const char *fallback_reg = get_arg_reg64_num(arg_start_index + work->arg_index);
+                    const char *fallback_reg = current_arg_reg64(arg_start_index + work->arg_index);
                     if (fallback_reg != NULL)
                         record_src_reg = fallback_reg;
                 }
