@@ -1096,7 +1096,7 @@ static Register_t *codegen_clone_register_if_rcx(ListNode_t **inst_list, CodeGen
     Register_t *replacement = NULL;
     for (size_t i = 0; i < sizeof(preferred_regs) / sizeof(preferred_regs[0]); ++i)
     {
-        if (get_register_by_id(get_reg_stack(), preferred_regs[i], &replacement) == 0 && replacement != NULL)
+        if (get_register_by_id(get_reg_stack(), preferred_regs[i], &replacement, inst_list) == 0 && replacement != NULL)
             break;
         replacement = NULL;
     }
