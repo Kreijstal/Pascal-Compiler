@@ -105,7 +105,7 @@ RegStack_t *init_reg_stack();
 
 /* NOTE: Getters return number greater than 1 if it had to kick a value out to temp */
 /* The returned int is the temp offset to restore the value */
-int get_register_by_id(RegStack_t *, RegisterId_t reg_id, Register_t **);
+int get_register_by_id(RegStack_t *, RegisterId_t reg_id, Register_t **, ListNode_t **inst_list);
 void restore_register_64bit(RegStack_t *, Register_t *, int temp_offset);
 void restore_register_32bit(RegStack_t *, Register_t *, int temp_offset);
 void free_reg(RegStack_t *, Register_t *);
