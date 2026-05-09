@@ -700,7 +700,11 @@ int simplify_expr(struct Expression **expr)
                     if((*expr)->expr_data.mulop_data.mulop_type == STAR)
                         new_real_val = left_real_val * right_real_val;
                     else if((*expr)->expr_data.mulop_data.mulop_type == SLASH)
+                    {
+                        if(right_real_val == 0.0)
+                            return 0;
                         new_real_val = left_real_val / right_real_val;
+                    }
                     else
                         return 0;
 
@@ -715,6 +719,8 @@ int simplify_expr(struct Expression **expr)
                     }
                     else
                     {
+                        if((*expr)->expr_data.mulop_data.right_factor->expr_data.i_num == 0)
+                            return 0;
                         new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num /
                                     (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
                     }
