@@ -356,6 +356,11 @@ typedef struct CodeGenContext {
 
     /* Virtual register ID counter — reset to 0 at each function entry. */
     int next_vreg_id;
+
+    /* Set to 1 when performing whole-program codegen (codegen()),
+     * 0 when performing direct unit codegen (codegen_unit()).
+     * Used to guard symtab-fallback passes that are only safe at link time. */
+    int is_whole_program;
 } CodeGenContext;
 
 /* Generates a label */
