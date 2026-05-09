@@ -134,6 +134,16 @@ kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,
   c_args: kgpc_c_args,
 )
 
+debug_deserializer_tests = executable('debug_deserializer_tests',
+  [
+    'debug_deserializer_tests.c',
+    'debug_deserializer.c',
+  ],
+  include_directories: [inc_dirs, parser_inc],
+)
+
+test('debug deserializer unit tests', debug_deserializer_tests, timeout: 1800)
+
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
 runtime_sources = [
