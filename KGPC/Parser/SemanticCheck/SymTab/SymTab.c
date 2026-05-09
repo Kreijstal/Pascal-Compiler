@@ -75,7 +75,8 @@ SymTab_t *InitSymTab()
 
 void DestroySymTab(SymTab_t *symtab)
 {
-    assert(symtab != NULL);
+    if (symtab == NULL)
+        return;
 
     /* Destroy scope tree nodes.
      * All scopes own their tables; DestroyScope frees them.
