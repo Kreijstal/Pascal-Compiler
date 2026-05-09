@@ -614,7 +614,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             {
                 record_type_id = "Single";
             }
-        } else { // Assume array or other type for now
+        } else if (decl_tree->type == TREE_ARR_DECL) {
             ids = decl_tree->tree_data.arr_decl_data.ids;
             /* For open array parameters, include the element type in mangling
              * to distinguish between array of Char and array of Integer.
@@ -661,6 +661,47 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             else
             {
                 resolved_type = HASHVAR_ARRAY; /* Fallback for unknown element type */
+            }
+        } else {
+            KGPC_SEMCHECK_HARD_ASSERT(0,
+                "GetFlatTypeListForMangling: unsupported parameter decl tree type %d",
+                decl_tree->type);
+        }
+
+        if (resolved_type < 100)
+        {
+            switch (resolved_type)
+            {
+                case HASHVAR_INTEGER:
+                case HASHVAR_LONGINT:
+                case HASHVAR_INT64:
+                case HASHVAR_REAL:
+                case HASHVAR_PROCEDURE:
+                case HASHVAR_UNTYPED:
+                case HASHVAR_PCHAR:
+                case HASHVAR_PWIDECHAR:
+                case HASHVAR_PANSICHAR:
+                case HASHVAR_RECORD:
+                case HASHVAR_ARRAY:
+                case HASHVAR_BOOLEAN:
+                case HASHVAR_CHAR:
+                case HASHVAR_POINTER:
+                case HASHVAR_SET:
+                case HASHVAR_ENUM:
+                case HASHVAR_FILE:
+                case HASHVAR_TYPEDFILE:
+                case HASHVAR_TEXT:
+                case HASHVAR_RAWBYTESTRING:
+                case HASHVAR_UNICODESTRING:
+                case HASHVAR_SHORTSTRING:
+                case HASHVAR_WIDECHAR:
+                case HASHVAR_QWORD:
+                case HASHVAR_METHODPROCEDURE:
+                    break;
+                default:
+                    KGPC_SEMCHECK_HARD_ASSERT(0,
+                        "GetFlatTypeListForMangling: unsupported resolved VarType %d",
+                        resolved_type);
             }
         }
 
