@@ -62,7 +62,6 @@ static uint32_t kgpc_xsr_state[4] = {
 /* Forward decl for optional debug flag helper */
 char *kgpc_float_to_string(double value, int precision);
 static char *kgpc_apply_field_width(char *value, int64_t width);
-uint16_t *kgpc_unicodestring_from_string(const char *value);
 typedef struct KgpcGuardedAlloc
 {
     void *user_ptr;
@@ -353,8 +352,6 @@ void kgpc_interlocked_exchange_add_ptr(intptr_t *target, intptr_t value, intptr_
 
 #define KGPC_FILE_PRIVATE_MAGIC 0x4B475046u
 #define KGPC_FILE_PRIVATE_MAGIC_INV (~KGPC_FILE_PRIVATE_MAGIC)
-
-char *kgpc_alloc_empty_string(void);
 
 static int kgpc_file_private_magic_valid(const KGPCFileRec *file)
 {
@@ -2584,8 +2581,6 @@ void kgpc_write_unsigned(KGPCTextRec *file, int width, uint64_t value)
     kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest, int32_t cp, int64_t len);
-void kgpc_default_ansi2unicode_move(const char *source, int32_t cp, uint16_t **dest, int64_t len);
 extern void *widestringmanager[25];
 extern int32_t DefaultSystemCodePage;
 int64_t kgpc_widechar_length(const uint16_t *value);
