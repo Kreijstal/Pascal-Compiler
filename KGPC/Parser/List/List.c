@@ -14,11 +14,20 @@
 ListNode_t *CreateListNode(void *new_obj, enum ListType type)
 {
     ListNode_t *new_node;
+    arena_t *arena = arena_get_global();
 
-    // Arena allocation disabled for ListNodes due to temporal mismatch
-    // between allocation (with arena) and deallocation (after arena destroyed)
-    new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
-    assert(new_node != NULL);
+    if (arena != NULL)
+    {
+        new_node = (ListNode_t *)arena_alloc(arena, sizeof(ListNode_t));
+        assert(new_node != NULL);
+        new_node->arena_allocated = 1;
+    }
+    else
+    {
+        new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+        assert(new_node != NULL);
+        new_node->arena_allocated = 0;
+    }
 
     new_node->type = type;
     new_node->cur = new_obj;
@@ -95,9 +104,18 @@ ListNode_t *DeleteListNode(ListNode_t *node, ListNode_t *prev)
     if(prev != NULL)
         prev->next = next;
 
-    free(node);
+    FreeListNodeStorage(node);
 
     return next;
+}
+
+void FreeListNodeStorage(ListNode_t *node)
+{
+    if(node == NULL)
+        return;
+
+    if(!node->arena_allocated)
+        free(node);
 }
 
 void DestroyList(ListNode_t *head_node)
