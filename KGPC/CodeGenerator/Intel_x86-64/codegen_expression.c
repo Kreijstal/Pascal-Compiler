@@ -2414,35 +2414,37 @@ ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     return inst_list;
 }
 
+typedef struct {
+    int type_tag;
+    int tvar_kind;
+} TypeTagToTvarKind;
+
+static const TypeTagToTvarKind tvar_kind_table[] = {
+    { INT_TYPE,         KGPC_TVAR_KIND_INT },
+    { LONGINT_TYPE,     KGPC_TVAR_KIND_INT },
+    { BYTE_TYPE,        KGPC_TVAR_KIND_INT },
+    { WORD_TYPE,        KGPC_TVAR_KIND_INT },
+    { LONGWORD_TYPE,    KGPC_TVAR_KIND_INT },
+    { INT64_TYPE,       KGPC_TVAR_KIND_INT },
+    { QWORD_TYPE,       KGPC_TVAR_KIND_INT },
+    { ENUM_TYPE,        KGPC_TVAR_KIND_INT },
+    { BOOL,             KGPC_TVAR_KIND_BOOL },
+    { CHAR_TYPE,        KGPC_TVAR_KIND_CHAR },
+    { REAL_TYPE,        KGPC_TVAR_KIND_REAL },
+    { STRING_TYPE,      KGPC_TVAR_KIND_ANSISTRING },
+    { SHORTSTRING_TYPE, KGPC_TVAR_KIND_STRING },
+    { POINTER_TYPE,     KGPC_TVAR_KIND_POINTER },
+};
+
 static int codegen_format_arg_kind_for_expr(struct Expression *expr)
 {
     int type_tag = expr_get_type_tag(expr);
-    switch (type_tag)
+    for (size_t i = 0; i < sizeof(tvar_kind_table) / sizeof(tvar_kind_table[0]); ++i)
     {
-        case INT_TYPE:
-        case LONGINT_TYPE:
-        case BYTE_TYPE:
-        case WORD_TYPE:
-        case LONGWORD_TYPE:
-        case INT64_TYPE:
-        case QWORD_TYPE:
-        case ENUM_TYPE:
-            return KGPC_TVAR_KIND_INT;
-        case BOOL:
-            return KGPC_TVAR_KIND_BOOL;
-        case CHAR_TYPE:
-            return KGPC_TVAR_KIND_CHAR;
-        case REAL_TYPE:
-            return KGPC_TVAR_KIND_REAL;
-        case STRING_TYPE:
-            return KGPC_TVAR_KIND_ANSISTRING;
-        case SHORTSTRING_TYPE:
-            return KGPC_TVAR_KIND_STRING;
-        case POINTER_TYPE:
-            return KGPC_TVAR_KIND_POINTER;
-        default:
-            return -1;
+        if (tvar_kind_table[i].type_tag == type_tag)
+            return tvar_kind_table[i].tvar_kind;
     }
+    return -1;
 }
 
 static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
