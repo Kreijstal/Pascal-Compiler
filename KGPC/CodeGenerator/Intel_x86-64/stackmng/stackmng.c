@@ -841,10 +841,11 @@ RegStack_t *init_reg_stack()
 /* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
 /* The returned int is the temp offset to restore the value */
 /* TODO: Doesn't actually kick variable out to temp yet */
-int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id, Register_t **return_reg)
+int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id, Register_t **return_reg, ListNode_t **inst_list)
 {
     assert(regstack != NULL);
     assert(return_reg != NULL);
+    assert(inst_list != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
@@ -872,7 +873,42 @@ int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id, Register_t **r
         cur_reg = cur_reg->next;
     }
 
-    assert(0 && "Kicking out values in registers not currently supported!");
+    cur_reg = regstack->registers_allocated;
+    while (cur_reg != NULL)
+    {
+        reg = (Register_t *)cur_reg->cur;
+        if (reg->reg_id == reg_id)
+        {
+            char spill_label[64];
+            snprintf(spill_label, sizeof(spill_label), "spill_%s", reg->bit_64 + 1);
+            StackNode_t *spill_slot = find_in_temp(spill_label);
+            if (spill_slot == NULL)
+                spill_slot = add_l_t_bytes(spill_label, (int)sizeof(void *));
+            if (spill_slot == NULL)
+            {
+                *return_reg = NULL;
+                return -1;
+            }
+            reg->spill_location = spill_slot;
+
+            char spill_code[128];
+            snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (by-id)\n\tmovq\t%s, -%d(%%rbp)\n",
+                reg->bit_64, reg->bit_64, spill_slot->offset);
+            *inst_list = add_inst(*inst_list, spill_code);
+
+            if (reg->spill_callback != NULL)
+                reg->spill_callback(reg, spill_slot, reg->spill_context);
+            register_clear_spill_callback(reg);
+
+            reg->last_use_seq = ++regstack->use_sequence;
+            *return_reg = reg;
+            return 0;
+        }
+        cur_reg = cur_reg->next;
+    }
+
+    *return_reg = NULL;
+    return -1;
 }
 
 void free_reg(RegStack_t *reg_stack, Register_t *reg)
