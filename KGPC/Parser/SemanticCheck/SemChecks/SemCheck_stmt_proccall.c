@@ -2784,6 +2784,11 @@ proccall_parent_resolve_done:
             pascal_identifier_equals(proc_id, "Assign"))
             fprintf(stderr, "[ASSIGN-RESOLVED] mangled=%s match_count=%d\n",
                 resolved_proc->mangled_id ? resolved_proc->mangled_id : "<null>", match_count);
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
         if (resolved_proc->mangled_id != NULL)
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
         else if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)

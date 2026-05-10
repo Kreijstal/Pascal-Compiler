@@ -2570,10 +2570,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 else
                 {
-                    /* CRITICAL: Retain element_type if borrowed from symbol table
-                     * since create_array_type retains internally. */
-                    if (element_type_borrowed && element_type != NULL)
-                        kgpc_type_retain(element_type);
                     array_type = create_array_type(
                         element_type,
                         start_bound,

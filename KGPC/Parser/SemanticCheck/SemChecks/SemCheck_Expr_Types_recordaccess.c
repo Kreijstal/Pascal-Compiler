@@ -3076,6 +3076,7 @@ FIELD_RESOLVED:
         field_desc->proc_type == NULL)
     {
         KgpcType *fallback_type = NULL;
+        int fallback_owned = 0;
         if (field_desc->type_id != NULL || field_desc->type_ref != NULL)
         {
             HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(
@@ -3089,11 +3090,12 @@ FIELD_RESOLVED:
                 fallback_type = create_primitive_type_with_size(REAL_TYPE, 8);
             else
                 fallback_type = create_primitive_type(field_type);
+            fallback_owned = (fallback_type != NULL);
         }
         if (fallback_type != NULL)
         {
             semcheck_expr_set_resolved_kgpc_type_shared(expr, fallback_type);
-            if (fallback_type->ref_count == 1 && fallback_type->type_alias == NULL)
+            if (fallback_owned)
                 destroy_kgpc_type(fallback_type);
         }
     }
@@ -3642,4 +3644,3 @@ FIELD_RESOLVED:
     }
     return error_count;
 }
-

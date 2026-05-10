@@ -2146,6 +2146,8 @@ int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         
         /* Populate call info to avoid use-after-free when HashNode is freed */
@@ -2163,6 +2165,8 @@ int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (forced_system_builtin)
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_BUILTIN_PROCEDURE;
         semcheck_stmt_set_call_kgpc_type(stmt, NULL,
@@ -2176,6 +2180,8 @@ int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (qualifier != NULL && pascal_identifier_equals(qualifier, "System"))
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_BUILTIN_PROCEDURE;
         semcheck_stmt_set_call_kgpc_type(stmt, NULL,
