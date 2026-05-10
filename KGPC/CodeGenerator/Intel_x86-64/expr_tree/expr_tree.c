@@ -256,6 +256,44 @@ static int expr_tree_virtual_call_returns_shortstring(CodeGenContext *ctx,
     return 0;
 }
 
+static int expr_tree_constructor_owner_is_plain_object(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+
+    const char *owner_name = expr->expr_data.function_call_data.self_class_name;
+    if (owner_name == NULL)
+        owner_name = expr->expr_data.function_call_data.cached_owner_class;
+    if (owner_name != NULL)
+    {
+        struct RecordType *owner_record =
+            expr_tree_lookup_record_type(ctx->symtab, owner_name);
+        if (owner_record != NULL)
+            return !record_type_is_class(owner_record);
+    }
+
+    struct Expression *receiver =
+        expr->expr_data.function_call_data.constructor_receiver_expr;
+    if (receiver == NULL &&
+        expr->expr_data.function_call_data.args_expr != NULL)
+    {
+        receiver = (struct Expression *)
+            expr->expr_data.function_call_data.args_expr->cur;
+    }
+
+    KgpcType *receiver_type = expr_get_kgpc_type(receiver);
+    if (receiver_type != NULL && kgpc_type_is_pointer(receiver_type) &&
+        receiver_type->info.points_to != NULL)
+        receiver_type = receiver_type->info.points_to;
+
+    if (receiver_type != NULL && kgpc_type_is_record(receiver_type) &&
+        receiver_type->info.record_info != NULL)
+        return !record_type_is_class(receiver_type->info.record_info);
+
+    return 0;
+}
+
 static int expr_tree_symbol_preference_score(const HashNode_t *node,
     const struct Expression *expr, const CodeGenContext *ctx)
 {
@@ -3637,6 +3675,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         int has_record_return = expr_returns_sret(expr);
         if (force_scalar_string_return)
             has_record_return = 0;
+        if (!force_scalar_string_return && !has_record_return && is_constructor &&
+            expr_tree_constructor_owner_is_plain_object(ctx, expr))
+        {
+            has_record_return = 1;
+        }
         if (!force_scalar_string_return && !has_record_return && func_type != NULL &&
             func_type->kind == TYPE_KIND_PROCEDURE)
         {
