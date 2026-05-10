@@ -1514,7 +1514,6 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         array_decl->tree_data.arr_decl_data.element_kgpc_type = type_info->element_kgpc_type;
         kgpc_type_retain(array_decl->tree_data.arr_decl_data.element_kgpc_type);
     }
-    type_info->element_type_id = NULL;
 
     /* Transfer array_dimensions to declaration for multi-dim linearization.
      * Only when 2+ dimensions — single-dim doesn't need linearization. */
