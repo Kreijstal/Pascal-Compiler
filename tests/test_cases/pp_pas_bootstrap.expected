@@ -265,6 +265,7 @@
       -XLA       Define library substitutions for linking
       -XLD       Exclude default order of standard libraries
       -XLO       Define order of library linking
+      -XLL       Link using ld.lld GNU compatible LLVM linker (Linux and some BSD targets, experimental)
       -Xm        Generate link map
       -XM<x>     Set the name of the 'main' program routine (default is 'main')
       -Xn        Use target system native linker instead of GNU ld (Solaris, AIX)

@@ -4098,9 +4098,16 @@ def _add_pp_pas_bootstrap_test():
         # FPC msg2inc.pp utility with KGPC (same approach as
         # scripts/profile_large_unit_graph.py ensure_bootstrap_prereqs).
         compiler_dir = os.path.join(fpc_src, "compiler")
+        errore_msg = os.path.join(compiler_dir, "msg", "errore.msg")
         msgtxt_inc = os.path.join(compiler_dir, "msgtxt.inc")
         msgidx_inc = os.path.join(compiler_dir, "msgidx.inc")
-        if not os.path.isfile(msgtxt_inc) or not os.path.isfile(msgidx_inc):
+        msg_includes_are_stale = (
+            not os.path.isfile(msgtxt_inc) or
+            not os.path.isfile(msgidx_inc) or
+            os.path.getmtime(msgtxt_inc) < os.path.getmtime(errore_msg) or
+            os.path.getmtime(msgidx_inc) < os.path.getmtime(errore_msg)
+        )
+        if msg_includes_are_stale:
             msg2inc_pp = os.path.join(fpc_src, "compiler", "utils", "msg2inc.pp")
             assert os.path.isfile(msg2inc_pp), f"msg2inc.pp not found: {msg2inc_pp}"
 
@@ -4244,13 +4251,21 @@ def _add_pp_pas_bootstrap_test():
 
         prebuilt_units_dir = os.path.join(fpc_src, "rtl", "units", "x86_64-linux")
         prebuilt_system_ppu = os.path.join(prebuilt_units_dir, "system.ppu")
+        ppu_version_source = os.path.join(fpc_src, "compiler", "ppu.pas")
         # `abitag.o` is built by the loader (not units) target, so a cache
         # populated by an older `make units` invocation can have system.ppu
         # without it.  Treat the loader artifact as a co-required input so
         # we always rebuild when either piece of the RTL is missing.
         prebuilt_abitag_o = os.path.join(prebuilt_units_dir, "abitag.o")
-        if (not os.path.isfile(prebuilt_system_ppu)
-                or not os.path.isfile(prebuilt_abitag_o)):
+        rtl_units_are_stale = (
+            not os.path.isfile(prebuilt_system_ppu) or
+            not os.path.isfile(prebuilt_abitag_o) or
+            os.path.getmtime(prebuilt_system_ppu) < os.path.getmtime(ppu_version_source) or
+            os.path.getmtime(prebuilt_abitag_o) < os.path.getmtime(ppu_version_source)
+        )
+        if rtl_units_are_stale:
+            if os.path.isdir(prebuilt_units_dir):
+                shutil.rmtree(prebuilt_units_dir)
             make_bin = shutil.which("make")
             fpc_bin = shutil.which("fpc")
             assert make_bin is not None, (
