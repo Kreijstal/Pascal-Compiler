@@ -1438,6 +1438,9 @@ int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_le
             subprogram->tree_data.subprogram_data.args_var,
             return_kgpc_type  /* functions have a return type */
         );
+        /* Release caller's owned ref — create_procedure_type retained its own */
+        destroy_kgpc_type(return_kgpc_type);
+        return_kgpc_type = NULL;
         if (func_type != NULL) {
             func_type->info.proc_info.definition = subprogram;
             if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
