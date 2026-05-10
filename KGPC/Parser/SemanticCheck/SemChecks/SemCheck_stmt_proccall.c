@@ -1522,8 +1522,12 @@ skip_type_receiver_rewrite:
         }
 
         if (record_info != NULL && record_info->type_id != NULL) {
-            const char *method_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-                ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
+            const char *method_name_source =
+                (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                    ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
+            char *method_name_owned =
+                (method_name_source != NULL) ? strdup(method_name_source) : NULL;
+            const char *method_name = method_name_owned;
 
             struct RecordType *actual_method_owner = NULL;
             HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
@@ -1728,10 +1732,12 @@ skip_type_receiver_rewrite:
                         stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
                         stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
                         stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                        free(method_name_owned);
                         return return_val;
                     }
                 }
             }
+            free(method_name_owned);
         }
     }
 
@@ -3938,4 +3944,3 @@ struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, int *is_
 
     return method_call;
 }
-
