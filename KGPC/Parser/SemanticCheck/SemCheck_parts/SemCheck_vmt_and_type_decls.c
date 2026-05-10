@@ -1953,6 +1953,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 }
                                             }
                                             mangled = NULL;
+                                            destroy_kgpc_type(proc_type);
                                         }
                                     }
                                     else if (existing != NULL)
