@@ -129,6 +129,79 @@ void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const char *t
     }
 }
 
+static long long semcheck_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static void semcheck_cache_named_set_storage_size(SymTab_t *symtab,
+    struct TypeAlias *alias)
+{
+    if (symtab == NULL || alias == NULL || !alias->is_set || alias->storage_size > 0)
+        return;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
+    {
+        alias->storage_size = 32;
+        return;
+    }
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = ListLength(alias->inline_enum_values);
+        if (count > 0)
+        {
+            alias->storage_size =
+                semcheck_default_set_storage_size_for_high((long long)count - 1);
+        }
+        return;
+    }
+
+    if (alias->range_known && alias->range_end >= alias->range_start)
+    {
+        long long count = alias->range_end - alias->range_start + 1;
+        alias->storage_size =
+            semcheck_default_set_storage_size_for_high(count - 1);
+        return;
+    }
+
+    HashNode_t *elem_node = semcheck_find_preferred_type_node_with_ref(symtab,
+        alias->set_element_type_ref, alias->set_element_type_id);
+    if (elem_node == NULL)
+        return;
+
+    struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+    if (elem_alias == NULL)
+        return;
+
+    if (elem_alias->is_enum && elem_alias->enum_literals != NULL)
+    {
+        int count = ListLength(elem_alias->enum_literals);
+        if (count > 0)
+        {
+            alias->storage_size =
+                semcheck_default_set_storage_size_for_high((long long)count - 1);
+        }
+        return;
+    }
+
+    if (elem_alias->range_known && elem_alias->range_end >= elem_alias->range_start)
+    {
+        long long count = elem_alias->range_end - elem_alias->range_start + 1;
+        alias->storage_size =
+            semcheck_default_set_storage_size_for_high(count - 1);
+    }
+}
+
 void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
 {
     if (symtab == NULL || alias == NULL)
@@ -181,6 +254,8 @@ void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
         alias->kgpc_type = target_alias->kgpc_type;
         kgpc_type_retain(alias->kgpc_type);
     }
+
+    semcheck_cache_named_set_storage_size(symtab, alias);
 }
 
 /* Helper function to get RecordType from HashNode */
