@@ -1847,7 +1847,6 @@ int semcheck_pointer_deref(int *type_return,
             pointer_expr->resolved_kgpc_type, symtab);
         if (points_to != NULL)
         {
-            kgpc_type_retain(points_to);
             semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
         }
     }

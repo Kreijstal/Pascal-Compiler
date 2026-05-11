@@ -1371,6 +1371,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         KgpcType *cached = tree->tree_data.var_decl_data.cached_kgpc_type;
                         kgpc_type_retain(cached);
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, cached);
+                        destroy_kgpc_type(cached);
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);

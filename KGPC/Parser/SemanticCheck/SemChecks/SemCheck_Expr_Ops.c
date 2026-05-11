@@ -1716,8 +1716,6 @@ int semcheck_addop(int *type_return,
             /* Propagate KgpcType information for proper type checking */
             if (expr1->resolved_kgpc_type != NULL)
             {
-                /* Share the KgpcType from the source pointer (increment ref count) */
-                kgpc_type_retain(expr1->resolved_kgpc_type);
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, expr1->resolved_kgpc_type);
             }
             
@@ -1734,8 +1732,6 @@ int semcheck_addop(int *type_return,
             /* Propagate KgpcType information for proper type checking */
             if (expr2->resolved_kgpc_type != NULL)
             {
-                /* Share the KgpcType from the source pointer (increment ref count) */
-                kgpc_type_retain(expr2->resolved_kgpc_type);
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, expr2->resolved_kgpc_type);
             }
             
