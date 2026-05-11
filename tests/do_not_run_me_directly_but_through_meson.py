@@ -319,6 +319,7 @@ def _kgpc_bootstrap_flags(fpc_src, *, include_compiler_dirs):
 def _pp_bootstrap_compiler_flags(
     fpc_src, *, rtl_units_dir, output_dir, unit_output_dir, executable_name
 ):
+    absolute_fpc_src = os.path.abspath(fpc_src)
     flags = [
         "-n",
         "-FE" + output_dir,
@@ -326,8 +327,14 @@ def _pp_bootstrap_compiler_flags(
         "-o" + executable_name,
         "-Fu" + rtl_units_dir,
     ]
-    flags.extend("-Fi" + path for path in _bootstrap_compiler_include_dirs(fpc_src))
-    flags.extend("-Fu" + path for path in _bootstrap_compiler_unit_dirs(fpc_src))
+    # pp_bootstrap rebuilds pp.pas with cwd inside FPCSource/compiler, so these
+    # paths must be absolute rather than repository-root-relative.
+    flags.extend(
+        "-Fi" + path for path in _bootstrap_compiler_include_dirs(absolute_fpc_src)
+    )
+    flags.extend(
+        "-Fu" + path for path in _bootstrap_compiler_unit_dirs(absolute_fpc_src)
+    )
     return flags
 
 
