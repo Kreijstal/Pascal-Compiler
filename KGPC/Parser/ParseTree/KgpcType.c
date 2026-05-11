@@ -640,6 +640,7 @@ static void kgpc_type_register_live(KgpcType *type)
         g_live_kgpc_types = new_items;
         g_live_kgpc_type_capacity = new_capacity;
     }
+    type->live_index = g_live_kgpc_type_count;
     g_live_kgpc_types[g_live_kgpc_type_count++] = type;
 }
 
@@ -647,13 +648,33 @@ static void kgpc_type_unregister_live(KgpcType *type)
 {
     if (type == NULL || g_live_kgpc_types == NULL)
         return;
+
+    size_t index = type->live_index;
+    if (index < g_live_kgpc_type_count && g_live_kgpc_types[index] == type)
+    {
+        size_t last_index = g_live_kgpc_type_count - 1;
+        KgpcType *last = g_live_kgpc_types[last_index];
+        g_live_kgpc_types[index] = last;
+        g_live_kgpc_types[last_index] = NULL;
+        --g_live_kgpc_type_count;
+        if (last != NULL && last != type)
+            last->live_index = index;
+        type->live_index = (size_t)-1;
+        return;
+    }
+
     for (size_t i = 0; i < g_live_kgpc_type_count; ++i)
     {
         if (g_live_kgpc_types[i] == type)
         {
-            g_live_kgpc_types[i] = g_live_kgpc_types[g_live_kgpc_type_count - 1];
-            g_live_kgpc_types[g_live_kgpc_type_count - 1] = NULL;
+            size_t last_index = g_live_kgpc_type_count - 1;
+            KgpcType *last = g_live_kgpc_types[last_index];
+            g_live_kgpc_types[i] = last;
+            g_live_kgpc_types[last_index] = NULL;
             --g_live_kgpc_type_count;
+            if (last != NULL && last != type)
+                last->live_index = i;
+            type->live_index = (size_t)-1;
             return;
         }
     }
@@ -4054,9 +4075,8 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->storage_size = src->storage_size;
     
     /* Copy string fields with duplication */
-    /* Alias names are parser-owned spelling metadata. KgpcType snapshots only
-     * need a borrowed view and must not duplicate/free it. */
-    dst->alias_name = src->alias_name;
+    if (src->alias_name != NULL)
+        dst->alias_name = strdup(src->alias_name);
     if (src->target_type_id != NULL)
         dst->target_type_id = strdup(src->target_type_id);
     if (src->array_element_type_id != NULL)
@@ -4105,6 +4125,7 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     if (alias == NULL)
         return;
     
+    free(alias->alias_name);
     free(alias->target_type_id);
     free(alias->array_element_type_id);
     free(alias->pointer_type_id);

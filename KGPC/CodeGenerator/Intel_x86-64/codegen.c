@@ -405,8 +405,8 @@ void ir_liveness_allocate(ListNode_t *inst_list)
  * SHORTSTRING_TYPE.  This avoids allocating ad-hoc instances via
  * create_primitive_type(SHORTSTRING_TYPE) in code paths that only need
  * a type descriptor for identification (e.g. ctx->current_return_type,
- * proc_info.return_type patching).  The returned pointer must NOT be
- * freed or ref-counted by the caller. */
+ * proc_info.return_type patching).  Borrowers must not free it; owners that
+ * store it in ref-counted fields must retain it like any other KgpcType. */
 KgpcType *codegen_canonical_shortstring_type(void)
 {
     static KgpcType *canonical = NULL;

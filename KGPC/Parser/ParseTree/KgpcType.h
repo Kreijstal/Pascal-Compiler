@@ -10,6 +10,7 @@
 #ifndef KGPC_TYPE_H
 #define KGPC_TYPE_H
 
+#include <stddef.h>
 #include "../List/List.h" // For ListNode_t
 #include "tree.h"         // For Tree_t
 
@@ -89,6 +90,7 @@ struct KgpcType {
     int size_in_bytes;      // To be calculated and filled in by the semantic checker.
     int alignment_in_bytes; // For future architecture support.
     int ref_count;
+    size_t live_index;
     
     // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
     // This is owned by the AST, not by KgpcType, so should not be freed.

@@ -1438,6 +1438,16 @@ void destroy_tree(Tree_t *tree)
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
             KgpcType *decl_kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+            {
+                struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                if (alias->kgpc_type == decl_kgpc_type)
+                {
+                    if (alias->kgpc_type != NULL && alias->kgpc_type->ref_count > 1)
+                        destroy_kgpc_type(alias->kgpc_type);
+                    alias->kgpc_type = NULL;
+                }
+            }
             if (decl_kgpc_type != NULL)
             {
                 destroy_kgpc_type(decl_kgpc_type);

@@ -1272,11 +1272,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             kgpc_type_get_primitive_tag(ret) == STRING_TYPE)
         {
             /* Patch STRING -> SHORTSTRING so body codegen uses value semantics */
-            func_node->type->info.proc_info.return_type = codegen_canonical_shortstring_type();
+            KgpcType *shortstring_type = codegen_canonical_shortstring_type();
+            kgpc_type_retain(shortstring_type);
+            kgpc_type_release(ret);
+            func_node->type->info.proc_info.return_type = shortstring_type;
         }
         else if (ret == NULL)
         {
-            func_node->type->info.proc_info.return_type = codegen_canonical_shortstring_type();
+            KgpcType *shortstring_type = codegen_canonical_shortstring_type();
+            kgpc_type_retain(shortstring_type);
+            func_node->type->info.proc_info.return_type = shortstring_type;
         }
     }
 
