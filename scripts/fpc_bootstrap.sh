@@ -155,6 +155,8 @@ end.
 PASCAL
 
     echo "  Compiling hello.pas with ${label} ..."
+    # Keep the source file last so the shared output/search-path flag handling
+    # stays identical between hello-world checks and pp.pas self-hosting.
     "$compiler" "${extra_flags[@]}" "-FE${hello_dir}" -o"$(basename "$hello_exe")" "$hello_pas" 2>&1 | tail -5
     echo "  Running hello ..."
     local output
@@ -173,6 +175,10 @@ ensure_same_source_rtl_units() {
     if [[ ! -f "$PREBUILT_SYSTEM_PPU" || ! -f "$PREBUILT_ABITAG_O" ]]; then
         rtl_units_are_stale=1
     elif [[ "$PREBUILT_SYSTEM_PPU" -ot "$PPU_VERSION_SOURCE" || "$PREBUILT_ABITAG_O" -ot "$PPU_VERSION_SOURCE" ]]; then
+        rtl_units_are_stale=1
+    elif find "${FPC_SRC}/rtl" \( -path "${FPC_SRC}/rtl/units" -o -path "${FPC_SRC}/rtl/units/*" \) -prune -o -type f -newer "$PREBUILT_SYSTEM_PPU" -print | grep -q .; then
+        rtl_units_are_stale=1
+    elif find "${FPC_SRC}/rtl" \( -path "${FPC_SRC}/rtl/units" -o -path "${FPC_SRC}/rtl/units/*" \) -prune -o -type f -newer "$PREBUILT_ABITAG_O" -print | grep -q .; then
         rtl_units_are_stale=1
     fi
 

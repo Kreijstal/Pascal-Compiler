@@ -335,6 +335,19 @@ def _pp_bootstrap_program_flags(*, rtl_units_dir, output_dir, executable_name):
         "-Fu" + rtl_units_dir,
     ]
 
+
+def _tree_contains_newer_file(root_dir, reference_file):
+    if not os.path.isdir(root_dir):
+        return False
+    reference_mtime = os.path.getmtime(reference_file)
+    for current_root, dirnames, filenames in os.walk(root_dir):
+        dirnames[:] = [dirname for dirname in dirnames if dirname != "units"]
+        for filename in filenames:
+            path = os.path.join(current_root, filename)
+            if os.path.getmtime(path) > reference_mtime:
+                return True
+    return False
+
 # Codegen object cache: the compiler assembles full .o on cache miss,
 # then uses --skip-unit-codegen on cache hit (all handled internally).
 _FPC_RTL_CODEGEN_CACHE_DIR = None
@@ -4310,7 +4323,9 @@ def _add_pp_pas_bootstrap_test():
             not os.path.isfile(prebuilt_system_ppu) or
             not os.path.isfile(prebuilt_abitag_o) or
             os.path.getmtime(prebuilt_system_ppu) < os.path.getmtime(ppu_version_source) or
-            os.path.getmtime(prebuilt_abitag_o) < os.path.getmtime(ppu_version_source)
+            os.path.getmtime(prebuilt_abitag_o) < os.path.getmtime(ppu_version_source) or
+            _tree_contains_newer_file(os.path.join(fpc_src, "rtl"), prebuilt_system_ppu) or
+            _tree_contains_newer_file(os.path.join(fpc_src, "rtl"), prebuilt_abitag_o)
         )
         if rtl_units_are_stale:
             if os.path.isdir(prebuilt_units_dir):
@@ -4405,6 +4420,9 @@ def _add_pp_pas_bootstrap_test():
             output_dir=os.path.abspath(TEST_OUTPUT_DIR),
             executable_name=os.path.basename(helloworld_exe),
         ) + [helloworld_p]
+        # Keep the source file last: this matches normal FPC invocation and
+        # lets the shared flag helpers append all output/search-path flags in
+        # one place before the input file.
         try:
             compile_proc = subprocess.run(
                 bootstrap_cmd, capture_output=True, text=True, timeout=120
@@ -4528,6 +4546,9 @@ def _add_pp_pas_bootstrap_test():
         "pp.pas bootstrap — compile and link the FPC compiler, use it to "
         "compile helloworld.p, then rebuild pp.pas itself"
     )
+    # pp.pas is compiled twice in this test (KGPC -> pp_bootstrap, then
+    # pp_bootstrap -> pp_stage2) and may also need the same-source RTL rebuild
+    # on a cold worker, so allow one long timeout budget for the full chain.
     test_pp_pas_bootstrap._timeout = 1800
     setattr(TestCompiler, "test_fpcrtl_pp_pas_bootstrap", test_pp_pas_bootstrap)
 
