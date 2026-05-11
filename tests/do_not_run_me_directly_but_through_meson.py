@@ -341,12 +341,23 @@ def _tree_contains_newer_file(root_dir, reference_file):
         return False
     reference_mtime = os.path.getmtime(reference_file)
     for current_root, dirnames, filenames in os.walk(root_dir):
+        # Skip generated RTL output so only source-tree changes invalidate the
+        # same-source unit cache.
         dirnames[:] = [dirname for dirname in dirnames if dirname != "units"]
         for filename in filenames:
             path = os.path.join(current_root, filename)
             if os.path.getmtime(path) > reference_mtime:
                 return True
     return False
+
+
+def _signal_name_suffix(returncode):
+    if returncode >= 0:
+        return ""
+    try:
+        return f" ({signal.Signals(-returncode).name})"
+    except (ValueError, AttributeError):
+        return ""
 
 # Codegen object cache: the compiler assembles full .o on cache miss,
 # then uses --skip-unit-codegen on cache hit (all handled internally).
@@ -4275,14 +4286,7 @@ def _add_pp_pas_bootstrap_test():
         # Check exit code first — if the binary crashed, report that instead
         # of a confusing empty-string-vs-expected diff.
         if process.returncode != 0:
-            import signal as _signal
-            sig = -process.returncode if process.returncode < 0 else None
-            sig_name = ""
-            if sig is not None:
-                try:
-                    sig_name = f" ({_signal.Signals(sig).name})"
-                except (ValueError, AttributeError):
-                    pass
+            sig_name = _signal_name_suffix(process.returncode)
             stderr_snippet = (process.stderr or "")[:2000]
             self.fail(
                 f"pp.pas binary exited with code {process.returncode}{sig_name}\n"
@@ -4432,14 +4436,7 @@ def _add_pp_pas_bootstrap_test():
             return
 
         if compile_proc.returncode != 0 or not os.path.isfile(helloworld_exe):
-            import signal as _signal
-            sig = -compile_proc.returncode if compile_proc.returncode < 0 else None
-            sig_name = ""
-            if sig is not None:
-                try:
-                    sig_name = f" ({_signal.Signals(sig).name})"
-                except (ValueError, AttributeError):
-                    pass
+            sig_name = _signal_name_suffix(compile_proc.returncode)
             self.fail(
                 f"pp_bootstrap failed to compile {helloworld_p} "
                 f"(rc={compile_proc.returncode}{sig_name}, "
@@ -4501,14 +4498,7 @@ def _add_pp_pas_bootstrap_test():
             return
 
         if stage2_compile.returncode != 0 or not os.path.isfile(stage2_executable):
-            import signal as _signal
-            sig = -stage2_compile.returncode if stage2_compile.returncode < 0 else None
-            sig_name = ""
-            if sig is not None:
-                try:
-                    sig_name = f" ({_signal.Signals(sig).name})"
-                except (ValueError, AttributeError):
-                    pass
+            sig_name = _signal_name_suffix(stage2_compile.returncode)
             self.fail(
                 f"pp_bootstrap failed to compile {pp_pas} "
                 f"(rc={stage2_compile.returncode}{sig_name}, "

@@ -171,14 +171,21 @@ PASCAL
 }
 
 ensure_same_source_rtl_units() {
+    rtl_sources_newer_than() {
+        local reference_file="$1"
+        find "${FPC_SRC}/rtl" \
+            \( -path "${FPC_SRC}/rtl/units" -o -path "${FPC_SRC}/rtl/units/*" \) -prune -o \
+            -type f -newer "$reference_file" -print | grep -q .
+    }
+
     local rtl_units_are_stale=0
     if [[ ! -f "$PREBUILT_SYSTEM_PPU" || ! -f "$PREBUILT_ABITAG_O" ]]; then
         rtl_units_are_stale=1
     elif [[ "$PREBUILT_SYSTEM_PPU" -ot "$PPU_VERSION_SOURCE" || "$PREBUILT_ABITAG_O" -ot "$PPU_VERSION_SOURCE" ]]; then
         rtl_units_are_stale=1
-    elif find "${FPC_SRC}/rtl" \( -path "${FPC_SRC}/rtl/units" -o -path "${FPC_SRC}/rtl/units/*" \) -prune -o -type f -newer "$PREBUILT_SYSTEM_PPU" -print | grep -q .; then
+    elif rtl_sources_newer_than "$PREBUILT_SYSTEM_PPU"; then
         rtl_units_are_stale=1
-    elif find "${FPC_SRC}/rtl" \( -path "${FPC_SRC}/rtl/units" -o -path "${FPC_SRC}/rtl/units/*" \) -prune -o -type f -newer "$PREBUILT_ABITAG_O" -print | grep -q .; then
+    elif rtl_sources_newer_than "$PREBUILT_ABITAG_O"; then
         rtl_units_are_stale=1
     fi
 
