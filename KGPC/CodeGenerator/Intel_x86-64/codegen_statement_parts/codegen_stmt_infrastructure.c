@@ -62,6 +62,26 @@ static int codegen_local_type_tag_size(int type_tag)
     return get_type_tag_size(type_tag);
 }
 
+static void codegen_destroy_synthetic_record_access_keep_record(
+    struct Expression *field_access)
+{
+    if (field_access == NULL)
+        return;
+    if (field_access->type == EXPR_RECORD_ACCESS)
+        field_access->expr_data.record_access_data.record_expr = NULL;
+    destroy_expr(field_access);
+}
+
+static void codegen_destroy_synthetic_array_access_keep_array(
+    struct Expression *array_access)
+{
+    if (array_access == NULL)
+        return;
+    if (array_access->type == EXPR_ARRAY_ACCESS)
+        array_access->expr_data.array_access_data.array_expr = NULL;
+    destroy_expr(array_access);
+}
+
 void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
     struct Expression *rhs_expr, CodeGenContext *ctx)
 {
@@ -2398,10 +2418,14 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         if (assign_stmt == NULL)
                             goto cleanup;
                         inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
-                        free(assign_stmt);
+                        assign_stmt->stmt_data.var_assign_data.var = NULL;
+                        assign_stmt->stmt_data.var_assign_data.expr = NULL;
+                        destroy_stmt(assign_stmt);
+                        codegen_destroy_synthetic_array_access_keep_array(array_access);
                         element_node = element_node->next;
                         ++index;
                     }
+                    codegen_destroy_synthetic_record_access_keep_record(field_access);
                     field_node = field_node->next;
                     continue;
                 }
@@ -2411,10 +2435,16 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 if (assign_stmt == NULL)
                     goto cleanup;
                 inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
-                free(assign_stmt);
+                assign_stmt->stmt_data.var_assign_data.var = NULL;
+                assign_stmt->stmt_data.var_assign_data.expr = NULL;
+                destroy_stmt(assign_stmt);
+                codegen_destroy_synthetic_record_access_keep_record(field_access);
             }
             field_node = field_node->next;
         }
+
+        destroy_expr(temp_var);
+        temp_var = NULL;
 
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)

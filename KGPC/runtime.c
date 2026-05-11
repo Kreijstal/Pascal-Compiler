@@ -2481,6 +2481,14 @@ void kgpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t e
     size_t old_length = descriptor->length > 0 ? (size_t)descriptor->length : 0;
     size_t target_length = (size_t)new_length;
 
+    if (target_length == 0)
+    {
+        free(descriptor->data);
+        descriptor->data = NULL;
+        descriptor->length = 0;
+        return;
+    }
+
     size_t alloc_length = target_length;
     if (alloc_length < SIZE_MAX)
         alloc_length += 1; /* Provide a spare slot to tolerate off-by-one accesses. */

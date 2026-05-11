@@ -1525,6 +1525,8 @@ void destroy_stmt(struct Statement *stmt)
               free(stmt->stmt_data.procedure_call_data.call_qualifier);
           if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
               free(stmt->stmt_data.procedure_call_data.self_class_name);
+          if (stmt->stmt_data.procedure_call_data.constructor_class_name != NULL)
+              free(stmt->stmt_data.procedure_call_data.constructor_class_name);
           break;
 
         case STMT_EXPR:

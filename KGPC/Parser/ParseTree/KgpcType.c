@@ -617,6 +617,98 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 /* Forward declarations for TypeAlias copy functions */
 static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
 static void free_copied_type_alias(struct TypeAlias *alias);
+/* Track heap-owned KgpcType instances so any objects left with positive
+ * reference counts after normal AST/symbol-table teardown can be released.
+ * This is only a final cleanup aid; regular ownership still goes through
+ * destroy_kgpc_type()/kgpc_type_release(). */
+static KgpcType **g_live_kgpc_types = NULL;
+static size_t g_live_kgpc_type_count = 0;
+static size_t g_live_kgpc_type_capacity = 0;
+static int g_live_kgpc_type_cleaning = 0;
+
+static void kgpc_type_register_live(KgpcType *type)
+{
+    if (type == NULL || g_live_kgpc_type_cleaning)
+        return;
+    if (g_live_kgpc_type_count == g_live_kgpc_type_capacity)
+    {
+        size_t new_capacity = g_live_kgpc_type_capacity == 0 ? 256 : g_live_kgpc_type_capacity * 2;
+        KgpcType **new_items = (KgpcType **)realloc(g_live_kgpc_types,
+            new_capacity * sizeof(KgpcType *));
+        if (new_items == NULL)
+            return;
+        g_live_kgpc_types = new_items;
+        g_live_kgpc_type_capacity = new_capacity;
+    }
+    g_live_kgpc_types[g_live_kgpc_type_count++] = type;
+}
+
+static void kgpc_type_unregister_live(KgpcType *type)
+{
+    if (type == NULL || g_live_kgpc_types == NULL)
+        return;
+    for (size_t i = 0; i < g_live_kgpc_type_count; ++i)
+    {
+        if (g_live_kgpc_types[i] == type)
+        {
+            g_live_kgpc_types[i] = g_live_kgpc_types[g_live_kgpc_type_count - 1];
+            g_live_kgpc_types[g_live_kgpc_type_count - 1] = NULL;
+            --g_live_kgpc_type_count;
+            return;
+        }
+    }
+}
+
+void kgpc_type_cleanup_remaining(void)
+{
+    g_live_kgpc_type_cleaning = 1;
+    while (g_live_kgpc_type_count > 0)
+    {
+        KgpcType *type = g_live_kgpc_types[--g_live_kgpc_type_count];
+        g_live_kgpc_types[g_live_kgpc_type_count] = NULL;
+        if (type == NULL)
+            continue;
+
+        switch (type->kind)
+        {
+            case TYPE_KIND_PROCEDURE:
+                if (type->info.proc_info.owns_params)
+                    destroy_list(type->info.proc_info.params);
+                else
+                    DestroyList(type->info.proc_info.params);
+                type->info.proc_info.params = NULL;
+                free(type->info.proc_info.return_type_id);
+                type->info.proc_info.return_type_id = NULL;
+                type->info.proc_info.return_type = NULL;
+                break;
+            case TYPE_KIND_ARRAY:
+                free(type->info.array_info.element_type_id);
+                type->info.array_info.element_type_id = NULL;
+                type->info.array_info.element_type = NULL;
+                break;
+            case TYPE_KIND_POINTER:
+                type->info.points_to = NULL;
+                break;
+            case TYPE_KIND_PRIMITIVE:
+            case TYPE_KIND_RECORD:
+            case TYPE_KIND_ARRAY_OF_CONST:
+                break;
+        }
+
+        if (type->type_alias != NULL)
+        {
+            type->type_alias->kgpc_type = NULL;
+            free_copied_type_alias(type->type_alias);
+            type->type_alias = NULL;
+        }
+        free(type);
+    }
+    free(g_live_kgpc_types);
+    g_live_kgpc_types = NULL;
+    g_live_kgpc_type_capacity = 0;
+    g_live_kgpc_type_cleaning = 0;
+}
+
 int kgpc_type_is_real_family_tag(int primitive_tag)
 {
     return is_real_family_type(primitive_tag);
@@ -635,6 +727,7 @@ KgpcType* create_primitive_type(int primitive_tag) {
     type->kind = TYPE_KIND_PRIMITIVE;
     type->info.primitive_type_tag = primitive_tag;
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     // Size will be determined later in semcheck
     return type;
 }
@@ -645,6 +738,7 @@ KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size) {
     type->kind = TYPE_KIND_PRIMITIVE;
     type->info.primitive_type_tag = primitive_tag;
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     
     /* Create a minimal type_alias just to hold the storage_size */
     struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
@@ -672,6 +766,7 @@ KgpcType* create_pointer_type(KgpcType *points_to) {
     if (points_to != NULL)
         kgpc_type_retain(points_to);
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     return type;
 }
 
@@ -688,6 +783,7 @@ KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type) {
     type->info.proc_info.return_type_id = NULL;
     type->info.proc_info.is_method_pointer = 0;
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     
     #ifdef DEBUG_KGPC_TYPE_CREATION
     fprintf(stderr, "DEBUG: create_procedure_type: params=%p, return_type=%p (is_function=%d)\n",
@@ -708,6 +804,7 @@ KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_ind
     type->info.array_info.end_index = end_index;
     type->info.array_info.element_type_id = NULL; // Initialize deferred resolution field
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     return type;
 }
 
@@ -717,6 +814,7 @@ KgpcType* create_array_of_const_type(void) {
     type->kind = TYPE_KIND_ARRAY_OF_CONST;
     type->info.array_of_const_info.element_size = sizeof(kgpc_tvarrec);
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     return type;
 }
 
@@ -726,6 +824,7 @@ KgpcType* create_record_type(struct RecordType *record_info) {
     type->kind = TYPE_KIND_RECORD;
     type->info.record_info = record_info; // Record is owned by the AST
     type->ref_count = 1;
+    kgpc_type_register_live(type);
     return type;
 }
 
@@ -742,6 +841,7 @@ KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *src)
     clone->size_in_bytes = src->size_in_bytes;
     clone->alignment_in_bytes = src->alignment_in_bytes;
     clone->ref_count = 1;
+    kgpc_type_register_live(clone);
 
     if (src->type_alias != NULL)
         kgpc_type_set_type_alias(clone, src->type_alias);
@@ -1163,6 +1263,7 @@ void destroy_kgpc_type(KgpcType *type) {
         type->type_alias = NULL;
     }
     
+    kgpc_type_unregister_live(type);
     free(type);
 }
 
