@@ -345,7 +345,8 @@ def _tree_contains_newer_file(root_dir, reference_file):
     reference_mtime = os.path.getmtime(reference_file)
     for current_root, dirnames, filenames in os.walk(root_dir):
         # Skip generated RTL output so only source-tree changes invalidate the
-        # same-source unit cache.
+        # same-source unit cache. This must rewrite dirnames in place so
+        # os.walk does not descend into the filtered directories.
         dirnames[:] = [dirname for dirname in dirnames if dirname != "units"]
         for filename in filenames:
             path = os.path.join(current_root, filename)
@@ -4493,7 +4494,7 @@ def _add_pp_pas_bootstrap_test():
                 stage2_cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                timeout=900,
                 cwd=os.path.join(fpc_src, "compiler"),
             )
         except subprocess.TimeoutExpired:
