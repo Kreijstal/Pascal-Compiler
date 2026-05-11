@@ -8,6 +8,17 @@
 #include "unit_registry.h"
 #include "../../ErrVars.h"
 
+static void record_access_clear_payload(struct Expression *expr, int destroy_record_expr)
+{
+    if (expr == NULL || expr->type != EXPR_RECORD_ACCESS)
+        return;
+    if (destroy_record_expr && expr->expr_data.record_access_data.record_expr != NULL)
+        destroy_expr(expr->expr_data.record_access_data.record_expr);
+    expr->expr_data.record_access_data.record_expr = NULL;
+    free(expr->expr_data.record_access_data.field_id);
+    expr->expr_data.record_access_data.field_id = NULL;
+}
+
 int semcheck_recordaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -141,6 +152,7 @@ int semcheck_recordaccess(int *type_return,
             symtab, record_expr->expr_data.id, field_id, &enum_value);
         if (enum_type_node != NULL)
         {
+            record_access_clear_payload(expr, 1);
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = enum_value;
             semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -209,6 +221,7 @@ int semcheck_recordaccess(int *type_return,
 
                     if (resolved)
                     {
+                        record_access_clear_payload(expr, 1);
                         expr->type = EXPR_INUM;
                         expr->expr_data.i_num = enum_value;
                         semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -508,6 +521,7 @@ skip_scoped_enum_resolution:
                 if (field_node->hash_type == HASHTYPE_CONST)
                 {
                     /* Transform to integer literal for constants */
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_INUM;
                     expr->expr_data.i_num = field_node->const_int_value;
                     semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
@@ -530,6 +544,7 @@ skip_scoped_enum_resolution:
                         *type_return = UNKNOWN_TYPE;
                         return 1;
                     }
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_VAR_ID;
                     expr->expr_data.id = field_copy;
                     return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
@@ -604,6 +619,7 @@ skip_scoped_enum_resolution:
                         *type_return = UNKNOWN_TYPE;
                         return 1;
                     }
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_VAR_ID;
                     expr->expr_data.id = field_copy;
                     return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
@@ -620,6 +636,7 @@ skip_scoped_enum_resolution:
                         *type_return = UNKNOWN_TYPE;
                         return 1;
                     }
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
@@ -653,6 +670,7 @@ skip_scoped_enum_resolution:
                         if (strcasecmp(literal_name, field_id) == 0)
                         {
                             /* Found the enum literal - transform to integer constant */
+                            record_access_clear_payload(expr, 1);
                             expr->type = EXPR_INUM;
                             expr->expr_data.i_num = ordinal;
                             semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -717,6 +735,7 @@ skip_scoped_enum_resolution:
                 }
                 if (resolved_via_target)
                 {
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_INUM;
                     expr->expr_data.i_num = alias_target_value;
                     semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -779,6 +798,7 @@ skip_scoped_enum_resolution:
                 }
                 if (resolved)
                 {
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_INUM;
                     expr->expr_data.i_num = enum_value;
                     semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -795,6 +815,7 @@ skip_scoped_enum_resolution:
                      literal_node->is_constant ||
                      literal_node->is_typed_const))
                 {
+                    record_access_clear_payload(expr, 1);
                     expr->type = EXPR_INUM;
                     expr->expr_data.i_num = literal_node->const_int_value;
                     semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -818,6 +839,7 @@ skip_scoped_enum_resolution:
         if (semcheck_resolve_scoped_enum_literal(symtab, record_expr->expr_data.id,
                 field_id, &enum_value))
         {
+            record_access_clear_payload(expr, 1);
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = enum_value;
             semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -2048,26 +2070,13 @@ SKIP_SELF_FIELD_REWRITE:
                     /* Transform record access into an explicit method call: receiver.Method() */
                     char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
 
-                    expr->type = EXPR_FUNCTION_CALL;
-                    memset(&expr->expr_data.function_call_data, 0,
-                        sizeof(expr->expr_data.function_call_data));
-                    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-                    expr->expr_data.function_call_data.id = method_id;
-                    if (field_id != NULL)
-                        expr->expr_data.function_call_data.placeholder_method_name = strdup(field_id);
-                    expr->expr_data.function_call_data.mangled_id = NULL;
-                    expr->expr_data.function_call_data.resolved_func = NULL;
-                    if (method_owner_record != NULL && method_owner_record->type_id != NULL)
-                        expr->expr_data.function_call_data.cached_owner_class =
-                            strdup(method_owner_record->type_id);
-                    if (field_id != NULL)
-                        expr->expr_data.function_call_data.cached_method_name = strdup(field_id);
-
                     /* For static methods:
                      * - If receiver is a type identifier (TypeName.Method), pass it as first arg
                      *   so semcheck_funccall can detect and handle the type-qualified call
                      * - If receiver is an instance variable, no receiver needed for static method
                      */
+                    ListNode_t *call_args = NULL;
+                    int receiver_moved = 0;
                     if (is_static_method) {
                         if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL) {
                             /* Check if the receiver is a type name */
@@ -2076,19 +2085,14 @@ SKIP_SELF_FIELD_REWRITE:
                                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) {
                                 /* It's a type-qualified static method call - pass type as first arg */
                                 struct Expression *type_arg = record_expr;
-                                ListNode_t *arg_node = CreateListNode(type_arg, LIST_EXPR);
-                                expr->expr_data.function_call_data.args_expr = arg_node;
-                            } else {
-                                /* It's an instance variable calling a static method - no receiver needed */
-                                expr->expr_data.function_call_data.args_expr = NULL;
+                                call_args = CreateListNode(type_arg, LIST_EXPR);
+                                receiver_moved = (call_args != NULL);
                             }
-                        } else {
-                            expr->expr_data.function_call_data.args_expr = NULL;
                         }
                     } else {
                         struct Expression *receiver = record_expr;
-                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
-                        expr->expr_data.function_call_data.args_expr = arg_node;
+                        call_args = CreateListNode(receiver, LIST_EXPR);
+                        receiver_moved = (call_args != NULL);
                     }
                     /* Check if this is a declared constructor on a class type.
                      * After semcheck_funccall resolves the inherited constructor,
@@ -2105,6 +2109,23 @@ SKIP_SELF_FIELD_REWRITE:
                         !record_info->is_type_helper &&
                         method_name != NULL &&
                         semcheck_method_is_declared_constructor(symtab, record_info, method_name));
+                    char *method_name_copy = (method_name != NULL) ? strdup(method_name) : NULL;
+                    record_access_clear_payload(expr, !receiver_moved);
+
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0,
+                        sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                    expr->expr_data.function_call_data.id = method_id;
+                    expr->expr_data.function_call_data.placeholder_method_name = method_name_copy;
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                    expr->expr_data.function_call_data.resolved_func = NULL;
+                    if (method_owner_record != NULL && method_owner_record->type_id != NULL)
+                        expr->expr_data.function_call_data.cached_owner_class =
+                            strdup(method_owner_record->type_id);
+                    if (method_name_copy != NULL)
+                        expr->expr_data.function_call_data.cached_method_name = strdup(method_name_copy);
+                    expr->expr_data.function_call_data.args_expr = call_args;
                     /* Re-run semantic checking as a function call */
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                     int funccall_result = semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
@@ -2207,6 +2228,12 @@ SKIP_SELF_FIELD_REWRITE:
                 ListNode_t *arg1_node = CreateListNode(size_arg, LIST_EXPR);
                 ListNode_t *arg2_node = CreateListNode(vmt_arg, LIST_EXPR);
                 arg1_node->next = arg2_node;
+                char *debug_field_id = (field_id != NULL) ? strdup(field_id) : NULL;
+                if (expr->expr_data.record_access_data.field_id != NULL)
+                {
+                    free(expr->expr_data.record_access_data.field_id);
+                    expr->expr_data.record_access_data.field_id = NULL;
+                }
                 
                 /* Transform the expression into a function call to __kgpc_default_create */
                 expr->type = EXPR_FUNCTION_CALL;
@@ -2229,8 +2256,10 @@ SKIP_SELF_FIELD_REWRITE:
                 
                 if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_recordaccess: Transformed '%s.%s' to __kgpc_default_create(%lld, %s) call\n",
-                        expr_name, field_id, class_size, is_type ? "(static VMT)" : "(runtime VMT)");
+                        expr_name, debug_field_id != NULL ? debug_field_id : "<null>",
+                        class_size, is_type ? "(static VMT)" : "(runtime VMT)");
                 }
+                free(debug_field_id);
                 
                 /* Free the record_expr only if we didn't reuse it for vmt_arg */
                 if (record_expr != NULL)
@@ -2284,6 +2313,16 @@ SKIP_SELF_FIELD_REWRITE:
                     char *method_id = (base_mangled != NULL) ? base_mangled :
                         ((field_id != NULL) ? strdup(field_id) : NULL);
 
+                    ListNode_t *call_args = NULL;
+                    int receiver_moved = 0;
+                    if (!is_static_method) {
+                        /* For instance methods, pass receiver as first argument (Self) */
+                        struct Expression *receiver = record_expr;
+                        call_args = CreateListNode(receiver, LIST_EXPR);
+                        receiver_moved = (call_args != NULL);
+                    }
+                    record_access_clear_payload(expr, !receiver_moved);
+
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
@@ -2294,16 +2333,7 @@ SKIP_SELF_FIELD_REWRITE:
                     /* Don't pre-bind resolved_func or call_kgpc_type — let
                      * semcheck_funccall handle overload resolution. */
                     expr->expr_data.function_call_data.is_call_info_valid = 0;
-
-                    /* For static methods, don't pass a receiver/Self */
-                    if (is_static_method) {
-                        expr->expr_data.function_call_data.args_expr = NULL;
-                    } else {
-                        /* For instance methods, pass receiver as first argument (Self) */
-                        struct Expression *receiver = record_expr;
-                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
-                        expr->expr_data.function_call_data.args_expr = arg_node;
-                    }
+                    expr->expr_data.function_call_data.args_expr = call_args;
 
                     /* Re-run semantic checking as a function call */
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
@@ -2344,6 +2374,15 @@ SKIP_SELF_FIELD_REWRITE:
                             strdup(method_node->mangled_id) :
                             ((field_id != NULL) ? strdup(field_id) : NULL);
 
+                        ListNode_t *call_args = NULL;
+                        int receiver_moved = 0;
+                        if (!is_static_method) {
+                            struct Expression *receiver = record_expr;
+                            call_args = CreateListNode(receiver, LIST_EXPR);
+                            receiver_moved = (call_args != NULL);
+                        }
+                        record_access_clear_payload(expr, !receiver_moved);
+
                         expr->type = EXPR_FUNCTION_CALL;
                         memset(&expr->expr_data.function_call_data, 0,
                             sizeof(expr->expr_data.function_call_data));
@@ -2358,14 +2397,7 @@ SKIP_SELF_FIELD_REWRITE:
                         expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
                         semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
                         expr->expr_data.function_call_data.is_call_info_valid = 1;
-
-                        if (is_static_method) {
-                            expr->expr_data.function_call_data.args_expr = NULL;
-                        } else {
-                            struct Expression *receiver = record_expr;
-                            ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
-                            expr->expr_data.function_call_data.args_expr = arg_node;
-                        }
+                        expr->expr_data.function_call_data.args_expr = call_args;
 
                         semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                         return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
@@ -2417,12 +2449,7 @@ SKIP_SELF_FIELD_REWRITE:
                     ListNode_t *args_list = CreateListNode(record_expr, LIST_EXPR);
                     if (args_list != NULL)
                     {
-                        /* Clear field_id and convert to function call */
-                        if (expr->expr_data.record_access_data.field_id != NULL)
-                        {
-                            free(expr->expr_data.record_access_data.field_id);
-                        }
-                        
+                        record_access_clear_payload(expr, 0);
                         expr->type = EXPR_FUNCTION_CALL;
                         memset(&expr->expr_data.function_call_data, 0,
                             sizeof(expr->expr_data.function_call_data));
@@ -2492,6 +2519,7 @@ SKIP_SELF_FIELD_REWRITE:
                         if (arg_node != NULL)
                         {
                             char *method_id = strdup(accessor);
+                            record_access_clear_payload(expr, 0);
                             expr->type = EXPR_FUNCTION_CALL;
                             memset(&expr->expr_data.function_call_data, 0,
                                 sizeof(expr->expr_data.function_call_data));

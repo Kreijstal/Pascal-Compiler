@@ -2052,6 +2052,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         tree->tree_data.type_decl_data.kgpc_type = alias_type;
                         kgpc_type_retain(alias_type);
+                        destroy_kgpc_type(alias_type);
                     }
                 }
                 if (alias_info->inline_record_type != NULL)
@@ -2078,6 +2079,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                             destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                         tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
                         kgpc_type_retain(inline_kgpc);
+                        destroy_kgpc_type(inline_kgpc);
                     }
                 }
                 if (alias_info->is_pointer &&

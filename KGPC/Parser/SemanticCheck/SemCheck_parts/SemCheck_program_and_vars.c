@@ -130,6 +130,36 @@ static void wire_program_scope_all_units(SymTab_t *symtab, ScopeNode *scope)
         ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, i), 1);
 }
 
+static void clear_predeclare_type_caches(ListNode_t *type_decls)
+{
+    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_TYPE_DECL)
+            continue;
+
+        KgpcType *decl_type = tree->tree_data.type_decl_data.kgpc_type;
+        if (decl_type != NULL)
+        {
+            tree->tree_data.type_decl_data.kgpc_type = NULL;
+            destroy_kgpc_type(decl_type);
+        }
+
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        {
+            struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+            if (alias->kgpc_type != NULL)
+            {
+                KgpcType *alias_type = alias->kgpc_type;
+                alias->kgpc_type = NULL;
+                destroy_kgpc_type(alias_type);
+            }
+        }
+    }
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val, push_result;
@@ -712,6 +742,7 @@ void semcheck_predeclare_program_into_unit_scope(SymTab_t *symtab, Tree_t *progr
     prepush_trivial_imported_consts(symtab, program_tree->tree_data.program_data.const_declaration, 1);
 
     LeaveScope(symtab);
+    clear_predeclare_type_caches(program_tree->tree_data.program_data.type_declaration);
     symtab->current_scope = saved_scope;
 }
 
@@ -2351,6 +2382,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             else
                             {
                                 element_type = create_primitive_type(builtin_type);
+                                element_type_borrowed = 0;
                             }
                         }
                         else
@@ -2576,9 +2608,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         start_bound,
                         end_bound
                     );
-                    /* Release local ref; create_array_type retained its own */
-                    if (!element_type_borrowed && element_type != NULL)
-                        kgpc_type_release(element_type);
                 }
                 assert(array_type != NULL && "Failed to create array type");
 
@@ -2662,6 +2691,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     /* Clear temp_alias.array_dimensions so it isn't freed (owned by AST) */
                     temp_alias.array_dimensions = NULL;
                 }
+
+                /* Release local ref after all metadata derived from element_type
+                 * has been copied; create_array_type retained its own ref. */
+                if (!is_array_of_const && !element_type_borrowed && element_type != NULL)
+                    kgpc_type_release(element_type);
                 
                 if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",

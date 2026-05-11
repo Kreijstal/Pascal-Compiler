@@ -3989,11 +3989,10 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
     
-    /* Copy kgpc_type with proper reference counting */
-    if (src->kgpc_type != NULL) {
-        kgpc_type_retain(src->kgpc_type);
-        dst->kgpc_type = src->kgpc_type;
-    }
+    /* KgpcType-owned aliases are metadata snapshots. Do not copy kgpc_type:
+     * that field is an owning cache on AST TypeAlias nodes and copying it here
+     * creates cross-type ownership cycles. */
+    dst->kgpc_type = NULL;
     
     return dst;
 }
