@@ -237,6 +237,7 @@ if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
 PP_BOOTSTRAP_FULL_CHAIN_TIMEOUT = 1800
+FPC_RTL_GENERATED_UNITS_DIRNAME = "units"
 
 
 def _with_fpc_rtl_ast_cache(flags):
@@ -347,7 +348,10 @@ def _tree_contains_newer_file(root_dir, reference_file):
         # Skip generated RTL output so only source-tree changes invalidate the
         # same-source unit cache. This must rewrite dirnames in place so
         # os.walk does not descend into the filtered directories.
-        dirnames[:] = [dirname for dirname in dirnames if dirname != "units"]
+        dirnames[:] = [
+            dirname for dirname in dirnames
+            if dirname != FPC_RTL_GENERATED_UNITS_DIRNAME
+        ]
         for filename in filenames:
             path = os.path.join(current_root, filename)
             if os.path.getmtime(path) > reference_mtime:

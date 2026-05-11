@@ -103,6 +103,7 @@ PREBUILT_UNITS_DIR="${FPC_SRC}/rtl/units/x86_64-linux"
 PREBUILT_SYSTEM_PPU="${PREBUILT_UNITS_DIR}/system.ppu"
 PREBUILT_ABITAG_O="${PREBUILT_UNITS_DIR}/abitag.o"
 PPU_VERSION_SOURCE="${FPC_SRC}/compiler/ppu.pas"
+SAME_SOURCE_FPC_BASENAME="ppcx64"
 
 # ── Helper: compile .pas → .s with kgpc ─────────────────────────────────────
 LINK_ARGS=()
@@ -173,9 +174,13 @@ PASCAL
 ensure_same_source_rtl_units() {
     rtl_sources_newer_than() {
         local reference_file="$1"
+        local first_match
+        first_match="$(
         find "${FPC_SRC}/rtl" \
             \( -path "${FPC_SRC}/rtl/units" -o -path "${FPC_SRC}/rtl/units/*" \) -prune -o \
-            -type f -newer "$reference_file" -print | grep -q .
+            -type f -newer "$reference_file" -print -quit
+        )"
+        [[ -n "$first_match" ]]
     }
 
     local rtl_units_are_stale=0
@@ -208,7 +213,7 @@ ensure_same_source_rtl_units() {
     fpc_bin="$(command -v fpc)"
     [[ -n "$fpc_bin" ]] || { echo "ERROR: fpc is required for bootstrap RTL units" >&2; exit 1; }
 
-    local same_source_fpc="${COMPILER_DIR}/ppcx64"
+    local same_source_fpc="${COMPILER_DIR}/${SAME_SOURCE_FPC_BASENAME}"
     local rtl_linux_dir="${FPC_SRC}/rtl/linux"
 
     "$make_bin" -C "$COMPILER_DIR" ppcx64 "FPC=${fpc_bin}"
