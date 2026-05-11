@@ -2368,6 +2368,7 @@ skip_method_placeholder_resolution:
                                         }
                                         cur = cur->next;
                                     }
+                                    DestroyList(parent_candidates);
                                 }
                                 
                                 free(parent_mangled_name);

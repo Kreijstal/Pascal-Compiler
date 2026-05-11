@@ -906,21 +906,25 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 semcheck_stmt_method_is_declared_constructor(symtab,
                                     parent_owner_record, method_name_for_constructor_check))
                             {
-                                stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
-
-                                if (parent_owner_record->parent_class_name == NULL ||
-                                    pascal_identifier_equals(method_name_for_constructor_check, "Create"))
+                                if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
                                 {
-                                    free(stmt->stmt_data.procedure_call_data.constructor_class_name);
-                                    stmt->stmt_data.procedure_call_data.constructor_class_name =
-                                        strdup("Self");
-                                    if (stmt->stmt_data.procedure_call_data.constructor_class_name == NULL)
+                                    call_expr->expr_data.function_call_data.is_constructor_call = 1;
+
+                                    if (parent_owner_record->parent_class_name == NULL ||
+                                        pascal_identifier_equals(method_name_for_constructor_check, "Create"))
                                     {
-                                        semcheck_error_with_context_at(stmt->line_num, stmt->col_num,
-                                            stmt->source_index,
-                                            "Error on line %d, out of memory while resolving inherited constructor call.\n\n",
-                                            stmt->line_num);
-                                        return ++return_val;
+                                        if (call_expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                                            destroy_expr(call_expr->expr_data.function_call_data.constructor_receiver_expr);
+                                        call_expr->expr_data.function_call_data.constructor_receiver_expr =
+                                            mk_varid(stmt->line_num, strdup("Self"));
+                                        if (call_expr->expr_data.function_call_data.constructor_receiver_expr == NULL)
+                                        {
+                                            semcheck_error_with_context_at(stmt->line_num, stmt->col_num,
+                                                stmt->source_index,
+                                                "Error on line %d, out of memory while resolving inherited constructor call.\n\n",
+                                                stmt->line_num);
+                                            return ++return_val;
+                                        }
                                     }
                                 }
                             }
@@ -968,6 +972,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         semcheck_stmt_set_call_kgpc_type(&temp_call, NULL,
                             temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
                         temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
+                        free(temp_call.stmt_data.procedure_call_data.cached_owner_class);
+                        temp_call.stmt_data.procedure_call_data.cached_owner_class = NULL;
+                        free(temp_call.stmt_data.procedure_call_data.cached_method_name);
+                        temp_call.stmt_data.procedure_call_data.cached_method_name = NULL;
+                        free(temp_call.stmt_data.procedure_call_data.self_class_name);
+                        temp_call.stmt_data.procedure_call_data.self_class_name = NULL;
+                        free(temp_call.stmt_data.procedure_call_data.constructor_class_name);
+                        temp_call.stmt_data.procedure_call_data.constructor_class_name = NULL;
+                        free(temp_call.stmt_data.procedure_call_data.call_qualifier);
+                        temp_call.stmt_data.procedure_call_data.call_qualifier = NULL;
                     }
                 }
                 else

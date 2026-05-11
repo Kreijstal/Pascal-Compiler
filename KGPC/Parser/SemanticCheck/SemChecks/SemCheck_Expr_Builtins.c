@@ -1505,8 +1505,9 @@ int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
     if (expr->expr_data.function_call_data.call_kgpc_type == NULL)
     {
         KgpcType *ret_type = create_primitive_type(LONGINT_TYPE);
-        /* create_procedure_type takes ownership of ret_type */
         KgpcType *func_type = create_procedure_type(NULL, ret_type);
+        if (ret_type != NULL)
+            destroy_kgpc_type(ret_type);
         if (func_type != NULL)
             expr->expr_data.function_call_data.call_kgpc_type = func_type;
     }

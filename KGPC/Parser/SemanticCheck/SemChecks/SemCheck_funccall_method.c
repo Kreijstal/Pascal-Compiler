@@ -459,6 +459,7 @@ if (!ctx->was_unit_qualified &&
                         }
                         if (filtered_candidates != NULL)
                         {
+                            DestroyList(method_candidates);
                             method_candidates = filtered_candidates;
                             any_has_self = 0;
                         }
@@ -469,6 +470,7 @@ if (!ctx->was_unit_qualified &&
                         ctx->expr->expr_data.function_call_data.args_expr = old_head->next;
                         old_head->next = NULL;  /* Detach to prevent dangling reference */
                         ctx->args_given = ctx->expr->expr_data.function_call_data.args_expr;
+                        destroy_list(old_head);
 
                         if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
@@ -483,6 +485,7 @@ if (!ctx->was_unit_qualified &&
                         ctx->expr->expr_data.function_call_data.args_expr = old_head->next;
                         old_head->next = NULL;
                         ctx->args_given = ctx->expr->expr_data.function_call_data.args_expr;
+                        destroy_list(old_head);
 
                         if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck] semcheck_funccall: Removed instance arg for static method call\n");
@@ -774,6 +777,7 @@ if (!ctx->was_unit_qualified &&
                             }
                             if (filtered_candidates != NULL)
                             {
+                                DestroyList(method_candidates);
                                 method_candidates = filtered_candidates;
                                 any_has_self = 0;
                             }
@@ -783,6 +787,7 @@ if (!ctx->was_unit_qualified &&
                             ctx->expr->expr_data.function_call_data.args_expr = old_head->next;
                             old_head->next = NULL;
                             ctx->args_given = ctx->expr->expr_data.function_call_data.args_expr;
+                            destroy_list(old_head);
                         }
 
                         if (ctx->mangled_name != NULL)
@@ -1130,6 +1135,7 @@ if (ctx->id != NULL &&
                 ListNode_t *old_head = ctx->args_given;
                 ctx->expr->expr_data.function_call_data.args_expr = old_head->next;
                 old_head->next = NULL;  /* Detach to prevent dangling reference */
+                destroy_list(old_head);
                 ListNode_t *user_args = ctx->expr->expr_data.function_call_data.args_expr;
                 ctx->args_given = user_args;  /* Update args_given to reflect removed type arg */
 

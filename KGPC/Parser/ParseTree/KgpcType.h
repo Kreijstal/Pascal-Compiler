@@ -129,6 +129,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
 void destroy_kgpc_type(KgpcType *type);
 void kgpc_type_retain(KgpcType *type);
 void kgpc_type_release(KgpcType *type);
+void kgpc_type_cleanup_remaining(void);
 
 // Utility functions
 int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, struct SymTab *symtab);

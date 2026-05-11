@@ -36,6 +36,7 @@ type
     FCount: integer;
     FSorted: boolean;
     constructor Create;
+    destructor Destroy; override;
     procedure Add(const S: string); override;
     procedure AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean); overload;
     procedure AddDelimitedText(const S: string); overload;
@@ -163,6 +164,13 @@ constructor TStringList.Create;
 begin
   inherited Create;
   FCount := 0;
+  SetLength(FItems, 0);
+end;
+
+destructor TStringList.Destroy;
+begin
+  SetLength(FItems, 0);
+  inherited Destroy;
 end;
 
 procedure TStringList.Add(const S: string);
