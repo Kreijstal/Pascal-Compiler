@@ -381,6 +381,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
 
     int expected_type = UNKNOWN_TYPE;
     const char *expected_type_id = NULL;
+    char *owned_expected_type_id = NULL;
     int expected_is_array_of_const = 0;
     int expected_element_size = 0;
     int is_open_array_param = (formal_decl->type == TREE_ARR_DECL);
@@ -428,11 +429,17 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
                 expected_type = semcheck_tag_from_kgpc(elem);
                 expected_type_id = NULL;
                 if (elem->type_alias != NULL && elem->type_alias->alias_name != NULL)
-                    expected_type_id = strdup(elem->type_alias->alias_name);
+                {
+                    owned_expected_type_id = strdup(elem->type_alias->alias_name);
+                    expected_type_id = owned_expected_type_id;
+                }
                 else if (kgpc_type_is_pointer(elem) && elem->info.points_to != NULL &&
                          elem->info.points_to->type_alias != NULL &&
                          elem->info.points_to->type_alias->alias_name != NULL)
-                    expected_type_id = strdup(elem->info.points_to->type_alias->alias_name);
+                {
+                    owned_expected_type_id = strdup(elem->info.points_to->type_alias->alias_name);
+                    expected_type_id = owned_expected_type_id;
+                }
                 long long elem_sz = kgpc_type_sizeof(elem);
                 if (elem_sz > 0 && elem_sz <= INT_MAX)
                     expected_element_size = (int)elem_sz;
@@ -452,11 +459,21 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
             expected_alias->array_element_type != -1)
         {
             expected_type = expected_alias->array_element_type;
+            if (owned_expected_type_id != NULL)
+            {
+                free(owned_expected_type_id);
+                owned_expected_type_id = NULL;
+            }
             expected_type_id = expected_alias->array_element_type_id;
         }
         else if (expected_alias->array_element_type_id != NULL)
         {
             expected_type = UNKNOWN_TYPE;
+            if (owned_expected_type_id != NULL)
+            {
+                free(owned_expected_type_id);
+                owned_expected_type_id = NULL;
+            }
             expected_type_id = expected_alias->array_element_type_id;
         }
     }
@@ -476,17 +493,24 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     if (arg_expr->type == EXPR_SET)
     {
         if (!expected_is_array)
+        {
+            free(owned_expected_type_id);
             return 0;
+        }
         if (semcheck_convert_set_literal_to_array_literal(arg_expr) != 0)
         {
             semcheck_error_with_context("Error on line %d, open array literal cannot contain ranges.\n",
                 line_num);
+            free(owned_expected_type_id);
             return 1;
         }
     }
 
     if (arg_expr->type != EXPR_ARRAY_LITERAL)
+    {
+        free(owned_expected_type_id);
         return 0;
+    }
 
     if (expected_is_array_of_const)
     {
@@ -511,6 +535,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         arg_expr->is_array_expr = 1;
         arg_expr->array_is_dynamic = 1;
         arg_expr->expr_data.array_literal_data.elements_semchecked = 1;
+        free(owned_expected_type_id);
         return 0;
     }
 
@@ -529,8 +554,10 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     arg_expr->is_array_expr = 1;
     arg_expr->array_is_dynamic = 1;
 
-    return semcheck_typecheck_array_literal(arg_expr, symtab, max_scope_lev,
+    int result = semcheck_typecheck_array_literal(arg_expr, symtab, max_scope_lev,
         expected_type, expected_type_id, line_num);
+    free(owned_expected_type_id);
+    return result;
 }
 
 struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t *symtab)

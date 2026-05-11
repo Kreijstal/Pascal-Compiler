@@ -11,6 +11,59 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static void semcheck_discard_function_call_payload(struct Expression *expr,
+                                                   struct Expression *preserve_expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, preserve_expr);
+    expr->expr_data.function_call_data.args_expr = NULL;
+    free(expr->expr_data.function_call_data.id);
+    expr->expr_data.function_call_data.id = NULL;
+    free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = NULL;
+    if (expr->expr_data.function_call_data.procedural_var_expr != NULL &&
+        expr->expr_data.function_call_data.procedural_var_expr != preserve_expr)
+    {
+        destroy_expr(expr->expr_data.function_call_data.procedural_var_expr);
+        expr->expr_data.function_call_data.procedural_var_expr = NULL;
+    }
+    if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL &&
+        expr->expr_data.function_call_data.constructor_receiver_expr != preserve_expr)
+    {
+        destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+        expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+    }
+    free(expr->expr_data.function_call_data.placeholder_method_name);
+    expr->expr_data.function_call_data.placeholder_method_name = NULL;
+    free(expr->expr_data.function_call_data.call_qualifier);
+    expr->expr_data.function_call_data.call_qualifier = NULL;
+    free(expr->expr_data.function_call_data.self_class_name);
+    expr->expr_data.function_call_data.self_class_name = NULL;
+    semcheck_reset_function_call_cache(expr);
+}
+
+static void semcheck_discard_function_call_shell_keep_args(struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    while (args != NULL)
+    {
+        ListNode_t *next = args->next;
+        free(args);
+        args = next;
+    }
+    expr->expr_data.function_call_data.args_expr = NULL;
+    free(expr->expr_data.function_call_data.id);
+    expr->expr_data.function_call_data.id = NULL;
+    free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = NULL;
+    semcheck_reset_function_call_cache(expr);
+}
+
 static long long semcheck_builtin_sizeof_type_id_local(const char *type_id)
 {
     if (type_id == NULL)
@@ -725,12 +778,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     if (error_count == 0 && is_static_array && !is_shortstring)
     {
         long long length = arg_expr->array_upper_bound - arg_expr->array_lower_bound + 1;
-        
-        /* Convert this function call into an integer literal expression */
-        semcheck_reset_function_call_cache(expr);
-        expr->type = EXPR_INUM;
-        expr->expr_data.i_num = length;
-        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
+        semcheck_replace_call_with_integer_literal(expr, length);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -1014,6 +1062,7 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
 
     /* Replace the function call expression with the addop tree in-place.
      * Copy the addop data into the original expression node. */
+    semcheck_discard_function_call_shell_keep_args(expr);
     expr->type = result->type;
     expr->expr_data = result->expr_data;
     kgpc_type_retain(result->resolved_kgpc_type);
@@ -1437,20 +1486,7 @@ void semcheck_replace_call_with_integer_literal(struct Expression *expr, long lo
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
         return;
 
-    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
-    expr->expr_data.function_call_data.args_expr = NULL;
-
-    if (expr->expr_data.function_call_data.id != NULL)
-    {
-        free(expr->expr_data.function_call_data.id);
-        expr->expr_data.function_call_data.id = NULL;
-    }
-    if (expr->expr_data.function_call_data.mangled_id != NULL)
-    {
-        free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = NULL;
-    }
-    semcheck_reset_function_call_cache(expr);
+    semcheck_discard_function_call_payload(expr, NULL);
 
     expr->type = EXPR_INUM;
     expr->expr_data.i_num = value;
@@ -2512,19 +2548,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     }
 
     /* Type is supported — clean up the call expression before lowering */
-    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
-    expr->expr_data.function_call_data.args_expr = NULL;
-    if (expr->expr_data.function_call_data.id != NULL)
-    {
-        free(expr->expr_data.function_call_data.id);
-        expr->expr_data.function_call_data.id = NULL;
-    }
-    if (expr->expr_data.function_call_data.mangled_id != NULL)
-    {
-        free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = NULL;
-    }
-    semcheck_reset_function_call_cache(expr);
+    semcheck_discard_function_call_payload(expr, NULL);
 
     if (target_type == RECORD_TYPE)
     {
@@ -3423,8 +3447,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
     if (arg_type == BOOL)
     {
-        semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
-        expr->expr_data.function_call_data.args_expr = NULL;
+        semcheck_discard_function_call_payload(expr, NULL);
         expr->type = EXPR_BOOL;
         expr->expr_data.bool_value = is_high ? 1 : 0;
         semcheck_expr_set_resolved_type(expr, BOOL);
@@ -3433,8 +3456,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
     if (arg_type == CHAR_TYPE)
     {
-        semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
-        expr->expr_data.function_call_data.args_expr = NULL;
+        semcheck_discard_function_call_payload(expr, NULL);
         expr->type = EXPR_CHAR_CODE;
         expr->expr_data.char_code = (unsigned int)(is_high ? 255 : 0);
         semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
@@ -4083,8 +4105,7 @@ int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     if (kgpc_type_is_dynamic_array(arg_kgpc_type))
         is_managed = 1;
 
-    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
-    expr->expr_data.function_call_data.args_expr = NULL;
+    semcheck_discard_function_call_payload(expr, NULL);
     expr->type = EXPR_BOOL;
     expr->expr_data.bool_value = is_managed ? 1 : 0;
     semcheck_expr_set_resolved_type(expr, BOOL);

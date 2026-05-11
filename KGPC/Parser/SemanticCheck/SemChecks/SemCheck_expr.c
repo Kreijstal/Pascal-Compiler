@@ -343,29 +343,42 @@ struct Expression *clone_expression(const struct Expression *expr)
         }
         case EXPR_SET:
         {
-            /* Clone set expression: copy bitmask, is_constant, and clone elements list */
             clone->expr_data.set_data.bitmask = expr->expr_data.set_data.bitmask;
             clone->expr_data.set_data.is_constant = expr->expr_data.set_data.is_constant;
-            
-            /* Clone the elements list if present */
+
             ListNode_t *elem_head = NULL;
             ListNode_t *elem_tail = NULL;
             ListNode_t *cur = expr->expr_data.set_data.elements;
             while (cur != NULL)
             {
-                struct Expression *elem_expr = (struct Expression *)cur->cur;
-                struct Expression *elem_clone = clone_expression(elem_expr);
-                /* NULL elements are allowed in empty sets */
-                
-                ListNode_t *node = CreateListNode(elem_clone, LIST_EXPR);
-                if (node == NULL)
+                struct SetElement *element = (struct SetElement *)cur->cur;
+                struct Expression *lower_clone =
+                    element != NULL ? clone_expression(element->lower) : NULL;
+                if (element != NULL && element->lower != NULL && lower_clone == NULL)
                 {
-                    if (elem_clone != NULL)
-                        destroy_expr(elem_clone);
                     destroy_expr(clone);
                     return NULL;
                 }
-                
+
+                struct Expression *upper_clone =
+                    element != NULL ? clone_expression(element->upper) : NULL;
+                if (element != NULL && element->upper != NULL && upper_clone == NULL)
+                {
+                    if (lower_clone != NULL)
+                        destroy_expr(lower_clone);
+                    destroy_expr(clone);
+                    return NULL;
+                }
+
+                struct SetElement *element_clone = mk_set_element(lower_clone, upper_clone);
+                ListNode_t *node = CreateListNode(element_clone, LIST_SET_ELEMENT);
+                if (node == NULL)
+                {
+                    destroy_set_element(element_clone);
+                    destroy_expr(clone);
+                    return NULL;
+                }
+
                 if (elem_head == NULL)
                 {
                     elem_head = node;

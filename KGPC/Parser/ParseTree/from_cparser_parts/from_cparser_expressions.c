@@ -903,7 +903,10 @@ struct Expression *convert_expression(ast_t *expr_node) {
                 fprintf(stderr, "[KGPC]   convert_type_spec result: type=%d id=%s\n", target_type, target_type_id ? target_type_id : "<null>");
             }
             
-            type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
+            type_ref_local = type_info.type_ref;
+            type_info.type_ref = NULL;
+            if (type_ref_local == NULL)
+                type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
             destroy_type_info_contents(&type_info);
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
@@ -1215,6 +1218,8 @@ tuple_cleanup:
             else if (target_type_qualifier != NULL)
                 free(target_type_qualifier);
             target_type_qualifier = NULL;
+            if (type_ref_local != NULL)
+                type_ref_free(type_ref_local);
             return call_expr;
         }
 

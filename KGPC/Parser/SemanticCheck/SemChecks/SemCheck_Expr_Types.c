@@ -2296,6 +2296,10 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
     expr->expr_data.typecast_data.target_type_id = NULL;
     char *call_qualifier = expr->expr_data.typecast_data.type_qualifier;
     expr->expr_data.typecast_data.type_qualifier = NULL;
+    TypeRef *target_type_ref = expr->expr_data.typecast_data.target_type_ref;
+    expr->expr_data.typecast_data.target_type_ref = NULL;
+    if (target_type_ref != NULL)
+        type_ref_free(target_type_ref);
 
     expr->type = EXPR_FUNCTION_CALL;
     memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));

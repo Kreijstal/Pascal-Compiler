@@ -5,6 +5,46 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct TypeRefLiveNode
+{
+    TypeRef *ref;
+    struct TypeRefLiveNode *next;
+} TypeRefLiveNode;
+
+static TypeRefLiveNode *g_live_type_refs = NULL;
+
+static void type_ref_track(TypeRef *ref)
+{
+    if (ref == NULL)
+        return;
+    TypeRefLiveNode *node = (TypeRefLiveNode *)malloc(sizeof(TypeRefLiveNode));
+    if (node == NULL)
+        return;
+    node->ref = ref;
+    node->next = g_live_type_refs;
+    g_live_type_refs = node;
+}
+
+static void type_ref_untrack(TypeRef *ref)
+{
+    TypeRefLiveNode *prev = NULL;
+    TypeRefLiveNode *cur = g_live_type_refs;
+    while (cur != NULL)
+    {
+        if (cur->ref == ref)
+        {
+            if (prev != NULL)
+                prev->next = cur->next;
+            else
+                g_live_type_refs = cur->next;
+            free(cur);
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+}
+
 static char *dup_trimmed_ident_segment(const char *segment)
 {
     if (segment == NULL)
@@ -241,6 +281,7 @@ TypeRef *type_ref_create(QualifiedIdent *name, TypeRef **args, int num_args)
     ref->generic_args = args;
     ref->num_generic_args = num_args;
     ref->is_class_reference = 0;
+    type_ref_track(ref);
     return ref;
 }
 
@@ -272,6 +313,7 @@ void type_ref_free(TypeRef *ref)
 {
     if (ref == NULL)
         return;
+    type_ref_untrack(ref);
     qualified_ident_free(ref->name);
     if (ref->generic_args != NULL)
     {
@@ -280,6 +322,15 @@ void type_ref_free(TypeRef *ref)
         free(ref->generic_args);
     }
     free(ref);
+}
+
+void type_ref_cleanup_remaining(void)
+{
+    while (g_live_type_refs != NULL)
+    {
+        TypeRef *ref = g_live_type_refs->ref;
+        type_ref_free(ref);
+    }
 }
 
 const char *type_ref_base_name(const TypeRef *ref)

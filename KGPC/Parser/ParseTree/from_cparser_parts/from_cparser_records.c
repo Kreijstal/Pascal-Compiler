@@ -520,6 +520,8 @@ void append_module_property_wrappers(ListNode_t **subprograms, ast_t *property_n
 
     if (prop->name) free(prop->name);
     if (prop->type_id) free(prop->type_id);
+    if (prop->type_ref != NULL)
+        type_ref_free(prop->type_ref);
     if (prop->read_accessor) free(prop->read_accessor);
     if (prop->write_accessor) free(prop->write_accessor);
     free(prop);
@@ -2347,8 +2349,18 @@ ListNode_t *convert_param(ast_t *param_node) {
             if (param_decl != NULL && (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC))
                 param_decl->tree_data.var_decl_data.is_untyped_param = 1;
             if (param_decl != NULL)
-                param_decl->tree_data.var_decl_data.type_ref =
-                    type_ref_from_info_or_id(&type_info, type_id_copy);
+            {
+                if (type_info.type_ref != NULL && next_id == NULL)
+                {
+                    param_decl->tree_data.var_decl_data.type_ref = type_info.type_ref;
+                    type_info.type_ref = NULL;
+                }
+                else
+                {
+                    param_decl->tree_data.var_decl_data.type_ref =
+                        type_ref_from_info_or_id(&type_info, type_id_copy);
+                }
+            }
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);

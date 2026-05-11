@@ -57,6 +57,7 @@ static int unsetenv(const char *name)
 #include "unit_registry.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParseTree/from_cparser.h"
+#include "Parser/ParseTree/ident_ref.h"
 #include "Parser/pascal_frontend.h"
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
@@ -2319,6 +2320,7 @@ static int compile_single_program(
         codegen(user_tree, input_file, &ctx, symtab, &g_comp_ctx);
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
+        codegen_destroy_static_link_procs(&ctx);
         fclose(ctx.output_file);
         if (!codegen_failed)
             trim_duplicate_program_suffix(output_file);
@@ -3341,6 +3343,8 @@ ast_nil = NULL;
             free(saved_preprocessed_source);
             free(saved_preprocessed_path);
             arena_destroy(arena);
+            kgpc_type_cleanup_remaining();
+            type_ref_cleanup_remaining();
             return 1;
         }
 
@@ -3366,6 +3370,8 @@ ast_nil = NULL;
             free(saved_preprocessed_source);
             free(saved_preprocessed_path);
             arena_destroy(arena);
+            kgpc_type_cleanup_remaining();
+            type_ref_cleanup_remaining();
             return 1;
         }
         ctx.label_counter = 1;
@@ -3385,6 +3391,7 @@ ast_nil = NULL;
         emit_profile_stage("unit compile: code generation", current_time_seconds() - codegen_profile_start);
         
         int codegen_failed = codegen_had_error(&ctx);
+        codegen_destroy_static_link_procs(&ctx);
         fclose(ctx.output_file);
         
         if (codegen_failed)
@@ -3404,6 +3411,8 @@ ast_nil = NULL;
             free(saved_preprocessed_source);
             free(saved_preprocessed_path);
             arena_destroy(arena);
+            kgpc_type_cleanup_remaining();
+            type_ref_cleanup_remaining();
             return 1;
         }
         
@@ -3419,6 +3428,8 @@ ast_nil = NULL;
         unit_search_paths_destroy(&g_unit_paths);
         unit_registry_reset();
         arena_destroy(arena);
+        kgpc_type_cleanup_remaining();
+        type_ref_cleanup_remaining();
         emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
         return 0;
     }
@@ -3670,6 +3681,7 @@ ast_nil = NULL;
             g_time_codegen += current_time_seconds() - codegen_start;
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
+        codegen_destroy_static_link_procs(&ctx);
         fclose(ctx.output_file);
         if (!codegen_failed)
             trim_duplicate_program_suffix(output_file);
@@ -3716,6 +3728,7 @@ ast_nil = NULL;
         unit_registry_reset();
         arena_destroy(arena);
         kgpc_type_cleanup_remaining();
+        type_ref_cleanup_remaining();
         return exit_code > 0 ? exit_code : 1;
     }
 
@@ -3724,6 +3737,7 @@ ast_nil = NULL;
     unit_registry_reset();
     arena_destroy(arena);
     kgpc_type_cleanup_remaining();
+    type_ref_cleanup_remaining();
     emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
     return exit_code;
 }

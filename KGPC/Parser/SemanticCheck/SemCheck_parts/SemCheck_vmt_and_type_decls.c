@@ -2929,7 +2929,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             KgpcType *short_type = type_node != NULL ? type_node->type : kgpc_type;
                             if (short_type != NULL)
-                                PushTypeOntoScope_Typed(symtab, strdup(short_name), short_type);
+                                PushTypeOntoScope_Typed(symtab, (char *)short_name, short_type);
                         }
                     }
                 }

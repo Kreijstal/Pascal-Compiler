@@ -540,7 +540,8 @@ KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
         return resolved_node->type;
     }
 
-    resolved_target = codegen_resolve_function_call_target(ctx, expr, NULL);
+    char *owned_resolved_target = NULL;
+    resolved_target = codegen_resolve_function_call_target(ctx, expr, &owned_resolved_target);
     if (ctx != NULL && ctx->symtab != NULL &&
         resolved_target != NULL &&
         (expr->expr_data.function_call_data.mangled_id == NULL ||
@@ -550,6 +551,7 @@ KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
     {
         if (resolved_node_out != NULL)
             *resolved_node_out = resolved_node;
+        free(owned_resolved_target);
         return resolved_node->type;
     }
 
@@ -561,9 +563,11 @@ KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
     {
         if (resolved_node_out != NULL)
             *resolved_node_out = resolved_node;
+        free(owned_resolved_target);
         return resolved_node->type;
     }
 
+    free(owned_resolved_target);
     return NULL;
 }
 

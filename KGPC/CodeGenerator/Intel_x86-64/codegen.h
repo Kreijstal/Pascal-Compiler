@@ -421,6 +421,7 @@ int codegen_is_nested_context(const CodeGenContext *ctx);
 void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_name, int lexical_depth);
 int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name);
 int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth);
+void codegen_destroy_static_link_procs(CodeGenContext *ctx);
 
 void codegen_reset_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);

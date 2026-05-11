@@ -1794,6 +1794,22 @@ int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangle
     return 0;
 }
 
+void codegen_destroy_static_link_procs(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    ListNode_t *node = ctx->static_link_procs;
+    while (node != NULL)
+    {
+        ListNode_t *next = node->next;
+        free(node->cur);
+        free(node);
+        node = next;
+    }
+    ctx->static_link_procs = NULL;
+}
+
 void codegen_reset_static_link_cache(CodeGenContext *ctx)
 {
     if (ctx == NULL)
@@ -1839,7 +1855,7 @@ void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab)
 
         if (kgpc != NULL)
         {
-            PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            PushTypeOntoScope_Typed(symtab, decl->tree_data.type_decl_data.id, kgpc);
             if (decl->tree_data.type_decl_data.info.record != NULL)
             {
                 codegen_register_record_field_enum_literals(symtab,
@@ -1894,7 +1910,7 @@ void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab)
 
         if (kgpc != NULL)
         {
-            PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            PushTypeOntoScope_Typed(symtab, decl->tree_data.type_decl_data.id, kgpc);
             if (alias->is_enum && alias->enum_literals != NULL)
             {
                 int ordinal = 0;
@@ -1905,7 +1921,7 @@ void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab)
                     if (literal_name == NULL)
                         continue;
                     if (FindSymbol(&existing, symtab, literal_name) == 0 || existing == NULL)
-                        PushConstOntoScope_Typed(symtab, strdup(literal_name), ordinal, kgpc);
+                        PushConstOntoScope_Typed(symtab, (char *)literal_name, ordinal, kgpc);
                 }
             }
             if (created_kgpc)

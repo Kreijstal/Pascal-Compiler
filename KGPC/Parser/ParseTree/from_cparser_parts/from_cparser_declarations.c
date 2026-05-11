@@ -3832,6 +3832,7 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
         }
     }
     destroy_list(map_list);
+    destroy_list(nested_type_sections);
 }
 
 static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,

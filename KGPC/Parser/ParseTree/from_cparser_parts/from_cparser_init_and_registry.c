@@ -1667,7 +1667,10 @@ static char *param_type_string_from_type_node(ast_t *type_node) {
     TypeInfo type_info;
     memset(&type_info, 0, sizeof(TypeInfo));
     convert_type_spec(type_node, &type_id, NULL, &type_info);
-    TypeRef *type_ref = type_ref_from_info_or_id(&type_info, type_id);
+    TypeRef *type_ref = type_info.type_ref;
+    type_info.type_ref = NULL;
+    if (type_ref == NULL)
+        type_ref = type_ref_from_info_or_id(&type_info, type_id);
     char *rendered = NULL;
     if (type_ref != NULL)
         rendered = type_ref_render_mangled(type_ref);

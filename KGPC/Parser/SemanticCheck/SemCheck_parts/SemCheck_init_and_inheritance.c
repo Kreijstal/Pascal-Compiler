@@ -1011,7 +1011,22 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                     else
                                                         existing_record->fields = old_fields;
                                                 }
+                                                else
+                                                {
+                                                    old_fields->next = NULL;
+                                                    destroy_list(old_fields);
+                                                }
                                             }
+                                            else
+                                            {
+                                                old_fields->next = NULL;
+                                                destroy_list(old_fields);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            old_fields->next = NULL;
+                                            destroy_list(old_fields);
                                         }
                                         old_fields = next;
                                     }
@@ -1186,16 +1201,23 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                             existing_fields->next = NULL;
                                                             existing_record->fields = PushListNodeFront(existing_record->fields, existing_fields);
                                                         }
+                                                        else
+                                                        {
+                                                            existing_fields->next = NULL;
+                                                            destroy_list(existing_fields);
+                                                        }
                                                     }
                                                     else
                                                     {
-                                                        /* Non-hidden field from forward decl - shouldn't happen, just free */
-                                                        free(existing_fields);
+                                                        /* Non-hidden field from forward decl - shouldn't happen. */
+                                                        existing_fields->next = NULL;
+                                                        destroy_list(existing_fields);
                                                     }
                                                 }
                                                 else
                                                 {
-                                                    free(existing_fields);
+                                                    existing_fields->next = NULL;
+                                                    destroy_list(existing_fields);
                                                 }
                                                 existing_fields = next;
                                             }

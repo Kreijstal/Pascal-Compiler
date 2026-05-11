@@ -106,6 +106,17 @@ static int semcheck_bind_expr_to_contextual_enum(SymTab_t *symtab,
         return 0;
     }
 
+    if (expr->type == EXPR_VAR_ID)
+    {
+        free(expr->expr_data.id);
+        expr->expr_data.id = NULL;
+        if (expr->id_ref != NULL)
+        {
+            qualified_ident_free(expr->id_ref);
+            expr->id_ref = NULL;
+        }
+    }
+
     expr->type = EXPR_INUM;
     expr->expr_data.i_num = value;
     semcheck_expr_set_resolved_type(expr, ENUM_TYPE);

@@ -29,6 +29,7 @@ char *qualified_ident_join(const QualifiedIdent *id, const char *sep);
 TypeRef *type_ref_create(QualifiedIdent *name, TypeRef **args, int num_args);
 TypeRef *type_ref_clone(const TypeRef *src);
 void type_ref_free(TypeRef *ref);
+void type_ref_cleanup_remaining(void);
 char *type_ref_render_mangled(const TypeRef *ref);
 char *type_ref_render_source(const TypeRef *ref);
 const char *type_ref_base_name(const TypeRef *ref);
