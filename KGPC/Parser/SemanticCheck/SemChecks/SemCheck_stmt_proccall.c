@@ -3709,6 +3709,7 @@ proccall_parent_resolve_done:
                             {
                                 kgpc_type_retain(arg_node->type);
                                 arg_expr->resolved_kgpc_type = create_pointer_type(arg_node->type);
+                                kgpc_type_release(arg_node->type);
                             }
                             else
                             {

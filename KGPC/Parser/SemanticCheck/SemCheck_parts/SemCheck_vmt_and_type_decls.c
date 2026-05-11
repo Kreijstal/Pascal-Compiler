@@ -2732,7 +2732,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (can_override_alias)
                 {
                     inherit_alias_metadata(symtab, alias_info);
-                    kgpc_type_set_type_alias(existing_type->type, alias_info);
+                    int alias_already_matches =
+                        existing_alias != NULL &&
+                        semcheck_alias_targets_match(existing_alias, alias_info) &&
+                        existing_alias->is_pointer == alias_info->is_pointer &&
+                        existing_alias->is_array == alias_info->is_array &&
+                        existing_alias->is_set == alias_info->is_set &&
+                        existing_alias->is_file == alias_info->is_file &&
+                        existing_alias->is_range == alias_info->is_range;
+                    if (!alias_already_matches)
+                        kgpc_type_set_type_alias(existing_type->type, alias_info);
                     if (existing_type->type->type_alias != NULL && alias_info->storage_size > 0)
                         existing_type->type->type_alias->storage_size = alias_info->storage_size;
                 }

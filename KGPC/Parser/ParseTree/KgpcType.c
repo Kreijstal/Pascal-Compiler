@@ -4054,8 +4054,9 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->storage_size = src->storage_size;
     
     /* Copy string fields with duplication */
-    if (src->alias_name != NULL)
-        dst->alias_name = strdup(src->alias_name);
+    /* Alias names are parser-owned spelling metadata. KgpcType snapshots only
+     * need a borrowed view and must not duplicate/free it. */
+    dst->alias_name = src->alias_name;
     if (src->target_type_id != NULL)
         dst->target_type_id = strdup(src->target_type_id);
     if (src->array_element_type_id != NULL)
@@ -4071,15 +4072,15 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     if (src->range_end_str != NULL)
         dst->range_end_str = strdup(src->range_end_str);
 
-    if (src->target_type_ref != NULL)
+    if (src->target_type_ref != NULL && dst->target_type_id == NULL)
         dst->target_type_ref = type_ref_clone(src->target_type_ref);
-    if (src->array_element_type_ref != NULL)
+    if (src->array_element_type_ref != NULL && dst->array_element_type_id == NULL)
         dst->array_element_type_ref = type_ref_clone(src->array_element_type_ref);
-    if (src->pointer_type_ref != NULL)
+    if (src->pointer_type_ref != NULL && dst->pointer_type_id == NULL)
         dst->pointer_type_ref = type_ref_clone(src->pointer_type_ref);
-    if (src->set_element_type_ref != NULL)
+    if (src->set_element_type_ref != NULL && dst->set_element_type_id == NULL)
         dst->set_element_type_ref = type_ref_clone(src->set_element_type_ref);
-    if (src->file_type_ref != NULL)
+    if (src->file_type_ref != NULL && dst->file_type_id == NULL)
         dst->file_type_ref = type_ref_clone(src->file_type_ref);
     
     /* Deep copy lists */
@@ -4104,7 +4105,6 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     if (alias == NULL)
         return;
     
-    free(alias->alias_name);
     free(alias->target_type_id);
     free(alias->array_element_type_id);
     free(alias->pointer_type_id);

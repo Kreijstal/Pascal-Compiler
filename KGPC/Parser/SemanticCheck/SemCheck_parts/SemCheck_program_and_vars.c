@@ -160,6 +160,46 @@ static void clear_predeclare_type_caches(ListNode_t *type_decls)
     }
 }
 
+static void clear_predeclare_var_type_caches(ListNode_t *decls)
+{
+    for (ListNode_t *cur = decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type == TREE_VAR_DECL &&
+            tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+            tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+        }
+        else if (tree->type == TREE_ARR_DECL &&
+                 tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+        {
+            kgpc_type_release(tree->tree_data.arr_decl_data.element_kgpc_type);
+            tree->tree_data.arr_decl_data.element_kgpc_type = NULL;
+        }
+    }
+}
+
+static void clear_predeclare_subprogram_type_caches(ListNode_t *subprograms)
+{
+    for (ListNode_t *cur = subprograms; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_SUBPROGRAM)
+            continue;
+
+        clear_predeclare_var_type_caches(tree->tree_data.subprogram_data.args_var);
+        clear_predeclare_var_type_caches(tree->tree_data.subprogram_data.declarations);
+        clear_predeclare_subprogram_type_caches(tree->tree_data.subprogram_data.subprograms);
+    }
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val, push_result;
@@ -743,6 +783,7 @@ void semcheck_predeclare_program_into_unit_scope(SymTab_t *symtab, Tree_t *progr
 
     LeaveScope(symtab);
     clear_predeclare_type_caches(program_tree->tree_data.program_data.type_declaration);
+    clear_predeclare_subprogram_type_caches(program_tree->tree_data.program_data.subprograms);
     symtab->current_scope = saved_scope;
 }
 
@@ -1489,6 +1530,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         
                         KgpcType *pointer_type = create_pointer_type(points_to);
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
+                        if (points_to != NULL)
+                            kgpc_type_release(points_to);
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
@@ -1504,6 +1547,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     tree->tree_data.var_decl_data.source_unit_index);
                             }
                         }
+                        destroy_kgpc_type(pointer_type);
                         goto next_identifier;
                     }
 
@@ -1586,6 +1630,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         {
                             kgpc_type_retain(type_node->type);
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
+                            destroy_kgpc_type(type_node->type);
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
@@ -1634,6 +1679,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                             KgpcType *pointer_type = create_pointer_type(points_to);
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
+                            if (points_to != NULL)
+                                kgpc_type_release(points_to);
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
@@ -1649,6 +1696,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                         tree->tree_data.var_decl_data.source_unit_index);
                                 }
                             }
+                            destroy_kgpc_type(pointer_type);
                             goto next_identifier;
                         }
 

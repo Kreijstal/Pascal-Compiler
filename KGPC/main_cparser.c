@@ -3700,10 +3700,11 @@ ast_nil = NULL;
         codegen_cache_clear_transient_flags();
     }
 
-    DestroySymTab(symtab);
     destroy_tree(prelude_tree);
     compilation_context_destroy(&g_comp_ctx);
     destroy_tree(user_tree);
+    pascal_frontend_cleanup();
+    DestroySymTab(symtab);
     free(prelude_path);
     free(ast_nil);
     ast_nil = NULL;
@@ -3711,7 +3712,6 @@ ast_nil = NULL;
     if (sem_result > 0)
     {
         clear_dump_ast_path();
-        pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
         unit_registry_reset();
         arena_destroy(arena);
@@ -3720,7 +3720,6 @@ ast_nil = NULL;
     }
 
     clear_dump_ast_path();
-    pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
     unit_registry_reset();
     arena_destroy(arena);

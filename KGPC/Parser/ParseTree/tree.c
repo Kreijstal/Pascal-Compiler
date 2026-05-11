@@ -1448,7 +1448,7 @@ void destroy_tree(Tree_t *tree)
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
             {
                 struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
-                if (alias->kgpc_type != NULL && alias->kgpc_type != decl_kgpc_type)
+                if (alias->kgpc_type != NULL)
                 {
                     destroy_kgpc_type(alias->kgpc_type);
                     alias->kgpc_type = NULL;

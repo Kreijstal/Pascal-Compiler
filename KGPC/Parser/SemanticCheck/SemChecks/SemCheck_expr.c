@@ -1639,6 +1639,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 {
                     kgpc_type_retain(proc_node->type);
                     expr->resolved_kgpc_type = create_pointer_type(proc_node->type);
+                    kgpc_type_release(proc_node->type);
                 }
                 else
                 {

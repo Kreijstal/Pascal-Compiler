@@ -1738,6 +1738,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     {
                         kgpc_type_retain(rhs_symbol->type);
                         expr->resolved_kgpc_type = create_pointer_type(rhs_symbol->type);
+                        kgpc_type_release(rhs_symbol->type);
                     }
                     else
                     {

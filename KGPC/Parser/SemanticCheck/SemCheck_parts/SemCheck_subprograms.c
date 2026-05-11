@@ -592,7 +592,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 }
                 else if (return_kgpc_type != NULL)
                 {
-                    existing_decl->type->info.proc_info.return_type = return_kgpc_type;
+                    KgpcType *old_ret = existing_decl->type->info.proc_info.return_type;
+                    if (old_ret != return_kgpc_type)
+                    {
+                        kgpc_type_retain(return_kgpc_type);
+                        if (old_ret != NULL)
+                            kgpc_type_release(old_ret);
+                        existing_decl->type->info.proc_info.return_type = return_kgpc_type;
+                    }
                 }
             }
         }

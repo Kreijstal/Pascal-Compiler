@@ -686,8 +686,7 @@ int semcheck_typecast(int *type_return,
             }
             else
             {
-                kgpc_type_retain(type_node->type);
-                expr->resolved_kgpc_type = type_node->type;
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
             }
         }
         else
@@ -3101,6 +3100,7 @@ int semcheck_addressof(int *type_return,
                 {
                     kgpc_type_retain(proc_symbol->type);
                     expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
+                    kgpc_type_release(proc_symbol->type);
                 }
                 else
                 {
@@ -3153,6 +3153,7 @@ int semcheck_addressof(int *type_return,
                     {
                         kgpc_type_retain(proc_symbol->type);
                         expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
+                        kgpc_type_release(proc_symbol->type);
                     }
                     else
                     {
@@ -3239,6 +3240,7 @@ int semcheck_addressof(int *type_return,
                     {
                         kgpc_type_retain(method_node->type);
                         expr->resolved_kgpc_type = create_pointer_type(method_node->type);
+                        kgpc_type_release(method_node->type);
                     }
                     else
                     {
@@ -3268,6 +3270,7 @@ int semcheck_addressof(int *type_return,
             {
                 kgpc_type_retain(resolved_proc_symbol->type);
                 expr->resolved_kgpc_type = create_pointer_type(resolved_proc_symbol->type);
+                kgpc_type_release(resolved_proc_symbol->type);
             }
             else
             {
