@@ -3715,6 +3715,7 @@ ast_nil = NULL;
         unit_search_paths_destroy(&g_unit_paths);
         unit_registry_reset();
         arena_destroy(arena);
+        kgpc_type_cleanup_remaining();
         return exit_code > 0 ? exit_code : 1;
     }
 
@@ -3723,6 +3724,7 @@ ast_nil = NULL;
     unit_search_paths_destroy(&g_unit_paths);
     unit_registry_reset();
     arena_destroy(arena);
+    kgpc_type_cleanup_remaining();
     emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
     return exit_code;
 }

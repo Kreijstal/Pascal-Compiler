@@ -2196,6 +2196,8 @@ void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
                     set_type->size_in_bytes = 4;
             }
             PushSetConstOntoScope(symtab, (char *)id, set_bytes, (int)set_size, set_type);
+            if (set_type != NULL)
+                destroy_kgpc_type(set_type);
             continue;
         }
 
