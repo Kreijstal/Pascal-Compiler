@@ -236,6 +236,105 @@ FPC_RTL_FLAGS = [
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
+def _append_fpc_rtl_ast_cache(flags):
+    flags = list(flags)
+    if _FPC_RTL_AST_CACHE_DIR is not None:
+        flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+    return flags
+
+
+def _bootstrap_define_flags():
+    return [
+        "-DCPU64",
+        "-DCPUX86_64",
+        "-Dx86_64",
+        "-DFPC",
+        "-DLINUX",
+        "-DUNIX",
+        "-DFPC_HAS_TYPE_EXTENDED",
+        "-DSUPPORT_EXTENDED",
+        "-DFPC_BOOTSTRAP_INDIRECT_ENTRY",
+        "-Sg",
+    ]
+
+
+def _bootstrap_rtl_include_dirs(fpc_src):
+    return [
+        os.path.join(fpc_src, "rtl", "objpas"),
+        os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+        os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        os.path.join(fpc_src, "rtl", "linux"),
+        os.path.join(fpc_src, "rtl", "unix"),
+        os.path.join(fpc_src, "rtl", "inc"),
+        os.path.join(fpc_src, "rtl", "x86_64"),
+        os.path.join(fpc_src, "rtl", "linux", "x86_64"),
+        os.path.join(fpc_src, "rtl", "unix", "x86_64"),
+    ]
+
+
+def _bootstrap_rtl_unit_dirs(fpc_src):
+    return [
+        os.path.join(fpc_src, "rtl", "unix"),
+        os.path.join(fpc_src, "rtl", "linux"),
+        os.path.join(fpc_src, "rtl", "objpas"),
+        os.path.join(fpc_src, "rtl", "inc"),
+        os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+        os.path.join(fpc_src, "rtl", "objpas", "classes"),
+    ]
+
+
+def _bootstrap_compiler_include_dirs(fpc_src):
+    return [
+        os.path.join(fpc_src, "compiler"),
+        os.path.join(fpc_src, "compiler", "x86"),
+        os.path.join(fpc_src, "compiler", "x86_64"),
+    ]
+
+
+def _bootstrap_compiler_unit_dirs(fpc_src):
+    return [
+        os.path.join(fpc_src, "compiler"),
+        os.path.join(fpc_src, "compiler", "x86"),
+        os.path.join(fpc_src, "compiler", "x86_64"),
+        os.path.join(fpc_src, "compiler", "systems"),
+    ]
+
+
+def _kgpc_bootstrap_flags(fpc_src, *, include_compiler_dirs):
+    flags = ["--no-stdlib"]
+    flags.extend(_bootstrap_define_flags())
+    flags.extend("-I" + path for path in _bootstrap_rtl_include_dirs(fpc_src))
+    if include_compiler_dirs:
+        flags.extend("-I" + path for path in _bootstrap_compiler_include_dirs(fpc_src))
+    flags.extend("-Fu" + path for path in _bootstrap_rtl_unit_dirs(fpc_src))
+    if include_compiler_dirs:
+        flags.extend("-Fu" + path for path in _bootstrap_compiler_unit_dirs(fpc_src))
+    return _append_fpc_rtl_ast_cache(flags)
+
+
+def _pp_bootstrap_compiler_flags(
+    fpc_src, *, rtl_units_dir, output_dir, unit_output_dir, executable_name
+):
+    flags = [
+        "-n",
+        "-FE" + output_dir,
+        "-FU" + unit_output_dir,
+        "-o" + executable_name,
+        "-Fu" + rtl_units_dir,
+    ]
+    flags.extend("-Fi" + path for path in _bootstrap_compiler_include_dirs(fpc_src))
+    flags.extend("-Fu" + path for path in _bootstrap_compiler_unit_dirs(fpc_src))
+    return flags
+
+
+def _pp_bootstrap_program_flags(*, rtl_units_dir, output_dir, executable_name):
+    return [
+        "-n",
+        "-FE" + output_dir,
+        "-o" + executable_name,
+        "-Fu" + rtl_units_dir,
+    ]
+
 # Codegen object cache: the compiler assembles full .o on cache miss,
 # then uses --skip-unit-codegen on cache hit (all handled internally).
 _FPC_RTL_CODEGEN_CACHE_DIR = None
@@ -4045,37 +4144,7 @@ def _add_pp_pas_bootstrap_test():
     if not os.path.isfile(pp_pas):
         return
 
-    # pp.pas needs additional -I/-Fu paths for the compiler source tree
-    pp_extra_flags = [
-        "-DCPU64", "-DCPUX86_64", "-Dx86_64", "-DFPC", "-DLINUX", "-DUNIX",
-        "-DFPC_HAS_TYPE_EXTENDED", "-DSUPPORT_EXTENDED", "-Sg",
-        "-I" + os.path.join(fpc_src, "rtl", "objpas"),
-        "-I" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
-        "-I" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
-        "-I" + os.path.join(fpc_src, "rtl", "linux"),
-        "-I" + os.path.join(fpc_src, "rtl", "unix"),
-        "-I" + os.path.join(fpc_src, "rtl", "inc"),
-        "-I" + os.path.join(fpc_src, "rtl", "x86_64"),
-        "-I" + os.path.join(fpc_src, "rtl", "linux", "x86_64"),
-        "-I" + os.path.join(fpc_src, "rtl", "unix", "x86_64"),
-        "-I" + os.path.join(fpc_src, "compiler"),
-        "-I" + os.path.join(fpc_src, "compiler", "x86"),
-        "-I" + os.path.join(fpc_src, "compiler", "x86_64"),
-        "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
-        "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
-        "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
-        "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
-        "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
-        "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
-        "-Fu" + os.path.join(fpc_src, "compiler"),
-        "-Fu" + os.path.join(fpc_src, "compiler", "x86"),
-        "-Fu" + os.path.join(fpc_src, "compiler", "x86_64"),
-        "-Fu" + os.path.join(fpc_src, "compiler", "systems"),
-    ]
-
-    pp_flags = ["--no-stdlib"] + pp_extra_flags
-    if _FPC_RTL_AST_CACHE_DIR is not None:
-        pp_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+    pp_flags = _kgpc_bootstrap_flags(fpc_src, include_compiler_dirs=True)
 
     pp_expected_file = os.path.join(TEST_CASES_DIR, "pp_pas_bootstrap.expected")
 
@@ -4115,29 +4184,9 @@ def _add_pp_pas_bootstrap_test():
             msg2inc_exe = os.path.join(TEST_OUTPUT_DIR, "msg2inc" + EXE_EXT)
 
             # Compile msg2inc.pp with KGPC using the same RTL flags
-            msg2inc_flags = [
-                "--no-stdlib",
-                "-DCPU64", "-DCPUX86_64", "-Dx86_64", "-DFPC",
-                "-DLINUX", "-DUNIX",
-                "-DFPC_HAS_TYPE_EXTENDED", "-DSUPPORT_EXTENDED", "-Sg",
-                "-I" + os.path.join(fpc_src, "rtl", "objpas"),
-                "-I" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
-                "-I" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
-                "-I" + os.path.join(fpc_src, "rtl", "linux"),
-                "-I" + os.path.join(fpc_src, "rtl", "unix"),
-                "-I" + os.path.join(fpc_src, "rtl", "inc"),
-                "-I" + os.path.join(fpc_src, "rtl", "x86_64"),
-                "-I" + os.path.join(fpc_src, "rtl", "linux", "x86_64"),
-                "-I" + os.path.join(fpc_src, "rtl", "unix", "x86_64"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
-                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
-            ]
-            if _FPC_RTL_AST_CACHE_DIR is not None:
-                msg2inc_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+            msg2inc_flags = _kgpc_bootstrap_flags(
+                fpc_src, include_compiler_dirs=False
+            )
 
             try:
                 run_compiler(msg2inc_pp, msg2inc_asm, flags=msg2inc_flags, timeout=120)
@@ -4232,20 +4281,20 @@ def _add_pp_pas_bootstrap_test():
         self.assertEqual(actual_output, expected_output)
 
         # End-to-end regression check: use the just-built pp_bootstrap to
-        # compile a tiny Pascal program and run it.  This pins more of the
-        # generated compiler than the -h banner — full unit-load /
-        # symtable / codegen / link / runtime — without re-compiling
-        # pp.pas (~7 minutes).  The pipeline is:
+        # compile a tiny Pascal program and then rebuild pp.pas itself. This
+        # pins the generated compiler's ordinary program path as well as the
+        # full self-hosting compiler path. The pipeline is:
         #     1. KGPC compiles pp.pas         -> tests/output/pp_bootstrap
-        #        (already done above; do NOT double-compile pp.pas).
+        #        (already done above).
         #     2. pp_bootstrap compiles helloworld.p with the FPC RTL units.
-        #     3. The produced binary runs and prints "Hello, World!".
+        #     3. pp_bootstrap compiles pp.pas -> tests/output/pp_stage2/pp_stage2
+        #     4. pp_stage2 starts and prints the expected help banner.
         #
-        # pp_bootstrap needs prebuilt RTL .ppu files for ordinary program
-        # compilation.  If CI has only the FPCSource checkout, build a
-        # same-source compiler first, then use it to build those units.  A
-        # distro FPC can build incompatible .ppu files even when it is good
-        # enough to seed the compiler build.
+        # pp_bootstrap needs prebuilt same-source RTL .ppu files for program
+        # compilation and for pp.pas self-hosting. If CI has only the FPCSource
+        # checkout, build a same-source compiler first, then use it to build
+        # those units. A distro FPC can build incompatible .ppu files even when
+        # it is good enough to seed the compiler build.
         helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
         assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
 
@@ -4339,10 +4388,6 @@ def _add_pp_pas_bootstrap_test():
                 "did the Makefile target switch from `all` back to `units`?"
             )
 
-        # Prebuilt RTL .ppu files are present.  Use them so we exercise
-        # pp_bootstrap's full unit-loading + codegen path.
-        rtl_search_paths = ["-Fu" + prebuilt_units_dir]
-
         helloworld_exe = os.path.join(
             TEST_OUTPUT_DIR, "helloworld_via_pp_bootstrap" + EXE_EXT)
         try:
@@ -4355,10 +4400,11 @@ def _add_pp_pas_bootstrap_test():
         # output tree.
         bootstrap_cmd = [
             os.path.abspath(executable_file),
-            "-n",
-            "-FE" + os.path.abspath(TEST_OUTPUT_DIR),
-            "-o" + os.path.basename(helloworld_exe),
-        ] + rtl_search_paths + [helloworld_p]
+        ] + _pp_bootstrap_program_flags(
+            rtl_units_dir=os.path.abspath(prebuilt_units_dir),
+            output_dir=os.path.abspath(TEST_OUTPUT_DIR),
+            executable_name=os.path.basename(helloworld_exe),
+        ) + [helloworld_p]
         try:
             compile_proc = subprocess.run(
                 bootstrap_cmd, capture_output=True, text=True, timeout=120
@@ -4406,12 +4452,83 @@ def _add_pp_pas_bootstrap_test():
             "pp_bootstrap-built helloworld printed unexpected output",
         )
 
+        stage2_dir = os.path.join(TEST_OUTPUT_DIR, "pp_stage2")
+        stage2_units_dir = os.path.join(stage2_dir, "units")
+        os.makedirs(stage2_units_dir, exist_ok=True)
+        stage2_executable = os.path.join(stage2_dir, "pp_stage2" + EXE_EXT)
+        try:
+            os.remove(stage2_executable)
+        except FileNotFoundError:
+            pass
+
+        stage2_cmd = [
+            os.path.abspath(executable_file),
+        ] + _pp_bootstrap_compiler_flags(
+            fpc_src,
+            rtl_units_dir=os.path.abspath(prebuilt_units_dir),
+            output_dir=os.path.abspath(stage2_dir),
+            unit_output_dir=os.path.abspath(stage2_units_dir),
+            executable_name=os.path.basename(stage2_executable),
+        ) + [os.path.abspath(pp_pas)]
+        try:
+            stage2_compile = subprocess.run(
+                stage2_cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=os.path.join(fpc_src, "compiler"),
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("pp_bootstrap timed out compiling pp.pas into pp_stage2")
+            return
+
+        if stage2_compile.returncode != 0 or not os.path.isfile(stage2_executable):
+            import signal as _signal
+            sig = -stage2_compile.returncode if stage2_compile.returncode < 0 else None
+            sig_name = ""
+            if sig is not None:
+                try:
+                    sig_name = f" ({_signal.Signals(sig).name})"
+                except (ValueError, AttributeError):
+                    pass
+            self.fail(
+                f"pp_bootstrap failed to compile {pp_pas} "
+                f"(rc={stage2_compile.returncode}{sig_name}, "
+                f"binary_present={os.path.isfile(stage2_executable)})\n"
+                f"cmd: {' '.join(stage2_cmd)}\n"
+                f"stdout:\n{(stage2_compile.stdout or '')[:4000]}\n"
+                f"stderr:\n{(stage2_compile.stderr or '')[:4000]}"
+            )
+
+        try:
+            stage2_help = subprocess.run(
+                [os.path.abspath(stage2_executable), "-h"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("pp_stage2 timed out running with -h")
+            return
+
+        if stage2_help.returncode != 0:
+            self.fail(
+                f"pp_stage2 exited with code {stage2_help.returncode}\n"
+                f"stdout:\n{(stage2_help.stdout or '')[:2000]}\n"
+                f"stderr:\n{(stage2_help.stderr or '')[:2000]}"
+            )
+        self.assertEqual(
+            _strip_pp_header(stage2_help.stdout or ""),
+            expected_output,
+            "pp_stage2 help output differs from the expected bootstrap banner",
+        )
+
     test_pp_pas_bootstrap.__name__ = "test_fpcrtl_pp_pas_bootstrap"
     test_pp_pas_bootstrap.__doc__ = (
-        "pp.pas bootstrap — compile and link the FPC compiler, then use "
-        "it to compile and run helloworld.p"
+        "pp.pas bootstrap — compile and link the FPC compiler, use it to "
+        "compile helloworld.p, then rebuild pp.pas itself"
     )
-    test_pp_pas_bootstrap._timeout = 900  # pp.pas is much larger than regular tests
+    test_pp_pas_bootstrap._timeout = 1800
     setattr(TestCompiler, "test_fpcrtl_pp_pas_bootstrap", test_pp_pas_bootstrap)
 
 
