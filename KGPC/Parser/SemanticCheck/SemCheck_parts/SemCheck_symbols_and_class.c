@@ -221,7 +221,10 @@ void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
             alias->target_type_ref, alias->target_type_id);
     }
     if (target_node == NULL)
+    {
+        semcheck_cache_named_set_storage_size(symtab, alias);
         return;
+    }
 
     struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
     if (target_alias == NULL)

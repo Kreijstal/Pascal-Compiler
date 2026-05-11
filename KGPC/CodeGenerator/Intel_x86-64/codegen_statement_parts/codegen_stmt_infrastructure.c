@@ -2270,13 +2270,26 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 }
                 else if (field->field_type != UNKNOWN_TYPE)
                 {
+                    if (field->field_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+                    {
+                        struct TypeAlias *field_alias =
+                            codegen_lookup_type_alias(ctx, field->field_type_id);
+                        if (field_alias != NULL)
+                        {
+                            field_access->resolved_kgpc_type =
+                                create_kgpc_type_from_type_alias(field_alias,
+                                    ctx->symtab, 0);
+                        }
+                    }
+
                     /* Compute the field's actual storage size from record layout.
                      * create_primitive_type(INT_TYPE) defaults to 4 bytes, but in
                      * FPC mode Integer=SmallInt is only 2 bytes.  Derive the real
                      * size from consecutive field offsets and the record's cached
                      * total size. */
                     long long field_storage = 0;
-                    if (expr->record_type != NULL && expr->record_type->has_cached_size)
+                    if (field_access->resolved_kgpc_type == NULL &&
+                        expr->record_type != NULL && expr->record_type->has_cached_size)
                     {
                         long long next_off = expr->record_type->cached_size;
                         ListNode_t *scan = expr->expr_data.record_constructor_data.fields;
@@ -2292,12 +2305,21 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         }
                         field_storage = next_off - field->field_offset;
                     }
-                    if (field_storage > 0 && field_storage != 4 &&
+                    if (field_access->resolved_kgpc_type == NULL &&
+                        field_storage > 0 && field_storage != 4 &&
                         field_storage <= INT_MAX)
                         field_access->resolved_kgpc_type =
                             create_primitive_type_with_size(field->field_type, (int)field_storage);
-                    else
+                    else if (field_access->resolved_kgpc_type == NULL)
                         field_access->resolved_kgpc_type = create_primitive_type(field->field_type);
+                }
+
+                if (field->field_type == SET_TYPE &&
+                    field->value->resolved_kgpc_type == NULL &&
+                    field_access->resolved_kgpc_type != NULL)
+                {
+                    field->value->resolved_kgpc_type =
+                        kgpc_type_clone_shallow_owned(field_access->resolved_kgpc_type);
                 }
 
                 if (field->field_is_array)
