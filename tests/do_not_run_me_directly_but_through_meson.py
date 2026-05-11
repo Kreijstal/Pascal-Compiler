@@ -236,7 +236,10 @@ FPC_RTL_FLAGS = [
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
-def _append_fpc_rtl_ast_cache(flags):
+PP_BOOTSTRAP_FULL_CHAIN_TIMEOUT = 1800
+
+
+def _with_fpc_rtl_ast_cache(flags):
     flags = list(flags)
     if _FPC_RTL_AST_CACHE_DIR is not None:
         flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
@@ -309,7 +312,7 @@ def _kgpc_bootstrap_flags(fpc_src, *, include_compiler_dirs):
     flags.extend("-Fu" + path for path in _bootstrap_rtl_unit_dirs(fpc_src))
     if include_compiler_dirs:
         flags.extend("-Fu" + path for path in _bootstrap_compiler_unit_dirs(fpc_src))
-    return _append_fpc_rtl_ast_cache(flags)
+    return _with_fpc_rtl_ast_cache(flags)
 
 
 def _pp_bootstrap_compiler_flags(
@@ -4539,7 +4542,7 @@ def _add_pp_pas_bootstrap_test():
     # pp.pas is compiled twice in this test (KGPC -> pp_bootstrap, then
     # pp_bootstrap -> pp_stage2) and may also need the same-source RTL rebuild
     # on a cold worker, so allow one long timeout budget for the full chain.
-    test_pp_pas_bootstrap._timeout = 1800
+    test_pp_pas_bootstrap._timeout = PP_BOOTSTRAP_FULL_CHAIN_TIMEOUT
     setattr(TestCompiler, "test_fpcrtl_pp_pas_bootstrap", test_pp_pas_bootstrap)
 
 
