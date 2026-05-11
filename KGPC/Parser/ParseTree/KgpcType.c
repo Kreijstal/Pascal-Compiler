@@ -3131,6 +3131,8 @@ long long kgpc_type_sizeof(KgpcType *type)
                     return kgpc_enum_storage_size(type->type_alias);
                 case SET_TYPE:
                 {
+                    if (type->size_in_bytes > 0)
+                        return type->size_in_bytes;
                     if (type->type_alias != NULL && type->type_alias->is_set)
                         return kgpc_set_storage_size(type->type_alias);
                     return 4;

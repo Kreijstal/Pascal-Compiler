@@ -327,6 +327,7 @@ def _pp_bootstrap_compiler_flags(
         "-o" + executable_name,
         "-Fu" + rtl_units_dir,
     ]
+    flags.extend(_bootstrap_define_flags())
     # pp_bootstrap rebuilds pp.pas with cwd inside FPCSource/compiler, so these
     # paths must be absolute rather than repository-root-relative.
     flags.extend(

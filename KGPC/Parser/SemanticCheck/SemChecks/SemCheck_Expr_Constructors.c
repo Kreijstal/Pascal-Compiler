@@ -1043,6 +1043,11 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         }
         else
         {
+            if (field->value->type == EXPR_SET && kgpc_type_is_set(expected_type))
+            {
+                semcheck_expr_set_resolved_kgpc_type_shared(field->value, expected_type);
+            }
+
             int value_owned = 0;
             KgpcType *value_type_kgpc = semcheck_resolve_expression_kgpc_type(
                 symtab, field->value, max_scope_lev, NO_MUTATE, &value_owned);

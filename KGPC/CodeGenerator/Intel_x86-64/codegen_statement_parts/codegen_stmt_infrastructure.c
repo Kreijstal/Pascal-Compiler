@@ -1,4 +1,5 @@
 #include "../codegen_stmt_internal.h"
+#include "../codegen_expression_internal.h"
 
 ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
@@ -2268,7 +2269,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 {
                     field_access->resolved_kgpc_type = create_pointer_type(NULL);
                 }
-                else if (field->field_type != UNKNOWN_TYPE)
+                else
                 {
                     if (field->field_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
                     {
@@ -2306,18 +2307,31 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         field_storage = next_off - field->field_offset;
                     }
                     if (field_access->resolved_kgpc_type == NULL &&
+                        field->field_type != UNKNOWN_TYPE &&
                         field_storage > 0 && field_storage != 4 &&
                         field_storage <= INT_MAX)
                         field_access->resolved_kgpc_type =
                             create_primitive_type_with_size(field->field_type, (int)field_storage);
-                    else if (field_access->resolved_kgpc_type == NULL)
+                    else if (field_access->resolved_kgpc_type == NULL &&
+                             field->field_type != UNKNOWN_TYPE)
                         field_access->resolved_kgpc_type = create_primitive_type(field->field_type);
+
+                    if (field_access->resolved_kgpc_type != NULL &&
+                        kgpc_type_is_set(field_access->resolved_kgpc_type) &&
+                        field_storage > 4 && field_storage <= INT_MAX &&
+                        kgpc_type_sizeof(field_access->resolved_kgpc_type) <= 4)
+                    {
+                        destroy_kgpc_type(field_access->resolved_kgpc_type);
+                        field_access->resolved_kgpc_type =
+                            create_primitive_type_with_size(SET_TYPE, (int)field_storage);
+                    }
                 }
 
-                if (field->field_type == SET_TYPE &&
-                    field->value->resolved_kgpc_type == NULL &&
-                    field_access->resolved_kgpc_type != NULL)
+                if (field_access->resolved_kgpc_type != NULL &&
+                    kgpc_type_is_set(field_access->resolved_kgpc_type))
                 {
+                    if (field->value->resolved_kgpc_type != NULL)
+                        destroy_kgpc_type(field->value->resolved_kgpc_type);
                     field->value->resolved_kgpc_type =
                         kgpc_type_clone_shallow_owned(field_access->resolved_kgpc_type);
                 }
@@ -2335,6 +2349,26 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 }
 
                 struct RecordField *actual_field = codegen_lookup_record_field_expr(field_access, ctx);
+                if (field->field_type == SET_TYPE &&
+                    actual_field != NULL &&
+                    actual_field->has_cached_layout &&
+                    actual_field->cached_size > 4 &&
+                    actual_field->cached_size <= INT_MAX &&
+                    (field_access->resolved_kgpc_type == NULL ||
+                     kgpc_type_sizeof(field_access->resolved_kgpc_type) <= 4))
+                {
+                    if (field_access->resolved_kgpc_type != NULL)
+                        destroy_kgpc_type(field_access->resolved_kgpc_type);
+                    field_access->resolved_kgpc_type =
+                        create_primitive_type_with_size(SET_TYPE, (int)actual_field->cached_size);
+                    if (field_access->resolved_kgpc_type != NULL)
+                    {
+                        if (field->value->resolved_kgpc_type != NULL)
+                            destroy_kgpc_type(field->value->resolved_kgpc_type);
+                        field->value->resolved_kgpc_type =
+                            kgpc_type_clone_shallow_owned(field_access->resolved_kgpc_type);
+                    }
+                }
                 if (actual_field != NULL && actual_field->is_array && !field_access->is_array_expr)
                 {
                     field_access->is_array_expr = 1;
@@ -2447,6 +2481,101 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         element_node = element_node->next;
                         ++index;
                     }
+                    codegen_destroy_synthetic_record_access_keep_record(field_access);
+                    field_node = field_node->next;
+                    continue;
+                }
+
+                long long set_copy_size = 0;
+                int field_is_set = (field_access->resolved_kgpc_type != NULL &&
+                    kgpc_type_is_set(field_access->resolved_kgpc_type));
+                if (field_is_set)
+                {
+                    set_copy_size = kgpc_type_sizeof(field_access->resolved_kgpc_type);
+                    if (set_copy_size <= 4 &&
+                        actual_field != NULL &&
+                        actual_field->has_cached_layout)
+                    {
+                        set_copy_size = actual_field->cached_size;
+                    }
+                }
+
+                if (field_is_set &&
+                    field->value->type == EXPR_SET &&
+                    set_copy_size > 4 &&
+                    set_copy_size <= INT_MAX)
+                {
+                    Register_t *dest_reg = NULL;
+                    Register_t *src_reg = NULL;
+                    Register_t *count_reg = NULL;
+
+                    if (field->value->resolved_kgpc_type == NULL ||
+                        kgpc_type_sizeof(field->value->resolved_kgpc_type) <= 4)
+                    {
+                        if (field->value->resolved_kgpc_type != NULL)
+                            destroy_kgpc_type(field->value->resolved_kgpc_type);
+                        field->value->resolved_kgpc_type =
+                            create_primitive_type_with_size(SET_TYPE, (int)set_copy_size);
+                    }
+
+                    inst_list = codegen_address_for_expr(field_access, inst_list, ctx, &dest_reg);
+                    if (codegen_had_error(ctx) || dest_reg == NULL)
+                    {
+                        if (dest_reg != NULL)
+                            free_reg(get_reg_stack(), dest_reg);
+                        codegen_destroy_synthetic_record_access_keep_record(field_access);
+                        goto cleanup;
+                    }
+
+                    inst_list = codegen_set_expr(field->value, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                    {
+                        if (src_reg != NULL)
+                            free_reg(get_reg_stack(), src_reg);
+                        free_reg(get_reg_stack(), dest_reg);
+                        codegen_destroy_synthetic_record_access_keep_record(field_access);
+                        goto cleanup;
+                    }
+
+                    count_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (count_reg == NULL)
+                        count_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (count_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), src_reg);
+                        free_reg(get_reg_stack(), dest_reg);
+                        codegen_destroy_synthetic_record_access_keep_record(field_access);
+                        inst_list = codegen_fail_register(ctx, inst_list, NULL,
+                            "ERROR: Unable to allocate register for large set copy size.");
+                        goto cleanup;
+                    }
+
+                    {
+                        char tmpl[96];
+                        snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%0\n",
+                            set_copy_size);
+                        Register_t *d[] = {count_reg};
+                        inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+                    }
+
+                    if (codegen_target_is_windows())
+                    {
+                        { Register_t *u[] = {dest_reg};  inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
+                        { Register_t *u[] = {src_reg};   inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                        { Register_t *u[] = {count_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n"); }
+                    }
+                    else
+                    {
+                        { Register_t *u[] = {dest_reg};  inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n"); }
+                        { Register_t *u[] = {src_reg};   inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n"); }
+                        { Register_t *u[] = {count_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                    }
+
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
+                    free_arg_regs();
+                    free_reg(get_reg_stack(), count_reg);
+                    free_reg(get_reg_stack(), src_reg);
+                    free_reg(get_reg_stack(), dest_reg);
                     codegen_destroy_synthetic_record_access_keep_record(field_access);
                     field_node = field_node->next;
                     continue;
