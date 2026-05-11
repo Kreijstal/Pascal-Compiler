@@ -341,7 +341,7 @@ def _pp_bootstrap_program_flags(*, rtl_units_dir, output_dir, executable_name):
 
 
 def _tree_contains_newer_file(root_dir, reference_file):
-    if not os.path.isdir(root_dir):
+    if not os.path.isdir(root_dir) or not os.path.isfile(reference_file):
         return False
     reference_mtime = os.path.getmtime(reference_file)
     for current_root, dirnames, filenames in os.walk(root_dir):

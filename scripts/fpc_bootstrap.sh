@@ -156,8 +156,9 @@ end.
 PASCAL
 
     echo "  Compiling hello.pas with ${label} ..."
-    # Keep the source file last so the shared output/search-path flag handling
-    # stays identical between hello-world checks and pp.pas self-hosting.
+    # FPC combines -FE<dir> with -o<basename>; keep the source file last so the
+    # shared output/search-path flag handling stays identical between
+    # hello-world checks and pp.pas self-hosting.
     "$compiler" "${extra_flags[@]}" "-FE${hello_dir}" -o"$(basename "$hello_exe")" "$hello_pas" 2>&1 | tail -5
     echo "  Running hello ..."
     local output
