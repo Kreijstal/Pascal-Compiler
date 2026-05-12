@@ -3546,10 +3546,39 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
 
             int use_qword = codegen_type_uses_qword(expr_get_type_tag(expr));
-            const char *swap_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
-            char swap_suffix = use_qword ? 'q' : 'l';
-            snprintf(buffer, sizeof(buffer), "\tbswap%c\t%s\n", swap_suffix, swap_reg);
-            inst_list = add_inst(inst_list, buffer);
+            long long arg_size = 4;
+            if (arg_expr->resolved_kgpc_type != NULL)
+                arg_size = kgpc_type_sizeof(arg_expr->resolved_kgpc_type);
+            else if (use_qword)
+                arg_size = 8;
+
+            if (arg_size == 2)
+            {
+                /* 16-bit byte swap: rolw $8, %reg16 then zero-extend to avoid bswapl clobbering upper bits */
+                const char *reg16 = codegen_register_name16(target_reg);
+                if (reg16 != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\trolw\t$8, %s\n", reg16);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzwl\t%s, %s\n", reg16, target_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    /* fallback: shifts */
+                    snprintf(buffer, sizeof(buffer), "\trolw\t$8, %s\n", target_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tandl\t$65535, %s\n", target_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else
+            {
+                const char *swap_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
+                char swap_suffix = use_qword ? 'q' : 'l';
+                snprintf(buffer, sizeof(buffer), "\tbswap%c\t%s\n", swap_suffix, swap_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
             return inst_list;
         }
 
