@@ -248,6 +248,7 @@ def _with_fpc_rtl_ast_cache(flags):
 
 
 def _bootstrap_define_flags():
+    """Returns KGPC-style define flags for invoking the KGPC compiler itself."""
     return [
         "-DCPU64",
         "-DCPUX86_64",
@@ -258,6 +259,22 @@ def _bootstrap_define_flags():
         "-DFPC_HAS_TYPE_EXTENDED",
         "-DSUPPORT_EXTENDED",
         "-DFPC_BOOTSTRAP_INDIRECT_ENTRY",
+        "-Sg",
+    ]
+
+
+def _fpc_bootstrap_define_flags():
+    """Returns FPC-style define flags for invoking a compiled FPC binary (pp_bootstrap etc.)."""
+    return [
+        "-dCPU64",
+        "-dCPUX86_64",
+        "-dx86_64",
+        "-dFPC",
+        "-dLINUX",
+        "-dUNIX",
+        "-dFPC_HAS_TYPE_EXTENDED",
+        "-dSUPPORT_EXTENDED",
+        "-dFPC_BOOTSTRAP_INDIRECT_ENTRY",
         "-Sg",
     ]
 
@@ -327,7 +344,7 @@ def _pp_bootstrap_compiler_flags(
         "-o" + executable_name,
         "-Fu" + rtl_units_dir,
     ]
-    flags.extend(_bootstrap_define_flags())
+    flags.extend(_fpc_bootstrap_define_flags())
     # pp_bootstrap rebuilds pp.pas with cwd inside FPCSource/compiler, so these
     # paths must be absolute rather than repository-root-relative.
     flags.extend(
