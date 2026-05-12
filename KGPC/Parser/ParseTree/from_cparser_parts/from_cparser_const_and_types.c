@@ -1315,6 +1315,10 @@ void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_sect
         if (start_ordinal >= 0 && end_ordinal >= 0) {
             info->start = start_ordinal;
             info->end = end_ordinal;
+        } else if (strlen(start_id) == 3 && start_id[0] == '\'' && start_id[2] == '\''
+                   && strlen(end_id) == 3 && end_id[0] == '\'' && end_id[2] == '\'') {
+            info->start = (unsigned char)start_id[1];
+            info->end   = (unsigned char)end_id[1];
         } else {
             int start_val;
             if (evaluate_simple_const_expr(start_id, const_section, &start_val) == 0) {
@@ -1417,6 +1421,14 @@ int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
             return 0;
         }
         return -1;
+    }
+    case PASCAL_T_CHAR:
+    {
+        const char *name = (expr->sym != NULL) ? expr->sym->name : NULL;
+        if (name == NULL || name[0] == '\0')
+            return -1;
+        *out_value = (unsigned char)name[0];
+        return 0;
     }
     case PASCAL_T_IDENTIFIER:
         return lookup_const_int(expr->sym != NULL ? expr->sym->name : NULL, out_value);
@@ -2054,6 +2066,20 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
     expr = unwrap_pascal_node(expr);
     if (expr == NULL)
         return NULL;
+
+    /* Char literal: serialize as 'X' so downstream evaluators recognise it */
+    if (expr->typ == PASCAL_T_CHAR && expr->sym != NULL && expr->sym->name != NULL) {
+        const char *ch = expr->sym->name;
+        size_t len = strlen(ch);
+        char *result = (char *)malloc(len + 3);
+        if (result == NULL)
+            return NULL;
+        result[0] = '\'';
+        memcpy(result + 1, ch, len);
+        result[1 + len] = '\'';
+        result[2 + len] = '\0';
+        return result;
+    }
 
     /* Simple identifier or literal with a symbol */
     if (expr->sym != NULL && expr->sym->name != NULL) {
