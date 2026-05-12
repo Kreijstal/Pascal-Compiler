@@ -1514,6 +1514,29 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     return codegen_fail_register(ctx, inst_list, NULL,
                         "ERROR: Unable to allocate register for reference assignment.");
                 }
+                if (scope_depth > 0)
+                {
+                    /* var-param pointer lives in the outer frame — reach it via static link */
+                    codegen_begin_expression(ctx);
+                    Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                    if (frame_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), ptr_reg);
+                        free_reg(get_reg_stack(), reg);
+                        codegen_end_expression(ctx);
+                        return codegen_fail_register(ctx, inst_list, NULL,
+                            "ERROR: Failed to acquire static link for reference assignment.");
+                    }
+                    {
+                        char tmpl[96];
+                        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%1), %%0\n", var->offset);
+                        Register_t *d[] = {ptr_reg};
+                        Register_t *u[] = {frame_reg};
+                        inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, tmpl);
+                    }
+                    codegen_end_expression(ctx);
+                }
+                else
                 {
                     char tmpl[96];
                     snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", var->offset);
