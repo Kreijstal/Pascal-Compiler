@@ -2093,7 +2093,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (codegen_had_error(ctx) || data_addr_reg == NULL)
                     return inst_list;
 
-                Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                Register_t *desc_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                 if (desc_addr_reg == NULL)
                 {
                     free_reg(get_reg_stack(), data_addr_reg);
@@ -2175,7 +2175,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 /* Get descriptor address register */
-                Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                Register_t *desc_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                 if (desc_addr_reg == NULL)
                 {
                     free_reg(get_reg_stack(), data_addr_reg);
