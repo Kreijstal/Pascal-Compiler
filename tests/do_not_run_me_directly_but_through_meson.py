@@ -330,7 +330,10 @@ def _kgpc_bootstrap_flags(fpc_src, *, include_compiler_dirs):
     flags.extend("-Fu" + path for path in _bootstrap_rtl_unit_dirs(fpc_src))
     if include_compiler_dirs:
         flags.extend("-Fu" + path for path in _bootstrap_compiler_unit_dirs(fpc_src))
-    return _with_fpc_rtl_ast_cache(flags)
+    flags = _with_fpc_rtl_ast_cache(flags)
+    if _FPC_RTL_CODEGEN_CACHE_DIR is not None:
+        flags.append("--codegen-cache-dir=" + _FPC_RTL_CODEGEN_CACHE_DIR)
+    return flags
 
 
 def _pp_bootstrap_compiler_flags(
