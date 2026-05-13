@@ -2062,14 +2062,18 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
         /* ShortStrings may be stored as pointers in a single qword slot.
          * In that case we need to load the pointer value, not take the
-         * address of the spill slot itself. */
+         * address of the spill slot itself.
+         * IMPORTANT: pointer-to-shortstring types (e.g. pshortstring = ^shortstring)
+         * must NOT be treated as shortstrings here: their target_type_id is "shortstring"
+         * but they are pointer variables whose address must be passed for var-params. */
         if (!treat_as_reference && symbol != NULL && symbol->type != NULL &&
-            var_node->size <= CODEGEN_POINTER_SIZE_BYTES)
+            var_node->size <= CODEGEN_POINTER_SIZE_BYTES &&
+            !kgpc_type_is_pointer(symbol->type))
         {
             struct TypeAlias *alias = kgpc_type_get_type_alias(symbol->type);
             int is_shortstring = kgpc_type_is_shortstring(symbol->type) ||
                 (alias != NULL && alias->is_shortstring);
-            if (!is_shortstring && alias != NULL)
+            if (!is_shortstring && alias != NULL && !alias->is_pointer)
             {
                 if ((alias->alias_name != NULL &&
                      pascal_identifier_equals(alias->alias_name, "ShortString")) ||
