@@ -89,7 +89,8 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr, CodeGe
     return 0;
 }
 
-/* Keep set-byte * 8 arithmetic in int range when deriving max bit index. */
+/* Clamp inferred set width so `(bytes * 8 - 1)` always stays within signed-int
+ * range used by immediate compare emission below. */
 enum { CODEGEN_MAX_SET_STORAGE_BYTES = INT_MAX / 8 };
 
 static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, CodeGenContext *ctx, Register_t *value_reg)
