@@ -706,6 +706,29 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return inst_list;
             }
 
+            /* Protect dest_addr across the RHS evaluation: spill it ourselves
+             * to a stack slot and reload after, since codegen_address_for_expr
+             * for assign_expr may evaluate a nested function call whose codegen
+             * spills dest_addr's physical register (e.g. rbx) into another live
+             * value. Without this, dest_addr ends up holding a pointer to
+             * unrelated data (a field inside the LHS def) and the subsequent
+             * shortstring copy corrupts that data. See pp.pas bootstrap bug
+             * (regr_pp_pas_shortstring_dest_clobber). */
+            char dest_spill_label[64];
+            snprintf(dest_spill_label, sizeof(dest_spill_label),
+                "__sscopy_dest_%p__", (void *)var_expr);
+            StackNode_t *dest_spill_slot = find_in_temp(dest_spill_label);
+            if (dest_spill_slot == NULL)
+                dest_spill_slot = add_l_t_bytes(dest_spill_label, (int)sizeof(void *));
+            if (dest_spill_slot != NULL)
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n",
+                    dest_spill_slot->offset);
+                Register_t *u[] = {dest_addr};
+                inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            }
+
             inst_list = codegen_address_for_expr(assign_expr, inst_list, ctx, &src_addr);
             if (codegen_had_error(ctx) || src_addr == NULL)
             {
@@ -713,6 +736,26 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 if (src_addr != NULL)
                     free_reg(get_reg_stack(), src_addr);
                 return inst_list;
+            }
+
+            /* Reload dest_addr from the spill slot so we use a register that
+             * still holds the destination address (rather than whatever the
+             * RHS evaluation left in our original physical register). */
+            if (dest_spill_slot != NULL)
+            {
+                Register_t *reloaded = get_free_reg(get_reg_stack(), &inst_list);
+                if (reloaded == NULL)
+                    reloaded = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (reloaded != NULL)
+                {
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                        dest_spill_slot->offset);
+                    Register_t *d[] = {reloaded};
+                    inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+                    free_reg(get_reg_stack(), dest_addr);
+                    dest_addr = reloaded;
+                }
             }
 
             inst_list = codegen_call_shortstring_copy(inst_list, ctx, dest_addr, array_size, src_addr);
