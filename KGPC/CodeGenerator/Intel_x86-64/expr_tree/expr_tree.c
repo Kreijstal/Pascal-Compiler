@@ -2219,6 +2219,13 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         {
             /* Fall through to create a leaf TYPECAST node */
         }
+        /* Narrowing integer typecasts (e.g. byte(result), word(x)) must NOT be
+         * stripped: the inner value could be wider and the high bits must be
+         * masked out.  Keep as a leaf so gencode_case0 emits the mask. */
+        else if (tc_target == BYTE_TYPE || tc_target == WORD_TYPE)
+        {
+            /* Fall through to create a leaf TYPECAST node */
+        }
         else
         {
             return build_expr_tree(tc_inner);
