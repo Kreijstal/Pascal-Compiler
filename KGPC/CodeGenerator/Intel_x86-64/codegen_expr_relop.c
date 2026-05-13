@@ -89,6 +89,9 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr, CodeGe
     return 0;
 }
 
+/* Keep set-byte * 8 arithmetic in int range when deriving max bit index. */
+enum { CODEGEN_MAX_SET_STORAGE_BYTES = INT_MAX / 8 };
+
 static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, CodeGenContext *ctx, Register_t *value_reg)
 {
     if (value_reg == NULL)
@@ -316,8 +319,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         Register_t *set_addr_reg = NULL;
         if (set_storage_bytes > 4)
         {
-            if (set_storage_bytes > (INT_MAX / 8))
-                set_storage_bytes = INT_MAX / 8;
+            if (set_storage_bytes > CODEGEN_MAX_SET_STORAGE_BYTES)
+                set_storage_bytes = CODEGEN_MAX_SET_STORAGE_BYTES;
             set_max_bit = set_storage_bytes * 8 - 1;
 
             free_reg(get_reg_stack(), set_val_reg);
@@ -355,20 +358,20 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob_label);
         inst_list = add_inst(inst_list, buffer);
         {
-            char buffer_tmpl[128];
-            snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tcmpl\t$%d, %%0\n", set_max_bit);
+            char cmp_template[128];
+            snprintf(cmp_template, sizeof(cmp_template), "\tcmpl\t$%d, %%0\n", set_max_bit);
             Register_t *u[] = {elem_reg};
-            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, cmp_template);
         }
         snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob_label);
         inst_list = add_inst(inst_list, buffer);
 
         if (set_addr_reg != NULL)
         {
-            char buffer_tmpl[128];
-            snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tbtl\t%%0, (%s)\n", set_addr_reg->bit_64);
+            char btl_template[128];
+            snprintf(btl_template, sizeof(btl_template), "\tbtl\t%%0, (%s)\n", set_addr_reg->bit_64);
             Register_t *u[] = {elem_reg};
-            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, btl_template);
         }
         else
         {
