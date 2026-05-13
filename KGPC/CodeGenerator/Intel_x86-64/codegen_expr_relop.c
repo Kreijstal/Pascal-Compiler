@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 
 #include "codegen.h"
 #include "codegen_expression.h"
@@ -52,6 +53,40 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
     if (reg == NULL)
         codegen_report_error(ctx, "ERROR: Unable to allocate register for %s.", usage);
     return reg;
+}
+
+static int codegen_infer_set_storage_bytes(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL && kgpc_type_is_set(expr_type))
+    {
+        long long size = kgpc_type_sizeof(expr_type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
+        {
+            if (node->const_set_value != NULL && node->const_set_size > 0)
+                return node->const_set_size;
+
+            if (node->type != NULL && kgpc_type_is_set(node->type))
+            {
+                long long size = kgpc_type_sizeof(node->type);
+                if (size > 0)
+                    return (int)size;
+            }
+        }
+    }
+
+    return 0;
 }
 
 static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, CodeGenContext *ctx, Register_t *value_reg)
@@ -276,6 +311,26 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             }
         }
 
+        int set_storage_bytes = codegen_infer_set_storage_bytes(right_expr, ctx);
+        int set_max_bit = 31;
+        Register_t *set_addr_reg = NULL;
+        if (set_storage_bytes > 4)
+        {
+            if (set_storage_bytes > (INT_MAX / 8))
+                set_storage_bytes = INT_MAX / 8;
+            set_max_bit = set_storage_bytes * 8 - 1;
+
+            free_reg(get_reg_stack(), set_val_reg);
+            set_val_reg = NULL;
+            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+            if (codegen_had_error(ctx) || set_addr_reg == NULL)
+            {
+                if (elem_reg != NULL)
+                    free_reg(get_reg_stack(), elem_reg);
+                return inst_list;
+            }
+        }
+
         /* Reload elem if spilled */
         if (elem_spill != NULL)
         {
@@ -299,13 +354,28 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         { Register_t *u[] = {elem_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n"); }
         snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob_label);
         inst_list = add_inst(inst_list, buffer);
-        { Register_t *u[] = {elem_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$31, %0\n"); }
+        {
+            char buffer_tmpl[128];
+            snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tcmpl\t$%d, %%0\n", set_max_bit);
+            Register_t *u[] = {elem_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+        }
         snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob_label);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
-            elem_reg->bit_32, set_val_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        if (set_addr_reg != NULL)
+        {
+            char buffer_tmpl[128];
+            snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tbtl\t%%0, (%s)\n", set_addr_reg->bit_64);
+            Register_t *u[] = {elem_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
+                elem_reg->bit_32, set_val_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
         snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n",
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
@@ -324,7 +394,10 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
-        free_reg(get_reg_stack(), set_val_reg);
+        if (set_addr_reg != NULL)
+            free_reg(get_reg_stack(), set_addr_reg);
+        if (set_val_reg != NULL)
+            free_reg(get_reg_stack(), set_val_reg);
         free_reg(get_reg_stack(), elem_reg);
         return inst_list;
     }
