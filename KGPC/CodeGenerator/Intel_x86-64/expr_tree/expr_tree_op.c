@@ -1267,6 +1267,35 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = add_inst(inst_list, buffer);
                         bit_base = temp_reg;
                     }
+                    else if (bit_base != NULL && right_expr != NULL &&
+                             right_expr->type == EXPR_VAR_ID &&
+                             right_expr->expr_data.id != NULL &&
+                             ctx != NULL && ctx->symtab != NULL)
+                    {
+                        /* If right operand is a var-parameter VAR_ID, the operand the
+                         * leaf produced is the parameter slot which holds the *pointer*
+                         * to the caller's set, not the set value.  Dereference: load
+                         * the pointer, then load 4 bytes of the pointed-to set. */
+                        HashNode_t *node = NULL;
+                        if (FindSymbol(&node, ctx->symtab, right_expr->expr_data.id) &&
+                            node != NULL && node->is_var_parameter)
+                        {
+                            const char *temp_reg64 = "%r10";
+                            const char *temp_reg32 = "%r10d";
+                            if (left_reg != NULL && left_reg->reg_id == REG_R10)
+                            {
+                                temp_reg64 = "%r11";
+                                temp_reg32 = "%r11d";
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                bit_base, temp_reg64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n",
+                                temp_reg64, temp_reg32);
+                            inst_list = add_inst(inst_list, buffer);
+                            bit_base = temp_reg32;
+                        }
+                    }
 
                     if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
                     {

@@ -259,6 +259,23 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
+        /* If right_expr is a var-parameter VAR_ID, set_val_reg holds the parameter's
+         * pointer value, not the dereferenced set.  Dereference: load the first
+         * 4 bytes of the pointed-to set into set_val_reg. */
+        if (right_expr != NULL && right_expr->type == EXPR_VAR_ID &&
+            right_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, right_expr->expr_data.id) && node != NULL &&
+                node->is_var_parameter)
+            {
+                char buffer_tmpl[128];
+                snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovl\t(%s), %s\n",
+                    set_val_reg->bit_64, set_val_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer_tmpl);
+            }
+        }
+
         /* Reload elem if spilled */
         if (elem_spill != NULL)
         {
