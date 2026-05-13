@@ -2199,7 +2199,7 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     CodeGenContext *ctx, Register_t *target_reg);
 static struct Expression *expr_tree_simplify_to_literal(const struct Expression *expr);
 static expr_node_t *build_expr_tree_internal(struct Expression *expr,
-    int preserve_narrowing_typecast);
+    int preserve_narrowing_in_arithmetic);
 
 /* Builds an expression tree out of an expression */
 /* WARNING: Does not make deep copy of expression */
@@ -2210,7 +2210,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 }
 
 static expr_node_t *build_expr_tree_internal(struct Expression *expr,
-    int preserve_narrowing_typecast)
+    int preserve_narrowing_in_arithmetic)
 {
     assert(expr != NULL);
 
@@ -2228,7 +2228,7 @@ static expr_node_t *build_expr_tree_internal(struct Expression *expr,
         {
             preserve_leaf_typecast = 1;
         }
-        else if (preserve_narrowing_typecast &&
+        else if (preserve_narrowing_in_arithmetic &&
                  (tc_target == BYTE_TYPE || tc_target == WORD_TYPE))
         {
             preserve_leaf_typecast = 1;
@@ -2236,7 +2236,7 @@ static expr_node_t *build_expr_tree_internal(struct Expression *expr,
 
         if (!preserve_leaf_typecast)
         {
-            return build_expr_tree_internal(tc_inner, preserve_narrowing_typecast);
+            return build_expr_tree_internal(tc_inner, preserve_narrowing_in_arithmetic);
         }
     }
 
@@ -4965,6 +4965,8 @@ cleanup_constructor:
               expr->expr_data.typecast_data.target_type == WORD_TYPE))
     {
         struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+        const int byte_mask = 255;
+        const int word_mask = 65535;
         expr_node_t *inner_tree = build_expr_tree(inner_expr);
         if (inner_tree == NULL)
             return inst_list;
@@ -4973,9 +4975,9 @@ cleanup_constructor:
         free_expr_tree(inner_tree);
 
         if (expr->expr_data.typecast_data.target_type == BYTE_TYPE)
-            snprintf(buffer, sizeof(buffer), "\tandl\t$255, %s\n", target_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", byte_mask, target_reg->bit_32);
         else
-            snprintf(buffer, sizeof(buffer), "\tandl\t$65535, %s\n", target_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", word_mask, target_reg->bit_32);
 
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
