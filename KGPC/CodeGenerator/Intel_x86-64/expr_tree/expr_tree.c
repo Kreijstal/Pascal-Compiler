@@ -2198,11 +2198,19 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 static struct Expression *expr_tree_simplify_to_literal(const struct Expression *expr);
+static expr_node_t *build_expr_tree_internal(struct Expression *expr,
+    int preserve_narrowing_typecast);
 
 /* Builds an expression tree out of an expression */
 /* WARNING: Does not make deep copy of expression */
 /* WARNING: Does not do relational expressions */
 expr_node_t *build_expr_tree(struct Expression *expr)
+{
+    return build_expr_tree_internal(expr, 0);
+}
+
+static expr_node_t *build_expr_tree_internal(struct Expression *expr,
+    int preserve_narrowing_typecast)
 {
     assert(expr != NULL);
 
@@ -2214,14 +2222,21 @@ expr_node_t *build_expr_tree(struct Expression *expr)
          * gencode_case0 can emit an address computation instead of a value load. */
         struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
         int tc_target = expr->expr_data.typecast_data.target_type;
+        int preserve_leaf_typecast = 0;
         if (tc_target == POINTER_TYPE && tc_inner->is_array_expr &&
             codegen_expr_is_addressable(tc_inner))
         {
-            /* Fall through to create a leaf TYPECAST node */
+            preserve_leaf_typecast = 1;
         }
-        else
+        else if (preserve_narrowing_typecast &&
+                 (tc_target == BYTE_TYPE || tc_target == WORD_TYPE))
         {
-            return build_expr_tree(tc_inner);
+            preserve_leaf_typecast = 1;
+        }
+
+        if (!preserve_leaf_typecast)
+        {
+            return build_expr_tree_internal(tc_inner, preserve_narrowing_typecast);
         }
     }
 
@@ -2237,16 +2252,20 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     switch(expr->type)
     {
         case EXPR_ADDOP:
-            new_node->left_expr = build_expr_tree(expr->expr_data.addop_data.left_expr);
-            new_node->right_expr = build_expr_tree(expr->expr_data.addop_data.right_term);
+            new_node->left_expr = build_expr_tree_internal(
+                expr->expr_data.addop_data.left_expr, 1);
+            new_node->right_expr = build_expr_tree_internal(
+                expr->expr_data.addop_data.right_term, 1);
             break;
         case EXPR_MULOP:
-            new_node->left_expr = build_expr_tree(expr->expr_data.mulop_data.left_term);
-            new_node->right_expr = build_expr_tree(expr->expr_data.mulop_data.right_factor);
+            new_node->left_expr = build_expr_tree_internal(
+                expr->expr_data.mulop_data.left_term, 1);
+            new_node->right_expr = build_expr_tree_internal(
+                expr->expr_data.mulop_data.right_factor, 1);
             break;
 
         case EXPR_SIGN_TERM:
-            new_node->left_expr = build_expr_tree(expr->expr_data.sign_term);
+            new_node->left_expr = build_expr_tree_internal(expr->expr_data.sign_term, 1);
             new_node->right_expr = NULL;
             break;
 
@@ -2281,14 +2300,14 @@ expr_node_t *build_expr_tree(struct Expression *expr)
             break;
 
         case EXPR_RELOP:
-            new_node->left_expr = build_expr_tree(expr->expr_data.relop_data.left);
+            new_node->left_expr = build_expr_tree_internal(expr->expr_data.relop_data.left, 1);
             if (expr->expr_data.relop_data.type == NOT)
             {
                 new_node->right_expr = NULL;
                 break;
             }
             assert(expr->expr_data.relop_data.right != NULL);
-            new_node->right_expr = build_expr_tree(expr->expr_data.relop_data.right);
+            new_node->right_expr = build_expr_tree_internal(expr->expr_data.relop_data.right, 1);
             break;
 
         default:
@@ -4939,6 +4958,27 @@ cleanup_constructor:
     else if (expr->type == EXPR_RECORD_ACCESS)
     {
         return codegen_record_access(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             (expr->expr_data.typecast_data.target_type == BYTE_TYPE ||
+              expr->expr_data.typecast_data.target_type == WORD_TYPE))
+    {
+        struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+        expr_node_t *inner_tree = build_expr_tree(inner_expr);
+        if (inner_tree == NULL)
+            return inst_list;
+
+        inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+        free_expr_tree(inner_tree);
+
+        if (expr->expr_data.typecast_data.target_type == BYTE_TYPE)
+            snprintf(buffer, sizeof(buffer), "\tandl\t$255, %s\n", target_reg->bit_32);
+        else
+            snprintf(buffer, sizeof(buffer), "\tandl\t$65535, %s\n", target_reg->bit_32);
+
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
     }
     else if (expr->type == EXPR_TYPECAST &&
              expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
