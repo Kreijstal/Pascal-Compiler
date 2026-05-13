@@ -3527,10 +3527,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             HashNode_t *dyn_node = NULL;
             if (FindSymbol(&dyn_node, symtab, arg_id) != 0 &&
                 dyn_node != NULL && dyn_node->type != NULL &&
-                kgpc_type_is_dynamic_array(dyn_node->type) &&
-                (dyn_node->hash_type == HASHTYPE_VAR ||
-                 dyn_node->hash_type == HASHTYPE_ARRAY ||
-                 dyn_node->hash_type == HASHTYPE_FUNCTION_RETURN))
+                kgpc_type_is_dynamic_array(dyn_node->type))
             {
                 long long elem_size = kgpc_type_get_array_element_size(dyn_node->type);
                 if (elem_size <= 0)
