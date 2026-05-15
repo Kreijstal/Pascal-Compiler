@@ -3,9 +3,12 @@
 int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
     struct Expression *array_expr)
 {
-    if (array_node != NULL && array_node->element_size > 0)
-        return array_node->element_size;
-
+    /* Prefer KgpcType-derived immediate element size: for a multi-level type
+     * like `array of array[0..3] of array of longint`, array_node->element_size
+     * holds the innermost scalar (4 bytes for longint) — wrong for SetLength on
+     * the outer dyn array, which needs the size of TMidStat (4×16 = 64 bytes).
+     * The expression-based lookup walks one level only and returns the correct
+     * immediate element size. */
     if (array_expr != NULL)
     {
         long long elem_size = expr_get_array_element_size(array_expr, ctx);
@@ -22,6 +25,9 @@ int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_n
         if (elem_size > 0 && elem_size <= INT_MAX)
             return (int)elem_size;
     }
+
+    if (array_node != NULL && array_node->element_size > 0)
+        return array_node->element_size;
 
     const char *array_name = NULL;
     if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
