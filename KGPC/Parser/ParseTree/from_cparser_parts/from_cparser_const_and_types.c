@@ -1554,6 +1554,13 @@ int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
                     return 0;
                 }
             }
+            else if (pascal_identifier_equals(func_name, "Length") &&
+                     arg != NULL && arg->typ == PASCAL_T_STRING &&
+                     arg->sym != NULL && arg->sym->name != NULL)
+            {
+                *out_value = (int)strlen(arg->sym->name);
+                return 0;
+            }
         }
         /* Typecast expressions like tregister($05000000) are parsed as
          * FUNC_CALL where child is the type name and child->next is the
