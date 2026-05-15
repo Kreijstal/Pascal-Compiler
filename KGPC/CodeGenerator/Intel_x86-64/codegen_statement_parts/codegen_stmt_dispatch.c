@@ -1144,6 +1144,63 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     free_reg(get_reg_stack(), src_reg);
                 }
             }
+            if (!handled_record_sret && return_expr != NULL && ctx != NULL &&
+                ctx->current_record_return_slot != NULL &&
+                ctx->current_record_return_size > 0 &&
+                expr_has_type_tag(return_expr, STRING_TYPE))
+            {
+                /* Exit(string_expr) for a shortstring-SRET function: the
+                 * scalar fallback would only park the source address in
+                 * %rax, leaving the caller's hidden buffer uninitialised.
+                 * Lower like a normal `Result := string_expr` by routing
+                 * through kgpc_string_to_shortstring(SRET_buf, src, size). */
+                StackNode_t *dest_slot = ctx->current_record_return_slot;
+                long long capacity = ctx->current_record_return_size;
+
+                Register_t *src_reg = NULL;
+                inst_list = codegen_expr_with_result(return_expr, inst_list, ctx, &src_reg);
+
+                if (!codegen_had_error(ctx) && src_reg != NULL)
+                {
+                    char buf[128];
+                    if (codegen_target_is_windows())
+                    {
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t-%d(%%rbp), %%rcx\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buf);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                            "\tmovq\t%0, %rdx\n");
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t$%lld, %%r8\n", capacity);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                    else
+                    {
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t-%d(%%rbp), %%rdi\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buf);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                            "\tmovq\t%0, %rsi\n");
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t$%lld, %%rdx\n", capacity);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                    free_reg(get_reg_stack(), src_reg);
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_shortstring");
+                    free_arg_regs();
+                    snprintf(buf, sizeof(buf),
+                        "\tmovq\t-%d(%%rbp), %%rax\n", dest_slot->offset);
+                    inst_list = add_inst(inst_list, buf);
+                    handled_record_sret = 1;
+                }
+                else if (src_reg != NULL)
+                {
+                    free_reg(get_reg_stack(), src_reg);
+                }
+            }
             if (return_expr != NULL && !handled_record_sret)
             {
                 /* Evaluate the return expression */
