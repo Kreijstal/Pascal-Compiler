@@ -89,6 +89,32 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr, CodeGe
     return 0;
 }
 
+static int codegen_expr_is_large_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_is_char_set_ctx(expr, ctx))
+        return 1;
+
+    if (codegen_infer_set_storage_bytes(expr, ctx) > 4)
+        return 1;
+
+    if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return codegen_expr_is_large_set_ctx(expr->expr_data.addop_data.left_expr, ctx) ||
+            codegen_expr_is_large_set_ctx(expr->expr_data.addop_data.right_term, ctx);
+    }
+
+    if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return codegen_expr_is_large_set_ctx(expr->expr_data.mulop_data.left_term, ctx) ||
+            codegen_expr_is_large_set_ctx(expr->expr_data.mulop_data.right_factor, ctx);
+    }
+
+    return 0;
+}
+
 /* Clamp inferred set width so `(bytes * 8 - 1)` always stays within signed-int
  * range used by immediate compare emission below. */
 enum { CODEGEN_MAX_SET_STORAGE_BYTES = INT_MAX / 8 };
@@ -403,6 +429,86 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (set_val_reg != NULL)
             free_reg(get_reg_stack(), set_val_reg);
         free_reg(get_reg_stack(), elem_reg);
+        return inst_list;
+    }
+
+    if ((relop_kind == EQ || relop_kind == NE) &&
+        ((left_expr != NULL && codegen_expr_is_large_set_ctx(left_expr, ctx)) ||
+         (right_expr != NULL && codegen_expr_is_large_set_ctx(right_expr, ctx))))
+    {
+        Register_t *left_addr = NULL;
+        Register_t *right_addr = NULL;
+        Register_t *acc = NULL;
+        Register_t *tmp = NULL;
+        StackNode_t *left_addr_spill = NULL;
+
+        inst_list = codegen_char_set_address(left_expr, inst_list, ctx, &left_addr);
+        if (codegen_had_error(ctx) || left_addr == NULL)
+            return inst_list;
+
+        left_addr_spill = add_l_t("relop_set_laddr");
+        if (left_addr_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                left_addr->bit_64, left_addr_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), left_addr);
+            left_addr = NULL;
+        }
+
+        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &right_addr);
+        if (codegen_had_error(ctx) || right_addr == NULL)
+        {
+            if (left_addr != NULL)
+                free_reg(get_reg_stack(), left_addr);
+            return inst_list;
+        }
+
+        if (left_addr_spill != NULL)
+        {
+            left_addr = codegen_try_get_reg(&inst_list, ctx, "relop_set_laddr_reload");
+            if (left_addr == NULL)
+            {
+                free_reg(get_reg_stack(), right_addr);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                left_addr_spill->offset, left_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        acc = codegen_try_get_reg(&inst_list, ctx, "relop_set_acc");
+        tmp = codegen_try_get_reg(&inst_list, ctx, "relop_set_tmp");
+        if (acc == NULL || tmp == NULL)
+        {
+            if (tmp != NULL) free_reg(get_reg_stack(), tmp);
+            if (acc != NULL) free_reg(get_reg_stack(), acc);
+            free_reg(get_reg_stack(), left_addr);
+            free_reg(get_reg_stack(), right_addr);
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", acc->bit_64, acc->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        for (int i = 0; i < 4; ++i)
+        {
+            int byte_off = i * 8;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+                byte_off, left_addr->bit_64, tmp->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\txorq\t%d(%s), %s\n",
+                byte_off, right_addr->bit_64, tmp->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\torq\t%s, %s\n", tmp->bit_64, acc->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", acc->bit_64, acc->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), tmp);
+        free_reg(get_reg_stack(), acc);
+        free_reg(get_reg_stack(), left_addr);
+        free_reg(get_reg_stack(), right_addr);
         return inst_list;
     }
 

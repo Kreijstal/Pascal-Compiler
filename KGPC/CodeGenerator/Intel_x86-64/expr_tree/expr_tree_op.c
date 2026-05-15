@@ -36,6 +36,33 @@
 
 #include "expr_tree_internal.h"
 
+static int expr_tree_is_large_set_expr(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_is_char_set_ctx(expr, ctx))
+        return 1;
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL && kgpc_type_is_set(type) && kgpc_type_sizeof(type) > 4)
+        return 1;
+
+    if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return expr_tree_is_large_set_expr(expr->expr_data.addop_data.left_expr, ctx) ||
+            expr_tree_is_large_set_expr(expr->expr_data.addop_data.right_term, ctx);
+    }
+
+    if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return expr_tree_is_large_set_expr(expr->expr_data.mulop_data.left_term, ctx) ||
+            expr_tree_is_large_set_expr(expr->expr_data.mulop_data.right_factor, ctx);
+    }
+
+    return 0;
+}
+
 ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, char *buffer, int buf_len, OperandKind *out_kind)
 {
@@ -931,6 +958,23 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             }
             if (expr_get_type_tag(expr) == SET_TYPE)
             {
+                if (expr_tree_is_large_set_expr(expr, ctx))
+                {
+                    Register_t *set_addr_reg = NULL;
+                    inst_list = codegen_char_set_address(expr, inst_list, ctx, &set_addr_reg);
+                    if (set_addr_reg != NULL && left_reg != NULL)
+                    {
+                        if (set_addr_reg->reg_id != left_reg->reg_id)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                set_addr_reg->bit_64, left_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (set_addr_reg != NULL)
+                        free_reg(get_reg_stack(), set_addr_reg);
+                    break;
+                }
                 /* Set operations use 32-bit instructions; ensure register names are 32-bit */
                 const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
                 const char *right32 = (right_reg != NULL) ? right_reg->bit_32 : right;
@@ -1406,6 +1450,93 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
                     } /* end small-set register-form path */
                 }
+                break;
+            }
+
+            if ((relop_kind == EQ || relop_kind == NE) &&
+                left_reg != NULL &&
+                ((left_expr != NULL && expr_tree_is_large_set_expr(left_expr, ctx)) ||
+                 (right_expr != NULL && expr_tree_is_large_set_expr(right_expr, ctx))))
+            {
+                Register_t *left_addr = NULL;
+                Register_t *right_addr = NULL;
+                Register_t *tmp = NULL;
+                StackNode_t *left_addr_spill = NULL;
+                const char *left32 = left_reg->bit_32;
+                const char *left8 = reg32_to_reg8(left32, left_reg);
+                const char *set_instr = (relop_kind == EQ) ? "sete" : "setne";
+
+                inst_list = codegen_char_set_address(left_expr, inst_list, ctx, &left_addr);
+                if (left_addr == NULL)
+                    break;
+
+                left_addr_spill = add_l_t("relop_set_laddr");
+                if (left_addr_spill != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        left_addr->bit_64, left_addr_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), left_addr);
+                    left_addr = NULL;
+                }
+
+                inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &right_addr);
+                if (right_addr == NULL)
+                {
+                    if (left_addr != NULL)
+                        free_reg(get_reg_stack(), left_addr);
+                    break;
+                }
+
+                if (left_addr_spill != NULL)
+                {
+                    left_addr = codegen_try_get_reg(&inst_list, ctx, "relop_set_laddr_reload");
+                    if (left_addr == NULL)
+                    {
+                        free_reg(get_reg_stack(), right_addr);
+                        break;
+                    }
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        left_addr_spill->offset, left_addr->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                tmp = codegen_try_get_reg(&inst_list, ctx, "relop_set_tmp");
+                if (tmp == NULL)
+                {
+                    free_reg(get_reg_stack(), left_addr);
+                    free_reg(get_reg_stack(), right_addr);
+                    break;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", left_reg->bit_64, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                for (int i = 0; i < 4; ++i)
+                {
+                    int byte_off = i * 8;
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+                        byte_off, left_addr->bit_64, tmp->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\txorq\t%d(%s), %s\n",
+                        byte_off, right_addr->bit_64, tmp->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\torq\t%s, %s\n",
+                        tmp->bit_64, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", left_reg->bit_64, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                if (left8 != NULL && set_instr != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, left8);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                free_reg(get_reg_stack(), tmp);
+                free_reg(get_reg_stack(), left_addr);
+                free_reg(get_reg_stack(), right_addr);
                 break;
             }
 
