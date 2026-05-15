@@ -2837,17 +2837,55 @@ static const char *kgpc_val_skip_trailing_whitespace(const char *ptr)
     return ptr;
 }
 
+/* Detect Pascal integer prefix: $/$x=hex, %=binary, &=octal; return base and skip prefix */
+static int kgpc_val_detect_base(const char **ptr)
+{
+    if (**ptr == '$' || **ptr == 'x' || **ptr == 'X')
+    {
+        (*ptr)++;
+        return 16;
+    }
+    if (**ptr == '%')
+    {
+        (*ptr)++;
+        return 2;
+    }
+    if (**ptr == '&')
+    {
+        (*ptr)++;
+        return 8;
+    }
+    if (**ptr == '0' && ((*ptr)[1] == 'x' || (*ptr)[1] == 'X'))
+    {
+        (*ptr) += 2;
+        return 16;
+    }
+    return 10;
+}
+
 static long long kgpc_val_parse_integer(const char *text, long long min_value,
     long long max_value, long long *out_value)
 {
     if (text == NULL)
         text = "";
 
+    const char *ptr = text;
+    while (*ptr != '\0' && isspace((unsigned char)*ptr))
+        ++ptr;
+
+    int negative = 0;
+    if (*ptr == '-') { negative = 1; ++ptr; }
+    else if (*ptr == '+') { ++ptr; }
+
+    int base = kgpc_val_detect_base(&ptr);
+
     errno = 0;
     char *endptr = NULL;
-    long long value = strtoll(text, &endptr, 10);
-    if (endptr == text)
+    unsigned long long uvalue = strtoull(ptr, &endptr, base);
+    if (endptr == ptr)
         return 1;
+
+    long long value = negative ? -(long long)uvalue : (long long)uvalue;
 
     if (errno == ERANGE || value < min_value || value > max_value)
         return kgpc_val_error_position(text, endptr);
@@ -2873,10 +2911,14 @@ static long long kgpc_val_parse_unsigned(const char *text, unsigned long long ma
 
     if (*ptr == '-')
         return kgpc_val_error_position(text, ptr);
+    if (*ptr == '+')
+        ++ptr;
+
+    int base = kgpc_val_detect_base(&ptr);
 
     errno = 0;
     char *endptr = NULL;
-    unsigned long long value = strtoull(ptr, &endptr, 10);
+    unsigned long long value = strtoull(ptr, &endptr, base);
     if (endptr == ptr)
         return 1;
 
