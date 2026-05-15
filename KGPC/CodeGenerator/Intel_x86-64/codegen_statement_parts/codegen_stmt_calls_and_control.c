@@ -2662,13 +2662,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            if (var_type_3 == CHAR_TYPE)
+            if (var_type_3 == CHAR_TYPE || pointer_target_size == 1)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)
                 {
                     codegen_report_error(ctx,
-                        "ERROR: Unable to select 8-bit register for character assignment.");
+                        "ERROR: Unable to select 8-bit register for byte/char assignment.");
                 }
                 else
                 {
