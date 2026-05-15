@@ -1080,7 +1080,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             assign_expr->type != EXPR_ARRAY_LITERAL &&
             codegen_get_char_array_bounds(var_expr, ctx, &array_lower, &array_upper, &array_is_shortstring) &&
             (codegen_expr_is_shortstring_value_local(assign_expr) ||
-             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE))
+             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
+             codegen_expr_is_shortstring_array(assign_expr)))
         {
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
