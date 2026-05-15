@@ -702,23 +702,27 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
             codegen_set_contains(&g_available_subprograms_set, full_mangled))
             slot_label = full_mangled;
-        if (slot_label != NULL) {
-            fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
-        } else if (full_mangled != NULL) {
+        if (slot_label == NULL && full_mangled != NULL) {
             /* Not in available subprograms — check symtab for a real
-             * implementation (has statement_list).  This handles cross-unit
-             * methods while keeping abstract methods as error handlers. */
+             * implementation (has statement_list).  When present, pin it as
+             * used so the method body survives DCE and the VMT slot links. */
             HashNode_t *sym = NULL;
-            int has_impl = 0;
             if (FindSymbol(&sym, symtab, full_mangled) != 0 && sym != NULL &&
                 sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
                 sym->type->info.proc_info.definition != NULL &&
                 sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
-                has_impl = 1;
-            if (has_impl)
-                fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
-            else
-                fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+            {
+                Tree_t *def = sym->type->info.proc_info.definition;
+                const char *emit_target = codegen_subprogram_emission_symbol(sym);
+                if (emit_target == NULL)
+                    emit_target = full_mangled;
+                def->tree_data.subprogram_data.is_used = 1;
+                codegen_keep_subprogram_label(emit_target);
+                slot_label = emit_target;
+            }
+        }
+        if (slot_label != NULL) {
+            fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
         } else {
             fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
         }
