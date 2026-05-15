@@ -1251,6 +1251,73 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 }
                 else
                 {
+                    /* Check if the set is larger than 4 bytes (not a char set, but still
+                     * too large for register-form btl).  Sets with > 32 elements store
+                     * bits beyond index 31 in higher bytes.  Register-form btl only sees
+                     * the first 4 bytes loaded into right_reg, so elements with ordinal > 31
+                     * would always appear absent.  Use address + memory-form btl instead. */
+                    int set_storage_bytes = 0;
+                    if (right_expr != NULL)
+                    {
+                        KgpcType *set_ktype = expr_get_kgpc_type(right_expr);
+                        if (set_ktype != NULL && kgpc_type_is_set(set_ktype))
+                        {
+                            long long sz = kgpc_type_sizeof(set_ktype);
+                            if (sz > 0)
+                                set_storage_bytes = (int)sz;
+                        }
+                    }
+
+                    if (set_storage_bytes > 4 && left32 != NULL && left8 != NULL)
+                    {
+                        /* Large non-char set: discard loaded value register, re-evaluate
+                         * as address, then use memory-form btl with correct max-bit bound. */
+                        if (right_reg != NULL)
+                        {
+                            free_reg(get_reg_stack(), (Register_t *)right_reg);
+                            right_reg = NULL;
+                        }
+                        Register_t *set_addr_reg = NULL;
+                        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+                        if (set_addr_reg != NULL)
+                        {
+                            int max_bit = set_storage_bytes * 8 - 1;
+                            char in_oob[18], in_done[18];
+                            gen_label(in_oob, sizeof(in_oob), ctx);
+                            gen_label(in_done, sizeof(in_done), ctx);
+
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left32);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, %s\n", max_bit, left32);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n",
+                                left32, set_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", in_done);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            snprintf(buffer, sizeof(buffer), "%s:\n", in_oob);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\txorb\t%s, %s\n", left8, left8);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "%s:\n", in_done);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            free_reg(get_reg_stack(), set_addr_reg);
+                        }
+                    }
+                    else
+                    {
                     const char *right32 = reg_to_reg32(right, right_reg);
                     const char *bit_index = left32;
                     const char *bit_base = right32;
@@ -1299,10 +1366,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                     if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
                     {
-                        /* Bound-check elem against [0..31] for 32-bit register-resident
-                         * sets — register-form btl wraps mod 32, so out-of-domain
-                         * elements would falsely match.  Pascal `n in S` must be FALSE
-                         * when n is outside S's element domain. */
+                        /* Bound-check elem against actual set width.  For sets ≤ 4 bytes
+                         * that's at most 31; for truly small sets it may be less, but
+                         * clamping to 31 is always safe since any element in range will
+                         * have ordinal ≤ 31.  register-form btl wraps mod 32 so we must
+                         * reject out-of-domain elements explicitly. */
+                        int max_bit = (set_storage_bytes > 0) ? set_storage_bytes * 8 - 1 : 31;
+                        if (max_bit > 31) max_bit = 31; /* register form only covers 32 bits */
                         char in_oob[18];
                         char in_done[18];
                         gen_label(in_oob, sizeof(in_oob), ctx);
@@ -1312,7 +1382,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob);
                         inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", bit_index);
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, %s\n", max_bit, bit_index);
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob);
                         inst_list = add_inst(inst_list, buffer);
@@ -1334,6 +1404,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
                         inst_list = add_inst(inst_list, buffer);
                     }
+                    } /* end small-set register-form path */
                 }
                 break;
             }
