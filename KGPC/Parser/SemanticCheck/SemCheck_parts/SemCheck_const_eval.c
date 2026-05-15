@@ -982,6 +982,9 @@ SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
                 signature_match = 1;
                 if (mangled_match && result.exact_match == NULL)
                     result.exact_match = candidate;
+                if (!mangled_match && def != subprogram &&
+                    result.signature_match_diff_mangle == NULL)
+                    result.signature_match_diff_mangle = candidate;
             }
 
             if (result.body_pair_match == NULL &&

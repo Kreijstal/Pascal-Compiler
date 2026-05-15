@@ -196,6 +196,11 @@ typedef struct SubprogramPredeclLookup
     HashNode_t *first_mangled_match;
     HashNode_t *tree_match;
     HashNode_t *body_pair_match;
+    /* First candidate whose signature matches the new declaration but whose
+     * mangled name differs (e.g. existing forward decl uses Pascal-mangled
+     * name and the new decl supplies an "external name" alias that became
+     * its mangled_id). */
+    HashNode_t *signature_match_diff_mangle;
 } SubprogramPredeclLookup;
 
 KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,

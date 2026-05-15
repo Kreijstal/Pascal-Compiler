@@ -1355,7 +1355,51 @@ int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_le
         semcheck_restore_scope(symtab, saved_scope_for_unit);
         return 0;  /* Declaration/body pair already tracked */
     }
-    
+
+    /* Alias-binding case: a prior FORWARD declaration (Pascal-mangled name,
+     * no body yet) is being supplied an "external name 'X'" implementation.
+     * The two declarations differ in mangled_id but share their signature.
+     * Bind the alias onto the existing forward decl rather than creating a
+     * second symbol-table entry, so callers that resolve through the forward
+     * decl still emit `call X` instead of the Pascal-mangled name.
+     *
+     * Restricted to the case where the existing definition has no body
+     * (forward / interface-style declaration).  When the existing definition
+     * already has a body, this is the unrelated "external alias before/after
+     * a separate implementation" pattern used by the system unit's
+     * InterlockedIncrement overloads, which must NOT alias the body. */
+    if (lookup.signature_match_diff_mangle != NULL &&
+        subprogram->tree_data.subprogram_data.cname_override != NULL &&
+        subprogram->tree_data.subprogram_data.cname_override[0] != '\0' &&
+        subprogram->tree_data.subprogram_data.statement_list == NULL)
+    {
+        HashNode_t *existing = lookup.signature_match_diff_mangle;
+        Tree_t *def = NULL;
+        if (existing->type != NULL &&
+            existing->type->kind == TYPE_KIND_PROCEDURE)
+            def = existing->type->info.proc_info.definition;
+        int def_is_forward = (def != NULL &&
+            def->tree_data.subprogram_data.statement_list == NULL);
+        if (def_is_forward)
+        {
+            const char *alias = subprogram->tree_data.subprogram_data.cname_override;
+            if (def->tree_data.subprogram_data.cname_override == NULL ||
+                def->tree_data.subprogram_data.cname_override[0] == '\0')
+            {
+                def->tree_data.subprogram_data.cname_override = strdup(alias);
+            }
+            if (def->tree_data.subprogram_data.mangled_id != NULL)
+                free(def->tree_data.subprogram_data.mangled_id);
+            def->tree_data.subprogram_data.mangled_id = strdup(alias);
+            if (existing->mangled_id != NULL)
+                free(existing->mangled_id);
+            existing->mangled_id = strdup(alias);
+            subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)existing;
+            semcheck_restore_scope(symtab, saved_scope_for_unit);
+            return 0;
+        }
+    }
+
     /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
 
     if(sub_type == TREE_SUBPROGRAM_PROC)
