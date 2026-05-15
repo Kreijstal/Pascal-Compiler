@@ -3089,12 +3089,40 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 if (element->lower->type == EXPR_INUM &&
                     element->lower->expr_data.i_num > 31)
                     return 1;
+                /* Enum-literal identifiers with ordinal > 31 also need the
+                   memory-based path. Resolve via symtab. */
+                if (element->lower->type == EXPR_VAR_ID &&
+                    element->lower->expr_data.id != NULL &&
+                    ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *lit_node = NULL;
+                    if (FindSymbol(&lit_node, ctx->symtab,
+                            element->lower->expr_data.id) != 0 &&
+                        lit_node != NULL &&
+                        lit_node->hash_type == HASHTYPE_CONST &&
+                        lit_node->is_constant &&
+                        lit_node->const_int_value > 31)
+                        return 1;
+                }
             }
             if (element->upper != NULL)
             {
                 if (element->upper->type == EXPR_INUM &&
                     element->upper->expr_data.i_num > 31)
                     return 1;
+                if (element->upper->type == EXPR_VAR_ID &&
+                    element->upper->expr_data.id != NULL &&
+                    ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *lit_node = NULL;
+                    if (FindSymbol(&lit_node, ctx->symtab,
+                            element->upper->expr_data.id) != 0 &&
+                        lit_node != NULL &&
+                        lit_node->hash_type == HASHTYPE_CONST &&
+                        lit_node->is_constant &&
+                        lit_node->const_int_value > 31)
+                        return 1;
+                }
             }
             node = node->next;
         }
