@@ -1,6 +1,6 @@
 #include "../SemCheck_internal.h"
 
-static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
 static void semcheck_ensure_implicit_tobject_parent(struct RecordType *record_info,
                                                     const char *class_name)
 {
@@ -655,7 +655,7 @@ static char *semcheck_append_param_sig(char *sig, const char *type_str)
     return out;
 }
 
-static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param)
+char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param)
 {
     if (params == NULL)
         return NULL;

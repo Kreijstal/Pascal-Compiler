@@ -980,29 +980,61 @@ if (num_best_matches == 1)
             if (class_record != NULL && record_type_is_class(class_record) &&
                 class_record->methods != NULL)
             {
-                for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                /* Two-pass match: first prefer exact mangled-name match (handles
+                 * overloaded constructors like tloopnode.create vs tfornode.create
+                 * where both have same param_count but different signatures), then
+                 * fall back to first-by-name+count for backwards compatibility. */
+                struct MethodInfo *picked = NULL;
+                if (best_match->mangled_id != NULL)
                 {
-                    struct MethodInfo *mi = (struct MethodInfo *)me->cur;
-                    if (mi != NULL && mi->name != NULL &&
-                        (mi->is_virtual || mi->is_override) &&
-                        strcasecmp(mi->name, best_match->method_name) == 0)
+                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
                     {
-                        if (best_match_param_count >= 0 && mi->param_count >= 0 &&
-                            best_match_param_count != mi->param_count)
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi == NULL || mi->name == NULL ||
+                            !(mi->is_virtual || mi->is_override) ||
+                            strcasecmp(mi->name, best_match->method_name) != 0)
                             continue;
-                        ctx->expr->expr_data.function_call_data.is_virtual_call = 1;
-                        ctx->expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
-                        if (ctx->expr->expr_data.function_call_data.self_class_name == NULL)
-                            ctx->expr->expr_data.function_call_data.self_class_name =
-                                strdup(best_match->owner_class);
-                        if (ctx->expr->expr_data.function_call_data.cached_owner_class == NULL)
-                            ctx->expr->expr_data.function_call_data.cached_owner_class =
-                                strdup(best_match->owner_class);
-                        if (ctx->expr->expr_data.function_call_data.cached_method_name == NULL)
-                            ctx->expr->expr_data.function_call_data.cached_method_name =
-                                strdup(best_match->method_name);
-                        break;
+                        const char *cand_mangled = mi->resolved_mangled_id != NULL
+                            ? mi->resolved_mangled_id
+                            : mi->mangled_name;
+                        if (cand_mangled != NULL &&
+                            strcmp(cand_mangled, best_match->mangled_id) == 0)
+                        {
+                            picked = mi;
+                            break;
+                        }
                     }
+                }
+                if (picked == NULL)
+                {
+                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                    {
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi != NULL && mi->name != NULL &&
+                            (mi->is_virtual || mi->is_override) &&
+                            strcasecmp(mi->name, best_match->method_name) == 0)
+                        {
+                            if (best_match_param_count >= 0 && mi->param_count >= 0 &&
+                                best_match_param_count != mi->param_count)
+                                continue;
+                            picked = mi;
+                            break;
+                        }
+                    }
+                }
+                if (picked != NULL)
+                {
+                    ctx->expr->expr_data.function_call_data.is_virtual_call = 1;
+                    ctx->expr->expr_data.function_call_data.vmt_index = picked->vmt_index;
+                    if (ctx->expr->expr_data.function_call_data.self_class_name == NULL)
+                        ctx->expr->expr_data.function_call_data.self_class_name =
+                            strdup(best_match->owner_class);
+                    if (ctx->expr->expr_data.function_call_data.cached_owner_class == NULL)
+                        ctx->expr->expr_data.function_call_data.cached_owner_class =
+                            strdup(best_match->owner_class);
+                    if (ctx->expr->expr_data.function_call_data.cached_method_name == NULL)
+                        ctx->expr->expr_data.function_call_data.cached_method_name =
+                            strdup(best_match->method_name);
                 }
             }
         }

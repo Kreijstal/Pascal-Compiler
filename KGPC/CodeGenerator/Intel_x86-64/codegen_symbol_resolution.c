@@ -16,6 +16,10 @@
 #include "../../flags.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 
+/* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
+ * Build a parameter signature for overload disambiguation. */
+char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+
 /* Globals defined in codegen.c; accessed here for label collection. */
 extern ListNode_t *g_codegen_available_subprograms;
 extern CodeGenStringSet g_available_subprograms_set;
@@ -470,8 +474,36 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
         owner_class_name);
 
     int wanted_param_count = codegen_call_type_method_param_count(call_type);
+
+    /* Compute a signature for the call's params so we can disambiguate
+     * overloaded methods that share a name+param_count but differ in arg
+     * types (e.g. tloopnode.create(tnodetype,4*tnode) vs
+     * tfornode.create(4*tnode,boolean)). */
+    char *call_param_sig = NULL;
+    if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        ListNode_t *params = call_type->info.proc_info.params;
+        int skip_self = 0;
+        if (params != NULL)
+        {
+            Tree_t *first = (Tree_t *)params->cur;
+            if (first != NULL && first->type == TREE_VAR_DECL &&
+                first->tree_data.var_decl_data.ids != NULL)
+            {
+                const char *first_name =
+                    (const char *)first->tree_data.var_decl_data.ids->cur;
+                if (first_name != NULL && pascal_identifier_equals(first_name, "Self"))
+                    skip_self = 1;
+            }
+        }
+        call_param_sig = semcheck_param_sig_from_params(params, skip_self);
+    }
+
     struct MethodInfo *name_match = NULL;
     int name_match_count = 0;
+    struct MethodInfo *first_count_match = NULL;
+    int count_match_count = 0;
+    struct MethodInfo *sig_match = NULL;
     for (ListNode_t *node = record->methods; node != NULL; node = node->next)
     {
         struct MethodInfo *method = (struct MethodInfo *)node->cur;
@@ -489,10 +521,24 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
                 owner_class_name, method_name);
             if (wanted_param_count != method->param_count)
                 continue;
-
-            return method->vmt_index;
+            if (first_count_match == NULL)
+                first_count_match = method;
+            count_match_count++;
+            if (call_param_sig != NULL && method->param_sig != NULL &&
+                strcmp(call_param_sig, method->param_sig) == 0)
+            {
+                sig_match = method;
+            }
         }
     }
+
+    if (call_param_sig != NULL)
+        free(call_param_sig);
+
+    if (sig_match != NULL)
+        return sig_match->vmt_index;
+    if (first_count_match != NULL)
+        return first_count_match->vmt_index;
 
     KGPC_COMPILER_HARD_ASSERT(name_match != NULL,
         "virtual method '%s.%s' is missing from the structured VMT method table",
