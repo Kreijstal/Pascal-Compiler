@@ -67,20 +67,23 @@ static int semcheck_resolve_enum_literal_from_alias(SymTab_t *symtab,
     }
 
     int ordinal = 0;
-    for (ListNode_t *literal_node = alias->enum_literals;
-         literal_node != NULL;
-         literal_node = literal_node->next, ++ordinal)
+    ListNode_t *literal_node = alias->enum_literals;
+    ListNode_t *value_node = alias->enum_values;
+    while (literal_node != NULL)
     {
+        int literal_ordinal = ordinal;
+        if (value_node != NULL && value_node->cur != NULL)
+            literal_ordinal = atoi((const char *)value_node->cur);
         const char *candidate = (const char *)literal_node->cur;
         if (candidate != NULL && pascal_identifier_equals(candidate, literal))
         {
-            KGPC_SEMCHECK_HARD_ASSERT(!alias->enum_has_explicit_values,
-                "contextual enum literal '%s' requires resolver-backed explicit enum values for '%s'",
-                literal,
-                alias->alias_name != NULL ? alias->alias_name : "(anonymous enum)");
-            *out_value = ordinal;
+            *out_value = literal_ordinal;
             return 1;
         }
+        ordinal = literal_ordinal + 1;
+        literal_node = literal_node->next;
+        if (value_node != NULL)
+            value_node = value_node->next;
     }
 
     return 0;

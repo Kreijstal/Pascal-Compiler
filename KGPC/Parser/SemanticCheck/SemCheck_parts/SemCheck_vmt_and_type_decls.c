@@ -817,16 +817,22 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
         {
             int ordinal = 0;
             ListNode_t *literal_node = alias->enum_literals;
+            ListNode_t *value_node = alias->enum_values;
             while (literal_node != NULL)
             {
+                int literal_ordinal = ordinal;
+                if (value_node != NULL && value_node->cur != NULL)
+                    literal_ordinal = atoi((const char *)value_node->cur);
                 if (literal_node->cur != NULL &&
                     pascal_identifier_equals((char *)literal_node->cur, literal_name))
                 {
-                    *out_value = ordinal;
+                    *out_value = literal_ordinal;
                     return 1;
                 }
-                ++ordinal;
+                ordinal = literal_ordinal + 1;
                 literal_node = literal_node->next;
+                if (value_node != NULL)
+                    value_node = value_node->next;
             }
             return 0;
         }
@@ -878,16 +884,22 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
         {
             int ordinal = 0;
             ListNode_t *literal_node = alias->enum_literals;
+            ListNode_t *value_node = alias->enum_values;
             while (literal_node != NULL)
             {
+                int literal_ordinal = ordinal;
+                if (value_node != NULL && value_node->cur != NULL)
+                    literal_ordinal = atoi((const char *)value_node->cur);
                 if (literal_node->cur != NULL &&
                     pascal_identifier_equals((char *)literal_node->cur, literal_name))
                 {
-                    *out_value = ordinal;
+                    *out_value = literal_ordinal;
                     return 1;
                 }
-                ++ordinal;
+                ordinal = literal_ordinal + 1;
                 literal_node = literal_node->next;
+                if (value_node != NULL)
+                    value_node = value_node->next;
             }
             return 0;
         }
