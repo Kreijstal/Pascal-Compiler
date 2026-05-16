@@ -5668,12 +5668,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 /* For multi-dimensional arrays, kgpc_type_sizeof only accounts
                  * for the outer dimension.  Use kgpc_type_get_array_dimension_info
                  * which correctly multiplies all dimension sizes together. */
+                int kgpc_dim_count = 0;
                 if (id_list != NULL && symtab != NULL) {
                     const char *var_name = (const char *)id_list->cur;
                     HashNode_t *var_node = NULL;
                     if (FindSymbol(&var_node, symtab, var_name) && var_node != NULL && var_node->type != NULL) {
                         KgpcArrayDimensionInfo dim_info;
                         if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0) {
+                            kgpc_dim_count = dim_info.dim_count;
                             if (dim_info.strides[0] > 0 &&
                                 dim_info.strides[0] <= INT_MAX)
                             {
@@ -5686,6 +5688,46 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (kgpc_size > total_size)
                                 total_size = (int)kgpc_size;
                         }
+                    }
+                }
+
+                /* For multi-dim typed-consts inside subprograms, FindSymbol on
+                 * the local name returns a KgpcType that only models the outer
+                 * dimension (kgpc_dim_count==1), so total_size ends up at
+                 * outer_length * scalar_element_size — short by the product of
+                 * the inner dimensions.  The parser-built arr->array_dimensions
+                 * list has the full set of ranges; use it whenever the KgpcType
+                 * recorded fewer dimensions than the source declared.  Without
+                 * this, .comm under-allocates and the runtime init loop's
+                 * inner-dim writes overwrite adjacent BSS — the cause of the
+                 * cutils.pas internalerror 2014041302 during pp.pas bootstrap:
+                 * defcmp.pas's 4x4 basedefconvertsexplicit typed-const ran off
+                 * into cpubase_14's guard byte, so flags_to_cond's lookup table
+                 * appeared pre-initialised with zeroes and C_None was returned
+                 * for every integer comparison. */
+                if (arr->array_dimensions != NULL) {
+                    long long product = 1;
+                    int parsed_all = 1;
+                    int count = 0;
+                    ListNode_t *dim_node = arr->array_dimensions;
+                    while (dim_node != NULL && dim_node->type == LIST_STRING &&
+                           dim_node->cur != NULL) {
+                        const char *range_str = (const char *)dim_node->cur;
+                        long long lo = 0, hi = 0;
+                        if (sscanf(range_str, "%lld..%lld", &lo, &hi) == 2 && hi >= lo) {
+                            product *= (hi - lo + 1);
+                            count++;
+                        } else {
+                            parsed_all = 0;
+                            break;
+                        }
+                        dim_node = dim_node->next;
+                    }
+                    if (parsed_all && count > kgpc_dim_count && product > 0 &&
+                        element_size > 0 && product <= INT_MAX / element_size) {
+                        int full = (int)(product * element_size);
+                        if (full > total_size)
+                            total_size = full;
                     }
                 }
 
