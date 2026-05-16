@@ -582,18 +582,33 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     /* Method-pointer (TMethod) assignment: when the LHS is a 16-byte
      * method-pointer storage location (record field of "procedure of object"
-     * type, or a local variable of TMethod type), and the RHS is @x.Method,
-     * copy the full 16 bytes ({code @0; data @8}) from the RHS temporary
-     * into the LHS storage.
+     * type, or a variable of TMethod type), copy the full 16 bytes ({code @0;
+     * data @8}) into the LHS storage.
      *
-     * The RHS path (EXPR_ADDR_OF_PROC with receiver_expr) already builds a
-     * 16-byte TMethod temp on the stack and returns its ADDRESS in
-     * value_reg.  We copy 16 bytes via two movq instructions. */
-    if (var_expr != NULL && assign_expr != NULL &&
-        assign_expr->type == EXPR_ADDR_OF_PROC)
+     * Two RHS shapes need to be covered:
+     *   (a) RHS = @x.Method  (EXPR_ADDR_OF_PROC with a receiver_expr).  The
+     *       value_reg returned by codegen_expr_with_result is the ADDRESS of a
+     *       16-byte TMethod temp built on the stack.
+     *   (b) RHS is another method-pointer-typed addressable expression
+     *       (variable, parameter, record field).  We take the source's
+     *       address with codegen_address_for_expr and copy 16 bytes.
+     *
+     * Without case (b), the fallthrough path treats the assignment as an
+     * 8-byte pointer copy and leaves the Self half of the destination
+     * uninitialised — calls through that field then dispatch with a garbage
+     * Self.  This was the cause of the pp.pas bootstrap crash in
+     * tcallnode.replaceparaload, reached via BoundToStaticForEachNodeAdapter,
+     * which assigns a method-pointer parameter into a record field. */
+    if (var_expr != NULL && assign_expr != NULL)
     {
         int lhs_is_tmethod_storage = 0;
-        if (var_expr->type == EXPR_RECORD_ACCESS)
+        {
+            KgpcType *lhs_type = (lhs_kgpc_type != NULL)
+                ? lhs_kgpc_type : expr_get_kgpc_type(var_expr);
+            if (lhs_type != NULL && kgpc_type_is_method_pointer(lhs_type))
+                lhs_is_tmethod_storage = 1;
+        }
+        if (!lhs_is_tmethod_storage && var_expr->type == EXPR_RECORD_ACCESS)
         {
             struct RecordField *field = codegen_lookup_record_field(var_expr);
             if (field != NULL && field->proc_type != NULL &&
@@ -610,7 +625,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     lhs_is_tmethod_storage = 1;
             }
         }
-        else if (var_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        if (!lhs_is_tmethod_storage && var_expr->type == EXPR_VAR_ID &&
+            ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
             if (FindSymbol(&node, ctx->symtab, var_expr->expr_data.id) != 0 &&
@@ -619,14 +635,28 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 lhs_is_tmethod_storage = 1;
         }
 
-        if (lhs_is_tmethod_storage &&
-            assign_expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+        int rhs_is_method_temp = (assign_expr->type == EXPR_ADDR_OF_PROC &&
+            assign_expr->expr_data.addr_of_proc_data.receiver_expr != NULL);
+        int rhs_is_method_storage = 0;
+        if (!rhs_is_method_temp && lhs_is_tmethod_storage &&
+            codegen_expr_is_addressable(assign_expr))
+        {
+            KgpcType *rhs_type = expr_get_kgpc_type(assign_expr);
+            if (rhs_type != NULL && kgpc_type_is_method_pointer(rhs_type))
+                rhs_is_method_storage = 1;
+        }
+
+        if (lhs_is_tmethod_storage && (rhs_is_method_temp || rhs_is_method_storage))
         {
             Register_t *addr_reg = NULL;
             Register_t *value_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
-            /* The RHS evaluates to the address of the 16-byte TMethod temp. */
-            inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+            /* For (a) value_reg holds the address of a 16-byte TMethod temp;
+             * for (b) value_reg holds the address of the source storage. */
+            if (rhs_is_method_temp)
+                inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+            else
+                inst_list = codegen_address_for_expr(assign_expr, inst_list, ctx, &value_reg);
             if (codegen_had_error(ctx) || addr_reg == NULL || value_reg == NULL)
             {
                 if (addr_reg != NULL)
