@@ -1686,10 +1686,76 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             else
             {
+                /* Spill `reg` (the RHS value) to a temp stack slot before
+                 * acquiring the static link.  Rationale: when the RHS is a
+                 * function/constructor call that was processed via the
+                 * expression-tree codegen, the call's target register can
+                 * end up back in the free list (e.g. via inner argument
+                 * evaluation that reuses and frees it through the
+                 * arg_eval spill path in codegen_pass_arguments).  In that
+                 * state, codegen_acquire_static_link's get_free_reg can
+                 * legitimately return the SAME register, clobbering the
+                 * just-computed call result with the static link, so the
+                 * subsequent store writes the static link (or whatever
+                 * was last loaded into that register) instead of the
+                 * actual RHS value.  Materialising `reg` to a slot first
+                 * makes the assignment robust to any register pressure
+                 * decisions inside codegen_acquire_static_link.
+                 *
+                 * Triggering case observed: pp_bootstrap's
+                 * taddnode.first_addset:call_varset_helper with
+                 *   result := ccallnode.createintern(name,
+                 *     ccallparanode.create(... chained 4 levels ...));
+                 * where `result` is the outer method's return slot
+                 * (scope_depth == 1) — the static-link path. */
+                StackNode_t *value_spill = add_l_t_bytes("nested_result_spill",
+                    CODEGEN_POINTER_SIZE_BYTES);
+                if (value_spill != NULL)
+                {
+                    char spill_tmpl[96];
+                    if (use_byte)
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, value_spill->offset);
+                    else if (use_word)
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovw\t%s, -%d(%%rbp)\n", value_reg16, value_spill->offset);
+                    else if (use_qword)
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovq\t%%0, -%d(%%rbp)\n", value_spill->offset);
+                    else
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovl\t%%0, -%d(%%rbp)\n", value_spill->offset);
+                    Register_t *u_spill[] = {reg};
+                    inst_list = add_inst_du(inst_list, ctx, NULL, 0, u_spill, 1, spill_tmpl);
+                }
+
                 codegen_begin_expression(ctx);
                 Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
                 if (frame_reg != NULL)
                 {
+                    /* Reload value from spill slot (frame_reg may have aliased
+                     * the original `reg`, so `reg` is no longer trustworthy). */
+                    if (value_spill != NULL)
+                    {
+                        char reload_tmpl[96];
+                        if (use_byte)
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovb\t-%d(%%rbp), %s\n",
+                                value_spill->offset, value_reg8);
+                        else if (use_word)
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovw\t-%d(%%rbp), %s\n",
+                                value_spill->offset, value_reg16);
+                        else if (use_qword)
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovq\t-%d(%%rbp), %%0\n", value_spill->offset);
+                        else
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovl\t-%d(%%rbp), %%0\n", value_spill->offset);
+                        Register_t *d_reload[] = {reg};
+                        inst_list = add_inst_du(inst_list, ctx, d_reload, 1, NULL, 0, reload_tmpl);
+                    }
+
                     if (use_qword)
                     {
                         char tmpl[96];
