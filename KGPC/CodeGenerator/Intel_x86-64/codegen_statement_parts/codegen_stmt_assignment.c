@@ -1790,29 +1790,13 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 Register_t *d[] = {dest_reg};
                 inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
             }
-
-            /* src_reg already contains the pointer value - store it directly.
-             * Guard against src_reg/dest_reg aliasing the same physical
-             * register; see comment on codegen_emit_qword_store_aliased_safe
-             * (in codegen_stmt_calls_and_control.c) for the failure mode. */
-            if (src_reg == dest_reg ||
-                (src_reg != NULL && dest_reg != NULL &&
-                 src_reg->bit_64 != NULL && dest_reg->bit_64 != NULL &&
-                 strcmp(src_reg->bit_64, dest_reg->bit_64) == 0))
-            {
-                char raw[160];
-                snprintf(raw, sizeof(raw),
-                    "\tmovq\t-%d(%%rbp), %%r11\n"
-                    "\tmovq\t%s, (%%r11)\n",
-                    dest_save_slot->offset, src_reg->bit_64);
-                inst_list = add_inst(inst_list, raw);
-            }
-            else
+            
+            /* src_reg already contains the pointer value - store it directly */
             {
                 Register_t *u[] = {src_reg, dest_reg};
                 inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
             }
-
+            
             free_reg(get_reg_stack(), src_reg);
         }
         
@@ -2194,7 +2178,7 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             inst_list = add_inst(inst_list, buffer);
                             inst_list = codegen_cleanup_call_stack(inst_list, ctx);
                             codegen_release_function_call_mangled_id(src_expr);
-
+                            
                             /* Restore dest_reg from stack */
                             {
                                 char tmpl[96];
@@ -2202,32 +2186,13 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                                 Register_t *d[] = {dest_reg};
                                 inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
                             }
-
-                            /* Store the instance pointer in the destination.
-                             * Guard against constructor_instance_reg/dest_reg
-                             * aliasing the same physical register (see comment
-                             * on codegen_emit_qword_store_aliased_safe in
-                             * codegen_stmt_calls_and_control.c). */
-                            if (constructor_instance_reg == dest_reg ||
-                                (constructor_instance_reg != NULL && dest_reg != NULL &&
-                                 constructor_instance_reg->bit_64 != NULL &&
-                                 dest_reg->bit_64 != NULL &&
-                                 strcmp(constructor_instance_reg->bit_64,
-                                        dest_reg->bit_64) == 0))
-                            {
-                                char raw[160];
-                                snprintf(raw, sizeof(raw),
-                                    "\tmovq\t-%d(%%rbp), %%r11\n"
-                                    "\tmovq\t%%rax, (%%r11)\n",
-                                    dest_save_slot->offset);
-                                inst_list = add_inst(inst_list, raw);
-                            }
-                            else
+                            
+                            /* Store the instance pointer in the destination */
                             {
                                 Register_t *u[] = {constructor_instance_reg, dest_reg};
                                 inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
                             }
-
+                            
                             free_reg(get_reg_stack(), constructor_instance_reg);
                             free_reg(get_reg_stack(), dest_reg);
                             return inst_list;
