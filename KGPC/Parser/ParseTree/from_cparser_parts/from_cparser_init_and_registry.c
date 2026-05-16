@@ -150,20 +150,48 @@ void enum_registry_scan_type_section(ast_t *type_section) {
         if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
             spec = spec->child;
         if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+            /* Honor explicit ordinal assignments (foo = N).  Without this, an
+             * enum like `tinlinenumber = (in_none = -1, ..., in_inc_x = 35)`
+             * would register each literal with its positional index rather
+             * than its declared value, corrupting any downstream code that
+             * uses the literal as an array bound (e.g. typed-const arrays
+             * indexed by enum range across unit boundaries). */
             int count = 0;
+            int ordinal = 0;
+            int have_bounds = 0;
+            int min_ord = 0;
+            int max_ord = 0;
             for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
                 ast_t *lit_id = lit;
-                if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT)
-                    lit_id = lit_id->child;
+                int literal_value = ordinal;
+                if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT) {
+                    ast_t *name_node = lit_id->child;
+                    ast_t *value_node = (name_node != NULL) ? name_node->next : NULL;
+                    int explicit_val = 0;
+                    if (value_node != NULL &&
+                        evaluate_const_int_expr(value_node, &explicit_val, 0) == 0) {
+                        literal_value = explicit_val;
+                    }
+                    lit_id = name_node;
+                }
                 if (lit_id != NULL && lit_id->typ == PASCAL_T_IDENTIFIER)
                 {
                     if (lit_id->sym != NULL && lit_id->sym->name != NULL)
-                        register_const_int(lit_id->sym->name, count);
+                        register_const_int(lit_id->sym->name, literal_value);
+                    if (!have_bounds) {
+                        min_ord = literal_value;
+                        max_ord = literal_value;
+                        have_bounds = 1;
+                    } else {
+                        if (literal_value < min_ord) min_ord = literal_value;
+                        if (literal_value > max_ord) max_ord = literal_value;
+                    }
                     count++;
+                    ordinal = literal_value + 1;
                 }
             }
             if (count > 0)
-                enum_registry_add(id_node->sym->name, 0, count - 1);
+                enum_registry_add(id_node->sym->name, min_ord, max_ord);
         } else if (spec != NULL && spec->typ == PASCAL_T_RANGE_TYPE) {
             ast_t *lower = spec->child;
             ast_t *upper = (lower != NULL) ? lower->next : NULL;
