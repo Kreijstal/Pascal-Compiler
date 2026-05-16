@@ -555,6 +555,7 @@ typedef struct ArgInfo
     int stack_slot;
     int stack_size;
     int stack_offset;
+    int emitted_via_prepass;
 } ArgInfo;
 
 static void arginfo_register_spill_handler(Register_t *reg, StackNode_t *spill_slot, void *context)
@@ -3791,6 +3792,71 @@ pass_value_arg:
         }
     }
 
+    /* Pre-pass: emit kgpc_move for stack-passed Extended (10-byte) arguments
+     * BEFORE loading any register-passed arguments.  kgpc_move forwards to
+     * memmove and clobbers caller-saved registers including the SysV argument
+     * registers (rdi/rsi/rdx/rcx/r8/r9).  If a later iteration of the main
+     * loop loads a register-passed arg (e.g. %rsi = def) and then the Extended
+     * arg's kgpc_move runs, the register-passed arg's value is destroyed
+     * before the actual call.  By doing all clobbering Extended copies first
+     * (their source is already spilled to the stack frame and the destination
+     * is rsp-relative, so they don't depend on any other arg setup), the
+     * subsequent register-arg loads happen after the last clobber and reach
+     * the callee intact. */
+    if (arg_infos != NULL)
+    {
+        for (int i = arg_num - 1; i >= 0; --i)
+        {
+            int expected_type = arg_infos[i].expected_type;
+            int expected_real_size = arg_infos[i].expected_real_size;
+            int pass_on_stack = arg_infos[i].pass_via_stack;
+            int is_ptr_like = arg_infos[i].is_pointer_like;
+            if (!pass_on_stack)
+                continue;
+            if (arg_infos[i].spill == NULL)
+                continue;
+            if (expected_type != REAL_TYPE || expected_real_size != 16 || is_ptr_like)
+                continue;
+
+            Register_t *src_addr = get_free_reg(get_reg_stack(), &inst_list);
+            if (src_addr == NULL)
+                return inst_list;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                arg_infos[i].spill->offset, src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            if (codegen_target_is_windows())
+            {
+                Register_t *dst_addr = get_free_reg(get_reg_stack(), &inst_list);
+                if (dst_addr == NULL)
+                {
+                    free_reg(get_reg_stack(), src_addr);
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rsp), %s\n",
+                    arg_infos[i].stack_offset, dst_addr->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {dst_addr}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
+                { Register_t *u[] = {src_addr}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+                free_reg(get_reg_stack(), dst_addr);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rsp), %%rdi\n",
+                    arg_infos[i].stack_offset);
+                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {src_addr}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n"); }
+                inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+            }
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+            free_arg_regs();
+            free_reg(get_reg_stack(), src_addr);
+            /* Mark this arg as already emitted so the main loop skips it. */
+            arg_infos[i].emitted_via_prepass = 1;
+        }
+    }
+
     for (int i = arg_num - 1; i >= 0; --i)
     {
         int expected_type = (arg_infos != NULL) ? arg_infos[i].expected_type : UNKNOWN_TYPE;
@@ -3805,6 +3871,8 @@ pass_value_arg:
         int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE
                                  && !is_ptr_like);
         int pass_on_stack = (arg_infos != NULL && arg_infos[i].pass_via_stack);
+        if (arg_infos != NULL && arg_infos[i].emitted_via_prepass)
+            continue;
 
         int reg_index = arg_start_index + i;
         if (!pass_on_stack && arg_infos != NULL && arg_infos[i].assigned_index >= 0)

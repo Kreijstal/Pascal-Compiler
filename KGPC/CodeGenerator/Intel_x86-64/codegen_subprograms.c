@@ -2439,6 +2439,22 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         if (kgpc_type_is_method_pointer(param_type))
                             has_record_or_dynarray = 1;
                     }
+                    /* Extended (10-byte / bestreal) value parameters that are
+                     * stack-passed call kgpc_move at entry to copy the 10-byte
+                     * value from caller's stack slot to the local storage.
+                     * kgpc_move forwards to memmove and does NOT preserve %rsi
+                     * (or other GPRs), so any subsequent register-passed
+                     * parameter would read a clobbered register.  Trigger the
+                     * presave mechanism so all GPR-passed params are spilled
+                     * to home slots before the first kgpc_move call. */
+                    if (!has_record_or_dynarray && !is_var &&
+                        (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE))
+                    {
+                        int scan_real_storage_size = codegen_real_param_storage_size(
+                            scan_decl, NULL, scan_cached_type);
+                        if (scan_real_storage_size == 16)
+                            has_record_or_dynarray = 1;
+                    }
                     /* Value ShortString parameters call kgpc_shortstring_to_shortstring
                      * at entry, which clobbers subsequent parameter registers.
                      * Trigger the presave mechanism so all registers are saved first. */
@@ -2532,6 +2548,17 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
                             scan_sse_index++;
+                        scan_ids = scan_ids->next;
+                        continue;
+                    }
+                    /* Extended (10-byte) value parameters are passed on the
+                     * stack — they don't consume an integer arg register, so
+                     * skip GPR allocation and no presave slot is needed for
+                     * the Extended value itself. */
+                    if (!scan_is_var &&
+                        (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE) &&
+                        scan_real_storage_size == 16)
+                    {
                         scan_ids = scan_ids->next;
                         continue;
                     }
