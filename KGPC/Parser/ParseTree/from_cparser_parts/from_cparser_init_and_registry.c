@@ -1869,7 +1869,7 @@ int is_method_static_with_signature(const char *class_name, const char *method_n
         if (binding->method_name == mn) {
             int matches = 0;
             if (param_sig != NULL && binding->param_sig != NULL) {
-                if (strcmp(binding->param_sig, param_sig) == 0)
+                if (strcasecmp(binding->param_sig, param_sig) == 0)
                     matches = 1;
             } else if (param_count >= 0 && binding->param_count == param_count) {
                 matches = 1;
@@ -2033,7 +2033,7 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
                     if (_b->method_name == mn) { \
                         int _matches = 0; \
                         if (param_sig != NULL && _b->param_sig != NULL) { \
-                            if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                            if (strcasecmp(_b->param_sig, param_sig) == 0) _matches = 1; \
                         } else if (param_count >= 0 && _b->param_count == param_count) { \
                             _matches = 1; \
                         } \

@@ -525,7 +525,7 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
                 first_count_match = method;
             count_match_count++;
             if (call_param_sig != NULL && method->param_sig != NULL &&
-                strcmp(call_param_sig, method->param_sig) == 0)
+                strcasecmp(call_param_sig, method->param_sig) == 0)
             {
                 sig_match = method;
             }

@@ -134,7 +134,7 @@ if (record_info->parent_class_name != NULL) {
                         int skip_self = (!binding->is_static);
                         char *sig = semcheck_param_sig_from_params(
                             cand->type->info.proc_info.params, skip_self);
-                        if (sig != NULL && strcmp(sig, binding->param_sig) == 0)
+                        if (sig != NULL && strcasecmp(sig, binding->param_sig) == 0)
                         {
                             best = cand;
                             free(sig);
@@ -196,7 +196,7 @@ if (record_info->parent_class_name != NULL) {
                         strcasecmp(info->name, binding->method_name) == 0) {
                         int signature_matches = 0;
                         if (binding->param_sig != NULL && info->param_sig != NULL) {
-                            if (strcmp(binding->param_sig, info->param_sig) == 0)
+                            if (strcasecmp(binding->param_sig, info->param_sig) == 0)
                                 signature_matches = 1;
                         } else if (binding->param_count >= 0 && info->param_count >= 0) {
                             if (binding->param_count == info->param_count)
@@ -346,7 +346,7 @@ if (record_info->parent_class_name != NULL) {
             if (mi->param_sig != NULL) {
                 char *cand_sig = semcheck_param_sig_from_params(
                     cand->type->info.proc_info.params, 1);
-                int sig_match = (cand_sig != NULL && strcmp(cand_sig, mi->param_sig) == 0);
+                int sig_match = (cand_sig != NULL && strcasecmp(cand_sig, mi->param_sig) == 0);
                 free(cand_sig);
                 if (!sig_match)
                     continue;
