@@ -5714,13 +5714,43 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                            dim_node->cur != NULL) {
                         const char *range_str = (const char *)dim_node->cur;
                         long long lo = 0, hi = 0;
+                        long long dim_size = 0;
                         if (sscanf(range_str, "%lld..%lld", &lo, &hi) == 2 && hi >= lo) {
-                            product *= (hi - lo + 1);
-                            count++;
-                        } else {
+                            dim_size = hi - lo + 1;
+                        } else if (pascal_identifier_equals(range_str, "Boolean")) {
+                            dim_size = 2;
+                        } else if (symtab != NULL) {
+                            /* Named range/enum: resolve via type symbol's TypeAlias
+                             * (same logic as kgpc_type_get_array_dimension_info's
+                             * alias branch). Necessary for procedure-scope typed
+                             * consts whose KgpcType only models the outer dim. */
+                            HashNode_t *type_node = NULL;
+                            if (FindSymbol(&type_node, symtab, range_str) != 0 &&
+                                type_node != NULL &&
+                                type_node->hash_type == HASHTYPE_TYPE) {
+                                struct TypeAlias *range_alias =
+                                    hashnode_get_type_alias(type_node);
+                                if (range_alias != NULL) {
+                                    if (range_alias->is_enum &&
+                                        range_alias->enum_literals != NULL) {
+                                        dim_size = (long long)ListLength(
+                                            range_alias->enum_literals);
+                                    } else if (range_alias->is_range &&
+                                               range_alias->range_known) {
+                                        long long lower = range_alias->range_start;
+                                        long long upper = range_alias->range_end;
+                                        if (upper >= lower)
+                                            dim_size = upper - lower + 1;
+                                    }
+                                }
+                            }
+                        }
+                        if (dim_size <= 0) {
                             parsed_all = 0;
                             break;
                         }
+                        product *= dim_size;
+                        count++;
                         dim_node = dim_node->next;
                     }
                     if (parsed_all && count > kgpc_dim_count && product > 0 &&
