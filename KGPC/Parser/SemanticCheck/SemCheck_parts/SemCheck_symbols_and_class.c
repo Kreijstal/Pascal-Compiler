@@ -1797,12 +1797,61 @@ void semcheck_mark_call_requires_static_link(HashNode_t *callee)
         return;
     if (g_semcheck_current_subprogram == NULL)
         return;
-    if (!hashnode_requires_static_link(callee))
+
+    /* When calling a function that requires a static link, the caller needs
+     * to be able to PASS a static link. Mark the caller as having nested
+     * children that need links, not as requiring a static link itself.
+     * The caller only RECEIVES a static link if it's nested or accesses outer
+     * vars.
+     *
+     * Subtlety: a callee that is itself a nested function may have its body
+     * semchecked AFTER this call site (forward-declared sibling, or a
+     * declaration-order-later sibling). At that point the HashNode flag is
+     * still 0 even though the callee will eventually require a static link.
+     * To stay correct, we also mark the caller whenever the callee is a
+     * lexically-nested Pascal function in the caller's parent scope, using:
+     *   (a) Tree-side flags (set by Pass 2 once the callee's body is
+     *       semchecked) — covers earlier-declared siblings and recursion.
+     *   (b) Mangled-name prefix match against the caller's enclosing parent
+     *       — essential for forward-declared siblings whose body Pass 2 has
+     *       not yet visited. Pass 1 (predeclare_subprogram) already sets the
+     *       "parent$child" mangled name, so siblings always share the
+     *       caller's parent prefix. Restricting (b) to "shares caller's
+     *       parent prefix" avoids false positives for unrelated unit-level
+     *       functions.
+     * Class methods (owner_class != NULL) are mangled like "Class.Method"
+     * but do NOT use static links, so we exclude them. */
+    int callee_is_nested = 0;
+    if (callee->owner_class == NULL)
+    {
+        if (callee->type != NULL &&
+            callee->type->kind == TYPE_KIND_PROCEDURE &&
+            callee->type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = callee->type->info.proc_info.definition;
+            if (def->tree_data.subprogram_data.is_nested != 0 ||
+                (def->tree_data.subprogram_data.nesting_level > 1 &&
+                 def->tree_data.subprogram_data.owner_class == NULL))
+                callee_is_nested = 1;
+        }
+        if (!callee_is_nested)
+        {
+            const char *caller_mangled =
+                g_semcheck_current_subprogram->tree_data.subprogram_data.mangled_id;
+            if (caller_mangled != NULL && callee->mangled_id != NULL)
+            {
+                const char *last_dollar = strrchr(caller_mangled, '$');
+                if (last_dollar != NULL)
+                {
+                    size_t prefix_len = (size_t)(last_dollar - caller_mangled) + 1;
+                    if (strncmp(callee->mangled_id, caller_mangled, prefix_len) == 0)
+                        callee_is_nested = 1;
+                }
+            }
+        }
+    }
+    if (!hashnode_requires_static_link(callee) && !callee_is_nested)
         return;
-    /* When calling a function that requires a static link, the caller needs to
-     * be able to PASS a static link. Mark the caller as having nested children
-     * that need links, not as requiring a static link itself.
-     * The caller only RECEIVES a static link if it's nested or accesses outer vars. */
     g_semcheck_current_subprogram->tree_data.subprogram_data.has_nested_requiring_link = 1;
 }
 

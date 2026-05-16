@@ -3628,7 +3628,53 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, func_mangled_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
+        /* If the codegen registry doesn't know the callee yet (e.g. nested
+         * sibling not yet emitted), fall back to the semantic definition's
+         * nesting_level. This avoids defaulting to STATIC_LINK_FROM_RBP
+         * (== caller's own rbp), which is wrong for sibling calls — the
+         * sibling needs the *parent's* frame, which the caller received as
+         * its own static link. */
+        if (!have_depth && func_type != NULL &&
+            func_type->kind == TYPE_KIND_PROCEDURE &&
+            func_type->info.proc_info.definition != NULL)
+        {
+            int sem_nesting = func_type->info.proc_info.definition
+                ->tree_data.subprogram_data.nesting_level;
+            if (sem_nesting > 0)
+            {
+                /* nesting_level: 1 = top-level (depth 1 in codegen), 2 = nested once, ... */
+                callee_depth = sem_nesting;
+                have_depth = 1;
+            }
+        }
+        /* Determine whether the callee requires a static link. Check, in order:
+         * 1. The HashNode flag (set by semcheck after the callee's body is processed).
+         * 2. The Tree node behind the kgpc_type (also set by semcheck — survives
+         *    when codegen lookup returns a HashNode that hasn't been refreshed).
+         * 3. The codegen registry (populated only after we emit the callee's
+         *    prologue — useful when both caller and callee are nested and the
+         *    callee was emitted first).
+         * Reading the Tree flag is critical for nested-sibling calls where the
+         * caller is codegen'd before the callee: at that point neither the
+         * HashNode lookup nor the codegen registry yet reflect the callee's
+         * static-link requirement, but the Tree does. */
+        int tree_requires_static_link = 0;
+        if (func_type != NULL && func_type->kind == TYPE_KIND_PROCEDURE &&
+            func_type->info.proc_info.definition != NULL)
+        {
+            Tree_t *callee_def = func_type->info.proc_info.definition;
+            /* The callee receives a static link if its prologue reserves one,
+             * which happens when either flag is set (see
+             * codegen_subprograms.c:will_need_static_link). The caller must
+             * mirror that decision exactly so caller-pass and callee-receive
+             * stay in sync. */
+            tree_requires_static_link =
+                callee_def->tree_data.subprogram_data.requires_static_link ||
+                (callee_def->tree_data.subprogram_data.is_nested &&
+                 callee_def->tree_data.subprogram_data.has_nested_requiring_link);
+        }
         int should_pass_static_link = (func_node != NULL && func_node->requires_static_link) ||
+            tree_requires_static_link ||
             codegen_proc_requires_static_link(ctx, func_mangled_name);
 
         enum {

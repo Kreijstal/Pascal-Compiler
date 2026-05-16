@@ -3440,13 +3440,36 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         if (call_kgpc_type != NULL && call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             call_kgpc_type->info.proc_info.definition != NULL)
         {
-            requires_static_link = call_kgpc_type->info.proc_info.definition
-                ->tree_data.subprogram_data.requires_static_link;
+            Tree_t *callee_def = call_kgpc_type->info.proc_info.definition;
+            /* The callee receives a static link iff its prologue reserves one
+             * (codegen_subprograms.c:will_need_static_link). Caller-pass and
+             * callee-receive must stay in sync. */
+            requires_static_link =
+                callee_def->tree_data.subprogram_data.requires_static_link ||
+                (callee_def->tree_data.subprogram_data.is_nested &&
+                 callee_def->tree_data.subprogram_data.has_nested_requiring_link);
         }
 
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, proc_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
+        /* If the codegen registry doesn't know the callee yet (nested sibling
+         * not yet emitted), fall back to the semantic definition's nesting_level.
+         * Otherwise the !have_depth branch below defaults to STATIC_LINK_FROM_RBP
+         * which passes the caller's *own* rbp — wrong for sibling calls, which
+         * need the parent's frame received as the caller's static link. */
+        if (!have_depth && call_kgpc_type != NULL &&
+            call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+            call_kgpc_type->info.proc_info.definition != NULL)
+        {
+            int sem_nesting = call_kgpc_type->info.proc_info.definition
+                ->tree_data.subprogram_data.nesting_level;
+            if (sem_nesting > 0)
+            {
+                callee_depth = sem_nesting;
+                have_depth = 1;
+            }
+        }
         int should_pass_static_link = requires_static_link;
 
         enum {
