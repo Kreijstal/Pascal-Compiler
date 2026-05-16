@@ -978,7 +978,28 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        if (is_array)
+        if (is_shortstring)
+        {
+            /* Copy(s) where s is a ShortString lowers to kgpc_shortstring_copy,
+             * which always hands back a heap-allocated AnsiString pointer in
+             * %rax — never an SRET-filled 256-byte shortstring buffer. The
+             * Pascal-level result is conceptually ShortString, but the
+             * runtime ABI is AnsiString, and assignment to a ShortString
+             * destination naturally inserts a kgpc_string_to_shortstring
+             * conversion. Tag the call's resolved type with an
+             * AnsiString-flavoured STRING_TYPE primitive so codegen's
+             * SRET checks see an explicit non-shortstring return: otherwise
+             * sharing the source's shortstring-flagged KgpcType triggers
+             * SRET reservation in %rdi, slides value/index/count one
+             * register to the right (becoming dest/value/index), and
+             * Copy returns an empty string. */
+            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+            KgpcType *ansi_ret = create_primitive_type_with_size(STRING_TYPE, 8);
+            if (ansi_ret != NULL)
+                expr->resolved_kgpc_type = ansi_ret;
+            *type_return = STRING_TYPE;
+        }
+        else if (is_array)
         {
             int tag = semcheck_tag_from_kgpc(source_kgpc_type);
             semcheck_expr_set_resolved_type(expr, tag);
