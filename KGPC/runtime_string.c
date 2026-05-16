@@ -1517,6 +1517,35 @@ void kgpc_text_close(KGPCTextRec *file)
 
 int kgpc_text_eof(KGPCTextRec *file)
 {
+    /* Fast path: if no stdio FILE* has been created yet for this textrec,
+     * check eof directly on the kernel fd via lseek+fstat.  This avoids
+     * fgetc's 8KB read-ahead, which advances the kernel file position and
+     * silently skips data for callers that read via raw syscalls
+     * (e.g. FPC's TCFileStream / BlockRead).  For non-seekable fds
+     * (pipes, sockets, ttys) lseek returns -1 and we fall back to stdio.
+     *
+     * Once stdio has been engaged (private_data != 0), it owns the read
+     * buffer and we must use fgetc/ungetc so eof reflects what the stdio
+     * reader will see, not the kernel position. */
+    if (file != NULL && file->private_data == 0 && file->handle >= 0
+        && file->mode != 0 && file->mode != (int32_t)0xD7B0)
+    {
+        int fd = file->handle;
+        int saved_errno = errno;
+        off_t pos = lseek(fd, 0, SEEK_CUR);
+        if (pos != (off_t)-1)
+        {
+            struct stat st;
+            if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode))
+            {
+                errno = saved_errno;
+                return pos >= st.st_size ? 1 : 0;
+            }
+        }
+        errno = saved_errno;
+        /* Non-seekable or non-regular: fall through to stdio path. */
+    }
+
     FILE *stream = kgpc_text_input_stream(file);
     if (stream == NULL)
         return 1;
