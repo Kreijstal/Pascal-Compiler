@@ -1490,7 +1490,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                 if (left_addr_spill != NULL)
                 {
-                    left_addr = codegen_try_get_reg(&inst_list, ctx, "relop_set_laddr_reload");
+                    left_addr = get_free_reg(get_reg_stack(), &inst_list);
                     if (left_addr == NULL)
                     {
                         free_reg(get_reg_stack(), right_addr);
@@ -1501,7 +1501,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     inst_list = add_inst(inst_list, buffer);
                 }
 
-                tmp = codegen_try_get_reg(&inst_list, ctx, "relop_set_tmp");
+                tmp = get_free_reg(get_reg_stack(), &inst_list);
                 if (tmp == NULL)
                 {
                     free_reg(get_reg_stack(), left_addr);
