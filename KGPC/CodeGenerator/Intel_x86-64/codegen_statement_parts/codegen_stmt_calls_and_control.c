@@ -1,5 +1,64 @@
 #include "../codegen_stmt_internal.h"
 
+/* Emit "movq %value_reg, (%addr_reload)" while guarding against the case
+ * where both virtual registers map to the same physical register.
+ *
+ * The dest-address pattern used in this file is:
+ *   1. Save dest address into spill slot `addr_temp`.
+ *   2. Free the original addr register so RHS evaluation can use it.
+ *   3. Evaluate RHS into `value_reg`.
+ *   4. get_free_reg() into `addr_reload`, then reload from `addr_temp`.
+ *   5. Store: movq %value_reg, (%addr_reload).
+ *
+ * In step 4 the register allocator can return the SAME physical register
+ * that `value_reg` was assigned in step 3 — e.g. when RHS evaluation
+ * internally spilled and re-acquired the only free callee-saved slot.
+ * If that happens, step 4's reload clobbers `value_reg`'s value, and the
+ * IR placeholder substitution collapses step 5 into "movq %X, (%X)" —
+ * a self-store that turns the destination field into a self-pointer.
+ *
+ * This helper detects the aliasing case and falls back to emitting raw
+ * asm that uses %r11 (caller-saved scratch, never in the allocatable
+ * pool) to hold the destination address, loading it directly from the
+ * spill slot.  The non-aliasing case keeps the original IR-tracked
+ * placeholder form so register liveness analysis still works.
+ *
+ * Triggered FPC pp_bootstrap regression: tvecnode.pass_1 in nmem.pas
+ * rebuilds an AnsiString unique-call's left subtree as a nested
+ * ctypeconvnode.create_internal(ccallnode.createintern(...)) chain.
+ * Under heavy register pressure the buggy collapse made
+ * tvecnode.left = &tvecnode.left, and the very next virtual dispatch
+ * during firstpass blew up on a NULL vtable entry. */
+static ListNode_t *codegen_emit_qword_store_aliased_safe(
+    ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *value_reg, Register_t *addr_reload,
+    StackNode_t *addr_temp)
+{
+    int aliased = 0;
+    if (value_reg != NULL && addr_reload != NULL)
+    {
+        if (value_reg == addr_reload)
+            aliased = 1;
+        else if (value_reg->bit_64 != NULL && addr_reload->bit_64 != NULL &&
+                 strcmp(value_reg->bit_64, addr_reload->bit_64) == 0)
+            aliased = 1;
+    }
+
+    if (aliased && addr_temp != NULL && value_reg != NULL &&
+        value_reg->bit_64 != NULL)
+    {
+        char raw[160];
+        snprintf(raw, sizeof(raw),
+            "\tmovq\t-%d(%%rbp), %%r11\n"
+            "\tmovq\t%s, (%%r11)\n",
+            addr_temp->offset, value_reg->bit_64);
+        return add_inst(inst_list, raw);
+    }
+
+    Register_t *u[] = {value_reg, addr_reload};
+    return add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
+}
+
 static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL || symtab == NULL || expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
@@ -1998,10 +2057,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* Pre-spill value_reg before allocating addr_reload — see comment
+         * on the EXPR_RECORD_ACCESS branch below for the aliasing failure
+         * mode this avoids. */
+        StackNode_t *value_save_slot = add_l_t("array_value_save");
+        if (value_save_slot != NULL)
+        {
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", value_save_slot->offset);
+            Register_t *u[] = {value_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            free_reg(get_reg_stack(), value_reg);
+            value_reg = NULL;
+        }
+
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
         {
-            free_reg(get_reg_stack(), value_reg);
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for array store.");
         }
@@ -2010,6 +2082,22 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             char tmpl[64];
             snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", addr_temp->offset);
             Register_t *d[] = {addr_reload};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        }
+
+        if (value_save_slot != NULL)
+        {
+            value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reload);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for array value reload.");
+            }
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                value_save_slot->offset);
+            Register_t *d[] = {value_reg};
             inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
         }
 
@@ -2160,7 +2248,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
-            { Register_t *u[] = {value_reg, addr_reload}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n"); }
+            inst_list = codegen_emit_qword_store_aliased_safe(inst_list, ctx,
+                value_reg, addr_reload, addr_temp);
         }
         else
         {
@@ -2234,10 +2323,35 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* Pre-spill value_reg to its own slot and free its physical register
+         * BEFORE acquiring addr_reload.  This prevents the addr_reload reload
+         * from clobbering value_reg when the register allocator hands the
+         * same physical register to both (which happens under heavy register
+         * pressure — get_free_reg can recycle a register the RHS-evaluation
+         * pass internally freed, even though logically value_reg still owns
+         * it).
+         *
+         * Triggered FPC pp_bootstrap regression: tvecnode.pass_1 in nmem.pas
+         * builds an AnsiString unique-call's left subtree as a nested
+         * ctypeconvnode.create_internal(ccallnode.createintern(...)) chain.
+         * Under the resulting register pressure the buggy collapse produced
+         * a "movq %rbx, (%rbx)" self-store, turning tvecnode.left into a
+         * self-pointer and crashing at the next firstpass virtual dispatch.
+         */
+        StackNode_t *value_save_slot = add_l_t("record_value_save");
+        if (value_save_slot != NULL)
+        {
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", value_save_slot->offset);
+            Register_t *u[] = {value_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            free_reg(get_reg_stack(), value_reg);
+            value_reg = NULL;
+        }
+
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
         {
-            free_reg(get_reg_stack(), value_reg);
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for record store.");
         }
@@ -2246,6 +2360,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             char tmpl[64];
             snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", addr_temp->offset);
             Register_t *d[] = {addr_reload};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        }
+
+        /* Allocate a guaranteed-distinct register for value_reg's reload. */
+        if (value_save_slot != NULL)
+        {
+            value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reload);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for record value reload.");
+            }
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                value_save_slot->offset);
+            Register_t *d[] = {value_reg};
             inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
         }
 
@@ -2428,7 +2559,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
-            { Register_t *u[] = {value_reg, addr_reload}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n"); }
+            inst_list = codegen_emit_qword_store_aliased_safe(inst_list, ctx,
+                value_reg, addr_reload, addr_temp);
         }
         else
         {
@@ -2775,7 +2907,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
-            { Register_t *u[] = {value_reg, addr_reload}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n"); }
+            inst_list = codegen_emit_qword_store_aliased_safe(inst_list, ctx,
+                value_reg, addr_reload, addr_temp);
         }
         else
         {
