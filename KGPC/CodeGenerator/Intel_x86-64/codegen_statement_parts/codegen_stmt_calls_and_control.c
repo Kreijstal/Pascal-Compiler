@@ -1733,34 +1733,53 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
                 if (frame_reg != NULL)
                 {
-                    /* Reload value from spill slot (frame_reg may have aliased
-                     * the original `reg`, so `reg` is no longer trustworthy). */
+                    /* Reload value from spill slot into a FRESH register distinct
+                     * from frame_reg. Reloading into `reg` is unsafe: `reg` was
+                     * already freed by the caller path, so the static-link
+                     * acquisition may have legitimately picked `reg`'s physical
+                     * register as frame_reg. In that case, reloading into `reg`
+                     * clobbers frame_reg before the store, producing
+                     * `movq value, -OFF(value)` instead of
+                     * `movq value, -OFF(static_link)`. */
+                    Register_t *value_reload = reg;
                     if (value_spill != NULL)
                     {
+                        value_reload = get_free_reg(get_reg_stack(), &inst_list);
+                        if (value_reload == NULL)
+                            value_reload = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (value_reload == NULL)
+                            value_reload = reg;
+                        const char *reload_reg8 = register_name8(value_reload);
+                        const char *reload_reg16 = codegen_register_name16(value_reload);
                         char reload_tmpl[96];
-                        if (use_byte)
+                        if (use_byte && reload_reg8 != NULL)
                             snprintf(reload_tmpl, sizeof(reload_tmpl),
                                 "\tmovb\t-%d(%%rbp), %s\n",
-                                value_spill->offset, value_reg8);
-                        else if (use_word)
+                                value_spill->offset, reload_reg8);
+                        else if (use_word && reload_reg16 != NULL)
                             snprintf(reload_tmpl, sizeof(reload_tmpl),
                                 "\tmovw\t-%d(%%rbp), %s\n",
-                                value_spill->offset, value_reg16);
+                                value_spill->offset, reload_reg16);
                         else if (use_qword)
                             snprintf(reload_tmpl, sizeof(reload_tmpl),
                                 "\tmovq\t-%d(%%rbp), %%0\n", value_spill->offset);
                         else
                             snprintf(reload_tmpl, sizeof(reload_tmpl),
                                 "\tmovl\t-%d(%%rbp), %%0\n", value_spill->offset);
-                        Register_t *d_reload[] = {reg};
+                        Register_t *d_reload[] = {value_reload};
                         inst_list = add_inst_du(inst_list, ctx, d_reload, 1, NULL, 0, reload_tmpl);
+                        /* Refresh narrow-name pointers to match value_reload. */
+                        if (use_byte && reload_reg8 != NULL)
+                            value_reg8 = reload_reg8;
+                        if (use_word && reload_reg16 != NULL)
+                            value_reg16 = reload_reg16;
                     }
 
                     if (use_qword)
                     {
                         char tmpl[96];
                         snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%1)\n", var->offset);
-                        Register_t *u[] = {reg, frame_reg};
+                        Register_t *u[] = {value_reload, frame_reg};
                         inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, tmpl);
                     }
                     else if (use_byte)
@@ -1781,9 +1800,11 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     {
                         char tmpl[96];
                         snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, -%d(%s)\n", var->offset, frame_reg->bit_64);
-                        Register_t *u[] = {reg};
+                        Register_t *u[] = {value_reload};
                         inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
                     }
+                    if (value_reload != reg)
+                        free_reg(get_reg_stack(), value_reload);
                 }
                 else
                 {
