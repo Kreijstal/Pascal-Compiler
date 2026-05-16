@@ -4114,20 +4114,45 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     
                     if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL)
                     {
-                        Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
-                        if (vmt_reg != NULL)
+                        /* Under register pressure, get_free_reg can return NULL.
+                           When that happens silently we'd emit no VMT-init store,
+                           producing instances whose first qword is whatever the
+                           heap happened to hold — a deferred null-deref at the
+                           next virtual dispatch. Use get_reg_with_spill so we
+                           always get a register, and load the instance address
+                           from its spill slot rather than the live register
+                           (which may have been spilled out by the same call). */
+                        Register_t *vmt_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        Register_t *inst_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (vmt_reg != NULL && inst_reg != NULL &&
+                            constructor_vmt_slot != NULL &&
+                            constructor_instance_slot != NULL)
                         {
-                            if (constructor_vmt_slot != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    constructor_vmt_slot->offset, vmt_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                                    vmt_reg->bit_64, constructor_instance_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
-                            free_reg(get_reg_stack(), vmt_reg);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                constructor_vmt_slot->offset, vmt_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                constructor_instance_slot->offset, inst_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                vmt_reg->bit_64, inst_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
                         }
+                        else if (vmt_reg != NULL && constructor_vmt_slot != NULL)
+                        {
+                            /* Fallback: live instance register path (no inst_reg available) */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                constructor_vmt_slot->offset, vmt_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        if (inst_reg != NULL)
+                            free_reg(get_reg_stack(), inst_reg);
+                        if (vmt_reg != NULL)
+                            free_reg(get_reg_stack(), vmt_reg);
+
                         if (constructor_vmt_slot == NULL)
                         {
                             const char *vmt_label = NULL;
@@ -4150,7 +4175,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", vmt_class_name);
                             vmt_label = vmt_buf;
                             if (vmt_label != NULL) {
-                                Register_t *fallback_vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                                Register_t *fallback_vmt_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                                 if (fallback_vmt_reg != NULL) {
                                     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                                         vmt_label, fallback_vmt_reg->bit_64);
