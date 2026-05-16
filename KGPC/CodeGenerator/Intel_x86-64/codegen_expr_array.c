@@ -1600,10 +1600,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
          (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
           pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
     /* Fall back to size-2 heuristic only when no array dimension info
-     * is available and the result type is not itself an array. */
+     * is available and the result type is not itself an array.
+     * Skip this when the array has authoritative multi-dimensional info:
+     * the first-index stride is the row width, not the scalar element size,
+     * so the size-2 heuristic would mis-flag the outer dimension of e.g.
+     * `array[..,..] of word` and force stride 2 instead of row_size*2.
+     * Without this guard, typed-const initialisers of 2-byte multi-dim
+     * arrays (e.g. FPC's convertopsse: array[..,..] of tasmop) write each
+     * element ignoring row stride, collapsing the table and producing
+     * internalerror 200312205 at runtime. */
     if (!wide_char_index &&
         (indexed_elem_size == 2 || expr->array_element_size == 2) &&
-        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_array(expr->resolved_kgpc_type)))
+        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_array(expr->resolved_kgpc_type)) &&
+        !(has_info && info.dim_count > 1))
     {
         wide_char_index = 1;
     }

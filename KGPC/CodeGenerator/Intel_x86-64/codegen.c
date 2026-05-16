@@ -5744,6 +5744,54 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     }
                                 }
                             }
+                            /* Explicit "<lo>..<hi>" with named-constant bounds
+                             * (e.g. "OS_F32..OS_F128").  sscanf("%lld..%lld") above
+                             * only matches numeric bounds, and the unit-scope
+                             * "uses"-imported symtab carries enum literals as
+                             * HASHTYPE_CONST entries.  Split on ".." and resolve
+                             * each side via the symbol table — needed for the
+                             * inner dim of FPC's cgx86.pas convertopsse, whose
+                             * bounds OS_F32..OS_F128 come from cgbase.pas. */
+                            if (dim_size == 0) {
+                                const char *dotdot = strstr(range_str, "..");
+                                if (dotdot != NULL) {
+                                    char left_buf[128], right_buf[128];
+                                    size_t left_len = (size_t)(dotdot - range_str);
+                                    if (left_len > 0 && left_len < sizeof(left_buf)) {
+                                        memcpy(left_buf, range_str, left_len);
+                                        left_buf[left_len] = '\0';
+                                        const char *right_str = dotdot + 2;
+                                        size_t right_len = strlen(right_str);
+                                        if (right_len > 0 && right_len < sizeof(right_buf)) {
+                                            memcpy(right_buf, right_str, right_len + 1);
+                                            char *lp = left_buf;
+                                            while (*lp == ' ' || *lp == '\t') lp++;
+                                            char *rp = right_buf;
+                                            while (*rp == ' ' || *rp == '\t') rp++;
+                                            long long lo_val = 0, hi_val = 0;
+                                            int lo_ok = 0, hi_ok = 0;
+                                            HashNode_t *ln = NULL;
+                                            if (FindSymbol(&ln, symtab, lp) != 0 &&
+                                                ln != NULL &&
+                                                (ln->hash_type == HASHTYPE_CONST ||
+                                                 ln->is_typed_const)) {
+                                                lo_val = ln->const_int_value;
+                                                lo_ok = 1;
+                                            }
+                                            HashNode_t *rn = NULL;
+                                            if (FindSymbol(&rn, symtab, rp) != 0 &&
+                                                rn != NULL &&
+                                                (rn->hash_type == HASHTYPE_CONST ||
+                                                 rn->is_typed_const)) {
+                                                hi_val = rn->const_int_value;
+                                                hi_ok = 1;
+                                            }
+                                            if (lo_ok && hi_ok && hi_val >= lo_val)
+                                                dim_size = hi_val - lo_val + 1;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         if (dim_size <= 0) {
                             parsed_all = 0;
