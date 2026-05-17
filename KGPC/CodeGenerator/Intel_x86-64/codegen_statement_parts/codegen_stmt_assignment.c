@@ -1775,12 +1775,51 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     free_reg(get_reg_stack(), src_reg);
                 return inst_list;
             }
-            
+
+            /* Pre-spill src_reg to its own slot and free its physical register
+             * BEFORE acquiring dest_reg.  Under heavy register pressure (e.g.
+             * deeply nested constructor chains like nmem.pas:1406's
+             * tvecnode.left := ctypeconvnode.create_internal(
+             *                    ccallnode.createintern('fpc_..._unique',
+             *                      ccallparanode.create(
+             *                        ctypeconvnode.create_internal(left,voidpointertype),
+             *                        nil)),
+             *                    left.resultdef);
+             * ), the register allocator can hand dest_reg the SAME physical
+             * register that src_reg still logically owns — get_free_reg can
+             * recycle a register the RHS-evaluation pass internally freed,
+             * even though logically src_reg owns it.  The subsequent reload
+             * of dest_reg from dest_save_slot then clobbers src_reg's value,
+             * and the final "movq %src, (%dest)" collapses into a self-store
+             * "movq %X, (%X)" — turning the destination field into a
+             * self-pointer.  At the next virtual dispatch on that field
+             * (firstpass(left) in tvecnode.pass_1 line 1410) the VMT slot
+             * reads from the destination field itself and the indirect call
+             * jumps through NULL, crashing pp_bootstrap while compiling
+             * aasmbase.pas's ApplyAsmSymbolRestrictions.
+             *
+             * Mirrors the same fix bfc48be5 applied to
+             * codegen_var_assignment's EXPR_RECORD_ACCESS branch in
+             * codegen_stmt_calls_and_control.c, but this path goes through
+             * codegen_assign_record_value's is_class_assignment branch
+             * instead, which the original commit did not cover. */
+            StackNode_t *src_save_slot = add_l_x("__class_assign_src__", CODEGEN_POINTER_SIZE_BYTES);
+            if (src_save_slot != NULL)
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", src_save_slot->offset);
+                Register_t *u[] = {src_reg};
+                inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+                free_reg(get_reg_stack(), src_reg);
+                src_reg = NULL;
+            }
+
             /* Restore dest_reg from stack */
             dest_reg = get_free_reg(get_reg_stack(), &inst_list);
             if (dest_reg == NULL)
             {
-                free_reg(get_reg_stack(), src_reg);
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
                 return codegen_fail_register(ctx, inst_list, NULL,
                     "ERROR: Unable to allocate register for class assignment destination restore.");
             }
@@ -1790,13 +1829,30 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 Register_t *d[] = {dest_reg};
                 inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
             }
-            
+
+            /* Allocate a guaranteed-distinct register for src_reg's reload. */
+            if (src_save_slot != NULL)
+            {
+                src_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (src_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), dest_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for class assignment source reload.");
+                }
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                    src_save_slot->offset);
+                Register_t *d[] = {src_reg};
+                inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+            }
+
             /* src_reg already contains the pointer value - store it directly */
             {
                 Register_t *u[] = {src_reg, dest_reg};
                 inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
             }
-            
+
             free_reg(get_reg_stack(), src_reg);
         }
         
