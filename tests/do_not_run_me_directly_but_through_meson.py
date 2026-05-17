@@ -301,6 +301,13 @@ def _bootstrap_rtl_unit_dirs(fpc_src):
         os.path.join(fpc_src, "rtl", "inc"),
         os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
         os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        # FPC charmap units (cp1250.pas, cp1251.pas, …, cp8859_1.pas) each
+        # declare a same-named `unicodemap` typed-const that registers itself
+        # via `registermapping(@unicodemap)` in initialization.  pp_bootstrap
+        # consults this chain via getmap(); if KGPC's per-unit storage keys
+        # are wrong the chain becomes self-referential and runtime lookups
+        # (e.g. widestr.pas:391) crash.
+        os.path.join(fpc_src, "rtl", "charmaps"),
     ]
 
 
@@ -1141,8 +1148,9 @@ class TAPTestResult(unittest.TestResult):
 
 
 class TAPTestRunner:
-    def __init__(self, stream=None):
+    def __init__(self, stream=None, failfast=False):
         self.stream = stream or sys.stdout
+        self.failfast = failfast
 
     def run(self, test):
         result = TAPTestResult(self.stream)
@@ -1406,10 +1414,11 @@ class TAPParallelTestResult(unittest.TestResult):
 class TAPParallelTestRunner:
     """Run tests in parallel and emit TAP output deterministically."""
 
-    def __init__(self, workers=4, timeout=300, stream=None):
+    def __init__(self, workers=4, timeout=300, stream=None, failfast=False):
         self.workers = workers
         self.timeout = timeout
         self.stream = stream or sys.stdout
+        self.failfast = failfast
 
     def _emit(self, line):
         self.stream.write(f"{line}\n")
@@ -1501,11 +1510,19 @@ class TAPParallelTestRunner:
                                 traceback.format_exc(),
                                 0.0,
                             )
+                        stop_now = False
                         while next_to_emit in completed:
                             test_obj, result_type, err_info, elapsed = completed[next_to_emit]
                             self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
                             del completed[next_to_emit]
                             next_to_emit += 1
+                            if self.failfast and result_type not in ("success", "skipped"):
+                                stop_now = True
+                                break
+                        if stop_now:
+                            for f in future_to_index:
+                                f.cancel()
+                            break
             else:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     future_to_index = {
@@ -4640,6 +4657,8 @@ def main():
                         help="Run tests in parallel with N workers (default: from KGPC_PARALLEL_WORKERS env)")
     parser.add_argument("--test-timeout", type=int, default=None,
                         help="Per-test timeout in seconds (default: from KGPC_TEST_CASE_TIMEOUT env or 300)")
+    parser.add_argument("--failfast", "-f", action="store_true",
+                        help="Stop on first failure/error (TAP runners only)")
     args, remaining = parser.parse_known_args()
 
     # Determine parallel workers and timeout
@@ -4659,9 +4678,10 @@ def main():
         else:
             suite = _load_suite()
         if parallel_workers > 0:
-            runner = TAPParallelTestRunner(workers=parallel_workers, timeout=test_timeout)
+            runner = TAPParallelTestRunner(workers=parallel_workers, timeout=test_timeout,
+                                           failfast=args.failfast)
         else:
-            runner = TAPTestRunner()
+            runner = TAPTestRunner(failfast=args.failfast)
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
 

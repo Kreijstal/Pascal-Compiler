@@ -528,8 +528,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
-    codegen_register_decl_list(proc->args_var, symtab, 1);
-    codegen_register_decl_list(proc->declarations, symtab, 0);
+    codegen_register_decl_list(ctx, proc->args_var, symtab, 1);
+    codegen_register_decl_list(ctx, proc->declarations, symtab, 0);
     codegen_register_const_decls(proc->const_declarations, symtab);
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
@@ -890,8 +890,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
-    codegen_register_decl_list(func->args_var, symtab, 1);
-    codegen_register_decl_list(func->declarations, symtab, 0);
+    codegen_register_decl_list(ctx, func->args_var, symtab, 1);
+    codegen_register_decl_list(ctx, func->declarations, symtab, 0);
     codegen_register_const_decls(func->const_declarations, symtab);
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)

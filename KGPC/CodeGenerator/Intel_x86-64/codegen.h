@@ -163,6 +163,11 @@ static inline const char *mangled_id_get_base(const char *mangled_id)
 
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
+/* Build the unit-qualified storage key "<unit>_$_<bare>" for a unit-defined
+ * variable.  Returns a malloc'd string the caller must free, or NULL when
+ * the variable is not associated with a registered unit. */
+char *codegen_make_unit_qualified_key(int source_unit_index, const char *bare_id);
+
 #define NORMAL_JMP -1
 
 /* Unsigned relop variants for jb/jbe/ja/jae instead of jl/jle/jg/jge */

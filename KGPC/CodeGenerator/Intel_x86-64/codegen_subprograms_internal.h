@@ -17,7 +17,7 @@ int codegen_real_param_storage_size(Tree_t *arg_decl,
 int codegen_shortstring_storage_size(KgpcType *type);
 void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab);
 void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab);
-void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_param);
+void codegen_register_decl_list(CodeGenContext *ctx, ListNode_t *decls, SymTab_t *symtab, int is_param);
 void codegen_emit_local_const_equivs(CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx,
     ListNode_t *const_decls);

@@ -269,10 +269,24 @@ static StackNode_t *codegen_find_nonlocal_lexical(CodeGenContext *ctx,
         return var;
 
     HashNode_t *sym_node = NULL;
-    if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
-        sym_node != NULL && sym_node->mangled_id != NULL)
+    if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 && sym_node != NULL)
     {
-        var = find_label_with_depth(sym_node->mangled_id, scope_depth);
+        /* Typed-consts declared in a unit are stored under the qualified key
+         * "<unit>_$_<name>" (see codegen_var_storage_key) so that same-named
+         * typed-consts in multiple units (e.g. each FPC charmap unit's
+         * `unicodemap`) don't alias.  Compute the qualified key directly. */
+        if (sym_node->is_typed_const && sym_node->source_unit_index > 0)
+        {
+            char *qualified = codegen_make_unit_qualified_key(
+                sym_node->source_unit_index, var_id);
+            if (qualified != NULL)
+            {
+                var = find_label_with_depth(qualified, scope_depth);
+                free(qualified);
+            }
+        }
+        if (var == NULL && sym_node->mangled_id != NULL)
+            var = find_label_with_depth(sym_node->mangled_id, scope_depth);
     }
 
     if (sym_node_out != NULL)
@@ -286,7 +300,35 @@ static ListNode_t *codegen_try_emit_nonlocal_global(ListNode_t *inst_list,
     if (ctx == NULL || ctx->symtab == NULL || ctx->comp_ctx == NULL)
         return NULL;
 
-    const HashNode_t *effective_node = sym_node;
+    /* Unit-aware HashNode selection for typed-consts: when the current
+     * codegen scope is inside a unit init/var-initializer (current_unit_index
+     * > 0) and the referenced identifier is a typed-const declared in that
+     * unit, prefer that unit's HashNode over any other matching candidate.
+     * This makes `@unicodemap` inside cp1252.pas's init block resolve to
+     * cp1252's typed-const HashNode regardless of which unit registered the
+     * symbol first.  This is the primary resolution path for unit-scoped
+     * typed-const references — not a fallback. */
+    const HashNode_t *effective_node = NULL;
+    if (ctx->symtab->current_unit_index > 0)
+    {
+        ListNode_t *cands = FindAllIdents(ctx->symtab, var_id);
+        for (ListNode_t *c = cands; c != NULL; c = c->next)
+        {
+            HashNode_t *cand = (HashNode_t *)c->cur;
+            if (cand == NULL)
+                continue;
+            if (cand->is_typed_const &&
+                cand->source_unit_index == ctx->symtab->current_unit_index)
+            {
+                effective_node = cand;
+                break;
+            }
+        }
+        if (cands != NULL)
+            DestroyList(cands);
+    }
+    if (effective_node == NULL)
+        effective_node = sym_node;
     if (effective_node == NULL)
         effective_node = codegen_find_owner_unit_symbol(ctx, var_id);
 
@@ -304,10 +346,40 @@ static ListNode_t *codegen_try_emit_nonlocal_global(ListNode_t *inst_list,
     if (global_symbol == NULL || global_symbol[0] == '\0')
         return NULL;
 
+    /* Typed-consts declared in a unit don't have a bare-name alias (they
+     * collide across units — each FPC charmap unit's `unicodemap`), so emit
+     * the per-unit static_label retrieved via the qualified storage key. */
+    char emit_buf[128];
+    const char *emit_label = global_symbol;
+    char *qualified = NULL;
+    if (decl != NULL &&
+        ((decl->type == TREE_VAR_DECL &&
+          decl->tree_data.var_decl_data.is_typed_const &&
+          decl->tree_data.var_decl_data.defined_in_unit) ||
+         (decl->type == TREE_ARR_DECL &&
+          decl->tree_data.arr_decl_data.is_typed_const &&
+          decl->tree_data.arr_decl_data.defined_in_unit)) &&
+        effective_node != NULL && effective_node->source_unit_index > 0)
+    {
+        qualified = codegen_make_unit_qualified_key(
+            effective_node->source_unit_index, var_id);
+        if (qualified != NULL)
+        {
+            StackNode_t *sn = find_label(qualified);
+            if (sn != NULL && sn->static_label != NULL)
+            {
+                snprintf(emit_buf, sizeof(emit_buf), "%s", sn->static_label);
+                emit_label = emit_buf;
+            }
+        }
+    }
+
     char buffer[128];
     *offset = 0;
     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-        global_symbol, current_non_local_reg64());
+        emit_label, current_non_local_reg64());
+    if (qualified != NULL)
+        free(qualified);
     return add_inst(inst_list, buffer);
 }
 

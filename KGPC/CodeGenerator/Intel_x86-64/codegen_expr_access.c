@@ -206,9 +206,25 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         {
             HashNode_t *sym_node = NULL;
             if (FindSymbol(&sym_node, ctx->symtab, inner->expr_data.id) != 0 &&
-                sym_node != NULL && sym_node->mangled_id != NULL)
+                sym_node != NULL)
             {
-                var_node = find_label(sym_node->mangled_id);
+                /* `@unicodemap` inside e.g. cp1252.pas's init block must
+                 * address cp1252's own unicodemap, not the first-registered
+                 * one.  Typed-consts in units are stored under
+                 * "<unit>_$_<name>" (see codegen_var_storage_key); resolve
+                 * directly via that qualified key. */
+                if (sym_node->is_typed_const && sym_node->source_unit_index > 0)
+                {
+                    char *qualified = codegen_make_unit_qualified_key(
+                        sym_node->source_unit_index, inner->expr_data.id);
+                    if (qualified != NULL)
+                    {
+                        var_node = find_label(qualified);
+                        free(qualified);
+                    }
+                }
+                if (var_node == NULL && sym_node->mangled_id != NULL)
+                    var_node = find_label(sym_node->mangled_id);
             }
         }
         if (var_node != NULL)

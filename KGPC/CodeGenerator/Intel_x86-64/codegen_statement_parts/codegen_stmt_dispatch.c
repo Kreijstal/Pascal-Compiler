@@ -991,6 +991,21 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                         /* Try resolving as a global variable (case-insensitive) */
                                         if (!did_substitute) {
                                             StackNode_t *var = find_label(id_buf);
+                                            /* If the symbol is a unit typed-const, its storage is
+                                             * keyed as "<unit>_$_<name>" — resolve directly. */
+                                            if (var == NULL && symtab != NULL) {
+                                                HashNode_t *sn = NULL;
+                                                if (FindSymbol(&sn, symtab, id_buf) != 0 && sn != NULL &&
+                                                    sn->is_typed_const && sn->source_unit_index > 0)
+                                                {
+                                                    char *q = codegen_make_unit_qualified_key(
+                                                        sn->source_unit_index, id_buf);
+                                                    if (q != NULL) {
+                                                        var = find_label(q);
+                                                        free(q);
+                                                    }
+                                                }
+                                            }
                                             if (var != NULL) {
                                                 if (var->is_static && var->static_label != NULL) {
                                                     const char *label = var->static_label;
