@@ -104,23 +104,6 @@ void init_stackmng()
 
     global_stackmng->cur_scope = NULL;
     global_stackmng->reg_stack = init_reg_stack();
-    global_stackmng->current_unit_index = 0;
-}
-
-int stackmng_set_current_unit_index(int unit_index)
-{
-    if (global_stackmng == NULL)
-        return 0;
-    int prev = global_stackmng->current_unit_index;
-    global_stackmng->current_unit_index = unit_index;
-    return prev;
-}
-
-int stackmng_get_current_unit_index(void)
-{
-    if (global_stackmng == NULL)
-        return 0;
-    return global_stackmng->current_unit_index;
 }
 
 /* For when you need low level access to the stack */
@@ -1438,8 +1421,6 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, const char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
-    StackNode_t *any_match = NULL;
-    int cur_unit = stackmng_get_current_unit_index();
 
     assert(cur_scope != NULL);
     assert(label != NULL);
@@ -1450,34 +1431,20 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, const char *label)
         cur_node = (StackNode_t *)cur_li->cur;
         if(pascal_identifier_equals(cur_node->label, label))
         {
-            /* When emitting code for a specific unit, prefer an exact
-             * source-unit match; otherwise (or when no unit is active)
-             * fall back to first-match behaviour to preserve historical
-             * lookups exactly. */
-            if (cur_unit != 0 && cur_node->source_unit_index == cur_unit)
-                return cur_node;
-            if (any_match == NULL)
-                any_match = cur_node;
+            return cur_node;
         }
 
         cur_li = cur_li->next;
     }
 
-    return any_match;
+    return NULL;
 }
 
 StackNode_t *stackscope_find_x(StackScope_t *cur_scope, const char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
-    /* When emitting code in a unit's scope, prefer that unit's own
-     * non-alias entry first.  Otherwise preserve the historical
-     * preference: first non-alias wins, falling back to first alias. */
-    StackNode_t *same_unit_match = NULL;
-    StackNode_t *any_match = NULL;
-    StackNode_t *same_unit_alias = NULL;
-    StackNode_t *any_alias = NULL;
-    int cur_unit = stackmng_get_current_unit_index();
+    StackNode_t *alias_match = NULL;
 
     assert(cur_scope != NULL);
     assert(label != NULL);
@@ -1491,41 +1458,22 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, const char *label)
         if(cur_node != NULL && cur_node->label != NULL &&
            pascal_identifier_equals(cur_node->label, label))
         {
-            int is_same_unit = (cur_unit != 0 && cur_node->source_unit_index == cur_unit);
             if (!cur_node->is_alias)
-            {
-                if (is_same_unit && same_unit_match == NULL)
-                    same_unit_match = cur_node;
-                if (any_match == NULL)
-                    any_match = cur_node;
-            }
-            else
-            {
-                if (is_same_unit && same_unit_alias == NULL)
-                    same_unit_alias = cur_node;
-                if (any_alias == NULL)
-                    any_alias = cur_node;
-            }
+                return cur_node;
+            if (alias_match == NULL)
+                alias_match = cur_node;
         }
 
         cur_li = cur_li->next;
     }
 
-    if (same_unit_match != NULL)
-        return same_unit_match;
-    if (any_match != NULL)
-        return any_match;
-    if (same_unit_alias != NULL)
-        return same_unit_alias;
-    return any_alias;
+    return alias_match;
 }
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, const char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
-    StackNode_t *any_match = NULL;
-    int cur_unit = stackmng_get_current_unit_index();
 
     assert(cur_scope != NULL);
     assert(label != NULL);
@@ -1536,16 +1484,13 @@ StackNode_t *stackscope_find_z(StackScope_t *cur_scope, const char *label)
         cur_node = (StackNode_t *)cur_li->cur;
         if(pascal_identifier_equals(cur_node->label, label))
         {
-            if (cur_unit != 0 && cur_node->source_unit_index == cur_unit)
-                return cur_node;
-            if (any_match == NULL)
-                any_match = cur_node;
+            return cur_node;
         }
 
         cur_li = cur_li->next;
     }
 
-    return any_match;
+    return NULL;
 }
 
 /* Returns pointer to previous stack scope */
@@ -1621,8 +1566,6 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->is_reference = 0;
     new_node->is_alias = 0;
     new_node->static_label = NULL;
-    new_node->source_unit_index = (global_stackmng != NULL) ?
-        global_stackmng->current_unit_index : 0;
 
     return new_node;
 }

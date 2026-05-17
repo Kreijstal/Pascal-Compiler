@@ -53,18 +53,9 @@ typedef struct stackmng
     /* Still in progress */
     StackScope_t *cur_scope;
     RegStack_t *reg_stack;
-    /* Source unit registry index for stack nodes being created right now
-     * (0 = program / no specific unit).  Set/restored by codegen around
-     * per-unit emission so that find_label can disambiguate same-name
-     * globals across units. */
-    int current_unit_index;
 } stackmng_t;
 
 void init_stackmng();
-/* Set the source-unit index assigned to subsequently-created stack nodes.
- * Returns the previous value so the caller can restore it. */
-int stackmng_set_current_unit_index(int unit_index);
-int stackmng_get_current_unit_index(void);
 StackScope_t *get_cur_scope();
 int get_full_stack_offset();
 int get_needed_stack_space();
@@ -233,10 +224,6 @@ typedef struct StackNode
     int is_reference;
     int is_alias;
     char *static_label;
-    /* Source unit registry index this stack node was created for
-     * (0 = program / no specific unit / per-function local).  Stamped
-     * at creation time from stackmng->current_unit_index. */
-    int source_unit_index;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */

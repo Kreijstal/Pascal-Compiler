@@ -1608,18 +1608,7 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
     if (path == NULL && normalized != NULL && strcmp(unit_name, normalized) != 0)
         path = build_unit_path(normalized);
     if (path == NULL)
-    {
-        /* A unit named in a `uses` clause should be resolvable.  Failing
-         * silently leads to confusing downstream errors (e.g. typed-const
-         * registration appearing to succeed but globals colliding because
-         * the unit was never loaded).  Diagnose loudly. */
-        fprintf(stderr,
-            "Warning: could not locate unit '%s' on any search path; "
-            "skipping load.  Subsequent references will fail or fall "
-            "back to other declarations.\n",
-            unit_name);
         return;
-    }
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
