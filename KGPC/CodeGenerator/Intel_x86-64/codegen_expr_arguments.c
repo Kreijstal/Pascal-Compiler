@@ -3939,9 +3939,18 @@ pass_value_arg:
         /* When an argument is passed by reference (var/out/array), the value
          * stored in the spill slot is a pointer (address), not the underlying
          * integer value.  Sign-extending a 64-bit pointer via movslq would
-         * truncate it, so suppress the sign-extension for pointer-like args. */
-        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE
-                                 && !is_ptr_like);
+         * truncate it, so suppress the sign-extension for pointer-like args.
+         *
+         * Sign-extend (movslq) is required when a signed 32-bit value
+         * (Integer / LongInt) is passed to a wider signed-or-unsigned 64-bit
+         * parameter (Int64 / QWord).  Without this, a spilled longint of -1
+         * is zero-extended to 0x00000000FFFFFFFF (4294967295) instead of
+         * 0xFFFFFFFFFFFFFFFF, breaking FPC semantics. */
+        int actual_is_s32 = (actual_type == INT_TYPE || actual_type == LONGINT_TYPE);
+        int expected_is_wider_int = (expected_type == LONGINT_TYPE ||
+                                     expected_type == INT64_TYPE ||
+                                     expected_type == QWORD_TYPE);
+        int needs_int_to_long = (actual_is_s32 && expected_is_wider_int && !is_ptr_like);
         int pass_on_stack = (arg_infos != NULL && arg_infos[i].pass_via_stack);
         if (arg_infos != NULL && arg_infos[i].emitted_via_prepass)
             continue;
