@@ -5933,7 +5933,19 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                 /* For multi-dimensional arrays, kgpc_type_sizeof only accounts
                  * for the outer dimension.  Use kgpc_type_get_array_dimension_info
-                 * which correctly multiplies all dimension sizes together. */
+                 * which correctly multiplies all dimension sizes together.
+                 *
+                 * IMPORTANT: don't let the symtab lookup override total_size for
+                 * single-dim arrays whose bounds were already supplied by the
+                 * AST.  Two same-named typed-const arrays in different units
+                 * (e.g. cpX.reversemap and cpY.reversemap, both
+                 * `array[0..N] of trec2` with different N) share a name in the
+                 * cross-unit symtab — FindSymbol returns whichever HashNode is
+                 * currently visible, which carries the OTHER declaration's
+                 * bounds.  The AST's arr->e_range / arr->s_range are
+                 * per-declaration and always correct, so trust them whenever
+                 * dim_info reports a single dimension and the AST has an
+                 * explicit positive length. */
                 int kgpc_dim_count = 0;
                 if (id_list != NULL && symtab != NULL) {
                     const char *var_name = (const char *)id_list->cur;
@@ -5947,8 +5959,25 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             {
                                 element_size = (int)dim_info.strides[0];
                             }
-                            if (dim_info.total_size > 0)
+                            /* Only use dim_info.total_size when it actually
+                             * encodes more dimensions than the AST's outer
+                             * range expression alone, or when the AST didn't
+                             * carry explicit bounds (alias-typed
+                             * declarations).  Otherwise the AST's
+                             * per-declaration bounds win — guarding against
+                             * cross-unit symtab aliasing of same-named typed
+                             * consts. */
+                            if (dim_info.total_size > 0 &&
+                                (dim_info.dim_count > 1 || length <= 0)) {
                                 total_size = (int)dim_info.total_size;
+                            } else if (dim_info.dim_count == 1 && length > 0) {
+                                /* Recompute total_size with possibly-updated
+                                 * element_size from strides[0]; keep bounds
+                                 * from the AST. */
+                                total_size = length * element_size;
+                                if (total_size <= 0)
+                                    total_size = element_size;
+                            }
                         } else {
                             long long kgpc_size = kgpc_type_sizeof(var_node->type);
                             if (kgpc_size > total_size)

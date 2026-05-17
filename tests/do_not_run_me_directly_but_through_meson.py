@@ -2383,6 +2383,36 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(any(token in asm for token in ("\troll\t", "\trolq\t")))
         self.assertTrue(any(token in asm for token in ("\trorl\t", "\trorq\t")))
 
+    def test_typed_const_array_size_per_decl(self):
+        """Regression: per-declaration .comm sizing for same-named typed-const arrays.
+
+        Two units declare `sharedarr : array[0..N] of trec2` with different N.
+        Before the fix, codegen pulled the array size from a cross-unit symtab
+        entry, so both units' .comm allocations ended up sized by whichever
+        declaration was most-recently registered.  Each unit's .comm must
+        match its OWN bound: 32 bytes for unit_a (8*4) and 16 bytes for
+        unit_b (4*4)."""
+        input_file = os.path.join(TEST_CASES_DIR, "typed_const_array_size_per_decl.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_size_per_decl.s")
+
+        run_compiler(input_file, asm_file)
+        asm = read_file_content(asm_file)
+
+        # Locate the .comm directive for each unit's sharedarr array.
+        comm_pattern = re.compile(
+            r"\.comm\s+__kgpc_tconst_array_"
+            r"typed_const_array_size_per_decl_unit_([ab])_0\s*,\s*(\d+)"
+        )
+        sizes = {m.group(1): int(m.group(2)) for m in comm_pattern.finditer(asm)}
+        self.assertIn("a", sizes, "missing unit_a typed-const .comm in asm")
+        self.assertIn("b", sizes, "missing unit_b typed-const .comm in asm")
+        self.assertEqual(sizes["a"], 32,
+            "unit_a's sharedarr [0..7] of trec2 must be 32 bytes, got "
+            f"{sizes['a']} — cross-unit symtab clobbered the bounds.")
+        self.assertEqual(sizes["b"], 16,
+            "unit_b's sharedarr [0..3] of trec2 must be 16 bytes, got "
+            f"{sizes['b']} — cross-unit symtab clobbered the bounds.")
+
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
         input_file, asm_file, _ = self._get_test_paths("bitshift_expr_malformed")
