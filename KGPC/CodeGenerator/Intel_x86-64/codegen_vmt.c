@@ -44,6 +44,10 @@
 
 #include "codegen_vmt_internal.h"
 
+/* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
+ * Build a parameter signature string for overload disambiguation. */
+char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
     const char ***out_names, int *out_count);
@@ -593,9 +597,28 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     /* Generic specializations can carry a cloned VMT from semcheck while the
      * actual specialized methods are only visible here by their emitted
      * symbols. Refresh matching virtual slots by method name before emitting
-     * the final table so inherited slots point at the specialized overrides. */
+     * the final table so inherited slots point at the specialized overrides.
+     *
+     * Pairing overloaded virtuals (same name, same param count, different
+     * param types) requires matching by full mangled signature.  Pure
+     * name+count matching causes both templates to pick the same candidate
+     * and overwrite the same MethodInfo slot — leaving the second overload's
+     * resolved_mangled_id either NULL (which falls back to the bare name
+     * `Class__Method` from Bug A in SemCheck_vmt_and_type_decls.c, producing
+     * an undefined symbol at link time) or stomped with the wrong overload's
+     * label.  Compute each template's expected mangled id, then pick the
+     * candidate whose mangled_id matches AND a MethodInfo not yet claimed
+     * by an earlier template in this pass.
+     */
     if (record_info->method_templates != NULL && record_info->methods != NULL &&
         class_label != NULL) {
+        int method_count = ListLength(record_info->methods);
+        int *method_claimed = (method_count > 0)
+            ? (int *)calloc((size_t)method_count, sizeof(int)) : NULL;
+        char **claimed_resolved_ids = NULL;
+        int claimed_resolved_count = 0;
+        int claimed_resolved_capacity = 0;
+
         for (ListNode_t *tmpl_node = record_info->method_templates;
              tmpl_node != NULL; tmpl_node = tmpl_node->next) {
             if (tmpl_node->type != LIST_METHOD_TEMPLATE || tmpl_node->cur == NULL)
@@ -610,10 +633,42 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 continue;
             snprintf(base_name, base_len, "%s__%s", class_label, tmpl->name);
 
-            const char *resolved_id = NULL;
+            /* Compute this template's param signature (excluding Self).  For
+             * overloaded virtuals this is the only way to distinguish one
+             * template from a sibling template with the same name and arity.
+             * Don't use MangleFunctionName(base_name, ..) directly: the
+             * template's Self type isn't fully resolved at codegen time, so
+             * Self mangles to `_u` whereas the real symbol used `_p`,
+             * producing spurious mismatches.  Compare param signatures
+             * (which already exclude Self) instead. */
+            char *template_param_sig = NULL;
+            KgpcType *tmpl_proc_type =
+                from_cparser_method_template_to_proctype(tmpl, record_info, symtab);
+            if (tmpl_proc_type != NULL && tmpl_proc_type->kind == TYPE_KIND_PROCEDURE) {
+                template_param_sig = semcheck_param_sig_from_params(
+                    tmpl_proc_type->info.proc_info.params,
+                    tmpl->is_static ? 0 : 1);
+            }
+            if (tmpl_proc_type != NULL)
+                destroy_kgpc_type(tmpl_proc_type);
+
             int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+            const char *resolved_id = NULL;
             ListNode_t *matches = FindAllIdents(symtab, base_name);
             int matching_defined_candidate_count = 0;
+
+            /* Resolution priorities, in order:
+             *   1. unclaimed candidate whose param sig matches template's
+             *   2. any candidate whose param sig matches template's
+             *   3. first unclaimed candidate
+             *   4. first candidate
+             * 4 covers duplicate templates that collapse to one impl
+             * (e.g. `class function F` and `function F`). */
+            const char *unclaimed_strong_id = NULL;
+            const char *any_strong_id = NULL;
+            const char *unclaimed_any_id = NULL;
+            const char *any_any_id = NULL;
+
             for (ListNode_t *m = matches; m != NULL; m = m->next) {
                 HashNode_t *cand = (HashNode_t *)m->cur;
                 if (cand == NULL || cand->type == NULL ||
@@ -626,33 +681,130 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 if (count != wanted_params)
                     continue;
                 matching_defined_candidate_count++;
-                resolved_id = cand->mangled_id;
-                if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
-                    resolved_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
-                break;
+
+                const char *cand_resolved = cand->mangled_id;
+                Tree_t *cand_def = cand->type->info.proc_info.definition;
+                if (cand_def != NULL &&
+                    cand_def->tree_data.subprogram_data.mangled_id != NULL)
+                    cand_resolved = cand_def->tree_data.subprogram_data.mangled_id;
+
+                int already_claimed = 0;
+                if (cand_resolved != NULL) {
+                    for (int i = 0; i < claimed_resolved_count; ++i) {
+                        if (claimed_resolved_ids[i] != NULL &&
+                            strcmp(claimed_resolved_ids[i], cand_resolved) == 0) {
+                            already_claimed = 1;
+                            break;
+                        }
+                    }
+                }
+
+                int sig_match = 0;
+                if (template_param_sig != NULL) {
+                    char *cand_sig = semcheck_param_sig_from_params(
+                        cand->type->info.proc_info.params,
+                        tmpl->is_static ? 0 : 1);
+                    if (cand_sig != NULL &&
+                        strcasecmp(cand_sig, template_param_sig) == 0)
+                        sig_match = 1;
+                    else if (cand_sig == NULL && template_param_sig[0] == '\0')
+                        sig_match = 1;
+                    free(cand_sig);
+                }
+
+                if (any_any_id == NULL)
+                    any_any_id = cand_resolved;
+                if (sig_match && any_strong_id == NULL)
+                    any_strong_id = cand_resolved;
+                if (!already_claimed) {
+                    if (unclaimed_any_id == NULL)
+                        unclaimed_any_id = cand_resolved;
+                    if (sig_match && unclaimed_strong_id == NULL)
+                        unclaimed_strong_id = cand_resolved;
+                }
             }
             if (matches != NULL)
                 DestroyList(matches);
-            free(base_name);
+
+            if (resolved_id == NULL) resolved_id = unclaimed_strong_id;
+            if (resolved_id == NULL) resolved_id = any_strong_id;
+            if (resolved_id == NULL) resolved_id = unclaimed_any_id;
+            if (resolved_id == NULL) resolved_id = any_any_id;
 
             KGPC_COMPILER_HARD_ASSERT(resolved_id != NULL || matching_defined_candidate_count == 0,
                 "generic VMT specialization '%s.%s' had a same-signature implementation but no resolved id",
                 class_label, tmpl->name);
-            if (resolved_id == NULL)
+            free(base_name);
+            if (resolved_id == NULL) {
+                free(template_param_sig);
                 continue;
+            }
 
+            /* Record this resolved id as claimed so a sibling template
+             * doesn't pick the same overload. */
+            if (claimed_resolved_count >= claimed_resolved_capacity) {
+                int new_cap = (claimed_resolved_capacity == 0) ? 4 : (claimed_resolved_capacity * 2);
+                char **grown = (char **)realloc(claimed_resolved_ids,
+                    (size_t)new_cap * sizeof(char *));
+                if (grown != NULL) {
+                    claimed_resolved_ids = grown;
+                    claimed_resolved_capacity = new_cap;
+                }
+            }
+            if (claimed_resolved_count < claimed_resolved_capacity) {
+                claimed_resolved_ids[claimed_resolved_count++] = strdup(resolved_id);
+            }
+
+            /* Find a MethodInfo not yet claimed by an earlier template.
+             * Prefer the one whose param_sig matches this template's
+             * param_sig (precise pairing for overloads with same arity).
+             * Otherwise take the first unclaimed name+arity match. */
+            int method_idx = 0;
+            int sig_match_idx = -1;
+            int first_match_idx = -1;
             for (ListNode_t *method_node = record_info->methods;
-                 method_node != NULL; method_node = method_node->next) {
+                 method_node != NULL; method_node = method_node->next, ++method_idx) {
+                if (method_claimed != NULL && method_claimed[method_idx])
+                    continue;
                 struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                 if (!codegen_template_matches_methodinfo(tmpl, method))
                     continue;
-                if (method->resolved_mangled_id != NULL &&
-                    method->resolved_mangled_id != method->mangled_name)
-                    free(method->resolved_mangled_id);
-                method->resolved_mangled_id = strdup(resolved_id);
-                break;
+                if (first_match_idx < 0)
+                    first_match_idx = method_idx;
+                if (template_param_sig != NULL && method->param_sig != NULL &&
+                    strcasecmp(template_param_sig, method->param_sig) == 0) {
+                    sig_match_idx = method_idx;
+                    break;
+                }
             }
+
+            int chosen_idx = (sig_match_idx >= 0) ? sig_match_idx : first_match_idx;
+            if (chosen_idx >= 0) {
+                method_idx = 0;
+                for (ListNode_t *method_node = record_info->methods;
+                     method_node != NULL; method_node = method_node->next, ++method_idx) {
+                    if (method_idx != chosen_idx)
+                        continue;
+                    struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                    if (method_claimed != NULL)
+                        method_claimed[method_idx] = 1;
+                    if (method->resolved_mangled_id != NULL &&
+                        method->resolved_mangled_id != method->mangled_name)
+                        free(method->resolved_mangled_id);
+                    method->resolved_mangled_id = strdup(resolved_id);
+                    break;
+                }
+            }
+
+            free(template_param_sig);
         }
+
+        if (claimed_resolved_ids != NULL) {
+            for (int i = 0; i < claimed_resolved_count; ++i)
+                free(claimed_resolved_ids[i]);
+            free(claimed_resolved_ids);
+        }
+        free(method_claimed);
     }
 
     /* Slots 12+: virtual methods.  Emit by vmt_index, not list order: imported
