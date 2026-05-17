@@ -1624,10 +1624,13 @@ int semcheck_addop(int *type_return,
             *type_return = BOOL;
             return return_val;
         }
-        if ((is_integer_type(type_first) || type_first == ENUM_TYPE ||
-             type_first == POINTER_TYPE || type_first == RECORD_TYPE) &&
+        /* Record operands fall through to the record-operator-overload
+         * dispatch below; don't silently treat them as ints. */
+        if (type_first != RECORD_TYPE && type_second != RECORD_TYPE &&
+            (is_integer_type(type_first) || type_first == ENUM_TYPE ||
+             type_first == POINTER_TYPE) &&
             (is_integer_type(type_second) || type_second == ENUM_TYPE ||
-             type_second == POINTER_TYPE || type_second == RECORD_TYPE))
+             type_second == POINTER_TYPE))
         {
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
@@ -1646,6 +1649,14 @@ int semcheck_addop(int *type_return,
             *type_return = UNKNOWN_TYPE;
             return return_val;
         }
+        /* If neither side is a record, this is a real type error. Record-typed
+         * operands fall through to the operator-overload dispatch below. */
+        if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
+        {
+            /* fall through to record-operator-overload dispatch */
+        }
+        else
+        {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean or integer operands for OR expression!\n\n",
             expr->line_num);
         if (kgpc_getenv("KGPC_DEBUG_ANDOR") != NULL)
@@ -1661,6 +1672,7 @@ int semcheck_addop(int *type_return,
         ++return_val;
         *type_return = UNKNOWN_TYPE;
         return return_val;
+        }
     }
 
     if (type_first == SET_TYPE && type_second == SET_TYPE)
@@ -1796,6 +1808,7 @@ int semcheck_addop(int *type_return,
             {
                 case PLUS: op_suffix = "op_add"; break;
                 case MINUS: op_suffix = "op_sub"; break;
+                case OR: op_suffix = "op_or"; break;
                 default: break;
             }
             
@@ -2099,11 +2112,15 @@ int semcheck_mulop(int *type_return,
             return return_val;
         }
         
-        /* Integer/enum/pointer/record bitwise operations (enums are ordinal types in Pascal) */
-        if ((is_integer_type(type_first) || type_first == ENUM_TYPE ||
-             type_first == POINTER_TYPE || type_first == RECORD_TYPE) &&
+        /* Integer/enum/pointer bitwise operations (enums are ordinal types in Pascal).
+         * Records are NOT included here — they must route through the
+         * operator-overload dispatch below so user-defined `operator and/xor`
+         * actually gets called instead of silently bit-ORing the first 4 bytes. */
+        if (type_first != RECORD_TYPE && type_second != RECORD_TYPE &&
+            (is_integer_type(type_first) || type_first == ENUM_TYPE ||
+             type_first == POINTER_TYPE) &&
             (is_integer_type(type_second) || type_second == ENUM_TYPE ||
-             type_second == POINTER_TYPE || type_second == RECORD_TYPE))
+             type_second == POINTER_TYPE))
         {
             /* Both operands are integers/enums - bitwise operation */
             /* INT64_TYPE/QWORD_TYPE take precedence as the largest integer types */
@@ -2126,6 +2143,14 @@ int semcheck_mulop(int *type_return,
             *type_return = UNKNOWN_TYPE;
             return return_val;
         }
+        /* Record operands fall through to the record-operator-overload dispatch
+         * below. Only flag a type error when neither side is a record. */
+        if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
+        {
+            /* fall through */
+        }
+        else
+        {
         /* Invalid operand types for AND/XOR */
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
@@ -2143,6 +2168,7 @@ int semcheck_mulop(int *type_return,
         ++return_val;
         *type_return = UNKNOWN_TYPE;
         return return_val;
+        }
     }
 
     /* Set operations for STAR operator (intersection) */
@@ -2182,6 +2208,12 @@ int semcheck_mulop(int *type_return,
                 case STAR: op_suffix = "op_mul"; break;
                 case SLASH: op_suffix = "op_div"; break;
                 case POWER: op_suffix = "op_pow"; break;
+                case AND: op_suffix = "op_and"; break;
+                case XOR: op_suffix = "op_xor"; break;
+                case SHL: op_suffix = "op_shl"; break;
+                case SHR: op_suffix = "op_shr"; break;
+                case DIV: op_suffix = "op_div"; break;
+                case MOD: op_suffix = "op_mod"; break;
                 default: break;
             }
             
