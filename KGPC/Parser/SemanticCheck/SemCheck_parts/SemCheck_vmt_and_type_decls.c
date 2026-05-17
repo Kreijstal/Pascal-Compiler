@@ -185,48 +185,116 @@ if (record_info->parent_class_name != NULL) {
             if (base_name != NULL)
                 free(base_name);
             
-            /* Check if this method overrides a parent method */
+            /* Check if this method overrides a parent method.
+             *
+             * We try matching in three passes of decreasing strictness:
+             *   1. strict: name + param_sig equal
+             *   2. name + param_count equal (handles aliased integer types
+             *      such as TRelocDataInt vs aint that mangle differently
+             *      but denote the same underlying type)
+             *   3. name only with matching param_count when a parent's
+             *      param_sig is NULL (abstract methods declared without a
+             *      body never get param_sig populated, see the body-walk
+             *      around the FindAllIdents block above).
+             *
+             * Passes 2 and 3 are only used when the binding is explicitly
+             * marked `override`, so we trust the programmer's assertion
+             * that this is meant to override and avoid silently fusing
+             * unrelated same-named virtuals.
+             */
             int is_actual_override = 0;
+            struct MethodInfo *override_target = NULL;
             if (binding->is_virtual || binding->is_override) {
-                /* Check if a method with this name/signature exists in the parent VMT */
-                ListNode_t *vmt_entry = vmt;
-                while (vmt_entry != NULL) {
+                /* Pass 1: strict signature match */
+                for (ListNode_t *vmt_entry = vmt; vmt_entry != NULL;
+                     vmt_entry = vmt_entry->next) {
                     struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
-                    if (info != NULL && info->name != NULL &&
-                        strcasecmp(info->name, binding->method_name) == 0) {
-                        int signature_matches = 0;
-                        if (binding->param_sig != NULL && info->param_sig != NULL) {
-                            if (strcasecmp(binding->param_sig, info->param_sig) == 0)
-                                signature_matches = 1;
-                        } else if (binding->param_count >= 0 && info->param_count >= 0) {
-                            if (binding->param_count == info->param_count)
-                                signature_matches = 1;
-                        } else {
+                    if (info == NULL || info->name == NULL)
+                        continue;
+                    if (strcasecmp(info->name, binding->method_name) != 0)
+                        continue;
+                    int signature_matches = 0;
+                    if (binding->param_sig != NULL && info->param_sig != NULL) {
+                        if (strcasecmp(binding->param_sig, info->param_sig) == 0)
                             signature_matches = 1;
-                        }
-                        if (!signature_matches) {
-                            vmt_entry = vmt_entry->next;
-                            continue;
-                        }
-                        /* Method exists in parent - this is an override */
-                        is_actual_override = 1;
-                        /* Replace with derived class's version */
-                        free(info->mangled_name);
-                        info->mangled_name = mangled ? strdup(mangled) : NULL;
-                        /* Clear resolved_mangled_id so the resolve phase re-resolves
-                         * for the overriding class (the cloned parent value is stale) */
-                        if (info->resolved_mangled_id != NULL) {
-                            free(info->resolved_mangled_id);
-                            info->resolved_mangled_id = NULL;
-                        }
-                        info->is_override = 1;
-                        if (info->param_count < 0 && binding->param_count >= 0)
-                            info->param_count = binding->param_count;
-                        if (info->param_sig == NULL && binding->param_sig != NULL)
-                            info->param_sig = strdup(binding->param_sig);
+                    } else if (binding->param_count >= 0 && info->param_count >= 0) {
+                        if (binding->param_count == info->param_count)
+                            signature_matches = 1;
+                    } else {
+                        signature_matches = 1;
+                    }
+                    if (signature_matches) {
+                        override_target = info;
                         break;
                     }
-                    vmt_entry = vmt_entry->next;
+                }
+
+                /* Pass 2: name + param_count when explicitly declared as
+                 * `override`. This covers cases where parent and child use
+                 * aliased type names that mangle differently (e.g. parent
+                 * uses TRelocDataInt while child uses aint, both being
+                 * the same underlying 64-bit integer on x86_64). Without
+                 * this, the override would be appended as a new VMT slot
+                 * and the parent's abstract slot would be left calling
+                 * __kgpc_abstract_method_error at runtime. */
+                if (override_target == NULL && binding->is_override &&
+                    binding->param_count >= 0) {
+                    for (ListNode_t *vmt_entry = vmt; vmt_entry != NULL;
+                         vmt_entry = vmt_entry->next) {
+                        struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
+                        if (info == NULL || info->name == NULL)
+                            continue;
+                        if (strcasecmp(info->name, binding->method_name) != 0)
+                            continue;
+                        if (info->param_count >= 0 &&
+                            info->param_count == binding->param_count) {
+                            override_target = info;
+                            break;
+                        }
+                    }
+                }
+
+                /* Pass 3: name + (any) param_count when the parent slot has
+                 * a NULL param_sig and the binding is declared `override`.
+                 * Abstract methods declared without a body never get their
+                 * param_sig recomputed by the FindAllIdents body walk
+                 * earlier in this function, so they may carry NULL even
+                 * when the child has a fully resolved param_sig. */
+                if (override_target == NULL && binding->is_override) {
+                    for (ListNode_t *vmt_entry = vmt; vmt_entry != NULL;
+                         vmt_entry = vmt_entry->next) {
+                        struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
+                        if (info == NULL || info->name == NULL ||
+                            info->param_sig != NULL)
+                            continue;
+                        if (strcasecmp(info->name, binding->method_name) != 0)
+                            continue;
+                        if (binding->param_count < 0 || info->param_count < 0 ||
+                            binding->param_count == info->param_count) {
+                            override_target = info;
+                            break;
+                        }
+                    }
+                }
+
+                if (override_target != NULL) {
+                    struct MethodInfo *info = override_target;
+                    /* Method exists in parent - this is an override */
+                    is_actual_override = 1;
+                    /* Replace with derived class's version */
+                    free(info->mangled_name);
+                    info->mangled_name = mangled ? strdup(mangled) : NULL;
+                    /* Clear resolved_mangled_id so the resolve phase re-resolves
+                     * for the overriding class (the cloned parent value is stale) */
+                    if (info->resolved_mangled_id != NULL) {
+                        free(info->resolved_mangled_id);
+                        info->resolved_mangled_id = NULL;
+                    }
+                    info->is_override = 1;
+                    if (info->param_count < 0 && binding->param_count >= 0)
+                        info->param_count = binding->param_count;
+                    if (info->param_sig == NULL && binding->param_sig != NULL)
+                        info->param_sig = strdup(binding->param_sig);
                 }
             }
             
