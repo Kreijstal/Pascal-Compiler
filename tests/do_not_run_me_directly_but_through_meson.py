@@ -2413,6 +2413,42 @@ class TestCompiler(unittest.TestCase):
             "unit_b's sharedarr [0..3] of trec2 must be 16 bytes, got "
             f"{sizes['b']} — cross-unit symtab clobbered the bounds.")
 
+    def test_typed_const_cross_unit_shortstring_array(self):
+        """Regression: per-element stride for cross-unit array-of-shortstring init.
+
+        A unit declares `tok2str : array[ttinytok] of string[10]`.  Before the
+        fix, the per-element init in the consuming program used stride 256
+        (the generic ShortString default) instead of 11 (string[10] storage =
+        N+1).  Writing element K at offset K*256 OOB-clobbered adjacent BSS.
+
+        The init code's address computation either uses an inline scaled LEA
+        (`leaq (base, idx, S), idx`) when S is 1/2/4/8, or `imulq $S, idx`
+        otherwise.  For stride 11 it must use `imulq $11, ...`.  The asm
+        must NOT contain a stride-256 imul for our typed-const symbol."""
+        input_file = os.path.join(
+            TEST_CASES_DIR, "typed_const_cross_unit_shortstring_array.p")
+        asm_file = os.path.join(
+            TEST_OUTPUT_DIR, "typed_const_cross_unit_shortstring_array.s")
+
+        run_compiler(input_file, asm_file)
+        asm = read_file_content(asm_file)
+
+        # The init code must reference the unit's typed-const symbol.
+        self.assertIn(
+            "__kgpc_tconst_array_typed_const_cross_unit_shortstring_array_recunit",
+            asm,
+            "expected the cross-unit typed-const symbol in emitted asm")
+
+        # The stride-256 imul is the bug signature.  Reject it.
+        self.assertNotIn(
+            "imulq\t$256,", asm,
+            "stride-256 per-element imul present — the bug is back.")
+
+        # And the correct stride 11 (string[10] storage) must appear.
+        self.assertIn(
+            "imulq\t$11,", asm,
+            "expected stride-11 imul for string[10] elements; got none.")
+
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
         input_file, asm_file, _ = self._get_test_paths("bitshift_expr_malformed")
