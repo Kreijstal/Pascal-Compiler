@@ -673,24 +673,60 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             symtab, cur_record->parent_class_name, 0);
     }
 
+    /* Walk the parent class chain to find the best MethodInfo at this slot.
+     *
+     * A child class clones its parent's MethodInfo entries during semcheck
+     * (see SemCheck_vmt_and_type_decls.c build_class_vmt) — the clone
+     * copies the parent's `resolved_mangled_id` AT CLONE TIME.  But the
+     * parent's pre-emit template-refresh pass (above) may update the
+     * parent's MethodInfo->resolved_mangled_id to the symbol actually
+     * emitted by semcheck_subprograms (which can differ from what was
+     * resolved earlier — different argument type encoding etc.).  That
+     * refresh does NOT propagate to already-cloned MethodInfo entries in
+     * descendant classes, so the cloned slot can carry a stale label.
+     *
+     * To pick the right label, prefer:
+     *   1. Most-specific MethodInfo whose resolved_mangled_id is in the
+     *      available_subprograms set (i.e. its symbol is being emitted).
+     *   2. Otherwise, most-specific MethodInfo with any non-NULL
+     *      resolved_mangled_id.
+     *   3. Otherwise the most-specific match (which the downstream symtab
+     *      fallback may still resolve via mangled_name). */
     for (int slot = 12; slot <= max_vmt_index; slot++) {
-        struct MethodInfo *method = NULL;
-        for (struct RecordType *cur_record = record_info;
-             cur_record != NULL && method == NULL; ) {
+        struct MethodInfo *method = NULL;          /* most-specific at slot */
+        struct MethodInfo *resolved_method = NULL; /* most-specific with resolved in available set */
+        struct MethodInfo *any_resolved = NULL;    /* most-specific with any non-NULL resolved */
+        for (struct RecordType *cur_record = record_info; cur_record != NULL; ) {
             for (ListNode_t *method_node = cur_record->methods;
                  method_node != NULL; method_node = method_node->next) {
                 struct MethodInfo *candidate = (struct MethodInfo *)method_node->cur;
-                if (candidate != NULL && candidate->vmt_index == slot) {
+                if (candidate == NULL || candidate->vmt_index != slot)
+                    continue;
+                if (method == NULL)
                     method = candidate;
-                    break;
-                }
+                if (any_resolved == NULL && candidate->resolved_mangled_id != NULL)
+                    any_resolved = candidate;
+                if (resolved_method == NULL &&
+                    candidate->resolved_mangled_id != NULL &&
+                    g_codegen_available_subprograms != NULL &&
+                    codegen_set_contains(&g_available_subprograms_set,
+                        candidate->resolved_mangled_id))
+                    resolved_method = candidate;
+                break;  /* first match per class; deeper classes via parent walk */
             }
 
-            if (method != NULL || cur_record->parent_class_name == NULL)
+            if (resolved_method != NULL)
+                break;
+            if (cur_record->parent_class_name == NULL)
                 break;
             cur_record = codegen_lookup_record_type_by_name(
                 symtab, cur_record->parent_class_name, 0);
         }
+
+        if (resolved_method != NULL)
+            method = resolved_method;
+        else if (any_resolved != NULL)
+            method = any_resolved;
 
         if (method == NULL || method->mangled_name == NULL) {
             fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
@@ -698,6 +734,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
 
         const char *full_mangled = method->resolved_mangled_id;
+        if (full_mangled == NULL && method->mangled_name != NULL)
+            full_mangled = method->mangled_name;
         const char *slot_label = NULL;
         if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
             codegen_set_contains(&g_available_subprograms_set, full_mangled))
