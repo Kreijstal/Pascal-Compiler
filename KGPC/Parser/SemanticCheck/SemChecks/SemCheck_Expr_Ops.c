@@ -2212,7 +2212,10 @@ int semcheck_mulop(int *type_return,
                 case XOR: op_suffix = "op_xor"; break;
                 case SHL: op_suffix = "op_shl"; break;
                 case SHR: op_suffix = "op_shr"; break;
-                case DIV: op_suffix = "op_div"; break;
+                /* `div` (integer division) maps to op_intdiv per
+                 * encode_operator_name() in from_cparser_init_and_registry.c.
+                 * `/` (real division) uses op_div — that's SLASH above. */
+                case DIV: op_suffix = "op_intdiv"; break;
                 case MOD: op_suffix = "op_mod"; break;
                 default: break;
             }
