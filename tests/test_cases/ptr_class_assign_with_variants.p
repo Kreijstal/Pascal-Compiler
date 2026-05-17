@@ -1,35 +1,44 @@
 program ptr_class_assign_with_variants;
 
-{ Regression: when the variants unit is in scope (or transitively visible),
-  `^TDerived := @ClassInstance.BaseField` was wrongly routed through the
-  operator-overload search and bound to `olevariant.op_assign(terror)`,
-  producing a NULL-call crash.  Reduces FPC compiler/nset.pas makeifblock:
-  the assignment must compile and run without invoking any variant operator.
-  The case statement on strings exercises the same path makeifblock builds. }
+{ Regression for 15c0620c "semcheck: never route pointer-to-pointer
+  assignments through op-overload search".
+
+  Reduces FPC compiler/nset.pas makeifblock pattern
+    newcheck : ^taddnode;
+    newcheck := @check.right;     // right : tnode (base of taddnode)
+
+  Before the fix, KGPC rejected (^taddnode vs ^tnode) in
+  are_types_compatible_for_assignment, then fell through to
+  semcheck_try_record_conversion_expression which gated the operator-
+  overload search on target_is_pointer alone. Pointer-to-pointer
+  assignments entered the search and bound `op_assign(terror)` whose
+  NULL handler dereferenced and aborted compilation (this is why the
+  original repro `uses variants` — it loaded olevariant's op_assign).
+
+  The fix is purely about pointer-to-pointer typing rules: no
+  `uses variants` needed to drive it. The test must compile, link, and
+  run regardless of whether the stdlib or FPC RTL is in use. }
 
 {$mode objfpc}
 
-uses
-  variants;
-
 type
-  tnode = class
+  TNode = class
     payload: longint;
   end;
 
-  tbinopnode = class(tnode)
-    left, right: tnode;
+  TBinopNode = class(TNode)
+    left, right: TNode;
   end;
 
-  taddnode = class(tbinopnode)
+  TAddNode = class(TBinopNode)
   end;
 
 procedure makeifblock;
 var
-  c: taddnode;
-  np: ^taddnode;
+  c: TAddNode;
+  np: ^TAddNode;
 begin
-  c := taddnode.create;
+  c := TAddNode.create;
   np := @c;
   writeln('@c ok');
   np := @c.right;

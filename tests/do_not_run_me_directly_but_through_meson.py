@@ -4029,6 +4029,10 @@ FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "fpc_sizeuint",
     "fpc_str_procedure",
     "implicitsystemimport",
+    # Regression for 15c0620c: `^TDerived := @ClassInstance.BaseField` must not
+    # be routed through op-overload search. Test has no `uses` clause, but we
+    # want it exercised under --no-stdlib too to cover both compile paths.
+    "ptr_class_assign_with_variants",
     "system_core_basics",
     "system_qualified_length_if",
     "tdd_cp_acp_paramstr_ioresult",
