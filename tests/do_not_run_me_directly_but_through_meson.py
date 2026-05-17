@@ -301,6 +301,7 @@ def _bootstrap_rtl_unit_dirs(fpc_src):
         os.path.join(fpc_src, "rtl", "inc"),
         os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
         os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        os.path.join(fpc_src, "rtl", "charmaps"),
     ]
 
 

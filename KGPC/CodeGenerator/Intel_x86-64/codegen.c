@@ -4791,16 +4791,23 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     /* Process var/const declarations from loaded units first, then program.
      * These are always needed — even with --skip-unit-codegen, the per-test
-     * compilation must emit unit globals and run unit init code. */
+     * compilation must emit unit globals and run unit init code.
+     *
+     * Stamp each unit's stack nodes with its source-unit index so that
+     * later find_label lookups (during init/finalization codegen) can
+     * disambiguate same-named globals across units. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            int saved_unit = stackmng_set_current_unit_index(unit_idx);
             codegen_function_locals(unit->tree_data.unit_data.interface_var_decls, ctx, symtab);
             codegen_function_locals(unit->tree_data.unit_data.implementation_var_decls, ctx, symtab);
             codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.interface_const_decls);
             codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.implementation_const_decls);
+            stackmng_set_current_unit_index(saved_unit);
         }
     }
     codegen_function_locals(data->var_declaration, ctx, symtab);
@@ -4919,14 +4926,19 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     reset_reg_stack();
     inst_list = NULL;
     ctx->next_vreg_id = 0;
-    /* Emit var initializers from loaded units first, then program. */
+    /* Emit var initializers from loaded units first, then program.
+     * Each unit's initializers must look up by that unit's name scope so
+     * same-named typed consts across units don't collide. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            int saved_unit = stackmng_set_current_unit_index(unit_idx);
             inst_list = codegen_var_initializers(unit->tree_data.unit_data.interface_var_decls, inst_list, ctx, symtab);
             inst_list = codegen_var_initializers(unit->tree_data.unit_data.implementation_var_decls, inst_list, ctx, symtab);
+            stackmng_set_current_unit_index(saved_unit);
         }
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
@@ -4946,7 +4958,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration, symtab);
 
-    /* Emit unit initialization blocks in dependency (load) order. */
+    /* Emit unit initialization blocks in dependency (load) order.
+     * Set the per-unit codegen scope so find_label resolves same-named
+     * typed consts / vars to the right unit's instance. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -4955,6 +4969,8 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             struct Statement *init_stmt = unit->tree_data.unit_data.initialization;
             if (init_stmt == NULL)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            int saved_unit = stackmng_set_current_unit_index(unit_idx);
             /* Only inline the inner statements from compound statements */
             if (init_stmt->type == STMT_COMPOUND_STATEMENT) {
                 ListNode_t *stnode = init_stmt->stmt_data.compound_statement;
@@ -4966,6 +4982,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             } else {
                 inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
             }
+            stackmng_set_current_unit_index(saved_unit);
         }
     }
 
@@ -4983,7 +5000,10 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             struct Statement *final_stmt = unit->tree_data.unit_data.finalization;
             if (final_stmt == NULL)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            int saved_unit = stackmng_set_current_unit_index(unit_idx);
             inst_list = codegen_stmt(final_stmt, inst_list, ctx, symtab);
+            stackmng_set_current_unit_index(saved_unit);
         }
     }
 
