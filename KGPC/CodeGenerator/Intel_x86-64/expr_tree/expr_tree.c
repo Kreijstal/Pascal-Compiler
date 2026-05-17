@@ -2233,6 +2233,16 @@ static expr_node_t *build_expr_tree_internal(struct Expression *expr,
         {
             preserve_leaf_typecast = 1;
         }
+        /* Widening typecast Int64(longint_var) / QWord(longint_var) must
+         * sign-extend the 32-bit value to 64 bits.  If we strip the typecast
+         * here, the inner load is a 32-bit movl that zero-extends, producing
+         * 0x00000000FFFFFFFF for longint(-1) instead of 0xFFFFFFFFFFFFFFFF.
+         * Preserve as leaf so gencode_case0 can emit movslq after the load. */
+        else if ((tc_target == INT64_TYPE || tc_target == QWORD_TYPE) &&
+                 type_tag_is_signed_32bit_int(expr_get_type_tag(tc_inner)))
+        {
+            preserve_leaf_typecast = 1;
+        }
 
         if (!preserve_leaf_typecast)
         {
@@ -5050,6 +5060,31 @@ cleanup_constructor:
         else
             snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", word_mask, target_reg->bit_32);
 
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             (expr->expr_data.typecast_data.target_type == INT64_TYPE ||
+              expr->expr_data.typecast_data.target_type == QWORD_TYPE) &&
+             type_tag_is_signed_32bit_int(
+                 expr_get_type_tag(expr->expr_data.typecast_data.expr)))
+    {
+        /* Widening Int64(longint_expr) / QWord(longint_expr): evaluate the
+         * inner expression into target_reg's low 32 bits (it's signed), then
+         * sign-extend to 64 bits.  Without this, a longint(-1) loaded by movl
+         * becomes 0x00000000FFFFFFFF (4294967295) rather than -1, which
+         * breaks FPC's constant range checks and other 64-bit signed math. */
+        struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+        expr_node_t *inner_tree = build_expr_tree(inner_expr);
+        if (inner_tree == NULL)
+            return inst_list;
+
+        inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+        free_expr_tree(inner_tree);
+
+        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+            target_reg->bit_32, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
     }
