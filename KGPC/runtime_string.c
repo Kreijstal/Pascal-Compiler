@@ -1527,6 +1527,7 @@ int kgpc_text_eof(KGPCTextRec *file)
      * Once stdio has been engaged (private_data != 0), it owns the read
      * buffer and we must use fgetc/ungetc so eof reflects what the stdio
      * reader will see, not the kernel position. */
+#ifndef _WIN32
     if (file != NULL && file->private_data == 0 && file->handle >= 0
         && file->mode != 0 && file->mode != (int32_t)0xD7B0)
     {
@@ -1545,6 +1546,7 @@ int kgpc_text_eof(KGPCTextRec *file)
         errno = saved_errno;
         /* Non-seekable or non-regular: fall through to stdio path. */
     }
+#endif
 
     FILE *stream = kgpc_text_input_stream(file);
     if (stream == NULL)
