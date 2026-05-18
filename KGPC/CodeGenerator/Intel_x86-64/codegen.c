@@ -1825,6 +1825,21 @@ void codegen_reset_static_link_cache(CodeGenContext *ctx)
     ctx->static_link_spill_slot = NULL;
 }
 
+/* Drop any cached static-link state WITHOUT touching the register pool.
+ * Used immediately after reset_reg_stack(), which has already freed all
+ * registers — ctx->static_link_reg would otherwise dangle into freed
+ * memory and produce a use-after-free the next time codegen_acquire_static_link
+ * sees a stale non-NULL pointer with a matching level. The spill slot also
+ * belongs to a stack scope that may no longer be live. */
+void codegen_invalidate_static_link_cache(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    ctx->static_link_reg = NULL;
+    ctx->static_link_reg_level = 0;
+    ctx->static_link_spill_slot = NULL;
+}
+
 void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab)
 {
     if (type_decls == NULL || symtab == NULL)
@@ -4101,6 +4116,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
         reset_reg_stack();
+        codegen_invalidate_static_link_cache(ctx);
         ListNode_t *inst_list = NULL;
         ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
@@ -4185,6 +4201,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             ctx->callee_save_r15_offset = r15_slot->offset;
         }
         reset_reg_stack();
+        codegen_invalidate_static_link_cache(ctx);
         ListNode_t *inst_list = NULL;
         ctx->next_vreg_id = 0;
         inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
@@ -5130,6 +5147,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * aliases needed — the cache .o is self-contained. */
 
     reset_reg_stack();
+    codegen_invalidate_static_link_cache(ctx);
     inst_list = NULL;
     ctx->next_vreg_id = 0;
     /* Emit var initializers from loaded units first, then program.

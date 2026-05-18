@@ -471,6 +471,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * with reset_reg_stack() in the cache-miss loop); making it
      * unconditional removes that hidden coupling. */
     reset_reg_stack();
+    /* reset_reg_stack just destroyed every Register_t the previous subprogram
+     * cached in ctx->static_link_reg.  Drop the dangling pointer (and the
+     * spill-slot pointer from the previous scope) before any expression in
+     * this subprogram can read it back as a live register. */
+    codegen_invalidate_static_link_cache(ctx);
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
@@ -617,6 +622,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         int saved_vreg_id = ctx->next_vreg_id;
         codegen_subprograms(proc->subprograms, ctx, symtab);
         reset_reg_stack();
+        /* The nested subprograms ran reset_reg_stack themselves, so any
+         * static_link cache entry was either freed cleanly or just dangles
+         * — invalidate here so this outer body never reads a stale pointer. */
+        codegen_invalidate_static_link_cache(ctx);
         ctx->next_vreg_id = saved_vreg_id;
     }
 
@@ -830,6 +839,13 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         liveness_free(liveness);
         cfg_free(cfg);
     }
+    /* Release any static-link register the body left cached.  Without this
+     * the callee-save reg (rbx/r12-r15) the nested-frame walker pinned in
+     * codegen_acquire_static_link survives into the next subprogram's
+     * reset_reg_stack — that not only fires "Not all registers freed" but
+     * leaves a dangling Register_t* in ctx->static_link_reg that the next
+     * acquire can return verbatim when the level happens to match. */
+    codegen_reset_static_link_cache(ctx);
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -901,6 +917,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* See comment in codegen_procedure: reset the global register allocator
      * so leaks from prior functions don't poison this function's codegen. */
     reset_reg_stack();
+    /* reset_reg_stack just destroyed every Register_t the previous subprogram
+     * cached in ctx->static_link_reg.  Drop the dangling pointer (and the
+     * spill-slot pointer from the previous scope) before any expression in
+     * this subprogram can read it back as a live register. */
+    codegen_invalidate_static_link_cache(ctx);
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
@@ -1565,6 +1586,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->returns_dynamic_array = saved_returns_dynamic_array;
         ctx->dynamic_array_descriptor_size = saved_dynamic_array_descriptor_size;
         reset_reg_stack();
+        codegen_invalidate_static_link_cache(ctx);
         ctx->next_vreg_id = saved_vreg_id;
     }
 
@@ -1843,6 +1865,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         liveness_free(liveness);
         cfg_free(cfg);
     }
+    /* See matching note in codegen_procedure — release any cached
+     * static-link register before the next subprogram's reset_reg_stack
+     * destroys the underlying Register_t storage. */
+    codegen_reset_static_link_cache(ctx);
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
@@ -2280,6 +2306,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
 
     /* Allocate stack slots for callee-saved registers */
     reset_reg_stack();
+    codegen_invalidate_static_link_cache(ctx);
     ListNode_t *inst_list = NULL;
     ctx->next_vreg_id = 0;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
