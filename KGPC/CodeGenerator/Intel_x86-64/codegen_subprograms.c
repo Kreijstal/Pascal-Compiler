@@ -1957,6 +1957,8 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
                 cur_scope->x_tail->next = new_list_node;
                 cur_scope->x_tail = new_list_node;
             }
+            /* Keep the hash index in sync with the list. */
+            stackscope_index_x_insert(cur_scope, new_list_node);
         }
     }
 }
@@ -2006,6 +2008,8 @@ int add_absolute_var_alias(const char *alias_label, const char *target_label)
         cur_scope->x_tail->next = new_list_node;
         cur_scope->x_tail = new_list_node;
     }
+    /* Keep the hash index in sync with the list. */
+    stackscope_index_x_insert(cur_scope, new_list_node);
 
     return 0;
 }
@@ -2056,6 +2060,8 @@ int add_absolute_static_symbol_alias(const char *alias_label, const char *target
         cur_scope->x_tail->next = new_list_node;
         cur_scope->x_tail = new_list_node;
     }
+    /* Keep the hash index in sync with the list. */
+    stackscope_index_x_insert(cur_scope, new_list_node);
 
     return 0;
 }
@@ -2124,6 +2130,8 @@ int add_absolute_var_alias_with_offset(const char *alias_label, const char *targ
         cur_scope->x_tail->next = new_list_node;
         cur_scope->x_tail = new_list_node;
     }
+    /* Keep the hash index in sync with the list. */
+    stackscope_index_x_insert(cur_scope, new_list_node);
 
     return 0;
 }
