@@ -64,9 +64,15 @@ static long long codegen_arr_decl_shortstring_elem_storage(const Tree_t *decl)
         return (long long)etype->type_alias->array_end + 1;
     }
 
-    /* TYPE_KIND_ARRAY of CHAR: kgpc_type_sizeof returns the data size
-     * (N bytes); the on-disk shortstring representation adds the length
-     * byte for total N+1. */
+    /* TYPE_KIND_ARRAY of CHAR: shortstring is represented either as
+     *   - array[0..N] of char  (start=0, end=N): includes the length-byte
+     *     slot at index 0 — total storage is N+1 bytes and that's exactly
+     *     what kgpc_type_sizeof reports.
+     *   - array[1..N] of char  (start=1, end=N): data-only — kgpc_type_sizeof
+     *     reports N bytes and the on-disk shortstring adds one more byte
+     *     for the length prefix.
+     * Distinguish by start_index so we don't double-count for the form
+     * the AST actually emits for string[N] typed-const elements. */
     if (etype->kind == TYPE_KIND_ARRAY &&
         etype->info.array_info.element_type != NULL &&
         etype->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
@@ -74,7 +80,7 @@ static long long codegen_arr_decl_shortstring_elem_storage(const Tree_t *decl)
     {
         long long ds = kgpc_type_sizeof(etype);
         if (ds > 0)
-            return ds + 1;
+            return (etype->info.array_info.start_index == 0) ? ds : ds + 1;
     }
     return 0;
 }
@@ -138,6 +144,44 @@ static long long codegen_cross_unit_typed_const_shortstring_elem_size(
             unit->tree_data.unit_data.implementation_var_decls, bare_id);
         if (sz > 0)
             return sz;
+    }
+    return 0;
+}
+
+/* Same as above, but only consider the loaded unit whose `unit_idx` matches
+ * `target_unit_idx`.  This is the authoritative resolver for the cross-unit
+ * same-named typed-const case: when `current_unit_index > 0` is set (during
+ * unit init or during a subprogram body emitted with per-unit binding), the
+ * read site's owning unit's AST decl carries the correct element storage
+ * size — bypass the flat symtab/TypeAlias state entirely.
+ *
+ * Concretely fixes: writing msg[i] := '...' or reading msg[i] from inside
+ * unit_a's procedure when unit_b's same-named `msg` (different element
+ * type) is also in the symtab.  Without per-unit filtering, the generic
+ * helper above returned the FIRST matching unit's size, which may not be
+ * the read site's owning unit. */
+static long long codegen_unit_typed_const_shortstring_elem_size(
+    CodeGenContext *ctx, const char *bare_id, int target_unit_idx)
+{
+    if (ctx == NULL || ctx->comp_ctx == NULL ||
+        bare_id == NULL || bare_id[0] == '\0' || target_unit_idx <= 0)
+        return 0;
+    for (int i = 0; i < ctx->comp_ctx->loaded_unit_count; ++i)
+    {
+        if (ctx->comp_ctx->loaded_units[i].unit_idx != target_unit_idx)
+            continue;
+        Tree_t *unit = ctx->comp_ctx->loaded_units[i].unit_tree;
+        if (unit == NULL || unit->type != TREE_UNIT)
+            continue;
+        long long sz = codegen_decl_list_typed_const_elem_storage(
+            unit->tree_data.unit_data.interface_var_decls, bare_id);
+        if (sz > 0)
+            return sz;
+        sz = codegen_decl_list_typed_const_elem_storage(
+            unit->tree_data.unit_data.implementation_var_decls, bare_id);
+        if (sz > 0)
+            return sz;
+        return 0;
     }
     return 0;
 }
@@ -1765,6 +1809,26 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         long long element_size_ll = 1;
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
+    }
+
+    /* Override stride from the read site's own unit AST when this is a
+     * typed-const reference and current_unit_index identifies the owning
+     * unit.  Necessary because cross-unit same-named typed-consts (e.g.
+     * `msg` in two units, or FPC's `ait_const2str` in aggas.pas/agx86nsm.pas)
+     * leave the non-last-registered unit's TypeAlias slot NULL — the
+     * symtab/alias-based stride paths above pick up the OTHER unit's
+     * element storage size, over-stride the .comm allocation, and clobber
+     * adjacent symbols (e.g. the typed-const guard byte) on init writes.
+     * This single AST lookup recovers the precise per-unit element size. */
+    if (array_expr != NULL && array_expr->type == EXPR_VAR_ID &&
+        array_expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL &&
+        ctx->symtab->current_unit_index > 0)
+    {
+        long long unit_sz = codegen_unit_typed_const_shortstring_elem_size(
+            ctx, array_expr->expr_data.id, ctx->symtab->current_unit_index);
+        if (unit_sz > 0 && unit_sz < 256)
+            first_index_stride = unit_sz;
     }
     int tokenidx_pointer_index = 0;
     if (!has_info && expr->expr_data.array_access_data.extra_indices != NULL &&
