@@ -536,6 +536,7 @@ UNIT_ONLY_TESTS = {
     "fpc_interface_const_after_external",
     "fpc_qualified_const_import",
     "property_indexed_unit",
+    "regr_char_const_alias_unit",
     "tdd_external_unit_var",
     "tdd_variant_shadow_record",
     "unit_cardinal_type",
