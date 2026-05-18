@@ -44,6 +44,7 @@
 #endif
 
 #include "codegen_subprograms_internal.h"
+#include "codegen_vmt_internal.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 
@@ -668,17 +669,65 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-        /* Free the instance memory.  We use kgpc_freemem (libc free)
-         * because the constructor codegen path uses kgpc_allocmem
-         * (libc malloc) — see codegen_constructor_call in expr_tree.c
-         * and the early-generic path in this file.  Routing via the
-         * Pascal-level FreeMem (FPC RTL's freemem_p ->
-         * MemoryManager.FreeMem) would mismatch the allocator and
-         * corrupt the heap when shutdown finalizers free objects like
-         * the OutOfMemory exception singleton.  User-code GetMem/FreeMem
-         * pairs are handled separately via overload resolution and are
-         * not affected by this body. */
-        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
+
+        /* Dispatch through the VMT to TObject.FreeInstance instead of
+         * unconditionally invoking the libc free path.  FPC's RTL relies on
+         * subclasses (notably tsymtable) overriding FreeInstance to
+         * implement refcount-shared semantics: the destructor runs every
+         * time `Free` is called but the storage is only released when the
+         * refcount reaches zero.  Going through the VMT also routes the
+         * actual free through `MemoryManager.FreeMem`, which pairs with
+         * the allocator that the constructor used.
+         *
+         * We look up the FreeInstance slot dynamically from TObject's
+         * method list so that the offset travels with the RecordType and
+         * stays in sync if the VMT layout shifts. */
+        int freeinstance_slot = -1;
+        if (symtab != NULL) {
+            struct RecordType *tobject = codegen_lookup_record_type_by_name(symtab, "TObject", 0);
+            if (tobject != NULL) {
+                for (ListNode_t *cur = tobject->methods; cur != NULL; cur = cur->next) {
+                    if (cur->cur == NULL)
+                        continue;
+                    struct MethodInfo *mi = (struct MethodInfo *)cur->cur;
+                    if (mi->name != NULL && mi->vmt_index >= 0 &&
+                        pascal_identifier_equals(mi->name, "FreeInstance")) {
+                        freeinstance_slot = mi->vmt_index;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (freeinstance_slot >= 0) {
+            /* %rdi already holds Self.  The body emitted above implements
+             * `if Self <> nil then Destroy`, and on the nil branch falls
+             * through to here.  Guard the FreeInstance dispatch with a
+             * Self <> nil check so a nil receiver simply returns. */
+            char skip_label[64];
+            gen_label(skip_label, sizeof(skip_label), ctx);
+            inst_list = add_inst(inst_list, "\ttestq\t%rdi, %rdi\n");
+            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+            inst_list = add_inst(inst_list, buffer);
+
+            /* Load VMT from (Self), then the method pointer from
+             * <slot*8>(VMT), and dispatch. */
+            inst_list = add_inst(inst_list, "\tmovq\t(%rdi), %r11\n");
+            snprintf(buffer, sizeof(buffer),
+                "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * 8);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "*%r11");
+
+            snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+            inst_list = add_inst(inst_list, buffer);
+        } else {
+            /* No TObject definition reachable (e.g. early bootstrap or a
+             * standalone program that doesn't import objpas).  Fall back to
+             * the libc free path so test programs without an RTL still build.
+             * This branch is never taken when the FPC RTL is in scope. */
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
+        }
     }
 
     /* For constructors, return Self in %rax.
