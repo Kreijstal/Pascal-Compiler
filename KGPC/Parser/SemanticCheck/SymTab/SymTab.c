@@ -711,9 +711,35 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
         }
 
         /* At unit/program scope, also search dependency unit scopes.
-         * Search in reverse order: last `uses` clause entry wins (Pascal semantics). */
+         * Search in reverse order: last `uses` clause entry wins (Pascal semantics).
+         *
+         * Same-unit preference: when current_unit_index > 0, scan all deps once
+         * looking for an exact-unit match first.  This is the structural fix for
+         * cross-unit same-named typed-consts (e.g. `msg` in two units, or FPC's
+         * `ait_const2str` in aggas.pas/agx86nsm.pas): without it, codegen with
+         * skip_unit_filter=1 returns whichever dep scope is reached first, which
+         * may belong to a foreign unit whose private decl has different bounds
+         * or element size.  Same-unit precedence honours Pascal scoping even
+         * when the visibility filter is bypassed.  Falls through to the normal
+         * reverse-order walk when no same-unit match exists. */
         if (scope->num_deps > 0)
         {
+            int cur_unit = symtab->current_unit_index;
+            if (cur_unit > 0)
+            {
+                for (int i = scope->num_deps - 1; i >= 0; i--)
+                {
+                    if (scope->dep_scopes[i]->unit_index != cur_unit)
+                        continue;
+                    node = FindIdentInTableCanonical(scope->dep_scopes[i]->table, canonical_id, hash);
+                    if (node != NULL)
+                    {
+                        *hash_return = node;
+                        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
+                        return 1;
+                    }
+                }
+            }
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
                 node = FindIdentInTableCanonical(scope->dep_scopes[i]->table, canonical_id, hash);
