@@ -4984,17 +4984,37 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     /* Process var/const declarations from loaded units first, then program.
      * These are always needed — even with --skip-unit-codegen, the per-test
-     * compilation must emit unit globals and run unit init code. */
+     * compilation must emit unit globals and run unit init code.
+     *
+     * Bind symtab->current_unit_index AND current_scope per unit so that
+     * bare-name lookups inside codegen_function_locals (e.g. FindSymbol
+     * for `var_info`, which feeds back the array element size used to
+     * size the .comm allocation) resolve to the unit currently being
+     * processed rather than the last-write-wins entry in the global
+     * symtab.  Without this, two units declaring same-named typed-consts
+     * of different element types end up with one unit's storage sized
+     * using the OTHER unit's element size. */
     if (comp_ctx != NULL) {
+        int saved_unit_index = symtab->current_unit_index;
+        ScopeNode *saved_scope = symtab->current_scope;
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            if (unit_idx > 0) {
+                symtab->current_unit_index = unit_idx;
+                ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, unit_idx);
+                if (unit_scope != NULL)
+                    symtab->current_scope = unit_scope;
+            }
             codegen_function_locals(unit->tree_data.unit_data.interface_var_decls, ctx, symtab);
             codegen_function_locals(unit->tree_data.unit_data.implementation_var_decls, ctx, symtab);
             codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.interface_const_decls);
             codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.implementation_const_decls);
         }
+        symtab->current_unit_index = saved_unit_index;
+        symtab->current_scope = saved_scope;
     }
     codegen_function_locals(data->var_declaration, ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, data->const_declaration);
