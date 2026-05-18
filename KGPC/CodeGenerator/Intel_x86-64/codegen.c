@@ -541,6 +541,7 @@ void escape_string(char *dest, const char *src, size_t dest_size)
 
 /* Helper functions for transitioning from legacy type fields to KgpcType */
 static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *name);
+static int codegen_typed_const_name_collides_ctx(CodeGenContext *ctx, const char *bare_id);
 static void codegen_emit_bss_or_comm(FILE *out, const char *sym, const char *label,
                                      int size, int alignment, int defined_in_unit);
 
@@ -2327,7 +2328,7 @@ static KgpcType *codegen_prefer_promoted_shortstring_type(KgpcType *decl_type,
     return decl_type;
 }
 
-void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_param)
+void codegen_register_decl_list(CodeGenContext *ctx, ListNode_t *decls, SymTab_t *symtab, int is_param)
 {
     if (decls == NULL || symtab == NULL)
         return;
@@ -2368,6 +2369,57 @@ void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_para
                 PushArrayOntoScope_Typed(symtab, (char *)id_node->cur, effective_decl_type);
             else
                 PushVarOntoScope_Typed(symtab, (char *)id_node->cur, effective_decl_type);
+
+            /* Propagate is_typed_const and source_unit_index from the decl
+             * tree onto the freshly-registered HashNode so codegen lookups
+             * (e.g. codegen_try_emit_nonlocal_global) can disambiguate
+             * same-named typed-consts across units. */
+            {
+                HashNode_t *registered = FindIdentInCurrentScope(symtab, id_node->cur);
+                if (registered != NULL)
+                {
+                    if (decl->type == TREE_VAR_DECL)
+                    {
+                        if (decl->tree_data.var_decl_data.is_typed_const)
+                            registered->is_typed_const = 1;
+                        if (decl->tree_data.var_decl_data.source_unit_index > 0 &&
+                            registered->source_unit_index == 0)
+                            registered->source_unit_index =
+                                decl->tree_data.var_decl_data.source_unit_index;
+                        if (decl->tree_data.var_decl_data.defined_in_unit)
+                            registered->defined_in_unit = 1;
+                    }
+                    else if (decl->type == TREE_ARR_DECL)
+                    {
+                        if (decl->tree_data.arr_decl_data.is_typed_const)
+                            registered->is_typed_const = 1;
+                        if (decl->tree_data.arr_decl_data.source_unit_index > 0 &&
+                            registered->source_unit_index == 0)
+                            registered->source_unit_index =
+                                decl->tree_data.arr_decl_data.source_unit_index;
+                        if (decl->tree_data.arr_decl_data.defined_in_unit)
+                            registered->defined_in_unit = 1;
+                    }
+
+                    /* Set mangled_id to the unit-qualified storage key only
+                     * when this typed-const name actually collides across
+                     * units.  Singletons (e.g. System.MemoryManager) keep a
+                     * NULL mangled_id so find_label resolves their bare
+                     * `MemoryManager` symbol — needed for C-runtime linkage
+                     * (KGPC/runtime_string.c references the bare name). */
+                    if (registered->is_typed_const &&
+                        registered->defined_in_unit &&
+                        registered->source_unit_index > 0 &&
+                        registered->mangled_id == NULL &&
+                        codegen_typed_const_name_collides_ctx(ctx,
+                            (const char *)id_node->cur))
+                    {
+                        registered->mangled_id = codegen_make_unit_qualified_key(
+                            registered->source_unit_index,
+                            (const char *)id_node->cur);
+                    }
+                }
+            }
 
             if (is_param)
             {
@@ -2879,6 +2931,147 @@ static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *nam
     snprintf(buffer, sizeof(buffer), "__kgpc_program_var_%s_%d",
         sanitized, ++ctx->global_data_counter);
     return strdup(buffer);
+}
+
+/* Build a unit-qualified Pascal storage key for a unit-defined global.
+ * Returns a newly-allocated string of the form "<unit_name>_$_<bare_id>" when
+ * the variable belongs to a named unit, or NULL when it should be registered
+ * under its bare name (program-scope vars, classvars, parameters, etc.).
+ *
+ * The qualified key is used as the StackNode label so that two units which
+ * export the same Pascal identifier (e.g. each FPC charmap unit's
+ * `unicodemap` typed-const) end up with distinct stack entries even though
+ * the assembler-level static_label remains unique (a counter-suffixed
+ * __kgpc_program_var_*).  Without this, the FLAT stack manager would alias
+ * every unit's `unicodemap` to the first one registered, making FPC's
+ * `mappings` linked list self-referencing. */
+char *codegen_make_unit_qualified_key(int source_unit_index, const char *bare_id)
+{
+    if (bare_id == NULL || source_unit_index <= 0)
+        return NULL;
+    const char *unit_name = unit_registry_get(source_unit_index);
+    if (unit_name == NULL || unit_name[0] == '\0')
+        return NULL;
+    size_t len = strlen(unit_name) + 3 /* "_$_" */ + strlen(bare_id) + 1;
+    char *buf = (char *)malloc(len);
+    if (buf == NULL)
+        return NULL;
+    snprintf(buf, len, "%s_$_%s", unit_name, bare_id);
+    return buf;
+}
+
+/* Return 1 if more than one typed-const named `bare_id` is declared
+ * across any of the loaded unit scopes.  Walks `unit_scopes[]` directly
+ * (not the scope-tree chain from current_scope) because the colliding
+ * typed-consts may be in sibling unit scopes that aren't reachable via
+ * the current scope's dep chain.  Used to decide whether storage for
+ * that name needs unit qualification — singletons like
+ * System.MemoryManager keep their bare-name alias for C-runtime linkage,
+ * while colliding typed-consts get per-unit qualified storage. */
+/* Scan a decl list for a typed-const named `bare_id`.  Used by the
+ * collision detector below — operates directly on the AST so it doesn't
+ * depend on HashNode flags being set consistently across semcheck and
+ * codegen passes. */
+static int codegen_decl_list_has_typed_const_named(ListNode_t *decls, const char *bare_id)
+{
+    for (ListNode_t *cur = decls; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL)
+            continue;
+        ListNode_t *ids = NULL;
+        int is_typed_const = 0;
+        if (decl->type == TREE_VAR_DECL)
+        {
+            ids = decl->tree_data.var_decl_data.ids;
+            is_typed_const = decl->tree_data.var_decl_data.is_typed_const;
+        }
+        else if (decl->type == TREE_ARR_DECL)
+        {
+            ids = decl->tree_data.arr_decl_data.ids;
+            is_typed_const = decl->tree_data.arr_decl_data.is_typed_const;
+        }
+        if (!is_typed_const)
+            continue;
+        for (ListNode_t *id = ids; id != NULL; id = id->next)
+        {
+            if (id->cur != NULL &&
+                pascal_identifier_equals((const char *)id->cur, bare_id))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/* Return 1 if more than one loaded unit declares a typed-const named
+ * `bare_id`.  Walks `comp_ctx->loaded_units[]` directly so it doesn't
+ * depend on HashNode flag propagation (which can be inconsistent between
+ * semcheck and codegen registration passes).  Used to decide whether
+ * storage for that name needs unit qualification — singletons like
+ * System.MemoryManager keep their bare-name alias for C-runtime linkage,
+ * while colliding typed-consts (each FPC charmap unit's `unicodemap`)
+ * get per-unit qualified storage. */
+static int codegen_typed_const_name_collides_ctx(CodeGenContext *ctx, const char *bare_id)
+{
+    if (ctx == NULL || ctx->comp_ctx == NULL ||
+        bare_id == NULL || bare_id[0] == '\0')
+        return 0;
+    int count = 0;
+    for (int i = 0; i < ctx->comp_ctx->loaded_unit_count && count < 2; ++i)
+    {
+        Tree_t *unit = ctx->comp_ctx->loaded_units[i].unit_tree;
+        if (unit == NULL || unit->type != TREE_UNIT)
+            continue;
+        if (codegen_decl_list_has_typed_const_named(
+                unit->tree_data.unit_data.interface_var_decls, bare_id) ||
+            codegen_decl_list_has_typed_const_named(
+                unit->tree_data.unit_data.implementation_var_decls, bare_id))
+        {
+            count++;
+        }
+    }
+    return count > 1;
+}
+
+
+/* Resolve the StackNode storage key for a var decl.  Typed-consts declared
+ * in a unit get the "<unit>_$_<name>" qualification ONLY when there is an
+ * actual cross-unit name collision (each FPC charmap unit's `unicodemap`,
+ * etc.).  Singletons like System.MemoryManager keep their bare key so the
+ * KGPC C runtime can link against the bare name.  Plain `var` declarations
+ * always keep their bare key. */
+static char *codegen_var_storage_key(CodeGenContext *ctx, SymTab_t *symtab,
+    Tree_t *decl_tree, const char *bare_id)
+{
+    (void)symtab;
+    if (bare_id == NULL)
+        return NULL;
+    int src_unit = 0;
+    int defined_in_unit = 0;
+    int is_typed_const = 0;
+    if (decl_tree != NULL)
+    {
+        if (decl_tree->type == TREE_VAR_DECL)
+        {
+            src_unit = decl_tree->tree_data.var_decl_data.source_unit_index;
+            defined_in_unit = decl_tree->tree_data.var_decl_data.defined_in_unit;
+            is_typed_const = decl_tree->tree_data.var_decl_data.is_typed_const;
+        }
+        else if (decl_tree->type == TREE_ARR_DECL)
+        {
+            src_unit = decl_tree->tree_data.arr_decl_data.source_unit_index;
+            defined_in_unit = decl_tree->tree_data.arr_decl_data.defined_in_unit;
+            is_typed_const = decl_tree->tree_data.arr_decl_data.is_typed_const;
+        }
+    }
+    if (is_typed_const && defined_in_unit && src_unit > 0 &&
+        codegen_typed_const_name_collides_ctx(ctx, bare_id))
+    {
+        char *key = codegen_make_unit_qualified_key(src_unit, bare_id);
+        if (key != NULL)
+            return key;
+    }
+    return strdup(bare_id);
 }
 
 /* Emit either a .bss allocation with a bare-name alias (when the variable's
@@ -4383,8 +4576,8 @@ void codegen_register_owner_unit_scope(CodeGenContext *ctx,
 
     codegen_register_type_enum_literals(unit->tree_data.unit_data.interface_type_decls, symtab);
     codegen_register_type_enum_literals(unit->tree_data.unit_data.implementation_type_decls, symtab);
-    codegen_register_decl_list(unit->tree_data.unit_data.interface_var_decls, symtab, 0);
-    codegen_register_decl_list(unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
+    codegen_register_decl_list(ctx, unit->tree_data.unit_data.interface_var_decls, symtab, 0);
+    codegen_register_decl_list(ctx, unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
     codegen_register_const_decls(unit->tree_data.unit_data.interface_const_decls, symtab);
     codegen_register_const_decls(unit->tree_data.unit_data.implementation_const_decls, symtab);
     if (unit_scope != NULL)
@@ -4919,15 +5112,29 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     reset_reg_stack();
     inst_list = NULL;
     ctx->next_vreg_id = 0;
-    /* Emit var initializers from loaded units first, then program. */
+    /* Emit var initializers from loaded units first, then program.
+     * Switch symtab->current_scope to each unit's ScopeNode so FindIdent_Tree
+     * resolves identifiers in that unit's own scope first (e.g. cp1252's
+     * typed-const `unicodemap` resolves to cp1252's HashNode, not cp1250's),
+     * which is what makes same-named typed-consts in multiple units
+     * disambiguate correctly without per-site lookup fallbacks. */
     if (comp_ctx != NULL) {
+        int saved_unit_index = symtab->current_unit_index;
+        ScopeNode *saved_scope = symtab->current_scope;
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            symtab->current_unit_index = unit_idx;
+            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, unit_idx);
+            if (unit_scope != NULL)
+                symtab->current_scope = unit_scope;
             inst_list = codegen_var_initializers(unit->tree_data.unit_data.interface_var_decls, inst_list, ctx, symtab);
             inst_list = codegen_var_initializers(unit->tree_data.unit_data.implementation_var_decls, inst_list, ctx, symtab);
         }
+        symtab->current_unit_index = saved_unit_index;
+        symtab->current_scope = saved_scope;
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
 
@@ -4946,8 +5153,12 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration, symtab);
 
-    /* Emit unit initialization blocks in dependency (load) order. */
+    /* Emit unit initialization blocks in dependency (load) order.
+     * Switch current_scope to each unit's ScopeNode so identifier lookups
+     * resolve in that unit's own scope first. */
     if (comp_ctx != NULL) {
+        int saved_unit_index = symtab->current_unit_index;
+        ScopeNode *saved_scope = symtab->current_scope;
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
@@ -4955,6 +5166,11 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             struct Statement *init_stmt = unit->tree_data.unit_data.initialization;
             if (init_stmt == NULL)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            symtab->current_unit_index = unit_idx;
+            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, unit_idx);
+            if (unit_scope != NULL)
+                symtab->current_scope = unit_scope;
             /* Only inline the inner statements from compound statements */
             if (init_stmt->type == STMT_COMPOUND_STATEMENT) {
                 ListNode_t *stnode = init_stmt->stmt_data.compound_statement;
@@ -4967,6 +5183,8 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                 inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
             }
         }
+        symtab->current_unit_index = saved_unit_index;
+        symtab->current_scope = saved_scope;
     }
 
     if (data->body_statement == NULL && getenv("KGPC_DEBUG_BODY") != NULL) {
@@ -4974,8 +5192,11 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
-    /* Emit unit finalization blocks in reverse dependency order (LIFO). */
+    /* Emit unit finalization blocks in reverse dependency order (LIFO).
+     * Switch current_scope per unit so lookups resolve in unit scope first. */
     if (comp_ctx != NULL) {
+        int saved_unit_index = symtab->current_unit_index;
+        ScopeNode *saved_scope = symtab->current_scope;
         for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
@@ -4983,8 +5204,15 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             struct Statement *final_stmt = unit->tree_data.unit_data.finalization;
             if (final_stmt == NULL)
                 continue;
+            int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+            symtab->current_unit_index = unit_idx;
+            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, unit_idx);
+            if (unit_scope != NULL)
+                symtab->current_scope = unit_scope;
             inst_list = codegen_stmt(final_stmt, inst_list, ctx, symtab);
         }
+        symtab->current_unit_index = saved_unit_index;
+        symtab->current_scope = saved_scope;
     }
 
     codegen_function_header(prgm_name, ctx);
@@ -5180,8 +5408,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     static_label, descriptor_bytes, alignment);
                             }
                         }
-                        add_dynamic_array((char *)id_list->cur, element_size,
-                            array_start, is_program_scope, static_label);
+                        {
+                            char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                            add_dynamic_array(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                                element_size, array_start, is_program_scope, static_label);
+                            if (storage_key != NULL)
+                                free(storage_key);
+                        }
                         if (static_label != NULL)
                             free(static_label);
                     }
@@ -5199,10 +5432,18 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 codegen_emit_bss_or_comm(ctx->output_file,
                                     (const char *)id_list->cur, static_label,
                                     (int)total_size, alignment,
-                                    tree->tree_data.var_decl_data.defined_in_unit);
+                                    tree->tree_data.var_decl_data.defined_in_unit
+                                    && !(tree->tree_data.var_decl_data.is_typed_const &&
+                                         codegen_typed_const_name_collides_ctx(ctx,
+                                             (const char *)id_list->cur)));
                             }
-                            add_static_array((char *)id_list->cur, (int)total_size, element_size,
-                                array_start, static_label);
+                            {
+                                char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                                add_static_array(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                                    (int)total_size, element_size, array_start, static_label);
+                                if (storage_key != NULL)
+                                    free(storage_key);
+                            }
                             if (static_label != NULL)
                                 free(static_label);
                         }
@@ -5252,8 +5493,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     static_label, descriptor_bytes, alignment);
                             }
                         }
-                        add_dynamic_array((char *)id_list->cur, (int)element_size_ll,
-                            start, is_program_scope, static_label);
+                        {
+                            char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                            add_dynamic_array(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                                (int)element_size_ll, start, is_program_scope, static_label);
+                            if (storage_key != NULL)
+                                free(storage_key);
+                        }
                         if (static_label != NULL)
                             free(static_label);
                     }
@@ -5274,10 +5520,18 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 codegen_emit_bss_or_comm(ctx->output_file,
                                     (const char *)id_list->cur, static_label,
                                     (int)total_size, alignment,
-                                    tree->tree_data.var_decl_data.defined_in_unit);
+                                    tree->tree_data.var_decl_data.defined_in_unit
+                                    && !(tree->tree_data.var_decl_data.is_typed_const &&
+                                         codegen_typed_const_name_collides_ctx(ctx,
+                                             (const char *)id_list->cur)));
                             }
-                            add_static_array((char *)id_list->cur, (int)total_size,
-                                (int)element_size_ll, start, static_label);
+                            {
+                                char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                                add_static_array(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                                    (int)total_size, (int)element_size_ll, start, static_label);
+                                if (storage_key != NULL)
+                                    free(storage_key);
+                            }
                             if (static_label != NULL)
                                 free(static_label);
                         }
@@ -5440,17 +5694,41 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
                                 /* Only emit a bare-name alias when there is no explicit cname override */
                                 int defined_for_alias = (cname_override == NULL) ?
-                                    tree->tree_data.var_decl_data.defined_in_unit : 0;
+                                    (tree->tree_data.var_decl_data.defined_in_unit
+                                     && !(tree->tree_data.var_decl_data.is_typed_const &&
+                                          codegen_typed_const_name_collides_ctx(ctx,
+                                              (const char *)id_list->cur))) : 0;
                                 if (cname_override != NULL) {
                                     /* Public name: make it globally visible */
                                     fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
                                 }
-                                codegen_emit_bss_or_comm(ctx->output_file,
-                                    (const char *)id_list->cur, static_label,
-                                    alloc_size, alignment, defined_for_alias);
+                                /* Typed-const record whose initialiser is wholly static:
+                                 * emit a .data block instead of .bss so the loader fills
+                                 * the storage at program start.  Any C constructor that
+                                 * later runs (e.g. kgpc_init_memory_manager) is then free
+                                 * to override individual fields without being clobbered by
+                                 * runtime field-by-field stores from the program body. */
+                                int statically_emitted = 0;
+                                if (cname_override == NULL &&
+                                    tree->tree_data.var_decl_data.is_typed_const &&
+                                    codegen_try_emit_typed_const_record_static_alias(ctx, symtab,
+                                        tree, (const char *)id_list->cur, static_label,
+                                        alloc_size, defined_for_alias) == 0)
+                                {
+                                    statically_emitted = 1;
+                                }
+                                if (!statically_emitted) {
+                                    codegen_emit_bss_or_comm(ctx->output_file,
+                                        (const char *)id_list->cur, static_label,
+                                        alloc_size, alignment, defined_for_alias);
+                                }
                             }
                         }
-                        add_static_var((char *)id_list->cur, alloc_size, static_label);
+                        char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                        add_static_var(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                            alloc_size, static_label);
+                        if (storage_key != NULL)
+                            free(storage_key);
                         if (static_label != NULL)
                             free(static_label);
                     }
@@ -5649,8 +5927,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 static_label, descriptor_bytes, alignment);
                         }
                     }
-                    add_dynamic_array((char *)id_list->cur, element_size, arr->s_range,
-                        is_program_scope, static_label);
+                    {
+                        char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                        add_dynamic_array(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                            element_size, arr->s_range, is_program_scope, static_label);
+                        if (storage_key != NULL)
+                            free(storage_key);
+                    }
                     if (static_label != NULL)
                         free(static_label);
                     id_list = id_list->next;
@@ -5667,25 +5950,174 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                 /* For multi-dimensional arrays, kgpc_type_sizeof only accounts
                  * for the outer dimension.  Use kgpc_type_get_array_dimension_info
-                 * which correctly multiplies all dimension sizes together. */
+                 * which correctly multiplies all dimension sizes together.
+                 *
+                 * IMPORTANT: don't let the symtab lookup override total_size for
+                 * single-dim arrays whose bounds were already supplied by the
+                 * AST.  Two same-named typed-const arrays in different units
+                 * (e.g. cpX.reversemap and cpY.reversemap, both
+                 * `array[0..N] of trec2` with different N) share a name in the
+                 * cross-unit symtab — FindSymbol returns whichever HashNode is
+                 * currently visible, which carries the OTHER declaration's
+                 * bounds.  The AST's arr->e_range / arr->s_range are
+                 * per-declaration and always correct, so trust them whenever
+                 * dim_info reports a single dimension and the AST has an
+                 * explicit positive length. */
+                int kgpc_dim_count = 0;
                 if (id_list != NULL && symtab != NULL) {
                     const char *var_name = (const char *)id_list->cur;
                     HashNode_t *var_node = NULL;
                     if (FindSymbol(&var_node, symtab, var_name) && var_node != NULL && var_node->type != NULL) {
                         KgpcArrayDimensionInfo dim_info;
                         if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0) {
+                            kgpc_dim_count = dim_info.dim_count;
                             if (dim_info.strides[0] > 0 &&
                                 dim_info.strides[0] <= INT_MAX)
                             {
                                 element_size = (int)dim_info.strides[0];
                             }
-                            if (dim_info.total_size > 0)
+                            /* Only use dim_info.total_size when it actually
+                             * encodes more dimensions than the AST's outer
+                             * range expression alone, or when the AST didn't
+                             * carry explicit bounds (alias-typed
+                             * declarations).  Otherwise the AST's
+                             * per-declaration bounds win — guarding against
+                             * cross-unit symtab aliasing of same-named typed
+                             * consts. */
+                            if (dim_info.total_size > 0 &&
+                                (dim_info.dim_count > 1 || length <= 0)) {
                                 total_size = (int)dim_info.total_size;
+                            } else if (dim_info.dim_count == 1 && length > 0) {
+                                /* Recompute total_size with possibly-updated
+                                 * element_size from strides[0]; keep bounds
+                                 * from the AST. */
+                                total_size = length * element_size;
+                                if (total_size <= 0)
+                                    total_size = element_size;
+                            }
                         } else {
                             long long kgpc_size = kgpc_type_sizeof(var_node->type);
                             if (kgpc_size > total_size)
                                 total_size = (int)kgpc_size;
                         }
+                    }
+                }
+
+                /* For multi-dim typed-consts inside subprograms, FindSymbol on
+                 * the local name returns a KgpcType that only models the outer
+                 * dimension (kgpc_dim_count==1), so total_size ends up at
+                 * outer_length * scalar_element_size — short by the product of
+                 * the inner dimensions.  The parser-built arr->array_dimensions
+                 * list has the full set of ranges; use it whenever the KgpcType
+                 * recorded fewer dimensions than the source declared.  Without
+                 * this, .comm under-allocates and the runtime init loop's
+                 * inner-dim writes overwrite adjacent BSS — the cause of the
+                 * cutils.pas internalerror 2014041302 during pp.pas bootstrap:
+                 * defcmp.pas's 4x4 basedefconvertsexplicit typed-const ran off
+                 * into cpubase_14's guard byte, so flags_to_cond's lookup table
+                 * appeared pre-initialised with zeroes and C_None was returned
+                 * for every integer comparison. */
+                if (arr->array_dimensions != NULL) {
+                    long long product = 1;
+                    int parsed_all = 1;
+                    int count = 0;
+                    ListNode_t *dim_node = arr->array_dimensions;
+                    while (dim_node != NULL && dim_node->type == LIST_STRING &&
+                           dim_node->cur != NULL) {
+                        const char *range_str = (const char *)dim_node->cur;
+                        long long lo = 0, hi = 0;
+                        long long dim_size = 0;
+                        if (sscanf(range_str, "%lld..%lld", &lo, &hi) == 2 && hi >= lo) {
+                            dim_size = hi - lo + 1;
+                        } else if (pascal_identifier_equals(range_str, "Boolean")) {
+                            dim_size = 2;
+                        } else if (symtab != NULL) {
+                            /* Named range/enum: resolve via type symbol's TypeAlias
+                             * (same logic as kgpc_type_get_array_dimension_info's
+                             * alias branch). Necessary for procedure-scope typed
+                             * consts whose KgpcType only models the outer dim. */
+                            HashNode_t *type_node = NULL;
+                            if (FindSymbol(&type_node, symtab, range_str) != 0 &&
+                                type_node != NULL &&
+                                type_node->hash_type == HASHTYPE_TYPE) {
+                                struct TypeAlias *range_alias =
+                                    hashnode_get_type_alias(type_node);
+                                if (range_alias != NULL) {
+                                    if (range_alias->is_enum &&
+                                        range_alias->enum_literals != NULL) {
+                                        dim_size = (long long)ListLength(
+                                            range_alias->enum_literals);
+                                    } else if (range_alias->is_range &&
+                                               range_alias->range_known) {
+                                        long long lower = range_alias->range_start;
+                                        long long upper = range_alias->range_end;
+                                        if (upper >= lower)
+                                            dim_size = upper - lower + 1;
+                                    }
+                                }
+                            }
+                            /* Explicit "<lo>..<hi>" with named-constant bounds
+                             * (e.g. "OS_F32..OS_F128").  sscanf("%lld..%lld") above
+                             * only matches numeric bounds, and the unit-scope
+                             * "uses"-imported symtab carries enum literals as
+                             * HASHTYPE_CONST entries.  Split on ".." and resolve
+                             * each side via the symbol table — needed for the
+                             * inner dim of FPC's cgx86.pas convertopsse, whose
+                             * bounds OS_F32..OS_F128 come from cgbase.pas. */
+                            if (dim_size == 0) {
+                                const char *dotdot = strstr(range_str, "..");
+                                if (dotdot != NULL) {
+                                    char left_buf[128], right_buf[128];
+                                    size_t left_len = (size_t)(dotdot - range_str);
+                                    if (left_len > 0 && left_len < sizeof(left_buf)) {
+                                        memcpy(left_buf, range_str, left_len);
+                                        left_buf[left_len] = '\0';
+                                        const char *right_str = dotdot + 2;
+                                        size_t right_len = strlen(right_str);
+                                        if (right_len > 0 && right_len < sizeof(right_buf)) {
+                                            memcpy(right_buf, right_str, right_len + 1);
+                                            char *lp = left_buf;
+                                            while (*lp == ' ' || *lp == '\t') lp++;
+                                            char *rp = right_buf;
+                                            while (*rp == ' ' || *rp == '\t') rp++;
+                                            long long lo_val = 0, hi_val = 0;
+                                            int lo_ok = 0, hi_ok = 0;
+                                            HashNode_t *ln = NULL;
+                                            if (FindSymbol(&ln, symtab, lp) != 0 &&
+                                                ln != NULL &&
+                                                (ln->hash_type == HASHTYPE_CONST ||
+                                                 ln->is_typed_const)) {
+                                                lo_val = ln->const_int_value;
+                                                lo_ok = 1;
+                                            }
+                                            HashNode_t *rn = NULL;
+                                            if (FindSymbol(&rn, symtab, rp) != 0 &&
+                                                rn != NULL &&
+                                                (rn->hash_type == HASHTYPE_CONST ||
+                                                 rn->is_typed_const)) {
+                                                hi_val = rn->const_int_value;
+                                                hi_ok = 1;
+                                            }
+                                            if (lo_ok && hi_ok && hi_val >= lo_val)
+                                                dim_size = hi_val - lo_val + 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (dim_size <= 0) {
+                            parsed_all = 0;
+                            break;
+                        }
+                        product *= dim_size;
+                        count++;
+                        dim_node = dim_node->next;
+                    }
+                    if (parsed_all && count > kgpc_dim_count && product > 0 &&
+                        element_size > 0 && product <= INT_MAX / element_size) {
+                        int full = (int)(product * element_size);
+                        if (full > total_size)
+                            total_size = full;
                     }
                 }
 
@@ -5718,12 +6150,21 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
                                 codegen_emit_bss_or_comm(ctx->output_file,
                                     (const char *)id_list->cur, generated_label,
-                                    total_size, alignment, arr->defined_in_unit);
+                                    total_size, alignment,
+                                    arr->defined_in_unit
+                                    && !(tree->tree_data.arr_decl_data.is_typed_const &&
+                                         codegen_typed_const_name_collides_ctx(ctx,
+                                             (const char *)id_list->cur)));
                             }
                             label_to_use = generated_label;
                         }
-                        add_static_array((char *)id_list->cur, total_size, element_size,
-                            arr->s_range, label_to_use);
+                        {
+                            char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);
+                            add_static_array(storage_key != NULL ? storage_key : (char *)id_list->cur,
+                                total_size, element_size, arr->s_range, label_to_use);
+                            if (storage_key != NULL)
+                                free(storage_key);
+                        }
                         if (generated_label != NULL)
                             free(generated_label);
                         id_list = id_list->next;

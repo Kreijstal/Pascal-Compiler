@@ -222,6 +222,20 @@ static int kgpc_eval_const_expr_primary(SymTab_t *symtab, const char **p, long l
         return (*out_value >= 0) ? 0 : -1;
     }
 
+    if (**p == '\'')
+    {
+        (*p)++;
+        if (**p == '\0')
+            return -1;
+        unsigned char ch = (unsigned char)**p;
+        (*p)++;
+        if (**p != '\'')
+            return -1;
+        (*p)++;
+        *out_value = (long long)ch;
+        return 0;
+    }
+
     if ((**p >= '0' && **p <= '9') ||
         ((**p == '+' || **p == '-') && ((*p)[1] >= '0' && (*p)[1] <= '9')))
     {
@@ -2128,6 +2142,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 return 1;
             if (lhs_class_record->is_interface && rhs_class_record->is_class)
                 return 1;
+            /* FPC defaults to non-strict typed-pointer checking ({$T-}): any two
+             * class pointers in the same hierarchy assign freely.  Accept either
+             * direction so patterns like `^taddnode := @check.right` (where
+             * right: tnode is a base-class field) work without falling into
+             * the operator-overload search and binding `op_assign(terror)`. */
+            if (is_record_subclass(lhs_class_record, rhs_class_record, symtab))
+                return 1;
         }
         else if (lhs_ptr_sub == RECORD_TYPE && rhs_ptr_sub == RECORD_TYPE)
         {
@@ -2142,6 +2163,19 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         KgpcType *rhs_points_to = rhs_type->info.points_to;
         if (lhs_points_to == NULL || rhs_points_to == NULL)
             return 1;
+        /* Pointer-to-pointer: when both sides are typed pointers whose pointees
+         * are themselves pointers (typically class references), accept if the
+         * inner pointee types are themselves assignment-compatible.  Needed for
+         * patterns like `newcheck: ^taddnode; newcheck := @check.right` where
+         * `right: tnode` (FPC compiler/nset.pas makeifblock).  Without this the
+         * assignment falls into the operator-overload search and accidentally
+         * binds to `olevariant.op_assign(terror)`, causing a NULL-call crash. */
+        if (lhs_points_to->kind == TYPE_KIND_POINTER &&
+            rhs_points_to->kind == TYPE_KIND_POINTER)
+        {
+            if (are_types_compatible_for_assignment(lhs_points_to, rhs_points_to, symtab))
+                return 1;
+        }
         if (lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
             rhs_points_to->kind == TYPE_KIND_PRIMITIVE)
         {
@@ -3131,6 +3165,8 @@ long long kgpc_type_sizeof(KgpcType *type)
                     return kgpc_enum_storage_size(type->type_alias);
                 case SET_TYPE:
                 {
+                    if (type->size_in_bytes > 0)
+                        return type->size_in_bytes;
                     if (type->type_alias != NULL && type->type_alias->is_set)
                         return kgpc_set_storage_size(type->type_alias);
                     return 4;

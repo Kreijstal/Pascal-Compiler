@@ -1608,7 +1608,17 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
     if (path == NULL && normalized != NULL && strcmp(unit_name, normalized) != 0)
         path = build_unit_path(normalized);
     if (path == NULL)
+    {
+        /* Silently skipping a `uses` reference hides real bugs (e.g. a unit
+         * source file missing from the search path).  Emit a warning under
+         * KGPC_DEBUG_UNIT_LOAD=1 so investigations can see the elision
+         * without spamming stderr in normal builds. */
+        if (getenv("KGPC_DEBUG_UNIT_LOAD") != NULL)
+            fprintf(stderr, "Warning: unit %s referenced via `uses` but no "
+                            "source found on the unit search path; "
+                            "skipping load.\n", unit_name);
         return;
+    }
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;

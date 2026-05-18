@@ -35,6 +35,113 @@ struct RecordType *codegen_expr_record_type(const struct Expression *expr, SymTa
 int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out, int depth);
 
+/* Compute the per-element storage size of an AST-declared array's element
+ * type when the element is a shortstring.  Returns the in-memory size
+ * (length-byte + capacity) in bytes, or 0 if the element type is not a
+ * shortstring or its size cannot be determined.
+ *
+ * Mirrors the logic of the in-line fallback below (the SHORTSTRING_TYPE
+ * and TYPE_KIND_ARRAY-of-CHAR branches), but operates on the AST's
+ * `arr_decl_data.element_kgpc_type` so it works for cross-unit lookups
+ * where the symtab's HashNode may carry a different declaration's
+ * generic ShortString element type. */
+static long long codegen_arr_decl_shortstring_elem_storage(const Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_ARR_DECL)
+        return 0;
+    KgpcType *etype = decl->tree_data.arr_decl_data.element_kgpc_type;
+    if (etype == NULL)
+        return 0;
+
+    /* SHORTSTRING_TYPE primitive with alias info: storage is N+1 bytes,
+     * where N is the declared capacity recorded on the alias. */
+    if (etype->kind == TYPE_KIND_PRIMITIVE &&
+        etype->info.primitive_type_tag == SHORTSTRING_TYPE &&
+        etype->type_alias != NULL &&
+        etype->type_alias->is_shortstring &&
+        etype->type_alias->array_end > 0)
+    {
+        return (long long)etype->type_alias->array_end + 1;
+    }
+
+    /* TYPE_KIND_ARRAY of CHAR: kgpc_type_sizeof returns the data size
+     * (N bytes); the on-disk shortstring representation adds the length
+     * byte for total N+1. */
+    if (etype->kind == TYPE_KIND_ARRAY &&
+        etype->info.array_info.element_type != NULL &&
+        etype->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        etype->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+    {
+        long long ds = kgpc_type_sizeof(etype);
+        if (ds > 0)
+            return ds + 1;
+    }
+    return 0;
+}
+
+/* Walk a decl-list looking for a typed-const array named `bare_id` and
+ * return its element storage size (only for shortstring elements).
+ * Returns 0 if no such declaration is found or the element is not a
+ * shortstring of known capacity. */
+static long long codegen_decl_list_typed_const_elem_storage(
+    ListNode_t *decls, const char *bare_id)
+{
+    for (ListNode_t *cur = decls; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL || decl->type != TREE_ARR_DECL)
+            continue;
+        if (!decl->tree_data.arr_decl_data.is_typed_const)
+            continue;
+        for (ListNode_t *id = decl->tree_data.arr_decl_data.ids;
+             id != NULL; id = id->next)
+        {
+            if (id->cur != NULL &&
+                pascal_identifier_equals((const char *)id->cur, bare_id))
+            {
+                long long sz = codegen_arr_decl_shortstring_elem_storage(decl);
+                if (sz > 0)
+                    return sz;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Walk `ctx->comp_ctx->loaded_units[]` to find a typed-const array named
+ * `bare_id` and return the shortstring element storage size declared by
+ * that array's AST.  Returns 0 if nothing matches.
+ *
+ * Pattern follows `codegen_typed_const_name_collides_ctx` in codegen.c
+ * (introduced by e52b0e73 for the allocation side of the same bug).
+ * Used for cross-unit typed-const init: when an array of `string[N]`
+ * (N < 255) is declared in another unit, the per-element init stride
+ * resolution can fall back to the generic 256 default because the
+ * cross-unit symtab HashNode's element type is the generic ShortString
+ * primitive.  The AST declaration carries the precise element type. */
+static long long codegen_cross_unit_typed_const_shortstring_elem_size(
+    CodeGenContext *ctx, const char *bare_id)
+{
+    if (ctx == NULL || ctx->comp_ctx == NULL ||
+        bare_id == NULL || bare_id[0] == '\0')
+        return 0;
+    for (int i = 0; i < ctx->comp_ctx->loaded_unit_count; ++i)
+    {
+        Tree_t *unit = ctx->comp_ctx->loaded_units[i].unit_tree;
+        if (unit == NULL || unit->type != TREE_UNIT)
+            continue;
+        long long sz = codegen_decl_list_typed_const_elem_storage(
+            unit->tree_data.unit_data.interface_var_decls, bare_id);
+        if (sz > 0)
+            return sz;
+        sz = codegen_decl_list_typed_const_elem_storage(
+            unit->tree_data.unit_data.implementation_var_decls, bare_id);
+        if (sz > 0)
+            return sz;
+    }
+    return 0;
+}
+
 static inline int expression_uses_qword(const struct Expression *expr)
 {
     return expr_uses_qword_kgpctype(expr);
@@ -1600,10 +1707,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
          (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
           pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
     /* Fall back to size-2 heuristic only when no array dimension info
-     * is available and the result type is not itself an array. */
+     * is available and the result type is not itself an array.
+     * Skip this when the array has authoritative multi-dimensional info:
+     * the first-index stride is the row width, not the scalar element size,
+     * so the size-2 heuristic would mis-flag the outer dimension of e.g.
+     * `array[..,..] of word` and force stride 2 instead of row_size*2.
+     * Without this guard, typed-const initialisers of 2-byte multi-dim
+     * arrays (e.g. FPC's convertopsse: array[..,..] of tasmop) write each
+     * element ignoring row stride, collapsing the table and producing
+     * internalerror 200312205 at runtime. */
     if (!wide_char_index &&
         (indexed_elem_size == 2 || expr->array_element_size == 2) &&
-        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_array(expr->resolved_kgpc_type)))
+        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_array(expr->resolved_kgpc_type)) &&
+        !(has_info && info.dim_count > 1))
     {
         wide_char_index = 1;
     }
@@ -1756,6 +1872,24 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             if (real_size > 0 && real_size < 256)
                 first_index_stride = real_size;
         }
+    }
+
+    /* Cross-unit typed-const arrays of shortstring (string[N], N<255):
+     * the symtab-based fallbacks above can return the generic 256-byte
+     * ShortString element type when the array was declared in another
+     * unit and the cross-unit symtab HashNode does not carry the
+     * declaration's specific element type.  Recover the precise size by
+     * walking loaded_units' AST decls, which carry per-declaration
+     * element type info — same pattern as e52b0e73 used for the
+     * allocation side. */
+    if (first_index_stride == 256 &&
+        array_expr != NULL && array_expr->type == EXPR_VAR_ID &&
+        array_expr->expr_data.id != NULL)
+    {
+        long long sz = codegen_cross_unit_typed_const_shortstring_elem_size(
+            ctx, array_expr->expr_data.id);
+        if (sz > 0 && sz < 256)
+            first_index_stride = sz;
     }
 
     if (wide_char_index)

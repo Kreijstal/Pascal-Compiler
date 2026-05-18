@@ -3350,6 +3350,8 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.cached_owner_class = NULL;
     new_expr->expr_data.function_call_data.cached_method_name = NULL;
     new_expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+    new_expr->expr_data.function_call_data.builtin_call_lowering = BUILTIN_CALL_NONE;
+    new_expr->expr_data.function_call_data.cached_procvar_sret_size = 0;
 
     return new_expr;
 }

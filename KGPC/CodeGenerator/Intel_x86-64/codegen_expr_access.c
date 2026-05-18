@@ -206,9 +206,25 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         {
             HashNode_t *sym_node = NULL;
             if (FindSymbol(&sym_node, ctx->symtab, inner->expr_data.id) != 0 &&
-                sym_node != NULL && sym_node->mangled_id != NULL)
+                sym_node != NULL)
             {
-                var_node = find_label(sym_node->mangled_id);
+                /* `@unicodemap` inside e.g. cp1252.pas's init block must
+                 * address cp1252's own unicodemap, not the first-registered
+                 * one.  Typed-consts in units are stored under
+                 * "<unit>_$_<name>" (see codegen_var_storage_key); resolve
+                 * directly via that qualified key. */
+                if (sym_node->is_typed_const && sym_node->source_unit_index > 0)
+                {
+                    char *qualified = codegen_make_unit_qualified_key(
+                        sym_node->source_unit_index, inner->expr_data.id);
+                    if (qualified != NULL)
+                    {
+                        var_node = find_label(qualified);
+                        free(qualified);
+                    }
+                }
+                if (var_node == NULL && sym_node->mangled_id != NULL)
+                    var_node = find_label(sym_node->mangled_id);
             }
         }
         if (var_node != NULL)
@@ -820,6 +836,67 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     return inst_list;
 }
 
+extern int extract_constant_int(struct Expression *expr, long long *out_value);
+
+static int char_set_resolve_element_value(const struct Expression *expr,
+    CodeGenContext *ctx, long long *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return 1;
+    if (extract_constant_int((struct Expression *)expr, out_value) == 0)
+        return 0;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+            node != NULL && node->hash_type == HASHTYPE_CONST &&
+            node->is_constant)
+        {
+            *out_value = node->const_int_value;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int char_set_compute_constant_mask(const struct Expression *expr,
+    CodeGenContext *ctx, uint64_t mask_out[4])
+{
+    mask_out[0] = mask_out[1] = mask_out[2] = mask_out[3] = 0;
+    if (expr == NULL || expr->type != EXPR_SET)
+        return 1;
+    for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        if (element == NULL)
+            continue;
+        long long low = 0, high = 0;
+        if (char_set_resolve_element_value(element->lower, ctx, &low) != 0)
+            return 1;
+        if (element->upper != NULL)
+        {
+            if (char_set_resolve_element_value(element->upper, ctx, &high) != 0)
+                return 1;
+        }
+        else
+        {
+            high = low;
+        }
+        if (low > high)
+        {
+            long long t = low; low = high; high = t;
+        }
+        if (low < 0 || high >= 256)
+            return 1;
+        for (long long v = low; v <= high; ++v)
+        {
+            mask_out[v >> 6] |= (uint64_t)1u << (v & 63);
+        }
+    }
+    return 0;
+}
+
 ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg, int force_char_set)
 {
@@ -831,6 +908,45 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
 
     if (is_char_set)
     {
+        /* Compile-time-constant fast path: if every element's ordinal is
+           known at compile time, emit the 256-bit mask as static .rodata
+           and just leaq it. Skips the per-literal zero+btsl explosion. */
+        uint64_t const_mask[4] = {0};
+        if (ctx != NULL && expr->type == EXPR_SET &&
+            char_set_compute_constant_mask(expr, ctx, const_mask) == 0)
+        {
+            Register_t *addr_reg = codegen_try_get_reg(&inst_list, ctx, "char set addr");
+            if (addr_reg == NULL)
+            {
+                if (out_reg != NULL)
+                    *out_reg = NULL;
+                return inst_list;
+            }
+            int label_id = ctx->write_label_counter++;
+            char label[32];
+            snprintf(label, sizeof(label), ".LCSET%d", label_id);
+            char rodata_buf[512];
+            const char *readonly_section = codegen_readonly_section_directive();
+            snprintf(rodata_buf, sizeof(rodata_buf),
+                "%s\n\t.align\t8\n%s:\n\t.quad\t0x%016llx\n\t.quad\t0x%016llx\n\t.quad\t0x%016llx\n\t.quad\t0x%016llx\n%s\n",
+                readonly_section, label,
+                (unsigned long long)const_mask[0],
+                (unsigned long long)const_mask[1],
+                (unsigned long long)const_mask[2],
+                (unsigned long long)const_mask[3],
+                codegen_text_section_resume());
+            inst_list = add_inst(inst_list, rodata_buf);
+            char lea_buf[128];
+            snprintf(lea_buf, sizeof(lea_buf), "\tleaq\t%s(%%rip), %s\n",
+                label, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, lea_buf);
+            if (out_reg != NULL)
+                *out_reg = addr_reg;
+            else
+                free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
         /* Character sets need 32 bytes in memory, not a register */
         /* Allocate a temporary 32-byte buffer on the stack */
         StackNode_t *char_set_temp = codegen_alloc_record_temp(32);

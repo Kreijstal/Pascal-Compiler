@@ -2976,8 +2976,26 @@ FIELD_RESOLVED:
 
         if (type_node != NULL)
         {
-            if (type_node->type != NULL && expr->resolved_kgpc_type == NULL)
-                semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (expr->resolved_kgpc_type == NULL)
+            {
+                if (type_node->type != NULL)
+                {
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
+                }
+                else if (alias != NULL)
+                {
+                    KgpcType *alias_type = alias->kgpc_type;
+                    if (alias_type == NULL)
+                        alias_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
+                    if (alias_type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, alias_type);
+                        if (alias_type != alias->kgpc_type)
+                            destroy_kgpc_type(alias_type);
+                    }
+                }
+            }
             if (type_node->type != NULL &&
                 (kgpc_type_is_array(type_node->type) || kgpc_type_is_array_of_const(type_node->type)) &&
                 !kgpc_type_is_shortstring(type_node->type) &&
@@ -3008,7 +3026,6 @@ FIELD_RESOLVED:
                 }
             }
 
-            struct TypeAlias *alias = get_type_alias_from_node(type_node);
             if (alias != NULL && alias->is_array &&
                 !(expr->resolved_kgpc_type != NULL && kgpc_type_is_shortstring(expr->resolved_kgpc_type)))
             {

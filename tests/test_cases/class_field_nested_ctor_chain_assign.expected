@@ -1,0 +1,3 @@
+outer = conv
+call  = fpc_ansistr_unique
+OK no self-pointer

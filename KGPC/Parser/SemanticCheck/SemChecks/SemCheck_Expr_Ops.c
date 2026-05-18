@@ -67,20 +67,23 @@ static int semcheck_resolve_enum_literal_from_alias(SymTab_t *symtab,
     }
 
     int ordinal = 0;
-    for (ListNode_t *literal_node = alias->enum_literals;
-         literal_node != NULL;
-         literal_node = literal_node->next, ++ordinal)
+    ListNode_t *literal_node = alias->enum_literals;
+    ListNode_t *value_node = alias->enum_values;
+    while (literal_node != NULL)
     {
+        int literal_ordinal = ordinal;
+        if (value_node != NULL && value_node->cur != NULL)
+            literal_ordinal = atoi((const char *)value_node->cur);
         const char *candidate = (const char *)literal_node->cur;
         if (candidate != NULL && pascal_identifier_equals(candidate, literal))
         {
-            KGPC_SEMCHECK_HARD_ASSERT(!alias->enum_has_explicit_values,
-                "contextual enum literal '%s' requires resolver-backed explicit enum values for '%s'",
-                literal,
-                alias->alias_name != NULL ? alias->alias_name : "(anonymous enum)");
-            *out_value = ordinal;
+            *out_value = literal_ordinal;
             return 1;
         }
+        ordinal = literal_ordinal + 1;
+        literal_node = literal_node->next;
+        if (value_node != NULL)
+            value_node = value_node->next;
     }
 
     return 0;
@@ -1621,10 +1624,13 @@ int semcheck_addop(int *type_return,
             *type_return = BOOL;
             return return_val;
         }
-        if ((is_integer_type(type_first) || type_first == ENUM_TYPE ||
-             type_first == POINTER_TYPE || type_first == RECORD_TYPE) &&
+        /* Record operands fall through to the record-operator-overload
+         * dispatch below; don't silently treat them as ints. */
+        if (type_first != RECORD_TYPE && type_second != RECORD_TYPE &&
+            (is_integer_type(type_first) || type_first == ENUM_TYPE ||
+             type_first == POINTER_TYPE) &&
             (is_integer_type(type_second) || type_second == ENUM_TYPE ||
-             type_second == POINTER_TYPE || type_second == RECORD_TYPE))
+             type_second == POINTER_TYPE))
         {
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
@@ -1643,6 +1649,14 @@ int semcheck_addop(int *type_return,
             *type_return = UNKNOWN_TYPE;
             return return_val;
         }
+        /* If neither side is a record, this is a real type error. Record-typed
+         * operands fall through to the operator-overload dispatch below. */
+        if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
+        {
+            /* fall through to record-operator-overload dispatch */
+        }
+        else
+        {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean or integer operands for OR expression!\n\n",
             expr->line_num);
         if (kgpc_getenv("KGPC_DEBUG_ANDOR") != NULL)
@@ -1658,6 +1672,7 @@ int semcheck_addop(int *type_return,
         ++return_val;
         *type_return = UNKNOWN_TYPE;
         return return_val;
+        }
     }
 
     if (type_first == SET_TYPE && type_second == SET_TYPE)
@@ -1793,6 +1808,7 @@ int semcheck_addop(int *type_return,
             {
                 case PLUS: op_suffix = "op_add"; break;
                 case MINUS: op_suffix = "op_sub"; break;
+                case OR: op_suffix = "op_or"; break;
                 default: break;
             }
             
@@ -2096,11 +2112,15 @@ int semcheck_mulop(int *type_return,
             return return_val;
         }
         
-        /* Integer/enum/pointer/record bitwise operations (enums are ordinal types in Pascal) */
-        if ((is_integer_type(type_first) || type_first == ENUM_TYPE ||
-             type_first == POINTER_TYPE || type_first == RECORD_TYPE) &&
+        /* Integer/enum/pointer bitwise operations (enums are ordinal types in Pascal).
+         * Records are NOT included here — they must route through the
+         * operator-overload dispatch below so user-defined `operator and/xor`
+         * actually gets called instead of silently bit-ORing the first 4 bytes. */
+        if (type_first != RECORD_TYPE && type_second != RECORD_TYPE &&
+            (is_integer_type(type_first) || type_first == ENUM_TYPE ||
+             type_first == POINTER_TYPE) &&
             (is_integer_type(type_second) || type_second == ENUM_TYPE ||
-             type_second == POINTER_TYPE || type_second == RECORD_TYPE))
+             type_second == POINTER_TYPE))
         {
             /* Both operands are integers/enums - bitwise operation */
             /* INT64_TYPE/QWORD_TYPE take precedence as the largest integer types */
@@ -2123,6 +2143,14 @@ int semcheck_mulop(int *type_return,
             *type_return = UNKNOWN_TYPE;
             return return_val;
         }
+        /* Record operands fall through to the record-operator-overload dispatch
+         * below. Only flag a type error when neither side is a record. */
+        if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
+        {
+            /* fall through */
+        }
+        else
+        {
         /* Invalid operand types for AND/XOR */
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
@@ -2140,6 +2168,7 @@ int semcheck_mulop(int *type_return,
         ++return_val;
         *type_return = UNKNOWN_TYPE;
         return return_val;
+        }
     }
 
     /* Set operations for STAR operator (intersection) */
@@ -2179,6 +2208,15 @@ int semcheck_mulop(int *type_return,
                 case STAR: op_suffix = "op_mul"; break;
                 case SLASH: op_suffix = "op_div"; break;
                 case POWER: op_suffix = "op_pow"; break;
+                case AND: op_suffix = "op_and"; break;
+                case XOR: op_suffix = "op_xor"; break;
+                case SHL: op_suffix = "op_shl"; break;
+                case SHR: op_suffix = "op_shr"; break;
+                /* `div` (integer division) maps to op_intdiv per
+                 * encode_operator_name() in from_cparser_init_and_registry.c.
+                 * `/` (real division) uses op_div — that's SLASH above. */
+                case DIV: op_suffix = "op_intdiv"; break;
+                case MOD: op_suffix = "op_mod"; break;
                 default: break;
             }
             

@@ -2328,11 +2328,111 @@ ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     if (data_slot == NULL)
         return inst_list;
 
+    /* When the formal array element is an inline ShortString slot (size N+1 bytes
+     * containing {length_byte, chars[N]}), each element source value -- which may
+     * be a string literal (AnsiString pointer), an AnsiString variable, a CHAR,
+     * or another ShortString -- must be converted into that slot via the runtime
+     * helper.  Without this, codegen_store_value_to_stack would just write an
+     * 8-byte movq of the pointer/ordinal into the slot, leaving the length byte
+     * holding a low pointer byte and the rest of the slot uninitialized.  This
+     * matters in particular for FPC's RTTI emission path
+     * (queue_subscriptn_multiple_by_name in aasmcnst.pas) which passes
+     * `array of TIDString = string[127]` literals; without the conversion the
+     * callee sees garbage length bytes and trips an internalerror. */
+    int element_is_shortstring_slot =
+        (expr->array_element_type == SHORTSTRING_TYPE && element_size >= 2);
+
     ListNode_t *cur = expr->expr_data.array_literal_data.elements;
     int index = 0;
     while (cur != NULL)
     {
         struct Expression *element_expr = (struct Expression *)cur->cur;
+        int element_offset = data_slot->offset - index * element_size;
+
+        if (element_is_shortstring_slot)
+        {
+            /* Determine the conversion path based on the source expression's
+             * type: shortstring source -> kgpc_shortstring_to_shortstring,
+             * char source -> kgpc_char_to_string + kgpc_string_to_shortstring,
+             * everything else (AnsiString / string literal) ->
+             * kgpc_string_to_shortstring.  Anything that produces something
+             * other than a string-like value falls back to the legacy store. */
+            int src_is_shortstring = codegen_expr_is_shortstring_value(element_expr);
+            int src_is_char = (!src_is_shortstring &&
+                expr_get_type_tag(element_expr) == CHAR_TYPE);
+            int src_is_stringlike = (!src_is_shortstring && !src_is_char &&
+                (element_expr->type == EXPR_STRING ||
+                 expr_get_type_tag(element_expr) == STRING_TYPE));
+
+            if (src_is_shortstring || src_is_char || src_is_stringlike)
+            {
+                Register_t *src_reg = NULL;
+                if (src_is_shortstring && codegen_expr_is_addressable(element_expr))
+                    inst_list = codegen_address_for_expr(element_expr, inst_list, ctx, &src_reg);
+                else
+                    inst_list = codegen_expr_with_result(element_expr, inst_list, ctx, &src_reg);
+                if (codegen_had_error(ctx) || src_reg == NULL)
+                {
+                    if (src_reg != NULL)
+                        free_reg(get_reg_stack(), src_reg);
+                    return inst_list;
+                }
+
+                /* For a CHAR ordinal, promote to a heap AnsiString first so
+                 * kgpc_string_to_shortstring can dereference it as a pointer. */
+                if (src_is_char)
+                {
+                    const char *char_arg32 = current_arg_reg32(0);
+                    if (char_arg32 == NULL)
+                        char_arg32 = "%edi";
+                    {
+                        char buffer_tmpl[128];
+                        snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovl\t%%0, %s\n", char_arg32);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+                    }
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+                    { Register_t *d[] = {src_reg}; inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n"); }
+                    free_arg_regs();
+                }
+
+                /* Compute dest address (leaq -element_offset(%rbp), arg0).
+                 * src_reg holds the source pointer.  Call signature:
+                 *   void kgpc_string_to_shortstring(char *dest,
+                 *                                   const char *src,
+                 *                                   size_t dest_size);
+                 * kgpc_string_to_shortstring also handles ShortString sources
+                 * (unmanaged buffers with a length byte at offset 0). */
+                char buf[128];
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buf, sizeof(buf), "\tleaq\t-%d(%%rbp), %%rcx\n", element_offset);
+                    inst_list = add_inst(inst_list, buf);
+                    { Register_t *u[] = {src_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                    snprintf(buf, sizeof(buf), "\tmovl\t$%d, %%r8d\n", element_size);
+                    inst_list = add_inst(inst_list, buf);
+                }
+                else
+                {
+                    snprintf(buf, sizeof(buf), "\tleaq\t-%d(%%rbp), %%rdi\n", element_offset);
+                    inst_list = add_inst(inst_list, buf);
+                    { Register_t *u[] = {src_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n"); }
+                    snprintf(buf, sizeof(buf), "\tmovl\t$%d, %%edx\n", element_size);
+                    inst_list = add_inst(inst_list, buf);
+                }
+                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_shortstring");
+                free_arg_regs();
+                free_reg(get_reg_stack(), src_reg);
+
+                cur = cur->next;
+                ++index;
+                continue;
+            }
+            /* fall through to legacy path for unrecognized source kinds */
+        }
+
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(element_expr, inst_list, ctx, &value_reg);
         if (codegen_had_error(ctx) || value_reg == NULL)
@@ -2342,7 +2442,6 @@ ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
             return inst_list;
         }
 
-        int element_offset = data_slot->offset - index * element_size;
         inst_list = codegen_store_value_to_stack(inst_list, ctx, value_reg, element_offset, element_size);
         free_reg(get_reg_stack(), value_reg);
 
@@ -3089,12 +3188,40 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 if (element->lower->type == EXPR_INUM &&
                     element->lower->expr_data.i_num > 31)
                     return 1;
+                /* Enum-literal identifiers with ordinal > 31 also need the
+                   memory-based path. Resolve via symtab. */
+                if (element->lower->type == EXPR_VAR_ID &&
+                    element->lower->expr_data.id != NULL &&
+                    ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *lit_node = NULL;
+                    if (FindSymbol(&lit_node, ctx->symtab,
+                            element->lower->expr_data.id) != 0 &&
+                        lit_node != NULL &&
+                        lit_node->hash_type == HASHTYPE_CONST &&
+                        lit_node->is_constant &&
+                        lit_node->const_int_value > 31)
+                        return 1;
+                }
             }
             if (element->upper != NULL)
             {
                 if (element->upper->type == EXPR_INUM &&
                     element->upper->expr_data.i_num > 31)
                     return 1;
+                if (element->upper->type == EXPR_VAR_ID &&
+                    element->upper->expr_data.id != NULL &&
+                    ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *lit_node = NULL;
+                    if (FindSymbol(&lit_node, ctx->symtab,
+                            element->upper->expr_data.id) != 0 &&
+                        lit_node != NULL &&
+                        lit_node->hash_type == HASHTYPE_CONST &&
+                        lit_node->is_constant &&
+                        lit_node->const_int_value > 31)
+                        return 1;
+                }
             }
             node = node->next;
         }

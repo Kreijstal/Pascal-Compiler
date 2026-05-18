@@ -1,0 +1,7 @@
+[0]="hello" len=5
+[1]="world" len=5
+[0]="size_start_rec" len=14
+[1]="typ_union_rec" len=13
+[2]="min_max_rec" len=11
+[3]="basetype_array_rec" len=18
+[4]="myname" len=6

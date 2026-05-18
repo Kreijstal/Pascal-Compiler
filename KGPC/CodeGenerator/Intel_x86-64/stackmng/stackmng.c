@@ -196,6 +196,343 @@ static inline int stack_slot_alignment_for_size(int size)
     return alignment;
 }
 
+/* ------------------------------------------------------------------
+ * Scope hash index
+ *
+ * The codegen previously did O(N) linear scans of cur_scope->{t,x,z}
+ * for every identifier lookup. With ~13k entries on the x list during
+ * pp.pas compilation (mostly record_ctor_N temps), this dominated
+ * runtime (>75% inclusive in profiling).
+ *
+ * We add a parallel open-addressed hash table per list. Each bucket
+ * head holds a chain of insertion-order entries for one key (lowercased
+ * identifier name), so we preserve the exact semantics of the original
+ * linear scans:
+ *   - find_t / find_z: return first-inserted match -> head of chain
+ *   - find_x:          prefer first non-alias; else first alias
+ *     (matches the original `alias_match == NULL` first-wins rule)
+ *
+ * Hash keys are case-insensitive (lowercased) so collisions match the
+ * pascal_identifier_equals comparator exactly. We always verify via
+ * pascal_identifier_equals on probe to handle hash collisions.
+ * ------------------------------------------------------------------ */
+
+typedef struct ScopeHashEntry
+{
+    ListNode_t *list_node;          /* points to a cell in the t/x/z list */
+    struct ScopeHashEntry *next_same_key;
+} ScopeHashEntry;
+
+typedef struct ScopeHashHead
+{
+    char *key;                      /* lowercased label, owned; NULL = empty bucket */
+    ScopeHashEntry *first;          /* insertion-order chain head */
+    ScopeHashEntry *last;           /* insertion-order chain tail */
+} ScopeHashHead;
+
+typedef struct ScopeHashTable
+{
+    ScopeHashHead *buckets;
+    size_t bucket_count;            /* always a power of two */
+    size_t live_heads;              /* number of buckets with first != NULL */
+} ScopeHashTable;
+
+#define SCOPE_HASH_INITIAL_BUCKETS 16
+
+static unsigned long scope_hash_lower(const char *s)
+{
+    /* djb2 over lowercased bytes. */
+    unsigned long h = 5381UL;
+    while (*s != '\0')
+    {
+        unsigned char c = (unsigned char)*s++;
+        h = ((h << 5) + h) + (unsigned long)tolower(c);
+    }
+    return h;
+}
+
+static ScopeHashTable *scope_hash_create(void)
+{
+    ScopeHashTable *ht = (ScopeHashTable *)malloc(sizeof(ScopeHashTable));
+    assert(ht != NULL);
+    ht->bucket_count = SCOPE_HASH_INITIAL_BUCKETS;
+    ht->live_heads = 0;
+    ht->buckets = (ScopeHashHead *)calloc(ht->bucket_count, sizeof(ScopeHashHead));
+    assert(ht->buckets != NULL);
+    return ht;
+}
+
+static void scope_hash_destroy(ScopeHashTable *ht)
+{
+    if (ht == NULL)
+        return;
+
+    for (size_t i = 0; i < ht->bucket_count; ++i)
+    {
+        ScopeHashHead *head = &ht->buckets[i];
+        if (head->key != NULL)
+            free(head->key);
+        ScopeHashEntry *e = head->first;
+        while (e != NULL)
+        {
+            ScopeHashEntry *next = e->next_same_key;
+            free(e);
+            e = next;
+        }
+    }
+    free(ht->buckets);
+    free(ht);
+}
+
+/* Returns the bucket head for `key` (case-insensitive), or NULL.
+ * If `out_index` is non-NULL, *out_index is set to either the matching
+ * bucket index or the first free bucket where a new head would go. */
+static ScopeHashHead *scope_hash_probe(ScopeHashTable *ht, const char *key, size_t *out_index)
+{
+    assert(ht->bucket_count > 0);
+    assert((ht->bucket_count & (ht->bucket_count - 1)) == 0);
+
+    unsigned long h = scope_hash_lower(key);
+    size_t mask = ht->bucket_count - 1;
+    size_t idx = (size_t)h & mask;
+    size_t first_free = ht->bucket_count;
+
+    for (size_t step = 0; step < ht->bucket_count; ++step)
+    {
+        ScopeHashHead *head = &ht->buckets[idx];
+        if (head->key == NULL)
+        {
+            if (first_free == ht->bucket_count)
+                first_free = idx;
+            /* truly empty: no head ever inserted here. Stop probing. */
+            if (out_index != NULL)
+                *out_index = first_free;
+            return NULL;
+        }
+        if (pascal_identifier_equals(head->key, key))
+        {
+            if (out_index != NULL)
+                *out_index = idx;
+            return head;
+        }
+        idx = (idx + 1) & mask;
+    }
+
+    /* table full of distinct keys (shouldn't happen since we resize). */
+    if (out_index != NULL)
+        *out_index = first_free;
+    return NULL;
+}
+
+static void scope_hash_grow(ScopeHashTable *ht)
+{
+    size_t old_count = ht->bucket_count;
+    ScopeHashHead *old_buckets = ht->buckets;
+
+    ht->bucket_count = old_count * 2;
+    ht->buckets = (ScopeHashHead *)calloc(ht->bucket_count, sizeof(ScopeHashHead));
+    assert(ht->buckets != NULL);
+    ht->live_heads = 0;
+
+    for (size_t i = 0; i < old_count; ++i)
+    {
+        ScopeHashHead *src = &old_buckets[i];
+        if (src->key == NULL)
+            continue;
+        if (src->first == NULL)
+        {
+            /* empty head left over from a remove; drop it. */
+            free(src->key);
+            continue;
+        }
+        /* Re-home this head. */
+        size_t mask = ht->bucket_count - 1;
+        unsigned long h = scope_hash_lower(src->key);
+        size_t idx = (size_t)h & mask;
+        while (ht->buckets[idx].key != NULL)
+            idx = (idx + 1) & mask;
+        ht->buckets[idx] = *src;
+        ht->live_heads++;
+    }
+    free(old_buckets);
+}
+
+static void scope_hash_insert(ScopeHashTable *ht, const char *key, ListNode_t *list_node)
+{
+    if (ht == NULL || key == NULL || list_node == NULL)
+        return;
+
+    /* Resize at 75% load of live heads. */
+    if ((ht->live_heads + 1) * 4 > ht->bucket_count * 3)
+        scope_hash_grow(ht);
+
+    size_t idx = 0;
+    ScopeHashHead *head = scope_hash_probe(ht, key, &idx);
+
+    ScopeHashEntry *e = (ScopeHashEntry *)malloc(sizeof(ScopeHashEntry));
+    assert(e != NULL);
+    e->list_node = list_node;
+    e->next_same_key = NULL;
+
+    if (head != NULL)
+    {
+        /* existing chain or empty head left from a remove */
+        if (head->first == NULL)
+        {
+            head->first = e;
+            head->last = e;
+            ht->live_heads++;
+        }
+        else
+        {
+            head->last->next_same_key = e;
+            head->last = e;
+        }
+        return;
+    }
+
+    /* fresh bucket */
+    assert(idx < ht->bucket_count);
+    ScopeHashHead *fresh = &ht->buckets[idx];
+    assert(fresh->key == NULL);
+    fresh->key = pascal_identifier_lower_dup(key);
+    assert(fresh->key != NULL);
+    fresh->first = e;
+    fresh->last = e;
+    ht->live_heads++;
+}
+
+/* Remove the *latest* (tail) entry for `key`. Returns 1 if something
+ * was removed, 0 if no entry existed. Used by remove_last_l_x. */
+static int scope_hash_remove_last(ScopeHashTable *ht, const char *key)
+{
+    if (ht == NULL || key == NULL)
+        return 0;
+
+    ScopeHashHead *head = scope_hash_probe(ht, key, NULL);
+    if (head == NULL || head->first == NULL)
+        return 0;
+
+    if (head->first == head->last)
+    {
+        free(head->first);
+        head->first = NULL;
+        head->last = NULL;
+        /* keep head->key around as a tombstone-with-name so subsequent
+         * inserts of the same key reuse this bucket and probing past it
+         * still continues. live_heads decreases. */
+        assert(ht->live_heads > 0);
+        ht->live_heads--;
+        return 1;
+    }
+
+    /* Multi-entry chain: walk to find predecessor of tail (rare). */
+    ScopeHashEntry *prev = head->first;
+    while (prev->next_same_key != head->last)
+        prev = prev->next_same_key;
+    free(head->last);
+    prev->next_same_key = NULL;
+    head->last = prev;
+    return 1;
+}
+
+/* Returns the list-node pointer of the last (most recently inserted)
+ * entry for `key`, or NULL. Used by remove_last_l_x. */
+static ListNode_t *scope_hash_get_last_listnode(ScopeHashTable *ht, const char *key)
+{
+    if (ht == NULL || key == NULL)
+        return NULL;
+    ScopeHashHead *head = scope_hash_probe(ht, key, NULL);
+    if (head == NULL || head->last == NULL)
+        return NULL;
+    return head->last->list_node;
+}
+
+/* Find for _t / _z semantics: first-inserted match. */
+static StackNode_t *scope_hash_find_first(ScopeHashTable *ht, const char *key)
+{
+    if (ht == NULL || key == NULL)
+        return NULL;
+    ScopeHashHead *head = scope_hash_probe(ht, key, NULL);
+    if (head == NULL || head->first == NULL)
+        return NULL;
+    return (StackNode_t *)head->first->list_node->cur;
+}
+
+/* Find for _x semantics: prefer first non-alias, else first alias.
+ * Matches the original linear-scan behavior in stackscope_find_x. */
+static StackNode_t *scope_hash_find_x(ScopeHashTable *ht, const char *key)
+{
+    if (ht == NULL || key == NULL)
+        return NULL;
+    ScopeHashHead *head = scope_hash_probe(ht, key, NULL);
+    if (head == NULL || head->first == NULL)
+        return NULL;
+
+    StackNode_t *alias_match = NULL;
+    for (ScopeHashEntry *e = head->first; e != NULL; e = e->next_same_key)
+    {
+        StackNode_t *node = (StackNode_t *)e->list_node->cur;
+        if (node == NULL || node->label == NULL)
+            continue;
+        if (!node->is_alias)
+            return node;
+        if (alias_match == NULL)
+            alias_match = node;
+    }
+    return alias_match;
+}
+
+/* Public wrappers for insert/remove (used by code outside this file
+ * that appends to ->x manually). */
+void stackscope_index_t_insert(StackScope_t *scope, ListNode_t *node)
+{
+    if (scope == NULL || node == NULL)
+        return;
+    if (scope->t_index == NULL)
+        scope->t_index = scope_hash_create();
+    StackNode_t *sn = (StackNode_t *)node->cur;
+    if (sn == NULL || sn->label == NULL)
+        return;
+    scope_hash_insert(scope->t_index, sn->label, node);
+}
+
+void stackscope_index_x_insert(StackScope_t *scope, ListNode_t *node)
+{
+    if (scope == NULL || node == NULL)
+        return;
+    if (scope->x_index == NULL)
+        scope->x_index = scope_hash_create();
+    StackNode_t *sn = (StackNode_t *)node->cur;
+    if (sn == NULL || sn->label == NULL)
+        return;
+    scope_hash_insert(scope->x_index, sn->label, node);
+}
+
+void stackscope_index_z_insert(StackScope_t *scope, ListNode_t *node)
+{
+    if (scope == NULL || node == NULL)
+        return;
+    if (scope->z_index == NULL)
+        scope->z_index = scope_hash_create();
+    StackNode_t *sn = (StackNode_t *)node->cur;
+    if (sn == NULL || sn->label == NULL)
+        return;
+    scope_hash_insert(scope->z_index, sn->label, node);
+}
+
+void stackscope_index_x_remove(StackScope_t *scope, ListNode_t *node)
+{
+    if (scope == NULL || node == NULL || scope->x_index == NULL)
+        return;
+    StackNode_t *sn = (StackNode_t *)node->cur;
+    if (sn == NULL || sn->label == NULL)
+        return;
+    /* The remove_last_l_x caller removes the latest-inserted match,
+     * which is exactly what scope_hash_remove_last does. */
+    scope_hash_remove_last(scope->x_index, sn->label);
+}
+
 static void stackscope_append_node(ListNode_t **head, ListNode_t **tail, ListNode_t *node)
 {
     assert(head != NULL);
@@ -213,6 +550,26 @@ static void stackscope_append_node(ListNode_t **head, ListNode_t **tail, ListNod
     assert(*tail != NULL);
     (*tail)->next = node;
     *tail = node;
+}
+
+/* Combined append-to-list-and-index helpers. Use these for any new code;
+ * they keep the hash index in sync. */
+static inline void stackscope_append_t(StackScope_t *scope, ListNode_t *node)
+{
+    stackscope_append_node(&scope->t, &scope->t_tail, node);
+    stackscope_index_t_insert(scope, node);
+}
+
+static inline void stackscope_append_x(StackScope_t *scope, ListNode_t *node)
+{
+    stackscope_append_node(&scope->x, &scope->x_tail, node);
+    stackscope_index_x_insert(scope, node);
+}
+
+static inline void stackscope_append_z(StackScope_t *scope, ListNode_t *node)
+{
+    stackscope_append_node(&scope->z, &scope->z_tail, node);
+    stackscope_index_z_insert(scope, node);
 }
 
 /* Adds temporary storage to t */
@@ -242,7 +599,7 @@ StackNode_t *add_l_t(char *label)
 
     new_node = init_stack_node(offset, label, temp_size);
 
-    stackscope_append_node(&cur_scope->t, &cur_scope->t_tail,
+    stackscope_append_t(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -280,7 +637,7 @@ StackNode_t *add_l_t_bytes(char *label, int size)
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
 
-    stackscope_append_node(&cur_scope->t, &cur_scope->t_tail,
+    stackscope_append_t(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -322,7 +679,7 @@ StackNode_t *add_l_x(char *label, int size)
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
 
-    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail,
+    stackscope_append_x(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -339,37 +696,38 @@ void remove_last_l_x(char *label)
     assert(label != NULL);
 
     StackScope_t *cur_scope = global_stackmng->cur_scope;
-    ListNode_t *cur_li = cur_scope->x;
-    ListNode_t *prev_li = NULL;
-    ListNode_t *last_match_prev = NULL;
-    ListNode_t *last_match = NULL;
 
-    /* Find the LAST node with this label */
-    while (cur_li != NULL) {
-        StackNode_t *node = (StackNode_t *)cur_li->cur;
-        if (pascal_identifier_equals(node->label, label)) {
-            last_match_prev = prev_li;
-            last_match = cur_li;
-        }
-        prev_li = cur_li;
-        cur_li = cur_li->next;
-    }
-
+    /* Locate the latest matching listnode via the hash index. */
+    ListNode_t *last_match = scope_hash_get_last_listnode(cur_scope->x_index, label);
     if (last_match == NULL)
         return;
 
-    /* Remove from linked list */
-    if (last_match_prev != NULL)
-        last_match_prev->next = last_match->next;
+    /* Find the predecessor in the linked list. We only need pointer
+     * comparison, not strcmp, so this is fast even for long lists. */
+    ListNode_t *prev_li = NULL;
+    ListNode_t *cur_li = cur_scope->x;
+    while (cur_li != NULL && cur_li != last_match)
+    {
+        prev_li = cur_li;
+        cur_li = cur_li->next;
+    }
+    assert(cur_li == last_match);
+
+    /* Unlink from linked list */
+    if (prev_li != NULL)
+        prev_li->next = last_match->next;
     else
         cur_scope->x = last_match->next;
 
     if (cur_scope->x == NULL)
         cur_scope->x_tail = NULL;
     else if (cur_scope->x_tail == last_match)
-        cur_scope->x_tail = last_match_prev;
+        cur_scope->x_tail = prev_li;
 
-    /* Free the node */
+    /* Drop the index entry for this listnode before freeing it. */
+    scope_hash_remove_last(cur_scope->x_index, label);
+
+    /* Free the stack node and list cell */
     StackNode_t *node = (StackNode_t *)last_match->cur;
     if (node != NULL) {
         if (node->label != NULL)
@@ -398,7 +756,7 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
     new_node->element_size = element_size;
     new_node->is_dynamic = 0;
 
-    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail,
+    stackscope_append_x(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -441,7 +799,7 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
             new_node->static_label = strdup(static_label);
     }
 
-    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail,
+    stackscope_append_x(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -464,7 +822,7 @@ StackNode_t *add_static_var(char *label, int size, const char *static_label)
         new_node->static_label = strdup(static_label);
 
     ListNode_t *list_node = CreateListNode(new_node, LIST_UNSPECIFIED);
-    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail, list_node);
+    stackscope_append_x(cur_scope, list_node);
     return new_node;
 }
 
@@ -491,7 +849,7 @@ StackNode_t *add_l_z(char *label)
 
     new_node = init_stack_node(offset, label, DOUBLEWORD);
 
-    stackscope_append_node(&cur_scope->z, &cur_scope->z_tail,
+    stackscope_append_z(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -520,7 +878,7 @@ StackNode_t *add_l_z_bytes(char *label, int size)
     StackNode_t *new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
 
-    stackscope_append_node(&cur_scope->z, &cur_scope->z_tail,
+    stackscope_append_z(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -554,7 +912,7 @@ StackNode_t *add_q_z(char *label)
 
     new_node = init_stack_node(offset, label, 8);
 
-    stackscope_append_node(&cur_scope->z, &cur_scope->z_tail,
+    stackscope_append_z(cur_scope,
         CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
@@ -1412,6 +1770,12 @@ StackScope_t *init_stackscope()
     new_scope->x_tail = NULL;
     new_scope->z_tail = NULL;
 
+    /* Lazily allocated on first insert to avoid paying setup cost
+     * for scopes that never see any locals (early init paths). */
+    new_scope->t_index = NULL;
+    new_scope->x_index = NULL;
+    new_scope->z_index = NULL;
+
     new_scope->prev_scope = NULL;
 
     return new_scope;
@@ -1419,78 +1783,28 @@ StackScope_t *init_stackscope()
 
 StackNode_t *stackscope_find_t(StackScope_t *cur_scope, const char *label)
 {
-    ListNode_t *cur_li;
-    StackNode_t *cur_node;
-
     assert(cur_scope != NULL);
     assert(label != NULL);
-
-    cur_li = cur_scope->t;
-    while(cur_li != NULL)
-    {
-        cur_node = (StackNode_t *)cur_li->cur;
-        if(pascal_identifier_equals(cur_node->label, label))
-        {
-            return cur_node;
-        }
-
-        cur_li = cur_li->next;
-    }
-
-    return NULL;
+    /* Indexed lookup; preserves "first-inserted match" semantics of
+     * the prior linear scan because the hash chain is in insertion
+     * order. Empty scope (no index yet) returns NULL via the helper. */
+    return scope_hash_find_first(cur_scope->t_index, label);
 }
 
 StackNode_t *stackscope_find_x(StackScope_t *cur_scope, const char *label)
 {
-    ListNode_t *cur_li;
-    StackNode_t *cur_node;
-    StackNode_t *alias_match = NULL;
-
     assert(cur_scope != NULL);
     assert(label != NULL);
-
-    cur_li = cur_scope->x;
-    int safety = 0;
-    while(cur_li != NULL && safety < 100000)
-    {
-        safety++;
-        cur_node = (StackNode_t *)cur_li->cur;
-        if(cur_node != NULL && cur_node->label != NULL &&
-           pascal_identifier_equals(cur_node->label, label))
-        {
-            if (!cur_node->is_alias)
-                return cur_node;
-            if (alias_match == NULL)
-                alias_match = cur_node;
-        }
-
-        cur_li = cur_li->next;
-    }
-
-    return alias_match;
+    /* The x list uses alias-aware lookup: prefer first non-alias
+     * match, otherwise return the first alias seen. */
+    return scope_hash_find_x(cur_scope->x_index, label);
 }
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, const char *label)
 {
-    ListNode_t *cur_li;
-    StackNode_t *cur_node;
-
     assert(cur_scope != NULL);
     assert(label != NULL);
-
-    cur_li = cur_scope->z;
-    while(cur_li != NULL)
-    {
-        cur_node = (StackNode_t *)cur_li->cur;
-        if(pascal_identifier_equals(cur_node->label, label))
-        {
-            return cur_node;
-        }
-
-        cur_li = cur_li->next;
-    }
-
-    return NULL;
+    return scope_hash_find_first(cur_scope->z_index, label);
 }
 
 /* Returns pointer to previous stack scope */
@@ -1506,6 +1820,9 @@ StackScope_t *free_stackscope(StackScope_t *stackscope)
         free_stackscope_list(stackscope->t);
         free_stackscope_list(stackscope->x);
         free_stackscope_list(stackscope->z);
+        scope_hash_destroy(stackscope->t_index);
+        scope_hash_destroy(stackscope->x_index);
+        scope_hash_destroy(stackscope->z_index);
         free(stackscope);
     }
     return prev_scope;
@@ -1522,6 +1839,9 @@ void free_all_stackscopes(StackScope_t *stackscope)
         free_stackscope_list(stackscope->t);
         free_stackscope_list(stackscope->x);
         free_stackscope_list(stackscope->z);
+        scope_hash_destroy(stackscope->t_index);
+        scope_hash_destroy(stackscope->x_index);
+        scope_hash_destroy(stackscope->z_index);
         free(stackscope);
 
         stackscope = prev_scope;
@@ -1598,7 +1918,7 @@ StackNode_t *add_static_array(char *label, int total_size, int element_size, int
         new_node->static_label = strdup(static_label);
 
     ListNode_t *list_node = CreateListNode(new_node, LIST_UNSPECIFIED);
-    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail, list_node);
+    stackscope_append_x(cur_scope, list_node);
 
     return new_node;
 }

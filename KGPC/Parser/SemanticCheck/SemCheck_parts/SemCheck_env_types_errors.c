@@ -1684,6 +1684,20 @@ static int eval_const_expr_parse_primary(SymTab_t *symtab, const char **p, long 
         return 0;
     }
 
+    if (**p == '\'')
+    {
+        (*p)++;
+        if (**p == '\0')
+            return -1;
+        unsigned char ch = (unsigned char)**p;
+        (*p)++;
+        if (**p != '\'')
+            return -1;
+        (*p)++;
+        *out_value = (long long)ch;
+        return 0;
+    }
+
     if ((**p >= '0' && **p <= '9') ||
         ((**p == '+' || **p == '-') && ((*p)[1] >= '0' && (*p)[1] <= '9')))
     {

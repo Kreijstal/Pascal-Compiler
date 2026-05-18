@@ -3079,8 +3079,15 @@ int semcheck_addressof(int *type_return,
                 int is_implicit_method = (proc_symbol == implicit_method) ||
                     (proc_symbol->owner_class != NULL &&
                      proc_symbol->method_name != NULL);
+                int is_static_method = 0;
+                if (proc_symbol->owner_class != NULL &&
+                    proc_symbol->method_name != NULL)
+                {
+                    is_static_method = from_cparser_is_method_static(
+                        proc_symbol->owner_class, proc_symbol->method_name);
+                }
                 struct Expression *receiver_expr_local = NULL;
-                if (is_implicit_method)
+                if (is_implicit_method && !is_static_method)
                 {
                     HashNode_t *self_node = NULL;
                     if (FindSymbol(&self_node, symtab, "Self") != 0 &&

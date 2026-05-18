@@ -377,17 +377,29 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (!are_types_compatible_for_assignment(result_node->type,
                                                                     return_expr->resolved_kgpc_type, symtab))
                             {
+                                /* Use a local KgpcType* tracker so that the rewriter's
+                                 * `*source_type = return_type` does NOT clobber the
+                                 * arg expression's resolved_kgpc_type.  If we passed
+                                 * `&return_expr->resolved_kgpc_type` here and the
+                                 * rewriter succeeded, return_expr (which becomes the
+                                 * single arg of the synthesized op_assign call) would
+                                 * end up tagged with the call's record return type,
+                                 * causing codegen to treat the integer literal as a
+                                 * by-value record argument. */
+                                KgpcType *conv_type = return_expr->resolved_kgpc_type;
                                 if (!semcheck_try_record_conversion_expression(symtab,
                                         &stmt->stmt_data.exit_data.return_expr,
                                         result_expr,
                                         result_node->type,
-                                        &return_expr->resolved_kgpc_type,
+                                        &conv_type,
                                         &return_owned))
                                 {
                                     semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, incompatible return type in exit().\n",
                                         stmt->line_num);
                                     ++return_val;
                                 }
+                                if (return_owned && conv_type != NULL)
+                                    destroy_kgpc_type(conv_type);
                             }
                             destroy_expr(result_expr);
                         }

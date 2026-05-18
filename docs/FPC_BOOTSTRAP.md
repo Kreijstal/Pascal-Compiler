@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: FPC RTL test suite passes; `pp.pas` compiles and links as `pp_bootstrap`
+## Status: FPC RTL test suite passes; `pp.pas` self-hosts through `pp_stage2`
 
 ## Prerequisites
 
@@ -238,7 +238,15 @@ This writes:
 ```text
 tests/output/pp_bootstrap.s
 tests/output/pp_bootstrap
+tests/output/pp_stage2/pp_stage2
 ```
+
+The test verifies the full bootstrap chain:
+
+1. KGPC compiles and links `FPCSource/compiler/pp.pas` as `pp_bootstrap`
+2. `pp_bootstrap` compiles and runs `tests/test_cases/helloworld.p`
+3. `pp_bootstrap` recompiles `FPCSource/compiler/pp.pas` as `pp_stage2`
+4. `pp_stage2 -h` matches the expected bootstrap banner
 
 Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
@@ -250,17 +258,47 @@ The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix8
 (emitted as `.comm` by codegen). Without it, they're declared `external name` and expected to come
 from ASM startup object files (`si_c.inc` via `{$L}`), which KGPC doesn't support.
 
+### Compile `pp.pas` with the generated `pp_bootstrap`
+
+Build same-source RTL units first so the generated compiler consumes matching
+`.ppu` files instead of any host-installed cache:
+
+```bash
+make -C FPCSource/compiler ppcx64 FPC="$(command -v fpc)"
+make -C FPCSource/rtl/linux all FPC="$PWD/FPCSource/compiler/ppcx64"
+```
+
+Then rebuild the compiler with explicit unit/include/output paths:
+
+```bash
+mkdir -p tests/output/pp_stage2/units
+
+./tests/output/pp_bootstrap -n \
+  -FEtests/output/pp_stage2 \
+  -FUtests/output/pp_stage2/units \
+  -opp_stage2 \
+  -FuFPCSource/rtl/units/x86_64-linux \
+  -FiFPCSource/compiler \
+  -FiFPCSource/compiler/x86 \
+  -FiFPCSource/compiler/x86_64 \
+  -FuFPCSource/compiler \
+  -FuFPCSource/compiler/x86 \
+  -FuFPCSource/compiler/x86_64 \
+  -FuFPCSource/compiler/systems \
+  FPCSource/compiler/pp.pas
+
+./tests/output/pp_stage2/pp_stage2 -h
+```
+
 ### Compile hello world with the generated `pp_bootstrap`
 
-Pass the FPC RTL unit paths explicitly. Do not rely on guessed search paths.
+Pass the same-source FPC RTL unit path explicitly. Do not rely on guessed
+search paths or host-generated `.ppu` files.
 ```bash
 ./tests/output/pp_bootstrap -n \
-  -FuFPCSource/rtl/linux \
-  -FuFPCSource/rtl/unix \
-  -FuFPCSource/rtl/inc \
-  -FuFPCSource/rtl/objpas \
-  -FuFPCSource/rtl/objpas/sysutils \
-  -FuFPCSource/rtl/objpas/classes \
+  -FEtests/output \
+  -ohelloworld \
+  -FuFPCSource/rtl/units/x86_64-linux \
   tests/test_cases/helloworld.p
 
 ./tests/output/helloworld

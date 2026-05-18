@@ -655,6 +655,28 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             if (has_alpha) {
                                 int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
                                 int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                /* Fallback: cross-unit const-int registry holds
+                                 * each enum literal's ordinal, populated when the
+                                 * defining unit was scanned (see
+                                 * enum_registry_scan_type_section). Needed when
+                                 * the enum type is defined in a different unit
+                                 * than the typed-const array (e.g. cgx86.pas's
+                                 * convertopsse uses OS_F32..OS_F128 from
+                                 * cgbase.pas). Without this, indices fall into
+                                 * multidim_infer_bounds and the inner offsets
+                                 * end up as 0..n-1 while outer offsets correctly
+                                 * use the enum ordinal, producing skewed writes
+                                 * before the array (KGPC bug). */
+                                if (s < 0) {
+                                    int cached = 0;
+                                    if (lookup_const_int(range_copy, &cached) == 0)
+                                        s = cached;
+                                }
+                                if (e < 0) {
+                                    int cached = 0;
+                                    if (lookup_const_int(dotdot + 2, &cached) == 0)
+                                        e = cached;
+                                }
                                 if (s >= 0 && e >= 0) {
                                     multidim_inner_start = s;
                                     multidim_inner_end = e;
@@ -686,6 +708,17 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             if (has_alpha) {
                                 int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
                                 int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                /* Cross-unit fallback (see comment on 2nd dim) */
+                                if (s < 0) {
+                                    int cached = 0;
+                                    if (lookup_const_int(range_copy, &cached) == 0)
+                                        s = cached;
+                                }
+                                if (e < 0) {
+                                    int cached = 0;
+                                    if (lookup_const_int(dotdot + 2, &cached) == 0)
+                                        e = cached;
+                                }
                                 if (s >= 0 && e >= 0) {
                                     dim3_start = s;
                                     dim3_end = e;
@@ -718,6 +751,17 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                                 if (has_alpha) {
                                     int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
                                     int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                    /* Cross-unit fallback (see comment on 2nd dim) */
+                                    if (s < 0) {
+                                        int cached = 0;
+                                        if (lookup_const_int(range_copy, &cached) == 0)
+                                            s = cached;
+                                    }
+                                    if (e < 0) {
+                                        int cached = 0;
+                                        if (lookup_const_int(dotdot + 2, &cached) == 0)
+                                            e = cached;
+                                    }
                                     if (s >= 0 && e >= 0) {
                                         dim4_start = s;
                                         dim4_end = e;
@@ -754,6 +798,17 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             if (has_alpha) {
                                 int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
                                 int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                /* Cross-unit fallback (see comment on 2nd dim) */
+                                if (s < 0) {
+                                    int cached = 0;
+                                    if (lookup_const_int(range_copy, &cached) == 0)
+                                        s = cached;
+                                }
+                                if (e < 0) {
+                                    int cached = 0;
+                                    if (lookup_const_int(dotdot + 2, &cached) == 0)
+                                        e = cached;
+                                }
                                 if (s >= 0 && e >= 0) {
                                     multidim_inner_start = s;
                                     multidim_inner_end = e;

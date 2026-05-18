@@ -2198,11 +2198,19 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 static struct Expression *expr_tree_simplify_to_literal(const struct Expression *expr);
+static expr_node_t *build_expr_tree_internal(struct Expression *expr,
+    int preserve_narrowing_in_arithmetic);
 
 /* Builds an expression tree out of an expression */
 /* WARNING: Does not make deep copy of expression */
 /* WARNING: Does not do relational expressions */
 expr_node_t *build_expr_tree(struct Expression *expr)
+{
+    return build_expr_tree_internal(expr, 0);
+}
+
+static expr_node_t *build_expr_tree_internal(struct Expression *expr,
+    int preserve_narrowing_in_arithmetic)
 {
     assert(expr != NULL);
 
@@ -2214,14 +2222,31 @@ expr_node_t *build_expr_tree(struct Expression *expr)
          * gencode_case0 can emit an address computation instead of a value load. */
         struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
         int tc_target = expr->expr_data.typecast_data.target_type;
+        int preserve_leaf_typecast = 0;
         if (tc_target == POINTER_TYPE && tc_inner->is_array_expr &&
             codegen_expr_is_addressable(tc_inner))
         {
-            /* Fall through to create a leaf TYPECAST node */
+            preserve_leaf_typecast = 1;
         }
-        else
+        else if (preserve_narrowing_in_arithmetic &&
+                 (tc_target == BYTE_TYPE || tc_target == WORD_TYPE))
         {
-            return build_expr_tree(tc_inner);
+            preserve_leaf_typecast = 1;
+        }
+        /* Widening typecast Int64(longint_var) / QWord(longint_var) must
+         * sign-extend the 32-bit value to 64 bits.  If we strip the typecast
+         * here, the inner load is a 32-bit movl that zero-extends, producing
+         * 0x00000000FFFFFFFF for longint(-1) instead of 0xFFFFFFFFFFFFFFFF.
+         * Preserve as leaf so gencode_case0 can emit movslq after the load. */
+        else if ((tc_target == INT64_TYPE || tc_target == QWORD_TYPE) &&
+                 type_tag_is_signed_32bit_int(expr_get_type_tag(tc_inner)))
+        {
+            preserve_leaf_typecast = 1;
+        }
+
+        if (!preserve_leaf_typecast)
+        {
+            return build_expr_tree_internal(tc_inner, preserve_narrowing_in_arithmetic);
         }
     }
 
@@ -2237,16 +2262,20 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     switch(expr->type)
     {
         case EXPR_ADDOP:
-            new_node->left_expr = build_expr_tree(expr->expr_data.addop_data.left_expr);
-            new_node->right_expr = build_expr_tree(expr->expr_data.addop_data.right_term);
+            new_node->left_expr = build_expr_tree_internal(
+                expr->expr_data.addop_data.left_expr, 1);
+            new_node->right_expr = build_expr_tree_internal(
+                expr->expr_data.addop_data.right_term, 1);
             break;
         case EXPR_MULOP:
-            new_node->left_expr = build_expr_tree(expr->expr_data.mulop_data.left_term);
-            new_node->right_expr = build_expr_tree(expr->expr_data.mulop_data.right_factor);
+            new_node->left_expr = build_expr_tree_internal(
+                expr->expr_data.mulop_data.left_term, 1);
+            new_node->right_expr = build_expr_tree_internal(
+                expr->expr_data.mulop_data.right_factor, 1);
             break;
 
         case EXPR_SIGN_TERM:
-            new_node->left_expr = build_expr_tree(expr->expr_data.sign_term);
+            new_node->left_expr = build_expr_tree_internal(expr->expr_data.sign_term, 1);
             new_node->right_expr = NULL;
             break;
 
@@ -2281,14 +2310,14 @@ expr_node_t *build_expr_tree(struct Expression *expr)
             break;
 
         case EXPR_RELOP:
-            new_node->left_expr = build_expr_tree(expr->expr_data.relop_data.left);
+            new_node->left_expr = build_expr_tree_internal(expr->expr_data.relop_data.left, 1);
             if (expr->expr_data.relop_data.type == NOT)
             {
                 new_node->right_expr = NULL;
                 break;
             }
             assert(expr->expr_data.relop_data.right != NULL);
-            new_node->right_expr = build_expr_tree(expr->expr_data.relop_data.right);
+            new_node->right_expr = build_expr_tree_internal(expr->expr_data.relop_data.right, 1);
             break;
 
         default:
@@ -3546,10 +3575,39 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
 
             int use_qword = codegen_type_uses_qword(expr_get_type_tag(expr));
-            const char *swap_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
-            char swap_suffix = use_qword ? 'q' : 'l';
-            snprintf(buffer, sizeof(buffer), "\tbswap%c\t%s\n", swap_suffix, swap_reg);
-            inst_list = add_inst(inst_list, buffer);
+            long long arg_size = 4;
+            if (arg_expr->resolved_kgpc_type != NULL)
+                arg_size = kgpc_type_sizeof(arg_expr->resolved_kgpc_type);
+            else if (use_qword)
+                arg_size = 8;
+
+            if (arg_size == 2)
+            {
+                /* 16-bit byte swap: rolw $8, %reg16 then zero-extend to avoid bswapl clobbering upper bits */
+                const char *reg16 = codegen_register_name16(target_reg);
+                if (reg16 != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\trolw\t$8, %s\n", reg16);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzwl\t%s, %s\n", reg16, target_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    /* fallback: shifts */
+                    snprintf(buffer, sizeof(buffer), "\trolw\t$8, %s\n", target_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tandl\t$65535, %s\n", target_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else
+            {
+                const char *swap_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
+                char swap_suffix = use_qword ? 'q' : 'l';
+                snprintf(buffer, sizeof(buffer), "\tbswap%c\t%s\n", swap_suffix, swap_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
             return inst_list;
         }
 
@@ -3580,7 +3638,53 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, func_mangled_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
+        /* If the codegen registry doesn't know the callee yet (e.g. nested
+         * sibling not yet emitted), fall back to the semantic definition's
+         * nesting_level. This avoids defaulting to STATIC_LINK_FROM_RBP
+         * (== caller's own rbp), which is wrong for sibling calls — the
+         * sibling needs the *parent's* frame, which the caller received as
+         * its own static link. */
+        if (!have_depth && func_type != NULL &&
+            func_type->kind == TYPE_KIND_PROCEDURE &&
+            func_type->info.proc_info.definition != NULL)
+        {
+            int sem_nesting = func_type->info.proc_info.definition
+                ->tree_data.subprogram_data.nesting_level;
+            if (sem_nesting > 0)
+            {
+                /* nesting_level: 1 = top-level (depth 1 in codegen), 2 = nested once, ... */
+                callee_depth = sem_nesting;
+                have_depth = 1;
+            }
+        }
+        /* Determine whether the callee requires a static link. Check, in order:
+         * 1. The HashNode flag (set by semcheck after the callee's body is processed).
+         * 2. The Tree node behind the kgpc_type (also set by semcheck — survives
+         *    when codegen lookup returns a HashNode that hasn't been refreshed).
+         * 3. The codegen registry (populated only after we emit the callee's
+         *    prologue — useful when both caller and callee are nested and the
+         *    callee was emitted first).
+         * Reading the Tree flag is critical for nested-sibling calls where the
+         * caller is codegen'd before the callee: at that point neither the
+         * HashNode lookup nor the codegen registry yet reflect the callee's
+         * static-link requirement, but the Tree does. */
+        int tree_requires_static_link = 0;
+        if (func_type != NULL && func_type->kind == TYPE_KIND_PROCEDURE &&
+            func_type->info.proc_info.definition != NULL)
+        {
+            Tree_t *callee_def = func_type->info.proc_info.definition;
+            /* The callee receives a static link if its prologue reserves one,
+             * which happens when either flag is set (see
+             * codegen_subprograms.c:will_need_static_link). The caller must
+             * mirror that decision exactly so caller-pass and callee-receive
+             * stay in sync. */
+            tree_requires_static_link =
+                callee_def->tree_data.subprogram_data.requires_static_link ||
+                (callee_def->tree_data.subprogram_data.is_nested &&
+                 callee_def->tree_data.subprogram_data.has_nested_requiring_link);
+        }
         int should_pass_static_link = (func_node != NULL && func_node->requires_static_link) ||
+            tree_requires_static_link ||
             codegen_proc_requires_static_link(ctx, func_mangled_name);
 
         enum {
@@ -4066,20 +4170,45 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     
                     if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL)
                     {
-                        Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
-                        if (vmt_reg != NULL)
+                        /* Under register pressure, get_free_reg can return NULL.
+                           When that happens silently we'd emit no VMT-init store,
+                           producing instances whose first qword is whatever the
+                           heap happened to hold — a deferred null-deref at the
+                           next virtual dispatch. Use get_reg_with_spill so we
+                           always get a register, and load the instance address
+                           from its spill slot rather than the live register
+                           (which may have been spilled out by the same call). */
+                        Register_t *vmt_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        Register_t *inst_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (vmt_reg != NULL && inst_reg != NULL &&
+                            constructor_vmt_slot != NULL &&
+                            constructor_instance_slot != NULL)
                         {
-                            if (constructor_vmt_slot != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    constructor_vmt_slot->offset, vmt_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                                    vmt_reg->bit_64, constructor_instance_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
-                            free_reg(get_reg_stack(), vmt_reg);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                constructor_vmt_slot->offset, vmt_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                constructor_instance_slot->offset, inst_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                vmt_reg->bit_64, inst_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
                         }
+                        else if (vmt_reg != NULL && constructor_vmt_slot != NULL)
+                        {
+                            /* Fallback: live instance register path (no inst_reg available) */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                constructor_vmt_slot->offset, vmt_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        if (inst_reg != NULL)
+                            free_reg(get_reg_stack(), inst_reg);
+                        if (vmt_reg != NULL)
+                            free_reg(get_reg_stack(), vmt_reg);
+
                         if (constructor_vmt_slot == NULL)
                         {
                             const char *vmt_label = NULL;
@@ -4102,7 +4231,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", vmt_class_name);
                             vmt_label = vmt_buf;
                             if (vmt_label != NULL) {
-                                Register_t *fallback_vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                                Register_t *fallback_vmt_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                                 if (fallback_vmt_reg != NULL) {
                                     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                                         vmt_label, fallback_vmt_reg->bit_64);
@@ -4910,6 +5039,54 @@ cleanup_constructor:
     else if (expr->type == EXPR_RECORD_ACCESS)
     {
         return codegen_record_access(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             (expr->expr_data.typecast_data.target_type == BYTE_TYPE ||
+              expr->expr_data.typecast_data.target_type == WORD_TYPE))
+    {
+        struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+        const int byte_mask = 255;
+        const int word_mask = 65535;
+        expr_node_t *inner_tree = build_expr_tree(inner_expr);
+        if (inner_tree == NULL)
+            return inst_list;
+
+        inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+        free_expr_tree(inner_tree);
+
+        if (expr->expr_data.typecast_data.target_type == BYTE_TYPE)
+            snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", byte_mask, target_reg->bit_32);
+        else
+            snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", word_mask, target_reg->bit_32);
+
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             (expr->expr_data.typecast_data.target_type == INT64_TYPE ||
+              expr->expr_data.typecast_data.target_type == QWORD_TYPE) &&
+             type_tag_is_signed_32bit_int(
+                 expr_get_type_tag(expr->expr_data.typecast_data.expr)))
+    {
+        /* Widening Int64(longint_expr) / QWord(longint_expr): evaluate the
+         * inner expression into target_reg's low 32 bits (it's signed), then
+         * sign-extend to 64 bits.  Without this, a longint(-1) loaded by movl
+         * becomes 0x00000000FFFFFFFF (4294967295) rather than -1, which
+         * breaks FPC's constant range checks and other 64-bit signed math. */
+        struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+        expr_node_t *inner_tree = build_expr_tree(inner_expr);
+        if (inner_tree == NULL)
+            return inst_list;
+
+        inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+        free_expr_tree(inner_tree);
+
+        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+            target_reg->bit_32, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
     }
     else if (expr->type == EXPR_TYPECAST &&
              expr->expr_data.typecast_data.target_type == POINTER_TYPE &&

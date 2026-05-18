@@ -44,6 +44,7 @@
 #endif
 
 #include "codegen_subprograms_internal.h"
+#include "codegen_vmt_internal.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 
@@ -528,8 +529,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
-    codegen_register_decl_list(proc->args_var, symtab, 1);
-    codegen_register_decl_list(proc->declarations, symtab, 0);
+    codegen_register_decl_list(ctx, proc->args_var, symtab, 1);
+    codegen_register_decl_list(ctx, proc->declarations, symtab, 0);
     codegen_register_const_decls(proc->const_declarations, symtab);
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
@@ -668,17 +669,69 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-        /* Free the instance memory.  We use kgpc_freemem (libc free)
-         * because the constructor codegen path uses kgpc_allocmem
-         * (libc malloc) — see codegen_constructor_call in expr_tree.c
-         * and the early-generic path in this file.  Routing via the
-         * Pascal-level FreeMem (FPC RTL's freemem_p ->
-         * MemoryManager.FreeMem) would mismatch the allocator and
-         * corrupt the heap when shutdown finalizers free objects like
-         * the OutOfMemory exception singleton.  User-code GetMem/FreeMem
-         * pairs are handled separately via overload resolution and are
-         * not affected by this body. */
-        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
+
+        /* Dispatch through the VMT to TObject.FreeInstance instead of
+         * unconditionally invoking the libc free path.  FPC's RTL relies on
+         * subclasses (notably tsymtable) overriding FreeInstance to
+         * implement refcount-shared semantics: the destructor runs every
+         * time `Free` is called but the storage is only released when the
+         * refcount reaches zero.  Going through the VMT also routes the
+         * actual free through `MemoryManager.FreeMem`, which pairs with
+         * the allocator that the constructor used.
+         *
+         * We look up the FreeInstance slot dynamically from TObject's
+         * method list so that the offset travels with the RecordType and
+         * stays in sync if the VMT layout shifts. */
+        int freeinstance_slot = -1;
+        if (symtab != NULL) {
+            struct RecordType *tobject = codegen_lookup_record_type_by_name(symtab, "TObject", 0);
+            if (tobject != NULL) {
+                for (ListNode_t *cur = tobject->methods; cur != NULL; cur = cur->next) {
+                    if (cur->cur == NULL)
+                        continue;
+                    struct MethodInfo *mi = (struct MethodInfo *)cur->cur;
+                    if (mi->name != NULL && mi->vmt_index >= 0 &&
+                        pascal_identifier_equals(mi->name, "FreeInstance")) {
+                        freeinstance_slot = mi->vmt_index;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (freeinstance_slot >= 0) {
+            /* arg_reg already holds Self (loaded above using the ABI-correct
+             * first GPR arg register — %rdi on SysV, %rcx on Win64).  The
+             * body emitted above implements `if Self <> nil then Destroy`,
+             * and on the nil branch falls through to here.  Guard the
+             * FreeInstance dispatch with a Self <> nil check so a nil
+             * receiver simply returns. */
+            char skip_label[64];
+            gen_label(skip_label, sizeof(skip_label), ctx);
+            snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", arg_reg, arg_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+            inst_list = add_inst(inst_list, buffer);
+
+            /* Load VMT from (Self), then the method pointer from
+             * <slot*8>(VMT), and dispatch. */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %%r11\n", arg_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer),
+                "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * 8);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "*%r11");
+
+            snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+            inst_list = add_inst(inst_list, buffer);
+        } else {
+            /* No TObject definition reachable (e.g. early bootstrap or a
+             * standalone program that doesn't import objpas).  Fall back to
+             * the libc free path so test programs without an RTL still build.
+             * This branch is never taken when the FPC RTL is in scope. */
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
+        }
     }
 
     /* For constructors, return Self in %rax.
@@ -890,8 +943,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
-    codegen_register_decl_list(func->args_var, symtab, 1);
-    codegen_register_decl_list(func->declarations, symtab, 0);
+    codegen_register_decl_list(ctx, func->args_var, symtab, 1);
+    codegen_register_decl_list(ctx, func->declarations, symtab, 0);
     codegen_register_const_decls(func->const_declarations, symtab);
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)
@@ -1904,6 +1957,8 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
                 cur_scope->x_tail->next = new_list_node;
                 cur_scope->x_tail = new_list_node;
             }
+            /* Keep the hash index in sync with the list. */
+            stackscope_index_x_insert(cur_scope, new_list_node);
         }
     }
 }
@@ -1953,6 +2008,8 @@ int add_absolute_var_alias(const char *alias_label, const char *target_label)
         cur_scope->x_tail->next = new_list_node;
         cur_scope->x_tail = new_list_node;
     }
+    /* Keep the hash index in sync with the list. */
+    stackscope_index_x_insert(cur_scope, new_list_node);
 
     return 0;
 }
@@ -2003,6 +2060,8 @@ int add_absolute_static_symbol_alias(const char *alias_label, const char *target
         cur_scope->x_tail->next = new_list_node;
         cur_scope->x_tail = new_list_node;
     }
+    /* Keep the hash index in sync with the list. */
+    stackscope_index_x_insert(cur_scope, new_list_node);
 
     return 0;
 }
@@ -2071,6 +2130,8 @@ int add_absolute_var_alias_with_offset(const char *alias_label, const char *targ
         cur_scope->x_tail->next = new_list_node;
         cur_scope->x_tail = new_list_node;
     }
+    /* Keep the hash index in sync with the list. */
+    stackscope_index_x_insert(cur_scope, new_list_node);
 
     return 0;
 }
@@ -2439,6 +2500,22 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         if (kgpc_type_is_method_pointer(param_type))
                             has_record_or_dynarray = 1;
                     }
+                    /* Extended (10-byte / bestreal) value parameters that are
+                     * stack-passed call kgpc_move at entry to copy the 10-byte
+                     * value from caller's stack slot to the local storage.
+                     * kgpc_move forwards to memmove and does NOT preserve %rsi
+                     * (or other GPRs), so any subsequent register-passed
+                     * parameter would read a clobbered register.  Trigger the
+                     * presave mechanism so all GPR-passed params are spilled
+                     * to home slots before the first kgpc_move call. */
+                    if (!has_record_or_dynarray && !is_var &&
+                        (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE))
+                    {
+                        int scan_real_storage_size = codegen_real_param_storage_size(
+                            scan_decl, NULL, scan_cached_type);
+                        if (scan_real_storage_size == 16)
+                            has_record_or_dynarray = 1;
+                    }
                     /* Value ShortString parameters call kgpc_shortstring_to_shortstring
                      * at entry, which clobbers subsequent parameter registers.
                      * Trigger the presave mechanism so all registers are saved first. */
@@ -2532,6 +2609,17 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
                             scan_sse_index++;
+                        scan_ids = scan_ids->next;
+                        continue;
+                    }
+                    /* Extended (10-byte) value parameters are passed on the
+                     * stack — they don't consume an integer arg register, so
+                     * skip GPR allocation and no presave slot is needed for
+                     * the Extended value itself. */
+                    if (!scan_is_var &&
+                        (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE) &&
+                        scan_real_storage_size == 16)
+                    {
                         scan_ids = scan_ids->next;
                         continue;
                     }
@@ -3787,6 +3875,360 @@ static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_
 
 
 
+/* ------------------------------------------------------------------------ */
+/* Typed-const record static .data initialisation                           */
+/* ------------------------------------------------------------------------ */
+/* A typed-const record declaration like
+ *
+ *     MemoryManager: TMemoryManager = (
+ *         NeedLock: false; GetMem: @SysGetMem; ... );
+ *
+ * has historically been lowered (in the parser) to a compound statement of
+ * field-by-field assignments executed at runtime from the program body.  That
+ * runtime init clobbers any prior .bss contents — in particular it overwrites
+ * the values placed there by C ctors such as kgpc_init_memory_manager.
+ *
+ * For records whose initialiser values are all statically resolvable
+ * constants (integer literals, NIL, address-of-procedure expressions, booleans,
+ * etc.), we emit a .data block at compile time that bakes the field values
+ * directly into the symbol's storage.  A C constructor that later runs (before
+ * main) is then free to override any individual field, and the program body
+ * no longer runs the field-by-field stores.  This unifies the allocator chain
+ * end-to-end without overriding or special-casing any FPC RTL symbol by name.
+ */
+
+/* Try to evaluate an Expression as a 64-bit integer constant.
+ * Returns 0 on success with *out set; non-zero on failure. */
+static int codegen_typed_const_eval_int(struct Expression *expr, long long *out)
+{
+    if (expr == NULL || out == NULL)
+        return -1;
+    switch (expr->type) {
+        case EXPR_INUM:
+            *out = expr->expr_data.i_num;
+            return 0;
+        case EXPR_BOOL:
+            *out = expr->expr_data.bool_value ? 1 : 0;
+            return 0;
+        case EXPR_CHAR_CODE:
+            *out = (long long)expr->expr_data.char_code;
+            return 0;
+        case EXPR_NIL:
+            *out = 0;
+            return 0;
+        case EXPR_SIGN_TERM: {
+            long long sub = 0;
+            if (codegen_typed_const_eval_int(expr->expr_data.sign_term, &sub) != 0)
+                return -1;
+            *out = -sub;
+            return 0;
+        }
+        case EXPR_TYPECAST: {
+            /* TypeCast around an integer literal evaluates to the inner int. */
+            struct Expression *inner = expr->expr_data.typecast_data.expr;
+            return codegen_typed_const_eval_int(inner, out);
+        }
+        case EXPR_SET: {
+            /* Small-set bitmask emitted by the parser as an unsigned word. */
+            if (expr->expr_data.set_data.is_constant) {
+                *out = (long long)(unsigned int)expr->expr_data.set_data.bitmask;
+                return 0;
+            }
+            return -1;
+        }
+        default:
+            return -1;
+    }
+}
+
+/* Is `expr` statically resolvable for emission as a field initialiser? */
+static int codegen_typed_const_is_static(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    switch (expr->type) {
+        case EXPR_INUM:
+        case EXPR_BOOL:
+        case EXPR_CHAR_CODE:
+        case EXPR_NIL:
+        case EXPR_ADDR_OF_PROC:
+            return 1;
+        case EXPR_SIGN_TERM:
+            return codegen_typed_const_is_static(expr->expr_data.sign_term);
+        case EXPR_TYPECAST:
+            return codegen_typed_const_is_static(expr->expr_data.typecast_data.expr);
+        case EXPR_SET:
+            return expr->expr_data.set_data.is_constant ? 1 : 0;
+        default:
+            return 0;
+    }
+}
+
+/* Determine the on-disk size for a field, given the resolved RecordField. */
+static long long codegen_typed_const_field_size(struct RecordField *field)
+{
+    if (field == NULL)
+        return 0;
+    if (field->has_cached_layout && field->cached_size > 0)
+        return field->cached_size;
+    /* Fall back to deriving from the primitive tag. */
+    long long sz = sizeof_from_type_tag(field->type);
+    if (sz > 0)
+        return sz;
+    /* Pointers and procedure-pointer fields default to 8 bytes. */
+    if (field->is_pointer || field->proc_type != NULL)
+        return 8;
+    return 0;
+}
+
+/* Emit one initialiser entry covering `size` bytes starting at the current
+ * cursor, taking the value from `value_expr`.  `static_label` is unused here
+ * but kept for symmetry with future extensions.  Returns 0 on success. */
+static int codegen_emit_typed_const_field_data(FILE *out, struct Expression *value_expr,
+    long long size)
+{
+    if (out == NULL || value_expr == NULL || size <= 0)
+        return -1;
+
+    /* Address-of-procedure: emit the function label as .quad. */
+    if (value_expr->type == EXPR_ADDR_OF_PROC) {
+        const char *label = value_expr->expr_data.addr_of_proc_data.proc_mangled_id;
+        if (label == NULL || label[0] == '\0')
+            return -1;
+        if (size != 8)
+            return -1; /* Function pointer must be 8 bytes. */
+        fprintf(out, "\t.quad\t%s\n", label);
+        return 0;
+    }
+
+    long long ival = 0;
+    if (codegen_typed_const_eval_int(value_expr, &ival) == 0) {
+        switch (size) {
+            case 1: fprintf(out, "\t.byte\t%lld\n", ival & 0xff); break;
+            case 2: fprintf(out, "\t.word\t%lld\n", ival & 0xffff); break;
+            case 4: fprintf(out, "\t.long\t%lld\n", ival & 0xffffffffll); break;
+            case 8: fprintf(out, "\t.quad\t%lld\n", ival); break;
+            default:
+                /* Wider widths: emit raw bytes (little-endian).  Caller pads
+                 * via the surrounding offset cursor. */
+                {
+                    unsigned long long uval = (unsigned long long)ival;
+                    for (long long i = 0; i < size; ++i) {
+                        unsigned int b = (unsigned int)((uval >> (i * 8)) & 0xff);
+                        if (i == 0)
+                            fprintf(out, "\t.byte\t%u", b);
+                        else
+                            fprintf(out, ", %u", b);
+                    }
+                    fputc('\n', out);
+                }
+                break;
+        }
+        return 0;
+    }
+
+    return -1;
+}
+
+/* Walk `stmt` collecting field-name -> value-expr pairs into the supplied
+ * arrays.  Returns 0 on success.  Each pair must originate from a
+ * `<var>.<field> := <expr>` assignment where the base is the typed-const var
+ * itself.  Failure to match any of these shapes returns non-zero so the
+ * caller can fall back to runtime initialisation. */
+typedef struct {
+    const char *field_name;
+    struct Expression *value;
+} TypedConstFieldInit;
+
+static int codegen_collect_typed_const_inits(struct Statement *stmt,
+    const char *var_name,
+    TypedConstFieldInit *out, int max_out, int *count_inout)
+{
+    if (stmt == NULL || count_inout == NULL)
+        return -1;
+    if (stmt->type == STMT_COMPOUND_STATEMENT) {
+        ListNode_t *cur = stmt->stmt_data.compound_statement;
+        while (cur != NULL) {
+            struct Statement *child = (struct Statement *)cur->cur;
+            if (codegen_collect_typed_const_inits(child, var_name, out, max_out,
+                    count_inout) != 0)
+                return -1;
+            cur = cur->next;
+        }
+        return 0;
+    }
+    if (stmt->type != STMT_VAR_ASSIGN)
+        return -1;
+    struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+    struct Expression *rhs = stmt->stmt_data.var_assign_data.expr;
+    if (lhs == NULL || rhs == NULL)
+        return -1;
+    if (lhs->type != EXPR_RECORD_ACCESS)
+        return -1;
+    struct Expression *base = lhs->expr_data.record_access_data.record_expr;
+    const char *field = lhs->expr_data.record_access_data.field_id;
+    if (base == NULL || base->type != EXPR_VAR_ID || base->expr_data.id == NULL ||
+        field == NULL)
+        return -1;
+    if (!pascal_identifier_equals(base->expr_data.id, var_name))
+        return -1;
+    if (*count_inout >= max_out)
+        return -1;
+    out[*count_inout].field_name = field;
+    out[*count_inout].value = rhs;
+    (*count_inout)++;
+    return 0;
+}
+
+/* Try to emit a typed-const record's storage statically into .data, writing
+ * each field at its offset and zero-filling the gaps.  Returns 0 if the full
+ * record was emitted (and the caller must skip the runtime init).  Returns
+ * non-zero (negative) otherwise.
+ *
+ * `static_label` is the assembler symbol that backs storage (e.g.
+ * "__kgpc_program_var_MemoryManager_96").  `total_size` is the storage size.
+ * `emit_bare_alias` is non-zero when the bare Pascal name (var_name) should
+ * be globally exported as an alias to static_label, mirroring the policy
+ * that codegen_emit_bss_or_comm uses for unit-defined typed-consts. */
+int codegen_try_emit_typed_const_record_static_alias(CodeGenContext *ctx,
+    SymTab_t *symtab, Tree_t *decl, const char *var_name,
+    const char *static_label, long long total_size, int emit_bare_alias)
+{
+    if (ctx == NULL || ctx->output_file == NULL || decl == NULL ||
+        decl->type != TREE_VAR_DECL)
+        return -1;
+    if (!decl->tree_data.var_decl_data.is_typed_const)
+        return -1;
+    if (decl->tree_data.var_decl_data.static_init_emitted)
+        return -1; /* Already done; don't double-emit. */
+    if (var_name == NULL || static_label == NULL || total_size <= 0)
+        return -1;
+    struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+    if (init_stmt == NULL)
+        return -1;
+
+    /* Resolve the variable's RecordType.  Prefer the inline record (records
+     * declared inline have no named type), otherwise look up by type_id. */
+    struct RecordType *record = decl->tree_data.var_decl_data.inline_record_type;
+    HashNode_t *type_node = NULL;
+    if (record == NULL && decl->tree_data.var_decl_data.type_id != NULL &&
+        symtab != NULL) {
+        if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0
+            && type_node != NULL) {
+            record = get_record_type_from_node(type_node);
+        }
+    }
+    if (record == NULL)
+        return -1;
+    /* Don't statically initialise class instances — class typed-consts hold
+     * a class reference pointer rather than the instance layout. */
+    if (record_type_is_class(record))
+        return -1;
+
+    /* Collect (field, expr) pairs from the lowered initialiser. */
+    TypedConstFieldInit inits[64];
+    int init_count = 0;
+    if (codegen_collect_typed_const_inits(init_stmt, var_name, inits, 64, &init_count) != 0)
+        return -1;
+    if (init_count == 0)
+        return -1;
+
+    /* Resolve each field to an offset + size + value.  All values must be
+     * statically evaluable for us to commit to the .data path. */
+    typedef struct {
+        long long offset;
+        long long size;
+        struct Expression *value;
+    } ResolvedInit;
+    ResolvedInit resolved[64];
+    int resolved_count = 0;
+    for (int i = 0; i < init_count; ++i) {
+        if (!codegen_typed_const_is_static(inits[i].value))
+            return -1;
+        struct RecordField *field_desc = NULL;
+        long long offset = 0;
+        if (resolve_record_field(symtab, record, inits[i].field_name,
+                &field_desc, &offset, decl->line_num, 1) != 0 || field_desc == NULL)
+            return -1;
+        long long size = codegen_typed_const_field_size(field_desc);
+        if (size <= 0)
+            return -1;
+        if (offset < 0 || offset + size > total_size)
+            return -1;
+        resolved[resolved_count].offset = offset;
+        resolved[resolved_count].size = size;
+        resolved[resolved_count].value = inits[i].value;
+        resolved_count++;
+    }
+    /* Sort by offset (insertion sort — N<=64). */
+    for (int i = 1; i < resolved_count; ++i) {
+        ResolvedInit cur = resolved[i];
+        int j = i - 1;
+        while (j >= 0 && resolved[j].offset > cur.offset) {
+            resolved[j + 1] = resolved[j];
+            j--;
+        }
+        resolved[j + 1] = cur;
+    }
+    /* Detect overlaps. */
+    for (int i = 1; i < resolved_count; ++i) {
+        if (resolved[i].offset < resolved[i - 1].offset + resolved[i - 1].size)
+            return -1;
+    }
+
+    /* Determine alignment and bare-name alias emission, mirroring
+     * codegen_emit_bss_or_comm so the existing .bss path and this .data path
+     * stay symmetric. */
+    int alignment = (total_size >= 8) ? 8 : DOUBLEWORD;
+    FILE *out = ctx->output_file;
+    int need_alias = emit_bare_alias && strcmp(var_name, static_label) != 0;
+
+    /* Emit into .data so the loader populates the storage at program start. */
+    if (codegen_target_is_windows())
+        fprintf(out, "\t.section .data\n");
+    else
+        fprintf(out, "\t.pushsection .data\n");
+    if (alignment > 0)
+        fprintf(out, "\t.align\t%d\n", alignment);
+    fprintf(out, "\t.globl\t%s\n", static_label);
+    fprintf(out, "%s:\n", static_label);
+
+    long long cursor = 0;
+    for (int i = 0; i < resolved_count; ++i) {
+        if (resolved[i].offset > cursor)
+            fprintf(out, "\t.zero\t%lld\n", resolved[i].offset - cursor);
+        if (codegen_emit_typed_const_field_data(out, resolved[i].value,
+                resolved[i].size) != 0) {
+            /* Pipe a hard failure: rewind through a marker.  We've already
+             * emitted partial data, so just zero the rest and let the caller
+             * also schedule a runtime store.  But better: bail before this
+             * partial state.  Since is_static was checked beforehand, this
+             * shouldn't happen — but guard anyway. */
+            if (codegen_target_is_windows())
+                fprintf(out, "\t.section .text\n");
+            else
+                fprintf(out, "\t.popsection\n");
+            return -1;
+        }
+        cursor = resolved[i].offset + resolved[i].size;
+    }
+    if (cursor < total_size)
+        fprintf(out, "\t.zero\t%lld\n", total_size - cursor);
+
+    if (need_alias) {
+        fprintf(out, "\t.globl\t%s\n", var_name);
+        fprintf(out, "\t.set\t%s, %s\n", var_name, static_label);
+    }
+
+    if (codegen_target_is_windows())
+        fprintf(out, "\t.section .text\n");
+    else
+        fprintf(out, "\t.popsection\n");
+
+    decl->tree_data.var_decl_data.static_init_emitted = 1;
+    return 0;
+}
+
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(ctx != NULL);
@@ -3875,6 +4317,17 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+            /* Suppress the runtime field-by-field initialiser when the
+             * record's .data block has already been emitted statically
+             * during codegen_function_locals (see
+             * codegen_try_emit_typed_const_record_static_ex).  This keeps
+             * any C constructor that fills the same record (e.g.
+             * kgpc_init_memory_manager) from being clobbered. */
+            if (init_stmt != NULL && decl->tree_data.var_decl_data.is_typed_const &&
+                decl->tree_data.var_decl_data.static_init_emitted)
+            {
+                init_stmt = NULL;
+            }
             if (type_node != NULL && node_is_class_type(type_node))
             {
                 struct RecordType *record_desc = get_record_type_from_node(type_node);

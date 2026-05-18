@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 
 #include "codegen.h"
 #include "codegen_expression.h"
@@ -53,6 +54,70 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
         codegen_report_error(ctx, "ERROR: Unable to allocate register for %s.", usage);
     return reg;
 }
+
+static int codegen_infer_set_storage_bytes(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL && kgpc_type_is_set(expr_type))
+    {
+        long long size = kgpc_type_sizeof(expr_type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
+        {
+            if (node->const_set_value != NULL && node->const_set_size > 0)
+                return node->const_set_size;
+
+            if (node->type != NULL && kgpc_type_is_set(node->type))
+            {
+                long long size = kgpc_type_sizeof(node->type);
+                if (size > 0)
+                    return (int)size;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int codegen_expr_is_large_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_is_char_set_ctx(expr, ctx))
+        return 1;
+
+    if (codegen_infer_set_storage_bytes(expr, ctx) > 4)
+        return 1;
+
+    if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return codegen_expr_is_large_set_ctx(expr->expr_data.addop_data.left_expr, ctx) ||
+            codegen_expr_is_large_set_ctx(expr->expr_data.addop_data.right_term, ctx);
+    }
+
+    if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return codegen_expr_is_large_set_ctx(expr->expr_data.mulop_data.left_term, ctx) ||
+            codegen_expr_is_large_set_ctx(expr->expr_data.mulop_data.right_factor, ctx);
+    }
+
+    return 0;
+}
+
+/* Clamp inferred set width so `(bytes * 8 - 1)` always stays within signed-int
+ * range used by immediate compare emission below. */
+enum { CODEGEN_MAX_SET_STORAGE_BYTES = INT_MAX / 8 };
 
 static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, CodeGenContext *ctx, Register_t *value_reg)
 {
@@ -259,6 +324,43 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
+        /* If right_expr is a var-parameter VAR_ID, set_val_reg holds the parameter's
+         * pointer value, not the dereferenced set.  Dereference: load the first
+         * 4 bytes of the pointed-to set into set_val_reg. */
+        if (right_expr != NULL && right_expr->type == EXPR_VAR_ID &&
+            right_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, right_expr->expr_data.id) && node != NULL &&
+                node->is_var_parameter)
+            {
+                char buffer_tmpl[128];
+                snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovl\t(%s), %s\n",
+                    set_val_reg->bit_64, set_val_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer_tmpl);
+            }
+        }
+
+        int set_storage_bytes = codegen_infer_set_storage_bytes(right_expr, ctx);
+        int set_max_bit = 31;
+        Register_t *set_addr_reg = NULL;
+        if (set_storage_bytes > 4)
+        {
+            if (set_storage_bytes > CODEGEN_MAX_SET_STORAGE_BYTES)
+                set_storage_bytes = CODEGEN_MAX_SET_STORAGE_BYTES;
+            set_max_bit = set_storage_bytes * 8 - 1;
+
+            free_reg(get_reg_stack(), set_val_reg);
+            set_val_reg = NULL;
+            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+            if (codegen_had_error(ctx) || set_addr_reg == NULL)
+            {
+                if (elem_reg != NULL)
+                    free_reg(get_reg_stack(), elem_reg);
+                return inst_list;
+            }
+        }
+
         /* Reload elem if spilled */
         if (elem_spill != NULL)
         {
@@ -282,13 +384,28 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         { Register_t *u[] = {elem_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n"); }
         snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob_label);
         inst_list = add_inst(inst_list, buffer);
-        { Register_t *u[] = {elem_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$31, %0\n"); }
+        {
+            char cmp_template[128];
+            snprintf(cmp_template, sizeof(cmp_template), "\tcmpl\t$%d, %%0\n", set_max_bit);
+            Register_t *u[] = {elem_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, cmp_template);
+        }
         snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob_label);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
-            elem_reg->bit_32, set_val_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        if (set_addr_reg != NULL)
+        {
+            char btl_template[128];
+            snprintf(btl_template, sizeof(btl_template), "\tbtl\t%%0, (%s)\n", set_addr_reg->bit_64);
+            Register_t *u[] = {elem_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, btl_template);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
+                elem_reg->bit_32, set_val_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
         snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n",
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
@@ -307,8 +424,91 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
-        free_reg(get_reg_stack(), set_val_reg);
+        if (set_addr_reg != NULL)
+            free_reg(get_reg_stack(), set_addr_reg);
+        if (set_val_reg != NULL)
+            free_reg(get_reg_stack(), set_val_reg);
         free_reg(get_reg_stack(), elem_reg);
+        return inst_list;
+    }
+
+    if ((relop_kind == EQ || relop_kind == NE) &&
+        ((left_expr != NULL && codegen_expr_is_large_set_ctx(left_expr, ctx)) ||
+         (right_expr != NULL && codegen_expr_is_large_set_ctx(right_expr, ctx))))
+    {
+        Register_t *left_addr = NULL;
+        Register_t *right_addr = NULL;
+        Register_t *acc = NULL;
+        Register_t *tmp = NULL;
+        StackNode_t *left_addr_spill = NULL;
+
+        inst_list = codegen_char_set_address(left_expr, inst_list, ctx, &left_addr);
+        if (codegen_had_error(ctx) || left_addr == NULL)
+            return inst_list;
+
+        left_addr_spill = add_l_t("relop_set_laddr");
+        if (left_addr_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                left_addr->bit_64, left_addr_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), left_addr);
+            left_addr = NULL;
+        }
+
+        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &right_addr);
+        if (codegen_had_error(ctx) || right_addr == NULL)
+        {
+            if (left_addr != NULL)
+                free_reg(get_reg_stack(), left_addr);
+            return inst_list;
+        }
+
+        if (left_addr_spill != NULL)
+        {
+            left_addr = codegen_try_get_reg(&inst_list, ctx, "relop_set_laddr_reload");
+            if (left_addr == NULL)
+            {
+                free_reg(get_reg_stack(), right_addr);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                left_addr_spill->offset, left_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        acc = codegen_try_get_reg(&inst_list, ctx, "relop_set_acc");
+        tmp = codegen_try_get_reg(&inst_list, ctx, "relop_set_tmp");
+        if (acc == NULL || tmp == NULL)
+        {
+            if (tmp != NULL) free_reg(get_reg_stack(), tmp);
+            if (acc != NULL) free_reg(get_reg_stack(), acc);
+            free_reg(get_reg_stack(), left_addr);
+            free_reg(get_reg_stack(), right_addr);
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", acc->bit_64, acc->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        for (int i = 0; i < 4; ++i)
+        {
+            int byte_off = i * 8;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+                byte_off, left_addr->bit_64, tmp->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\txorq\t%d(%s), %s\n",
+                byte_off, right_addr->bit_64, tmp->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\torq\t%s, %s\n", tmp->bit_64, acc->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", acc->bit_64, acc->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), tmp);
+        free_reg(get_reg_stack(), acc);
+        free_reg(get_reg_stack(), left_addr);
+        free_reg(get_reg_stack(), right_addr);
         return inst_list;
     }
 

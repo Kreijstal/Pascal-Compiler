@@ -3,9 +3,12 @@
 int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
     struct Expression *array_expr)
 {
-    if (array_node != NULL && array_node->element_size > 0)
-        return array_node->element_size;
-
+    /* Prefer KgpcType-derived immediate element size: for a multi-level type
+     * like `array of array[0..3] of array of longint`, array_node->element_size
+     * holds the innermost scalar (4 bytes for longint) — wrong for SetLength on
+     * the outer dyn array, which needs the size of TMidStat (4×16 = 64 bytes).
+     * The expression-based lookup walks one level only and returns the correct
+     * immediate element size. */
     if (array_expr != NULL)
     {
         long long elem_size = expr_get_array_element_size(array_expr, ctx);
@@ -22,6 +25,9 @@ int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_n
         if (elem_size > 0 && elem_size <= INT_MAX)
             return (int)elem_size;
     }
+
+    if (array_node != NULL && array_node->element_size > 0)
+        return array_node->element_size;
 
     const char *array_name = NULL;
     if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
@@ -985,6 +991,21 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                         /* Try resolving as a global variable (case-insensitive) */
                                         if (!did_substitute) {
                                             StackNode_t *var = find_label(id_buf);
+                                            /* If the symbol is a unit typed-const, its storage is
+                                             * keyed as "<unit>_$_<name>" — resolve directly. */
+                                            if (var == NULL && symtab != NULL) {
+                                                HashNode_t *sn = NULL;
+                                                if (FindSymbol(&sn, symtab, id_buf) != 0 && sn != NULL &&
+                                                    sn->is_typed_const && sn->source_unit_index > 0)
+                                                {
+                                                    char *q = codegen_make_unit_qualified_key(
+                                                        sn->source_unit_index, id_buf);
+                                                    if (q != NULL) {
+                                                        var = find_label(q);
+                                                        free(q);
+                                                    }
+                                                }
+                                            }
                                             if (var != NULL) {
                                                 if (var->is_static && var->static_label != NULL) {
                                                     const char *label = var->static_label;
@@ -1079,7 +1100,123 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
 
             /* Handle Exit(value) - evaluate value and return it */
             struct Expression *return_expr = stmt->stmt_data.exit_data.return_expr;
-            if (return_expr != NULL)
+            int handled_record_sret = 0;
+            if (return_expr != NULL && ctx != NULL &&
+                ctx->current_record_return_slot != NULL &&
+                ctx->current_record_return_size > 0 &&
+                codegen_expr_is_addressable(return_expr))
+            {
+                /* SRET case: function returns a record by hidden output
+                 * pointer.  Memcpy the value into the caller's buffer
+                 * instead of treating it as a scalar in %rax (which would
+                 * write zeros for record-typed sources). */
+                long long record_size = ctx->current_record_return_size;
+                StackNode_t *dest_slot = ctx->current_record_return_slot;
+
+                Register_t *src_reg = NULL;
+                inst_list = codegen_address_for_expr(return_expr, inst_list, ctx, &src_reg);
+
+                if (!codegen_had_error(ctx) && src_reg != NULL)
+                {
+                    char buf[128];
+                    if (codegen_target_is_windows())
+                    {
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t-%d(%%rbp), %%rcx\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buf);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                            "\tmovq\t%0, %rdx\n");
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t$%lld, %%r8\n", record_size);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                    else
+                    {
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t-%d(%%rbp), %%rdi\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buf);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                            "\tmovq\t%0, %rsi\n");
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t$%lld, %%rdx\n", record_size);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                    free_reg(get_reg_stack(), src_reg);
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                    free_arg_regs();
+                    /* Mirror the regular epilogue: leave the SRET pointer
+                     * in %rax for callers that read the return value. */
+                    snprintf(buf, sizeof(buf),
+                        "\tmovq\t-%d(%%rbp), %%rax\n", dest_slot->offset);
+                    inst_list = add_inst(inst_list, buf);
+                    handled_record_sret = 1;
+                }
+                else if (src_reg != NULL)
+                {
+                    free_reg(get_reg_stack(), src_reg);
+                }
+            }
+            if (!handled_record_sret && return_expr != NULL && ctx != NULL &&
+                ctx->current_record_return_slot != NULL &&
+                ctx->current_record_return_size > 0 &&
+                expr_has_type_tag(return_expr, STRING_TYPE))
+            {
+                /* Exit(string_expr) for a shortstring-SRET function: the
+                 * scalar fallback would only park the source address in
+                 * %rax, leaving the caller's hidden buffer uninitialised.
+                 * Lower like a normal `Result := string_expr` by routing
+                 * through kgpc_string_to_shortstring(SRET_buf, src, size). */
+                StackNode_t *dest_slot = ctx->current_record_return_slot;
+                long long capacity = ctx->current_record_return_size;
+
+                Register_t *src_reg = NULL;
+                inst_list = codegen_expr_with_result(return_expr, inst_list, ctx, &src_reg);
+
+                if (!codegen_had_error(ctx) && src_reg != NULL)
+                {
+                    char buf[128];
+                    if (codegen_target_is_windows())
+                    {
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t-%d(%%rbp), %%rcx\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buf);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                            "\tmovq\t%0, %rdx\n");
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t$%lld, %%r8\n", capacity);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                    else
+                    {
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t-%d(%%rbp), %%rdi\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buf);
+                        Register_t *u[] = {src_reg};
+                        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                            "\tmovq\t%0, %rsi\n");
+                        snprintf(buf, sizeof(buf),
+                            "\tmovq\t$%lld, %%rdx\n", capacity);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                    free_reg(get_reg_stack(), src_reg);
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_shortstring");
+                    free_arg_regs();
+                    snprintf(buf, sizeof(buf),
+                        "\tmovq\t-%d(%%rbp), %%rax\n", dest_slot->offset);
+                    inst_list = add_inst(inst_list, buf);
+                    handled_record_sret = 1;
+                }
+                else if (src_reg != NULL)
+                {
+                    free_reg(get_reg_stack(), src_reg);
+                }
+            }
+            if (return_expr != NULL && !handled_record_sret)
             {
                 /* Evaluate the return expression */
                 Register_t *result_reg = NULL;
@@ -1150,7 +1287,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     free_reg(get_reg_stack(), result_reg);
                 }
             }
-            else
+            else if (return_expr == NULL)
             {
                 StackNode_t *return_var = ctx != NULL ? ctx->current_return_slot : NULL;
 

@@ -129,6 +129,79 @@ void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const char *t
     }
 }
 
+static long long semcheck_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static void semcheck_cache_named_set_storage_size(SymTab_t *symtab,
+    struct TypeAlias *alias)
+{
+    if (symtab == NULL || alias == NULL || !alias->is_set || alias->storage_size > 0)
+        return;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
+    {
+        alias->storage_size = 32;
+        return;
+    }
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = ListLength(alias->inline_enum_values);
+        if (count > 0)
+        {
+            alias->storage_size =
+                semcheck_default_set_storage_size_for_high((long long)count - 1);
+        }
+        return;
+    }
+
+    if (alias->range_known && alias->range_end >= alias->range_start)
+    {
+        long long count = alias->range_end - alias->range_start + 1;
+        alias->storage_size =
+            semcheck_default_set_storage_size_for_high(count - 1);
+        return;
+    }
+
+    HashNode_t *elem_node = semcheck_find_preferred_type_node_with_ref(symtab,
+        alias->set_element_type_ref, alias->set_element_type_id);
+    if (elem_node == NULL)
+        return;
+
+    struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+    if (elem_alias == NULL)
+        return;
+
+    if (elem_alias->is_enum && elem_alias->enum_literals != NULL)
+    {
+        int count = ListLength(elem_alias->enum_literals);
+        if (count > 0)
+        {
+            alias->storage_size =
+                semcheck_default_set_storage_size_for_high((long long)count - 1);
+        }
+        return;
+    }
+
+    if (elem_alias->range_known && elem_alias->range_end >= elem_alias->range_start)
+    {
+        long long count = elem_alias->range_end - elem_alias->range_start + 1;
+        alias->storage_size =
+            semcheck_default_set_storage_size_for_high(count - 1);
+    }
+}
+
 void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
 {
     if (symtab == NULL || alias == NULL)
@@ -148,7 +221,10 @@ void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
             alias->target_type_ref, alias->target_type_id);
     }
     if (target_node == NULL)
+    {
+        semcheck_cache_named_set_storage_size(symtab, alias);
         return;
+    }
 
     struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
     if (target_alias == NULL)
@@ -181,6 +257,8 @@ void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
         alias->kgpc_type = target_alias->kgpc_type;
         kgpc_type_retain(alias->kgpc_type);
     }
+
+    semcheck_cache_named_set_storage_size(symtab, alias);
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -1719,12 +1797,61 @@ void semcheck_mark_call_requires_static_link(HashNode_t *callee)
         return;
     if (g_semcheck_current_subprogram == NULL)
         return;
-    if (!hashnode_requires_static_link(callee))
+
+    /* When calling a function that requires a static link, the caller needs
+     * to be able to PASS a static link. Mark the caller as having nested
+     * children that need links, not as requiring a static link itself.
+     * The caller only RECEIVES a static link if it's nested or accesses outer
+     * vars.
+     *
+     * Subtlety: a callee that is itself a nested function may have its body
+     * semchecked AFTER this call site (forward-declared sibling, or a
+     * declaration-order-later sibling). At that point the HashNode flag is
+     * still 0 even though the callee will eventually require a static link.
+     * To stay correct, we also mark the caller whenever the callee is a
+     * lexically-nested Pascal function in the caller's parent scope, using:
+     *   (a) Tree-side flags (set by Pass 2 once the callee's body is
+     *       semchecked) — covers earlier-declared siblings and recursion.
+     *   (b) Mangled-name prefix match against the caller's enclosing parent
+     *       — essential for forward-declared siblings whose body Pass 2 has
+     *       not yet visited. Pass 1 (predeclare_subprogram) already sets the
+     *       "parent$child" mangled name, so siblings always share the
+     *       caller's parent prefix. Restricting (b) to "shares caller's
+     *       parent prefix" avoids false positives for unrelated unit-level
+     *       functions.
+     * Class methods (owner_class != NULL) are mangled like "Class.Method"
+     * but do NOT use static links, so we exclude them. */
+    int callee_is_nested = 0;
+    if (callee->owner_class == NULL)
+    {
+        if (callee->type != NULL &&
+            callee->type->kind == TYPE_KIND_PROCEDURE &&
+            callee->type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = callee->type->info.proc_info.definition;
+            if (def->tree_data.subprogram_data.is_nested != 0 ||
+                (def->tree_data.subprogram_data.nesting_level > 1 &&
+                 def->tree_data.subprogram_data.owner_class == NULL))
+                callee_is_nested = 1;
+        }
+        if (!callee_is_nested)
+        {
+            const char *caller_mangled =
+                g_semcheck_current_subprogram->tree_data.subprogram_data.mangled_id;
+            if (caller_mangled != NULL && callee->mangled_id != NULL)
+            {
+                const char *last_dollar = strrchr(caller_mangled, '$');
+                if (last_dollar != NULL)
+                {
+                    size_t prefix_len = (size_t)(last_dollar - caller_mangled) + 1;
+                    if (strncmp(callee->mangled_id, caller_mangled, prefix_len) == 0)
+                        callee_is_nested = 1;
+                }
+            }
+        }
+    }
+    if (!hashnode_requires_static_link(callee) && !callee_is_nested)
         return;
-    /* When calling a function that requires a static link, the caller needs to
-     * be able to PASS a static link. Mark the caller as having nested children
-     * that need links, not as requiring a static link itself.
-     * The caller only RECEIVES a static link if it's nested or accesses outer vars. */
     g_semcheck_current_subprogram->tree_data.subprogram_data.has_nested_requiring_link = 1;
 }
 

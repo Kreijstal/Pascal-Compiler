@@ -1,5 +1,64 @@
 #include "../codegen_stmt_internal.h"
 
+/* Emit "movq %value_reg, (%addr_reload)" while guarding against the case
+ * where both virtual registers map to the same physical register.
+ *
+ * The dest-address pattern used in this file is:
+ *   1. Save dest address into spill slot `addr_temp`.
+ *   2. Free the original addr register so RHS evaluation can use it.
+ *   3. Evaluate RHS into `value_reg`.
+ *   4. get_free_reg() into `addr_reload`, then reload from `addr_temp`.
+ *   5. Store: movq %value_reg, (%addr_reload).
+ *
+ * In step 4 the register allocator can return the SAME physical register
+ * that `value_reg` was assigned in step 3 — e.g. when RHS evaluation
+ * internally spilled and re-acquired the only free callee-saved slot.
+ * If that happens, step 4's reload clobbers `value_reg`'s value, and the
+ * IR placeholder substitution collapses step 5 into "movq %X, (%X)" —
+ * a self-store that turns the destination field into a self-pointer.
+ *
+ * This helper detects the aliasing case and falls back to emitting raw
+ * asm that uses %r11 (caller-saved scratch, never in the allocatable
+ * pool) to hold the destination address, loading it directly from the
+ * spill slot.  The non-aliasing case keeps the original IR-tracked
+ * placeholder form so register liveness analysis still works.
+ *
+ * Triggered FPC pp_bootstrap regression: tvecnode.pass_1 in nmem.pas
+ * rebuilds an AnsiString unique-call's left subtree as a nested
+ * ctypeconvnode.create_internal(ccallnode.createintern(...)) chain.
+ * Under heavy register pressure the buggy collapse made
+ * tvecnode.left = &tvecnode.left, and the very next virtual dispatch
+ * during firstpass blew up on a NULL vtable entry. */
+static ListNode_t *codegen_emit_qword_store_aliased_safe(
+    ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *value_reg, Register_t *addr_reload,
+    StackNode_t *addr_temp)
+{
+    int aliased = 0;
+    if (value_reg != NULL && addr_reload != NULL)
+    {
+        if (value_reg == addr_reload)
+            aliased = 1;
+        else if (value_reg->bit_64 != NULL && addr_reload->bit_64 != NULL &&
+                 strcmp(value_reg->bit_64, addr_reload->bit_64) == 0)
+            aliased = 1;
+    }
+
+    if (aliased && addr_temp != NULL && value_reg != NULL &&
+        value_reg->bit_64 != NULL)
+    {
+        char raw[160];
+        snprintf(raw, sizeof(raw),
+            "\tmovq\t-%d(%%rbp), %%r11\n"
+            "\tmovq\t%s, (%%r11)\n",
+            addr_temp->offset, value_reg->bit_64);
+        return add_inst(inst_list, raw);
+    }
+
+    Register_t *u[] = {value_reg, addr_reload};
+    return add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
+}
+
 static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL || symtab == NULL || expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
@@ -582,18 +641,33 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     /* Method-pointer (TMethod) assignment: when the LHS is a 16-byte
      * method-pointer storage location (record field of "procedure of object"
-     * type, or a local variable of TMethod type), and the RHS is @x.Method,
-     * copy the full 16 bytes ({code @0; data @8}) from the RHS temporary
-     * into the LHS storage.
+     * type, or a variable of TMethod type), copy the full 16 bytes ({code @0;
+     * data @8}) into the LHS storage.
      *
-     * The RHS path (EXPR_ADDR_OF_PROC with receiver_expr) already builds a
-     * 16-byte TMethod temp on the stack and returns its ADDRESS in
-     * value_reg.  We copy 16 bytes via two movq instructions. */
-    if (var_expr != NULL && assign_expr != NULL &&
-        assign_expr->type == EXPR_ADDR_OF_PROC)
+     * Two RHS shapes need to be covered:
+     *   (a) RHS = @x.Method  (EXPR_ADDR_OF_PROC with a receiver_expr).  The
+     *       value_reg returned by codegen_expr_with_result is the ADDRESS of a
+     *       16-byte TMethod temp built on the stack.
+     *   (b) RHS is another method-pointer-typed addressable expression
+     *       (variable, parameter, record field).  We take the source's
+     *       address with codegen_address_for_expr and copy 16 bytes.
+     *
+     * Without case (b), the fallthrough path treats the assignment as an
+     * 8-byte pointer copy and leaves the Self half of the destination
+     * uninitialised — calls through that field then dispatch with a garbage
+     * Self.  This was the cause of the pp.pas bootstrap crash in
+     * tcallnode.replaceparaload, reached via BoundToStaticForEachNodeAdapter,
+     * which assigns a method-pointer parameter into a record field. */
+    if (var_expr != NULL && assign_expr != NULL)
     {
         int lhs_is_tmethod_storage = 0;
-        if (var_expr->type == EXPR_RECORD_ACCESS)
+        {
+            KgpcType *lhs_type = (lhs_kgpc_type != NULL)
+                ? lhs_kgpc_type : expr_get_kgpc_type(var_expr);
+            if (lhs_type != NULL && kgpc_type_is_method_pointer(lhs_type))
+                lhs_is_tmethod_storage = 1;
+        }
+        if (!lhs_is_tmethod_storage && var_expr->type == EXPR_RECORD_ACCESS)
         {
             struct RecordField *field = codegen_lookup_record_field(var_expr);
             if (field != NULL && field->proc_type != NULL &&
@@ -610,7 +684,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     lhs_is_tmethod_storage = 1;
             }
         }
-        else if (var_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        if (!lhs_is_tmethod_storage && var_expr->type == EXPR_VAR_ID &&
+            ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
             if (FindSymbol(&node, ctx->symtab, var_expr->expr_data.id) != 0 &&
@@ -619,14 +694,28 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 lhs_is_tmethod_storage = 1;
         }
 
-        if (lhs_is_tmethod_storage &&
-            assign_expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+        int rhs_is_method_temp = (assign_expr->type == EXPR_ADDR_OF_PROC &&
+            assign_expr->expr_data.addr_of_proc_data.receiver_expr != NULL);
+        int rhs_is_method_storage = 0;
+        if (!rhs_is_method_temp && lhs_is_tmethod_storage &&
+            codegen_expr_is_addressable(assign_expr))
+        {
+            KgpcType *rhs_type = expr_get_kgpc_type(assign_expr);
+            if (rhs_type != NULL && kgpc_type_is_method_pointer(rhs_type))
+                rhs_is_method_storage = 1;
+        }
+
+        if (lhs_is_tmethod_storage && (rhs_is_method_temp || rhs_is_method_storage))
         {
             Register_t *addr_reg = NULL;
             Register_t *value_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
-            /* The RHS evaluates to the address of the 16-byte TMethod temp. */
-            inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+            /* For (a) value_reg holds the address of a 16-byte TMethod temp;
+             * for (b) value_reg holds the address of the source storage. */
+            if (rhs_is_method_temp)
+                inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+            else
+                inst_list = codegen_address_for_expr(assign_expr, inst_list, ctx, &value_reg);
             if (codegen_had_error(ctx) || addr_reg == NULL || value_reg == NULL)
             {
                 if (addr_reg != NULL)
@@ -706,6 +795,29 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return inst_list;
             }
 
+            /* Protect dest_addr across the RHS evaluation: spill it ourselves
+             * to a stack slot and reload after, since codegen_address_for_expr
+             * for assign_expr may evaluate a nested function call whose codegen
+             * spills dest_addr's physical register (e.g. rbx) into another live
+             * value. Without this, dest_addr ends up holding a pointer to
+             * unrelated data (a field inside the LHS def) and the subsequent
+             * shortstring copy corrupts that data. See pp.pas bootstrap bug
+             * (regr_pp_pas_shortstring_dest_clobber). */
+            char dest_spill_label[64];
+            snprintf(dest_spill_label, sizeof(dest_spill_label),
+                "__sscopy_dest_%p__", (void *)var_expr);
+            StackNode_t *dest_spill_slot = find_in_temp(dest_spill_label);
+            if (dest_spill_slot == NULL)
+                dest_spill_slot = add_l_t_bytes(dest_spill_label, (int)sizeof(void *));
+            if (dest_spill_slot != NULL)
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n",
+                    dest_spill_slot->offset);
+                Register_t *u[] = {dest_addr};
+                inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            }
+
             inst_list = codegen_address_for_expr(assign_expr, inst_list, ctx, &src_addr);
             if (codegen_had_error(ctx) || src_addr == NULL)
             {
@@ -713,6 +825,26 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 if (src_addr != NULL)
                     free_reg(get_reg_stack(), src_addr);
                 return inst_list;
+            }
+
+            /* Reload dest_addr from the spill slot so we use a register that
+             * still holds the destination address (rather than whatever the
+             * RHS evaluation left in our original physical register). */
+            if (dest_spill_slot != NULL)
+            {
+                Register_t *reloaded = get_free_reg(get_reg_stack(), &inst_list);
+                if (reloaded == NULL)
+                    reloaded = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (reloaded != NULL)
+                {
+                    char tmpl[96];
+                    snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                        dest_spill_slot->offset);
+                    Register_t *d[] = {reloaded};
+                    inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+                    free_reg(get_reg_stack(), dest_addr);
+                    dest_addr = reloaded;
+                }
             }
 
             inst_list = codegen_call_shortstring_copy(inst_list, ctx, dest_addr, array_size, src_addr);
@@ -1037,7 +1169,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             assign_expr->type != EXPR_ARRAY_LITERAL &&
             codegen_get_char_array_bounds(var_expr, ctx, &array_lower, &array_upper, &array_is_shortstring) &&
             (codegen_expr_is_shortstring_value_local(assign_expr) ||
-             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE))
+             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
+             codegen_expr_is_shortstring_array(assign_expr)))
         {
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
@@ -1514,6 +1647,29 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     return codegen_fail_register(ctx, inst_list, NULL,
                         "ERROR: Unable to allocate register for reference assignment.");
                 }
+                if (scope_depth > 0)
+                {
+                    /* var-param pointer lives in the outer frame — reach it via static link */
+                    codegen_begin_expression(ctx);
+                    Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                    if (frame_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), ptr_reg);
+                        free_reg(get_reg_stack(), reg);
+                        codegen_end_expression(ctx);
+                        return codegen_fail_register(ctx, inst_list, NULL,
+                            "ERROR: Failed to acquire static link for reference assignment.");
+                    }
+                    {
+                        char tmpl[96];
+                        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%1), %%0\n", var->offset);
+                        Register_t *d[] = {ptr_reg};
+                        Register_t *u[] = {frame_reg};
+                        inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, tmpl);
+                    }
+                    codegen_end_expression(ctx);
+                }
+                else
                 {
                     char tmpl[96];
                     snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", var->offset);
@@ -1589,15 +1745,100 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             else
             {
+                /* Spill `reg` (the RHS value) to a temp stack slot before
+                 * acquiring the static link.  Rationale: when the RHS is a
+                 * function/constructor call that was processed via the
+                 * expression-tree codegen, the call's target register can
+                 * end up back in the free list (e.g. via inner argument
+                 * evaluation that reuses and frees it through the
+                 * arg_eval spill path in codegen_pass_arguments).  In that
+                 * state, codegen_acquire_static_link's get_free_reg can
+                 * legitimately return the SAME register, clobbering the
+                 * just-computed call result with the static link, so the
+                 * subsequent store writes the static link (or whatever
+                 * was last loaded into that register) instead of the
+                 * actual RHS value.  Materialising `reg` to a slot first
+                 * makes the assignment robust to any register pressure
+                 * decisions inside codegen_acquire_static_link.
+                 *
+                 * Triggering case observed: pp_bootstrap's
+                 * taddnode.first_addset:call_varset_helper with
+                 *   result := ccallnode.createintern(name,
+                 *     ccallparanode.create(... chained 4 levels ...));
+                 * where `result` is the outer method's return slot
+                 * (scope_depth == 1) — the static-link path. */
+                StackNode_t *value_spill = add_l_t_bytes("nested_result_spill",
+                    CODEGEN_POINTER_SIZE_BYTES);
+                if (value_spill != NULL)
+                {
+                    char spill_tmpl[96];
+                    if (use_byte)
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, value_spill->offset);
+                    else if (use_word)
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovw\t%s, -%d(%%rbp)\n", value_reg16, value_spill->offset);
+                    else if (use_qword)
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovq\t%%0, -%d(%%rbp)\n", value_spill->offset);
+                    else
+                        snprintf(spill_tmpl, sizeof(spill_tmpl),
+                            "\tmovl\t%%0, -%d(%%rbp)\n", value_spill->offset);
+                    Register_t *u_spill[] = {reg};
+                    inst_list = add_inst_du(inst_list, ctx, NULL, 0, u_spill, 1, spill_tmpl);
+                }
+
                 codegen_begin_expression(ctx);
                 Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
                 if (frame_reg != NULL)
                 {
+                    /* Reload value from spill slot into a FRESH register distinct
+                     * from frame_reg. Reloading into `reg` is unsafe: `reg` was
+                     * already freed by the caller path, so the static-link
+                     * acquisition may have legitimately picked `reg`'s physical
+                     * register as frame_reg. In that case, reloading into `reg`
+                     * clobbers frame_reg before the store, producing
+                     * `movq value, -OFF(value)` instead of
+                     * `movq value, -OFF(static_link)`. */
+                    Register_t *value_reload = reg;
+                    if (value_spill != NULL)
+                    {
+                        value_reload = get_free_reg(get_reg_stack(), &inst_list);
+                        if (value_reload == NULL)
+                            value_reload = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (value_reload == NULL)
+                            value_reload = reg;
+                        const char *reload_reg8 = register_name8(value_reload);
+                        const char *reload_reg16 = codegen_register_name16(value_reload);
+                        char reload_tmpl[96];
+                        if (use_byte && reload_reg8 != NULL)
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovb\t-%d(%%rbp), %s\n",
+                                value_spill->offset, reload_reg8);
+                        else if (use_word && reload_reg16 != NULL)
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovw\t-%d(%%rbp), %s\n",
+                                value_spill->offset, reload_reg16);
+                        else if (use_qword)
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovq\t-%d(%%rbp), %%0\n", value_spill->offset);
+                        else
+                            snprintf(reload_tmpl, sizeof(reload_tmpl),
+                                "\tmovl\t-%d(%%rbp), %%0\n", value_spill->offset);
+                        Register_t *d_reload[] = {value_reload};
+                        inst_list = add_inst_du(inst_list, ctx, d_reload, 1, NULL, 0, reload_tmpl);
+                        /* Refresh narrow-name pointers to match value_reload. */
+                        if (use_byte && reload_reg8 != NULL)
+                            value_reg8 = reload_reg8;
+                        if (use_word && reload_reg16 != NULL)
+                            value_reg16 = reload_reg16;
+                    }
+
                     if (use_qword)
                     {
                         char tmpl[96];
                         snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%1)\n", var->offset);
-                        Register_t *u[] = {reg, frame_reg};
+                        Register_t *u[] = {value_reload, frame_reg};
                         inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, tmpl);
                     }
                     else if (use_byte)
@@ -1618,9 +1859,11 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     {
                         char tmpl[96];
                         snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, -%d(%s)\n", var->offset, frame_reg->bit_64);
-                        Register_t *u[] = {reg};
+                        Register_t *u[] = {value_reload};
                         inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
                     }
+                    if (value_reload != reg)
+                        free_reg(get_reg_stack(), value_reload);
                 }
                 else
                 {
@@ -1814,10 +2057,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* Pre-spill value_reg before allocating addr_reload — see comment
+         * on the EXPR_RECORD_ACCESS branch below for the aliasing failure
+         * mode this avoids. */
+        StackNode_t *value_save_slot = add_l_t("array_value_save");
+        if (value_save_slot != NULL)
+        {
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", value_save_slot->offset);
+            Register_t *u[] = {value_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            free_reg(get_reg_stack(), value_reg);
+            value_reg = NULL;
+        }
+
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
         {
-            free_reg(get_reg_stack(), value_reg);
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for array store.");
         }
@@ -1826,6 +2082,22 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             char tmpl[64];
             snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", addr_temp->offset);
             Register_t *d[] = {addr_reload};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        }
+
+        if (value_save_slot != NULL)
+        {
+            value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reload);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for array value reload.");
+            }
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                value_save_slot->offset);
+            Register_t *d[] = {value_reg};
             inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
         }
 
@@ -1976,7 +2248,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
-            { Register_t *u[] = {value_reg, addr_reload}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n"); }
+            inst_list = codegen_emit_qword_store_aliased_safe(inst_list, ctx,
+                value_reg, addr_reload, addr_temp);
         }
         else
         {
@@ -2050,10 +2323,35 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* Pre-spill value_reg to its own slot and free its physical register
+         * BEFORE acquiring addr_reload.  This prevents the addr_reload reload
+         * from clobbering value_reg when the register allocator hands the
+         * same physical register to both (which happens under heavy register
+         * pressure — get_free_reg can recycle a register the RHS-evaluation
+         * pass internally freed, even though logically value_reg still owns
+         * it).
+         *
+         * Triggered FPC pp_bootstrap regression: tvecnode.pass_1 in nmem.pas
+         * builds an AnsiString unique-call's left subtree as a nested
+         * ctypeconvnode.create_internal(ccallnode.createintern(...)) chain.
+         * Under the resulting register pressure the buggy collapse produced
+         * a "movq %rbx, (%rbx)" self-store, turning tvecnode.left into a
+         * self-pointer and crashing at the next firstpass virtual dispatch.
+         */
+        StackNode_t *value_save_slot = add_l_t("record_value_save");
+        if (value_save_slot != NULL)
+        {
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", value_save_slot->offset);
+            Register_t *u[] = {value_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            free_reg(get_reg_stack(), value_reg);
+            value_reg = NULL;
+        }
+
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
         {
-            free_reg(get_reg_stack(), value_reg);
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for record store.");
         }
@@ -2062,6 +2360,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             char tmpl[64];
             snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", addr_temp->offset);
             Register_t *d[] = {addr_reload};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        }
+
+        /* Allocate a guaranteed-distinct register for value_reg's reload. */
+        if (value_save_slot != NULL)
+        {
+            value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reload);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for record value reload.");
+            }
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                value_save_slot->offset);
+            Register_t *d[] = {value_reg};
             inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
         }
 
@@ -2244,7 +2559,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
-            { Register_t *u[] = {value_reg, addr_reload}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n"); }
+            inst_list = codegen_emit_qword_store_aliased_safe(inst_list, ctx,
+                value_reg, addr_reload, addr_temp);
         }
         else
         {
@@ -2591,17 +2907,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
-            { Register_t *u[] = {value_reg, addr_reload}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n"); }
+            inst_list = codegen_emit_qword_store_aliased_safe(inst_list, ctx,
+                value_reg, addr_reload, addr_temp);
         }
         else
         {
-            if (var_type_3 == CHAR_TYPE)
+            if (var_type_3 == CHAR_TYPE || pointer_target_size == 1)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)
                 {
                     codegen_report_error(ctx,
-                        "ERROR: Unable to select 8-bit register for character assignment.");
+                        "ERROR: Unable to select 8-bit register for byte/char assignment.");
                 }
                 else
                 {
@@ -3256,13 +3573,36 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         if (call_kgpc_type != NULL && call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             call_kgpc_type->info.proc_info.definition != NULL)
         {
-            requires_static_link = call_kgpc_type->info.proc_info.definition
-                ->tree_data.subprogram_data.requires_static_link;
+            Tree_t *callee_def = call_kgpc_type->info.proc_info.definition;
+            /* The callee receives a static link iff its prologue reserves one
+             * (codegen_subprograms.c:will_need_static_link). Caller-pass and
+             * callee-receive must stay in sync. */
+            requires_static_link =
+                callee_def->tree_data.subprogram_data.requires_static_link ||
+                (callee_def->tree_data.subprogram_data.is_nested &&
+                 callee_def->tree_data.subprogram_data.has_nested_requiring_link);
         }
 
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, proc_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
+        /* If the codegen registry doesn't know the callee yet (nested sibling
+         * not yet emitted), fall back to the semantic definition's nesting_level.
+         * Otherwise the !have_depth branch below defaults to STATIC_LINK_FROM_RBP
+         * which passes the caller's *own* rbp — wrong for sibling calls, which
+         * need the parent's frame received as the caller's static link. */
+        if (!have_depth && call_kgpc_type != NULL &&
+            call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+            call_kgpc_type->info.proc_info.definition != NULL)
+        {
+            int sem_nesting = call_kgpc_type->info.proc_info.definition
+                ->tree_data.subprogram_data.nesting_level;
+            if (sem_nesting > 0)
+            {
+                callee_depth = sem_nesting;
+                have_depth = 1;
+            }
+        }
         int should_pass_static_link = requires_static_link;
 
         enum {

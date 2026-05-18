@@ -36,6 +36,65 @@
 
 #include "expr_tree_internal.h"
 
+static int expr_tree_is_large_set_expr(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_is_char_set_ctx(expr, ctx))
+        return 1;
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL && kgpc_type_is_set(type) && kgpc_type_sizeof(type) > 4)
+        return 1;
+
+    if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return expr_tree_is_large_set_expr(expr->expr_data.addop_data.left_expr, ctx) ||
+            expr_tree_is_large_set_expr(expr->expr_data.addop_data.right_term, ctx);
+    }
+
+    if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE))
+    {
+        return expr_tree_is_large_set_expr(expr->expr_data.mulop_data.left_term, ctx) ||
+            expr_tree_is_large_set_expr(expr->expr_data.mulop_data.right_factor, ctx);
+    }
+
+    return 0;
+}
+
+static int expr_tree_is_any_set_expr(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr_tree_is_large_set_expr(expr, ctx))
+        return 1;
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL && kgpc_type_is_set(type))
+        return 1;
+    if (expr->type == EXPR_SET || expr_has_type_tag(expr, SET_TYPE))
+        return 1;
+    if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE))
+        return 1;
+    if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE))
+        return 1;
+    return 0;
+}
+
+static long long expr_tree_set_size_bytes(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL && kgpc_type_is_set(type))
+    {
+        long long sz = kgpc_type_sizeof(type);
+        if (sz > 0)
+            return sz;
+    }
+    return 0;
+}
+
 ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, char *buffer, int buf_len, OperandKind *out_kind)
 {
@@ -931,6 +990,23 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             }
             if (expr_get_type_tag(expr) == SET_TYPE)
             {
+                if (expr_tree_is_large_set_expr(expr, ctx))
+                {
+                    Register_t *set_addr_reg = NULL;
+                    inst_list = codegen_char_set_address(expr, inst_list, ctx, &set_addr_reg);
+                    if (set_addr_reg != NULL && left_reg != NULL)
+                    {
+                        if (set_addr_reg->reg_id != left_reg->reg_id)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                set_addr_reg->bit_64, left_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (set_addr_reg != NULL)
+                        free_reg(get_reg_stack(), set_addr_reg);
+                    break;
+                }
                 /* Set operations use 32-bit instructions; ensure register names are 32-bit */
                 const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
                 const char *right32 = (right_reg != NULL) ? right_reg->bit_32 : right;
@@ -1251,6 +1327,73 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 }
                 else
                 {
+                    /* Check if the set is larger than 4 bytes (not a char set, but still
+                     * too large for register-form btl).  Sets with > 32 elements store
+                     * bits beyond index 31 in higher bytes.  Register-form btl only sees
+                     * the first 4 bytes loaded into right_reg, so elements with ordinal > 31
+                     * would always appear absent.  Use address + memory-form btl instead. */
+                    int set_storage_bytes = 0;
+                    if (right_expr != NULL)
+                    {
+                        KgpcType *set_ktype = expr_get_kgpc_type(right_expr);
+                        if (set_ktype != NULL && kgpc_type_is_set(set_ktype))
+                        {
+                            long long sz = kgpc_type_sizeof(set_ktype);
+                            if (sz > 0)
+                                set_storage_bytes = (int)sz;
+                        }
+                    }
+
+                    if (set_storage_bytes > 4 && left32 != NULL && left8 != NULL)
+                    {
+                        /* Large non-char set: discard loaded value register, re-evaluate
+                         * as address, then use memory-form btl with correct max-bit bound. */
+                        if (right_reg != NULL)
+                        {
+                            free_reg(get_reg_stack(), (Register_t *)right_reg);
+                            right_reg = NULL;
+                        }
+                        Register_t *set_addr_reg = NULL;
+                        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+                        if (set_addr_reg != NULL)
+                        {
+                            int max_bit = set_storage_bytes * 8 - 1;
+                            char in_oob[18], in_done[18];
+                            gen_label(in_oob, sizeof(in_oob), ctx);
+                            gen_label(in_done, sizeof(in_done), ctx);
+
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left32);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, %s\n", max_bit, left32);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n",
+                                left32, set_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", in_done);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            snprintf(buffer, sizeof(buffer), "%s:\n", in_oob);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\txorb\t%s, %s\n", left8, left8);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "%s:\n", in_done);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                            inst_list = add_inst(inst_list, buffer);
+
+                            free_reg(get_reg_stack(), set_addr_reg);
+                        }
+                    }
+                    else
+                    {
                     const char *right32 = reg_to_reg32(right, right_reg);
                     const char *bit_index = left32;
                     const char *bit_base = right32;
@@ -1267,13 +1410,45 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = add_inst(inst_list, buffer);
                         bit_base = temp_reg;
                     }
+                    else if (bit_base != NULL && right_expr != NULL &&
+                             right_expr->type == EXPR_VAR_ID &&
+                             right_expr->expr_data.id != NULL &&
+                             ctx != NULL && ctx->symtab != NULL)
+                    {
+                        /* If right operand is a var-parameter VAR_ID, the operand the
+                         * leaf produced is the parameter slot which holds the *pointer*
+                         * to the caller's set, not the set value.  Dereference: load
+                         * the pointer, then load 4 bytes of the pointed-to set. */
+                        HashNode_t *node = NULL;
+                        if (FindSymbol(&node, ctx->symtab, right_expr->expr_data.id) &&
+                            node != NULL && node->is_var_parameter)
+                        {
+                            const char *temp_reg64 = "%r10";
+                            const char *temp_reg32 = "%r10d";
+                            if (left_reg != NULL && left_reg->reg_id == REG_R10)
+                            {
+                                temp_reg64 = "%r11";
+                                temp_reg32 = "%r11d";
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                bit_base, temp_reg64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n",
+                                temp_reg64, temp_reg32);
+                            inst_list = add_inst(inst_list, buffer);
+                            bit_base = temp_reg32;
+                        }
+                    }
 
                     if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
                     {
-                        /* Bound-check elem against [0..31] for 32-bit register-resident
-                         * sets — register-form btl wraps mod 32, so out-of-domain
-                         * elements would falsely match.  Pascal `n in S` must be FALSE
-                         * when n is outside S's element domain. */
+                        /* Bound-check elem against actual set width.  For sets ≤ 4 bytes
+                         * that's at most 31; for truly small sets it may be less, but
+                         * clamping to 31 is always safe since any element in range will
+                         * have ordinal ≤ 31.  register-form btl wraps mod 32 so we must
+                         * reject out-of-domain elements explicitly. */
+                        int max_bit = (set_storage_bytes > 0) ? set_storage_bytes * 8 - 1 : 31;
+                        if (max_bit > 31) max_bit = 31; /* register form only covers 32 bits */
                         char in_oob[18];
                         char in_done[18];
                         gen_label(in_oob, sizeof(in_oob), ctx);
@@ -1283,7 +1458,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob);
                         inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", bit_index);
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, %s\n", max_bit, bit_index);
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob);
                         inst_list = add_inst(inst_list, buffer);
@@ -1305,8 +1480,254 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
                         inst_list = add_inst(inst_list, buffer);
                     }
+                    } /* end small-set register-form path */
                 }
                 break;
+            }
+
+            if ((relop_kind == EQ || relop_kind == NE) &&
+                left_reg != NULL &&
+                ((left_expr != NULL && expr_tree_is_large_set_expr(left_expr, ctx)) ||
+                 (right_expr != NULL && expr_tree_is_large_set_expr(right_expr, ctx))))
+            {
+                Register_t *left_addr = NULL;
+                Register_t *right_addr = NULL;
+                Register_t *tmp = NULL;
+                StackNode_t *left_addr_spill = NULL;
+                const char *left32 = left_reg->bit_32;
+                const char *left8 = reg32_to_reg8(left32, left_reg);
+                const char *set_instr = (relop_kind == EQ) ? "sete" : "setne";
+
+                inst_list = codegen_char_set_address(left_expr, inst_list, ctx, &left_addr);
+                if (left_addr == NULL)
+                    break;
+
+                left_addr_spill = add_l_t("relop_set_laddr");
+                if (left_addr_spill != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        left_addr->bit_64, left_addr_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), left_addr);
+                    left_addr = NULL;
+                }
+
+                inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &right_addr);
+                if (right_addr == NULL)
+                {
+                    if (left_addr != NULL)
+                        free_reg(get_reg_stack(), left_addr);
+                    break;
+                }
+
+                if (left_addr_spill != NULL)
+                {
+                    left_addr = get_free_reg(get_reg_stack(), &inst_list);
+                    if (left_addr == NULL)
+                    {
+                        free_reg(get_reg_stack(), right_addr);
+                        break;
+                    }
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        left_addr_spill->offset, left_addr->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                tmp = get_free_reg(get_reg_stack(), &inst_list);
+                if (tmp == NULL)
+                {
+                    free_reg(get_reg_stack(), left_addr);
+                    free_reg(get_reg_stack(), right_addr);
+                    break;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", left_reg->bit_64, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                for (int i = 0; i < 4; ++i)
+                {
+                    int byte_off = i * 8;
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+                        byte_off, left_addr->bit_64, tmp->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\txorq\t%d(%s), %s\n",
+                        byte_off, right_addr->bit_64, tmp->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\torq\t%s, %s\n",
+                        tmp->bit_64, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", left_reg->bit_64, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                if (left8 != NULL && set_instr != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, left8);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                free_reg(get_reg_stack(), tmp);
+                free_reg(get_reg_stack(), left_addr);
+                free_reg(get_reg_stack(), right_addr);
+                break;
+            }
+
+            /* Pascal set subset (LE) / superset (GE) — must be done bitwise,
+             * NOT as integer comparison.  For set operands:
+             *   LHS <= RHS  iff  (LHS AND NOT RHS) is empty
+             *   LHS >= RHS  iff  (RHS AND NOT LHS) is empty
+             * Integer LE/GE on the packed bit representation gives wrong
+             * answers for disjoint or overlapping sets (e.g.
+             * {bit 1} <= {bit 7} is false as a subset but true as 2<=128). */
+            if ((relop_kind == LE || relop_kind == GE) &&
+                left_reg != NULL && left_expr != NULL && right_expr != NULL &&
+                expr_tree_is_any_set_expr(left_expr, ctx) &&
+                expr_tree_is_any_set_expr(right_expr, ctx))
+            {
+                long long lsize = expr_tree_set_size_bytes(left_expr);
+                long long rsize = expr_tree_set_size_bytes(right_expr);
+                long long max_size = (lsize > rsize) ? lsize : rsize;
+                if (max_size <= 0) max_size = 4;
+                int either_large = (max_size > 4) ||
+                    expr_tree_is_large_set_expr(left_expr, ctx) ||
+                    expr_tree_is_large_set_expr(right_expr, ctx);
+
+                const char *left32 = left_reg->bit_32;
+                const char *left8 = reg32_to_reg8(left32, left_reg);
+
+                if (either_large)
+                {
+                    /* Byte-loop using addresses.  Same shape as the EQ/NE
+                     * large-set path above, but per byte/qword we compute
+                     *   (subset_side AND NOT superset_side)
+                     * and OR the result into the accumulator. */
+                    Register_t *left_addr = NULL;
+                    Register_t *right_addr = NULL;
+                    Register_t *tmp = NULL;
+                    StackNode_t *left_addr_spill = NULL;
+
+                    inst_list = codegen_char_set_address(left_expr, inst_list, ctx, &left_addr);
+                    if (left_addr == NULL)
+                        break;
+                    left_addr_spill = add_l_t("relop_setle_laddr");
+                    if (left_addr_spill != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            left_addr->bit_64, left_addr_spill->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), left_addr);
+                        left_addr = NULL;
+                    }
+                    inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &right_addr);
+                    if (right_addr == NULL)
+                    {
+                        if (left_addr != NULL)
+                            free_reg(get_reg_stack(), left_addr);
+                        break;
+                    }
+                    if (left_addr_spill != NULL)
+                    {
+                        left_addr = get_free_reg(get_reg_stack(), &inst_list);
+                        if (left_addr == NULL)
+                        {
+                            free_reg(get_reg_stack(), right_addr);
+                            break;
+                        }
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            left_addr_spill->offset, left_addr->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    tmp = get_free_reg(get_reg_stack(), &inst_list);
+                    if (tmp == NULL)
+                    {
+                        free_reg(get_reg_stack(), left_addr);
+                        free_reg(get_reg_stack(), right_addr);
+                        break;
+                    }
+
+                    /* For LE:  accum |= LHS[i] AND NOT RHS[i]
+                     * For GE:  accum |= RHS[i] AND NOT LHS[i] */
+                    const char *a_addr = (relop_kind == LE) ? left_addr->bit_64
+                                                            : right_addr->bit_64;
+                    const char *b_addr = (relop_kind == LE) ? right_addr->bit_64
+                                                            : left_addr->bit_64;
+
+                    snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n",
+                        left_reg->bit_64, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    /* FPC sets are at most 32 bytes (256 elements / 8). */
+                    int qwords = 4;
+                    for (int i = 0; i < qwords; ++i)
+                    {
+                        int byte_off = i * 8;
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+                            byte_off, b_addr, tmp->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tnotq\t%s\n", tmp->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tandq\t%d(%s), %s\n",
+                            byte_off, a_addr, tmp->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\torq\t%s, %s\n",
+                            tmp->bit_64, left_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n",
+                        left_reg->bit_64, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    if (left8 != NULL && left32 != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tsete\t%s\n", left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n",
+                            left8, left32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    free_reg(get_reg_stack(), tmp);
+                    free_reg(get_reg_stack(), left_addr);
+                    free_reg(get_reg_stack(), right_addr);
+                    break;
+                }
+                else
+                {
+                    /* Both sets fit in 32 bits.  Operate on the loaded values
+                     * directly.  `left` and `right` may each be a register or
+                     * a memory reference; movl/notl/andl handle both. */
+                    const char *left32_op = left32;
+                    const char *right32_op = (right_reg != NULL) ? right_reg->bit_32 : right;
+                    if (left32_op == NULL || right32_op == NULL || left8 == NULL)
+                        break;
+
+                    /* Pick scratch register avoiding both operand registers. */
+                    const char *scratch = "%r10d";
+                    int avoid_r10 = ((left_reg != NULL && left_reg->reg_id == REG_R10) ||
+                                     (right_reg != NULL && right_reg->reg_id == REG_R10));
+                    if (avoid_r10)
+                        scratch = "%r11d";
+
+                    /* LE: scratch = NOT RHS; scratch AND= LHS
+                     * GE: scratch = NOT LHS; scratch AND= RHS */
+                    const char *src_to_not = (relop_kind == LE) ? right32_op : left32_op;
+                    const char *src_to_and = (relop_kind == LE) ? left32_op : right32_op;
+
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n",
+                        src_to_not, scratch);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", scratch);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n",
+                        src_to_and, scratch);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
+                        scratch, scratch);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tsete\t%s\n", left8);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n",
+                        left8, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    break;
+                }
             }
 
             {

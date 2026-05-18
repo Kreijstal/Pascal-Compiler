@@ -623,11 +623,34 @@ record_ctor_cleanup:
  * by searching through AST type section.
  * Returns the ordinal value if found (>= 0), -1 if not found.
  */
+static int resolve_enum_ordinal_in_section_chain(const char *identifier, ast_t *section_root);
+static int resolve_enum_ordinal_in_type_section(const char *identifier, ast_t *type_section);
+
 int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
+    if (identifier == NULL)
+        return -1;
+    int from_local = (type_section != NULL)
+        ? resolve_enum_ordinal_in_type_section(identifier, type_section)
+        : -1;
+    if (from_local >= 0)
+        return from_local;
+    if (g_interface_type_section_ast != NULL) {
+        int v = resolve_enum_ordinal_in_type_section(identifier, g_interface_type_section_ast);
+        if (v >= 0) return v;
+    }
+    if (g_implementation_type_section_ast != NULL) {
+        int v = resolve_enum_ordinal_in_type_section(identifier, g_implementation_type_section_ast);
+        if (v >= 0) return v;
+    }
+    int from_iface = resolve_enum_ordinal_in_section_chain(identifier, g_interface_section_ast);
+    if (from_iface >= 0)
+        return from_iface;
+    return resolve_enum_ordinal_in_section_chain(identifier, g_implementation_section_ast);
+}
+
+static int resolve_enum_ordinal_in_type_section(const char *identifier, ast_t *type_section) {
     if (identifier == NULL || type_section == NULL)
         return -1;
-    
-    /* Iterate through type declarations */
     ast_t *type_decl = type_section->child;
     while (type_decl != NULL) {
         if (type_decl->typ == PASCAL_T_TYPE_DECL) {
@@ -653,8 +676,17 @@ int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
                 ast_t *literal = spec->child;
                 while (literal != NULL) {
                     ast_t *literal_id = literal;
-                    if (literal_id != NULL && literal_id->typ == PASCAL_T_ASSIGNMENT)
-                        literal_id = literal_id->child;
+                    if (literal_id != NULL && literal_id->typ == PASCAL_T_ASSIGNMENT) {
+                        /* Explicit ordinal: (foo = N). Evaluate N. */
+                        ast_t *name_node = literal_id->child;
+                        ast_t *value_node = (name_node != NULL) ? name_node->next : NULL;
+                        int explicit_val = 0;
+                        if (value_node != NULL &&
+                            evaluate_const_int_expr(value_node, &explicit_val, 0) == 0) {
+                            ordinal = explicit_val;
+                        }
+                        literal_id = name_node;
+                    }
                     if (literal_id != NULL && literal_id->typ == PASCAL_T_IDENTIFIER &&
                         literal_id->sym != NULL) {
                         if (strcmp(literal_id->sym->name, identifier) == 0) {
@@ -668,8 +700,66 @@ int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
         }
         type_decl = type_decl->next;
     }
-    
-    return -1; /* Not found */
+
+    return -1;
+}
+
+static int resolve_enum_ordinal_in_section_chain(const char *identifier, ast_t *section_root) {
+    if (identifier == NULL || section_root == NULL)
+        return -1;
+
+    ast_t *section = section_root->child;
+    while (section != NULL) {
+        ast_t *node = unwrap_pascal_node(section);
+        for (ast_t *cursor = node; cursor != NULL;
+             cursor = (section->typ == PASCAL_T_NONE) ? cursor->next : NULL) {
+            if (cursor->typ == PASCAL_T_TYPE_SECTION) {
+                ast_t *type_decl = cursor->child;
+                while (type_decl != NULL) {
+                    if (type_decl->typ == PASCAL_T_TYPE_DECL) {
+                        ast_t *type_spec_node = type_decl->child;
+                        if (type_spec_node != NULL)
+                            type_spec_node = type_spec_node->next;
+                        while (type_spec_node != NULL &&
+                               type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
+                               type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                            type_spec_node = type_spec_node->next;
+                        }
+                        ast_t *spec = type_spec_node;
+                        if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+                            spec = spec->child;
+                        if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+                            int ordinal = 0;
+                            ast_t *literal = spec->child;
+                            while (literal != NULL) {
+                                ast_t *literal_id = literal;
+                                if (literal_id != NULL && literal_id->typ == PASCAL_T_ASSIGNMENT) {
+                                    ast_t *name_node = literal_id->child;
+                                    ast_t *value_node = (name_node != NULL) ? name_node->next : NULL;
+                                    int explicit_val = 0;
+                                    if (value_node != NULL &&
+                                        evaluate_const_int_expr(value_node, &explicit_val, 0) == 0) {
+                                        ordinal = explicit_val;
+                                    }
+                                    literal_id = name_node;
+                                }
+                                if (literal_id != NULL && literal_id->typ == PASCAL_T_IDENTIFIER &&
+                                    literal_id->sym != NULL &&
+                                    strcmp(literal_id->sym->name, identifier) == 0) {
+                                    return ordinal;
+                                }
+                                ordinal++;
+                                literal = literal->next;
+                            }
+                        }
+                    }
+                    type_decl = type_decl->next;
+                }
+            }
+        }
+        section = section->next;
+    }
+    return -1;
 }
 
 /* Helper to resolve an enum literal within a specific enumerated type.
@@ -698,8 +788,17 @@ int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast
                     int ordinal = 0;
                     for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
                         ast_t *lit_id = lit;
-                        if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT)
-                            lit_id = lit_id->child;
+                        if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT) {
+                            /* Explicit ordinal: (foo = N). Evaluate N. */
+                            ast_t *name_node = lit_id->child;
+                            ast_t *value_node = (name_node != NULL) ? name_node->next : NULL;
+                            int explicit_val = 0;
+                            if (value_node != NULL &&
+                                evaluate_const_int_expr(value_node, &explicit_val, 0) == 0) {
+                                ordinal = explicit_val;
+                            }
+                            lit_id = name_node;
+                        }
                         if (lit_id != NULL && lit_id->typ == PASCAL_T_IDENTIFIER &&
                             lit_id->sym != NULL &&
                             lit_id->sym->name != NULL &&
@@ -752,20 +851,42 @@ int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section,
 
                     /* Check if it's an enumerated type */
                     if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
-                        /* Count the enum values */
+                        /* Walk literals, tracking running ordinal. Honor explicit
+                         * (foo = N) assignments so range reflects actual ordinals. */
                         int count = 0;
+                        int ordinal = 0;
+                        int min_ord = 0;
+                        int max_ord = 0;
                         ast_t *literal = spec->child;
                         while (literal != NULL) {
                             if (literal->typ == PASCAL_T_IDENTIFIER ||
-                                literal->typ == PASCAL_T_ASSIGNMENT)
+                                literal->typ == PASCAL_T_ASSIGNMENT) {
+                                if (literal->typ == PASCAL_T_ASSIGNMENT) {
+                                    ast_t *name_node = literal->child;
+                                    ast_t *value_node = (name_node != NULL) ? name_node->next : NULL;
+                                    int explicit_val = 0;
+                                    if (value_node != NULL &&
+                                        evaluate_const_int_expr(value_node, &explicit_val, 0) == 0) {
+                                        ordinal = explicit_val;
+                                    }
+                                }
+                                if (count == 0) {
+                                    min_ord = ordinal;
+                                    max_ord = ordinal;
+                                } else {
+                                    if (ordinal < min_ord) min_ord = ordinal;
+                                    if (ordinal > max_ord) max_ord = ordinal;
+                                }
                                 count++;
+                                ordinal++;
+                            }
                             literal = literal->next;
                         }
 
                         if (count > 0) {
-                            *out_start = 0;
-                            *out_end = count - 1;
-                            enum_registry_add(type_name, 0, count - 1);
+                            *out_start = min_ord;
+                            *out_end = max_ord;
+                            enum_registry_add(type_name, min_ord, max_ord);
                             return 0; /* Success */
                         }
                     }
@@ -1315,6 +1436,10 @@ void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_sect
         if (start_ordinal >= 0 && end_ordinal >= 0) {
             info->start = start_ordinal;
             info->end = end_ordinal;
+        } else if (strlen(start_id) == 3 && start_id[0] == '\'' && start_id[2] == '\''
+                   && strlen(end_id) == 3 && end_id[0] == '\'' && end_id[2] == '\'') {
+            info->start = (unsigned char)start_id[1];
+            info->end   = (unsigned char)end_id[1];
         } else {
             int start_val;
             if (evaluate_simple_const_expr(start_id, const_section, &start_val) == 0) {
@@ -1417,6 +1542,14 @@ int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
             return 0;
         }
         return -1;
+    }
+    case PASCAL_T_CHAR:
+    {
+        const char *name = (expr->sym != NULL) ? expr->sym->name : NULL;
+        if (name == NULL || name[0] == '\0')
+            return -1;
+        *out_value = (unsigned char)name[0];
+        return 0;
     }
     case PASCAL_T_IDENTIFIER:
         return lookup_const_int(expr->sym != NULL ? expr->sym->name : NULL, out_value);
@@ -1541,6 +1674,13 @@ int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
                     *out_value = INT_MAX;
                     return 0;
                 }
+            }
+            else if (pascal_identifier_equals(func_name, "Length") &&
+                     arg != NULL && arg->typ == PASCAL_T_STRING &&
+                     arg->sym != NULL && arg->sym->name != NULL)
+            {
+                *out_value = (int)strlen(arg->sym->name);
+                return 0;
             }
         }
         /* Typecast expressions like tregister($05000000) are parsed as
@@ -2054,6 +2194,20 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
     expr = unwrap_pascal_node(expr);
     if (expr == NULL)
         return NULL;
+
+    /* Char literal: serialize as 'X' so downstream evaluators recognise it */
+    if (expr->typ == PASCAL_T_CHAR && expr->sym != NULL && expr->sym->name != NULL) {
+        const char *ch = expr->sym->name;
+        size_t len = strlen(ch);
+        char *result = (char *)malloc(len + 3);
+        if (result == NULL)
+            return NULL;
+        result[0] = '\'';
+        memcpy(result + 1, ch, len);
+        result[1 + len] = '\'';
+        result[2 + len] = '\0';
+        return result;
+    }
 
     /* Simple identifier or literal with a symbol */
     if (expr->sym != NULL && expr->sym->name != NULL) {

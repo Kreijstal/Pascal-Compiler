@@ -192,14 +192,34 @@ typedef struct Register
 
 /********* StackScope_t **********/
 
+/* Forward declaration; defined in stackmng.c. Used to accelerate
+ * name lookups in stackscope_find_{t,x,z} from O(N) per-call to O(1). */
+struct ScopeHashTable;
+
 typedef struct StackScope
 {
     int t_offset, x_offset, z_offset;
     ListNode_t *t, *x, *z;
     ListNode_t *t_tail, *x_tail, *z_tail;
 
+    /* Parallel hash indexes onto the t/x/z lists keyed by lowercased label.
+     * The lists remain the source of truth (still iterated by callers in
+     * codegen.c). All insertion and removal sites that touch t/x/z MUST
+     * keep these indexes in sync via stackscope_index_{t,x,z}_insert /
+     * stackscope_index_x_remove. */
+    struct ScopeHashTable *t_index;
+    struct ScopeHashTable *x_index;
+    struct ScopeHashTable *z_index;
+
     StackScope_t *prev_scope;
 } StackScope_t;
+
+/* Hash-index maintenance helpers exposed for the few sites outside
+ * stackmng.c that directly append to ->x (codegen_subprograms.c aliases). */
+void stackscope_index_t_insert(StackScope_t *scope, ListNode_t *node);
+void stackscope_index_x_insert(StackScope_t *scope, ListNode_t *node);
+void stackscope_index_z_insert(StackScope_t *scope, ListNode_t *node);
+void stackscope_index_x_remove(StackScope_t *scope, ListNode_t *node);
 
 StackScope_t *init_stackscope();
 StackNode_t *stackscope_find_t(StackScope_t *, const char *);

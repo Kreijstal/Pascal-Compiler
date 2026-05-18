@@ -1517,6 +1517,37 @@ void kgpc_text_close(KGPCTextRec *file)
 
 int kgpc_text_eof(KGPCTextRec *file)
 {
+    /* Fast path: if no stdio FILE* has been created yet for this textrec,
+     * check eof directly on the kernel fd via lseek+fstat.  This avoids
+     * fgetc's 8KB read-ahead, which advances the kernel file position and
+     * silently skips data for callers that read via raw syscalls
+     * (e.g. FPC's TCFileStream / BlockRead).  For non-seekable fds
+     * (pipes, sockets, ttys) lseek returns -1 and we fall back to stdio.
+     *
+     * Once stdio has been engaged (private_data != 0), it owns the read
+     * buffer and we must use fgetc/ungetc so eof reflects what the stdio
+     * reader will see, not the kernel position. */
+#ifndef _WIN32
+    if (file != NULL && file->private_data == 0 && file->handle >= 0
+        && file->mode != 0 && file->mode != (int32_t)0xD7B0)
+    {
+        int fd = file->handle;
+        int saved_errno = errno;
+        off_t pos = lseek(fd, 0, SEEK_CUR);
+        if (pos != (off_t)-1)
+        {
+            struct stat st;
+            if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode))
+            {
+                errno = saved_errno;
+                return pos >= st.st_size ? 1 : 0;
+            }
+        }
+        errno = saved_errno;
+        /* Non-seekable or non-regular: fall through to stdio path. */
+    }
+#endif
+
     FILE *stream = kgpc_text_input_stream(file);
     if (stream == NULL)
         return 1;
@@ -1846,10 +1877,24 @@ void *SysTryResizeMem(void *p, intptr_t size)
 /* MemoryManager initialization                                        */
 /*                                                                     */
 /* FPC's heap functions (GetMem, FreeMem, etc.) call through function  */
-/* pointers in the MemoryManager typed constant.  KGPC doesn't yet     */
-/* support typed const initialization with @function values, so        */
-/* MemoryManager is emitted as all-zeros (BSS).  We initialize it at   */
-/* program startup with simple malloc/free wrappers.                   */
+/* pointers in the MemoryManager typed constant.  The runtime startup  */
+/* constructor binds the basic allocator slots (GetMem .. RelocateHeap)*/
+/* to libc-backed kgpc_mm_* wrappers — this is the contract every      */
+/* KGPC-built binary uses, and it works whether the host system unit   */
+/* is KGPC's bundled system.p (slots all NULL in .bss) or FPC's RTL    */
+/* system.pp (slots already set to SysGetMem/SysFreeMem/...).  Both    */
+/* are simple malloc/free pairs at the bottom, so swapping the FPC     */
+/* implementations for the libc ones is fine and matches what every    */
+/* runtime entry point already expects.                                */
+/*                                                                     */
+/* The reporting slots GetHeapStatus (80) and GetFPCHeapStatus (88)    */
+/* are different: kgpc has no libc fallback for them, and FPC RTL's    */
+/* typed-const initialiser correctly binds them to its Sys* routines.  */
+/* The constructor MUST NOT overwrite these slots with NULL — doing so */
+/* would null-call SysGetFPCHeapStatus through heap.inc's              */
+/* `Result := MemoryManager.GetFPCHeapStatus()`.  So we leave any      */
+/* pre-existing pointer in place and only initialise these slots if    */
+/* they start NULL (KGPC-bundled system.p case).                       */
 /*                                                                     */
 /* TMemoryManager layout (x86-64):                                     */
 /*   offset  0: NeedLock (boolean, padded to 8 bytes)                  */
@@ -1992,11 +2037,23 @@ static void kgpc_init_memory_manager(void)
         kgpc_mm_noop,         /* 56: InitThread */
         kgpc_mm_noop,         /* 64: DoneThread */
         kgpc_mm_noop,         /* 72: RelocateHeap */
-        NULL,                 /* 80: GetHeapStatus (unused) */
-        NULL,                 /* 88: GetFPCHeapStatus (unused) */
     };
-    for (int i = 0; i < 11; i++)
+    /* Slots 8..72: always install the libc-backed wrappers.  Every
+     * KGPC-built binary funnels alloc/free through these helpers; the
+     * pre-existing pointer (from FPC RTL's typed-const, or a NULL from
+     * BSS) is intentionally replaced. */
+    for (int i = 0; i < 9; i++)
         memcpy(mm + 8 + i * 8, &ptrs[i], sizeof(void *));
+
+    /* Slots 80 (GetHeapStatus) and 88 (GetFPCHeapStatus): no libc
+     * fallback, so preserve whatever the host system unit's typed-const
+     * initialiser put there.  KGPC-bundled system.p leaves them NULL
+     * (the user program is expected not to call them); FPC RTL binds
+     * them to SysGetHeapStatus / SysGetFPCHeapStatus and must keep
+     * those values, otherwise heap.inc's
+     *   Result := MemoryManager.GetFPCHeapStatus()
+     * crashes on a NULL call. */
+    (void)0;
 }
 
 char *kgpc_string_concat(const char *lhs, const char *rhs)
@@ -2837,17 +2894,55 @@ static const char *kgpc_val_skip_trailing_whitespace(const char *ptr)
     return ptr;
 }
 
+/* Detect Pascal integer prefix: $/$x=hex, %=binary, &=octal; return base and skip prefix */
+static int kgpc_val_detect_base(const char **ptr)
+{
+    if (**ptr == '$' || **ptr == 'x' || **ptr == 'X')
+    {
+        (*ptr)++;
+        return 16;
+    }
+    if (**ptr == '%')
+    {
+        (*ptr)++;
+        return 2;
+    }
+    if (**ptr == '&')
+    {
+        (*ptr)++;
+        return 8;
+    }
+    if (**ptr == '0' && ((*ptr)[1] == 'x' || (*ptr)[1] == 'X'))
+    {
+        (*ptr) += 2;
+        return 16;
+    }
+    return 10;
+}
+
 static long long kgpc_val_parse_integer(const char *text, long long min_value,
     long long max_value, long long *out_value)
 {
     if (text == NULL)
         text = "";
 
+    const char *ptr = text;
+    while (*ptr != '\0' && isspace((unsigned char)*ptr))
+        ++ptr;
+
+    int negative = 0;
+    if (*ptr == '-') { negative = 1; ++ptr; }
+    else if (*ptr == '+') { ++ptr; }
+
+    int base = kgpc_val_detect_base(&ptr);
+
     errno = 0;
     char *endptr = NULL;
-    long long value = strtoll(text, &endptr, 10);
-    if (endptr == text)
+    unsigned long long uvalue = strtoull(ptr, &endptr, base);
+    if (endptr == ptr)
         return 1;
+
+    long long value = negative ? -(long long)uvalue : (long long)uvalue;
 
     if (errno == ERANGE || value < min_value || value > max_value)
         return kgpc_val_error_position(text, endptr);
@@ -2873,10 +2968,14 @@ static long long kgpc_val_parse_unsigned(const char *text, unsigned long long ma
 
     if (*ptr == '-')
         return kgpc_val_error_position(text, ptr);
+    if (*ptr == '+')
+        ++ptr;
+
+    int base = kgpc_val_detect_base(&ptr);
 
     errno = 0;
     char *endptr = NULL;
-    unsigned long long value = strtoull(ptr, &endptr, 10);
+    unsigned long long value = strtoull(ptr, &endptr, base);
     if (endptr == ptr)
         return 1;
 

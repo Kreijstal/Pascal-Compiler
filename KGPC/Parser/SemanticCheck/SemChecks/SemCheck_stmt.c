@@ -936,8 +936,15 @@ int semcheck_try_record_conversion_expression(SymTab_t *symtab,
             target_type->info.primitive_type_tag == POINTER_TYPE);
     int target_is_record = semcheck_type_is_recordish(target_type);
     int source_is_record = semcheck_type_is_recordish(*source_type);
-    if (!target_is_pointer && !target_is_record && !source_is_record)
+    /* Require at least one side to be a record/recordish type.  Pointer-to-
+     * pointer assignments (e.g. `^taddnode := @check.right` where right is
+     * `tnode`) must never enter the operator-overload search — pointee
+     * incompatibility is a normal assignment error, not a cue to invent an
+     * implicit conversion through unrelated operators such as
+     * `olevariant.op_assign(terror)` (FPC compiler/nset.pas makeifblock). */
+    if (!target_is_record && !source_is_record)
         return 0;
+    (void)target_is_pointer;
 
     struct Expression *source_expr = *expr_slot;
     const char *source_type_id = semcheck_record_type_id_from_expr(symtab, source_expr, *source_type);

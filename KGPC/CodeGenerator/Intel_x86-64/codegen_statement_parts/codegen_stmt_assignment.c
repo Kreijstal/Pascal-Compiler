@@ -1,6 +1,51 @@
 #include "../codegen_stmt_internal.h"
 #include "../../../Parser/pascal_frontend.h"
 
+/* Tracks a destination address register across nested expression evaluation
+ * that may spill it. When the LRU/graph-coloring spiller picks our reg, the
+ * callback below records the spill slot so we can reload before use. */
+typedef struct DestSpillTracker {
+    StackNode_t *spill_slot;  /* non-NULL if our reg was spilled */
+} DestSpillTracker;
+
+static void dest_spill_handler(Register_t *reg, StackNode_t *spill_slot, void *context)
+{
+    (void)reg;
+    DestSpillTracker *tracker = (DestSpillTracker *)context;
+    if (tracker == NULL || spill_slot == NULL)
+        return;
+    tracker->spill_slot = spill_slot;
+}
+
+/* If dest_reg was spilled while evaluating an intermediate expression, allocate
+ * a fresh register, reload the saved value, and swap dest_reg to point at it.
+ * The original physical register is now owned by whoever spilled us, so we
+ * must NOT clobber it directly. */
+static ListNode_t *codegen_reload_if_spilled(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t **dest_reg, DestSpillTracker *tracker)
+{
+    if (tracker == NULL || tracker->spill_slot == NULL || dest_reg == NULL || *dest_reg == NULL)
+        return inst_list;
+
+    Register_t *new_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (new_reg == NULL)
+        new_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+    if (new_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+        tracker->spill_slot->offset, new_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* Release the old (spilled) Register_t entry and swap to the new one.
+     * Clearing the spill callback is implicit since free_reg clears it. */
+    free_reg(get_reg_stack(), *dest_reg);
+    *dest_reg = new_reg;
+    tracker->spill_slot = NULL;
+    return inst_list;
+}
+
 static int codegen_assignment_type_is_class_vmt_value(const KgpcType *type)
 {
     if (type == NULL)
@@ -1130,6 +1175,7 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     {
         Register_t *dest_reg = NULL;
         Register_t *src_reg = NULL;
+        DestSpillTracker dest_tracker = { NULL };
 
         inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
         if (codegen_had_error(ctx) || dest_reg == NULL)
@@ -1138,13 +1184,27 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
             return inst_list;
         }
 
+        /* Register a spill callback so if src_expr evaluation needs another
+         * register and the spiller picks dest_reg, we can reload it before
+         * passing it to codegen_call_shortstring_copy. Without this, the
+         * physical register may carry an intermediate value (e.g. a typesym
+         * field pointer) that the copy then treats as the destination,
+         * silently corrupting the def from which it was loaded. */
+        register_set_spill_callback(dest_reg, dest_spill_handler, &dest_tracker);
+
         inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
         if (codegen_had_error(ctx) || src_reg == NULL)
         {
-            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            if (dest_reg != NULL)
+            {
+                register_clear_spill_callback(dest_reg);
+                free_reg(get_reg_stack(), dest_reg);
+            }
             if (src_reg != NULL) free_reg(get_reg_stack(), src_reg);
             return inst_list;
         }
+
+        inst_list = codegen_reload_if_spilled(inst_list, ctx, &dest_reg, &dest_tracker);
 
         int dest_size = codegen_get_shortstring_capacity(dest_expr, ctx);
         if (dest_size <= 1)
@@ -1152,6 +1212,7 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
 
         inst_list = codegen_call_shortstring_copy(inst_list, ctx, dest_reg, dest_size, src_reg);
 
+        register_clear_spill_callback(dest_reg);
         free_reg(get_reg_stack(), dest_reg);
         free_reg(get_reg_stack(), src_reg);
         return inst_list;
@@ -1714,12 +1775,51 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     free_reg(get_reg_stack(), src_reg);
                 return inst_list;
             }
-            
+
+            /* Pre-spill src_reg to its own slot and free its physical register
+             * BEFORE acquiring dest_reg.  Under heavy register pressure (e.g.
+             * deeply nested constructor chains like nmem.pas:1406's
+             * tvecnode.left := ctypeconvnode.create_internal(
+             *                    ccallnode.createintern('fpc_..._unique',
+             *                      ccallparanode.create(
+             *                        ctypeconvnode.create_internal(left,voidpointertype),
+             *                        nil)),
+             *                    left.resultdef);
+             * ), the register allocator can hand dest_reg the SAME physical
+             * register that src_reg still logically owns — get_free_reg can
+             * recycle a register the RHS-evaluation pass internally freed,
+             * even though logically src_reg owns it.  The subsequent reload
+             * of dest_reg from dest_save_slot then clobbers src_reg's value,
+             * and the final "movq %src, (%dest)" collapses into a self-store
+             * "movq %X, (%X)" — turning the destination field into a
+             * self-pointer.  At the next virtual dispatch on that field
+             * (firstpass(left) in tvecnode.pass_1 line 1410) the VMT slot
+             * reads from the destination field itself and the indirect call
+             * jumps through NULL, crashing pp_bootstrap while compiling
+             * aasmbase.pas's ApplyAsmSymbolRestrictions.
+             *
+             * Mirrors the same fix bfc48be5 applied to
+             * codegen_var_assignment's EXPR_RECORD_ACCESS branch in
+             * codegen_stmt_calls_and_control.c, but this path goes through
+             * codegen_assign_record_value's is_class_assignment branch
+             * instead, which the original commit did not cover. */
+            StackNode_t *src_save_slot = add_l_x("__class_assign_src__", CODEGEN_POINTER_SIZE_BYTES);
+            if (src_save_slot != NULL)
+            {
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n", src_save_slot->offset);
+                Register_t *u[] = {src_reg};
+                inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+                free_reg(get_reg_stack(), src_reg);
+                src_reg = NULL;
+            }
+
             /* Restore dest_reg from stack */
             dest_reg = get_free_reg(get_reg_stack(), &inst_list);
             if (dest_reg == NULL)
             {
-                free_reg(get_reg_stack(), src_reg);
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
                 return codegen_fail_register(ctx, inst_list, NULL,
                     "ERROR: Unable to allocate register for class assignment destination restore.");
             }
@@ -1729,13 +1829,30 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 Register_t *d[] = {dest_reg};
                 inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
             }
-            
+
+            /* Allocate a guaranteed-distinct register for src_reg's reload. */
+            if (src_save_slot != NULL)
+            {
+                src_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (src_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), dest_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for class assignment source reload.");
+                }
+                char tmpl[96];
+                snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+                    src_save_slot->offset);
+                Register_t *d[] = {src_reg};
+                inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+            }
+
             /* src_reg already contains the pointer value - store it directly */
             {
                 Register_t *u[] = {src_reg, dest_reg};
                 inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
             }
-            
+
             free_reg(get_reg_stack(), src_reg);
         }
         

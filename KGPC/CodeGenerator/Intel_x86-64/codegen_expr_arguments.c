@@ -269,10 +269,24 @@ static StackNode_t *codegen_find_nonlocal_lexical(CodeGenContext *ctx,
         return var;
 
     HashNode_t *sym_node = NULL;
-    if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
-        sym_node != NULL && sym_node->mangled_id != NULL)
+    if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 && sym_node != NULL)
     {
-        var = find_label_with_depth(sym_node->mangled_id, scope_depth);
+        /* Typed-consts declared in a unit are stored under the qualified key
+         * "<unit>_$_<name>" (see codegen_var_storage_key) so that same-named
+         * typed-consts in multiple units (e.g. each FPC charmap unit's
+         * `unicodemap`) don't alias.  Compute the qualified key directly. */
+        if (sym_node->is_typed_const && sym_node->source_unit_index > 0)
+        {
+            char *qualified = codegen_make_unit_qualified_key(
+                sym_node->source_unit_index, var_id);
+            if (qualified != NULL)
+            {
+                var = find_label_with_depth(qualified, scope_depth);
+                free(qualified);
+            }
+        }
+        if (var == NULL && sym_node->mangled_id != NULL)
+            var = find_label_with_depth(sym_node->mangled_id, scope_depth);
     }
 
     if (sym_node_out != NULL)
@@ -286,7 +300,35 @@ static ListNode_t *codegen_try_emit_nonlocal_global(ListNode_t *inst_list,
     if (ctx == NULL || ctx->symtab == NULL || ctx->comp_ctx == NULL)
         return NULL;
 
-    const HashNode_t *effective_node = sym_node;
+    /* Unit-aware HashNode selection for typed-consts: when the current
+     * codegen scope is inside a unit init/var-initializer (current_unit_index
+     * > 0) and the referenced identifier is a typed-const declared in that
+     * unit, prefer that unit's HashNode over any other matching candidate.
+     * This makes `@unicodemap` inside cp1252.pas's init block resolve to
+     * cp1252's typed-const HashNode regardless of which unit registered the
+     * symbol first.  This is the primary resolution path for unit-scoped
+     * typed-const references — not a fallback. */
+    const HashNode_t *effective_node = NULL;
+    if (ctx->symtab->current_unit_index > 0)
+    {
+        ListNode_t *cands = FindAllIdents(ctx->symtab, var_id);
+        for (ListNode_t *c = cands; c != NULL; c = c->next)
+        {
+            HashNode_t *cand = (HashNode_t *)c->cur;
+            if (cand == NULL)
+                continue;
+            if (cand->is_typed_const &&
+                cand->source_unit_index == ctx->symtab->current_unit_index)
+            {
+                effective_node = cand;
+                break;
+            }
+        }
+        if (cands != NULL)
+            DestroyList(cands);
+    }
+    if (effective_node == NULL)
+        effective_node = sym_node;
     if (effective_node == NULL)
         effective_node = codegen_find_owner_unit_symbol(ctx, var_id);
 
@@ -304,10 +346,40 @@ static ListNode_t *codegen_try_emit_nonlocal_global(ListNode_t *inst_list,
     if (global_symbol == NULL || global_symbol[0] == '\0')
         return NULL;
 
+    /* Typed-consts declared in a unit don't have a bare-name alias (they
+     * collide across units — each FPC charmap unit's `unicodemap`), so emit
+     * the per-unit static_label retrieved via the qualified storage key. */
+    char emit_buf[128];
+    const char *emit_label = global_symbol;
+    char *qualified = NULL;
+    if (decl != NULL &&
+        ((decl->type == TREE_VAR_DECL &&
+          decl->tree_data.var_decl_data.is_typed_const &&
+          decl->tree_data.var_decl_data.defined_in_unit) ||
+         (decl->type == TREE_ARR_DECL &&
+          decl->tree_data.arr_decl_data.is_typed_const &&
+          decl->tree_data.arr_decl_data.defined_in_unit)) &&
+        effective_node != NULL && effective_node->source_unit_index > 0)
+    {
+        qualified = codegen_make_unit_qualified_key(
+            effective_node->source_unit_index, var_id);
+        if (qualified != NULL)
+        {
+            StackNode_t *sn = find_label(qualified);
+            if (sn != NULL && sn->static_label != NULL)
+            {
+                snprintf(emit_buf, sizeof(emit_buf), "%s", sn->static_label);
+                emit_label = emit_buf;
+            }
+        }
+    }
+
     char buffer[128];
     *offset = 0;
     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-        global_symbol, current_non_local_reg64());
+        emit_label, current_non_local_reg64());
+    if (qualified != NULL)
+        free(qualified);
     return add_inst(inst_list, buffer);
 }
 
@@ -555,6 +627,7 @@ typedef struct ArgInfo
     int stack_slot;
     int stack_size;
     int stack_offset;
+    int emitted_via_prepass;
 } ArgInfo;
 
 static void arginfo_register_spill_handler(Register_t *reg, StackNode_t *spill_slot, void *context)
@@ -2093,7 +2166,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (codegen_had_error(ctx) || data_addr_reg == NULL)
                     return inst_list;
 
-                Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                Register_t *desc_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                 if (desc_addr_reg == NULL)
                 {
                     free_reg(get_reg_stack(), data_addr_reg);
@@ -2175,7 +2248,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 /* Get descriptor address register */
-                Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                Register_t *desc_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                 if (desc_addr_reg == NULL)
                 {
                     free_reg(get_reg_stack(), data_addr_reg);
@@ -3791,6 +3864,71 @@ pass_value_arg:
         }
     }
 
+    /* Pre-pass: emit kgpc_move for stack-passed Extended (10-byte) arguments
+     * BEFORE loading any register-passed arguments.  kgpc_move forwards to
+     * memmove and clobbers caller-saved registers including the SysV argument
+     * registers (rdi/rsi/rdx/rcx/r8/r9).  If a later iteration of the main
+     * loop loads a register-passed arg (e.g. %rsi = def) and then the Extended
+     * arg's kgpc_move runs, the register-passed arg's value is destroyed
+     * before the actual call.  By doing all clobbering Extended copies first
+     * (their source is already spilled to the stack frame and the destination
+     * is rsp-relative, so they don't depend on any other arg setup), the
+     * subsequent register-arg loads happen after the last clobber and reach
+     * the callee intact. */
+    if (arg_infos != NULL)
+    {
+        for (int i = arg_num - 1; i >= 0; --i)
+        {
+            int expected_type = arg_infos[i].expected_type;
+            int expected_real_size = arg_infos[i].expected_real_size;
+            int pass_on_stack = arg_infos[i].pass_via_stack;
+            int is_ptr_like = arg_infos[i].is_pointer_like;
+            if (!pass_on_stack)
+                continue;
+            if (arg_infos[i].spill == NULL)
+                continue;
+            if (expected_type != REAL_TYPE || expected_real_size != 16 || is_ptr_like)
+                continue;
+
+            Register_t *src_addr = get_free_reg(get_reg_stack(), &inst_list);
+            if (src_addr == NULL)
+                return inst_list;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                arg_infos[i].spill->offset, src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            if (codegen_target_is_windows())
+            {
+                Register_t *dst_addr = get_free_reg(get_reg_stack(), &inst_list);
+                if (dst_addr == NULL)
+                {
+                    free_reg(get_reg_stack(), src_addr);
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rsp), %s\n",
+                    arg_infos[i].stack_offset, dst_addr->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {dst_addr}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n"); }
+                { Register_t *u[] = {src_addr}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n"); }
+                inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+                free_reg(get_reg_stack(), dst_addr);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rsp), %%rdi\n",
+                    arg_infos[i].stack_offset);
+                inst_list = add_inst(inst_list, buffer);
+                { Register_t *u[] = {src_addr}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n"); }
+                inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+            }
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+            free_arg_regs();
+            free_reg(get_reg_stack(), src_addr);
+            /* Mark this arg as already emitted so the main loop skips it. */
+            arg_infos[i].emitted_via_prepass = 1;
+        }
+    }
+
     for (int i = arg_num - 1; i >= 0; --i)
     {
         int expected_type = (arg_infos != NULL) ? arg_infos[i].expected_type : UNKNOWN_TYPE;
@@ -3801,10 +3939,21 @@ pass_value_arg:
         /* When an argument is passed by reference (var/out/array), the value
          * stored in the spill slot is a pointer (address), not the underlying
          * integer value.  Sign-extending a 64-bit pointer via movslq would
-         * truncate it, so suppress the sign-extension for pointer-like args. */
-        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE
-                                 && !is_ptr_like);
+         * truncate it, so suppress the sign-extension for pointer-like args.
+         *
+         * Sign-extend (movslq) is required when a signed 32-bit value
+         * (Integer / LongInt) is passed to a wider signed-or-unsigned 64-bit
+         * parameter (Int64 / QWord).  Without this, a spilled longint of -1
+         * is zero-extended to 0x00000000FFFFFFFF (4294967295) instead of
+         * 0xFFFFFFFFFFFFFFFF, breaking FPC semantics. */
+        int actual_is_s32 = (actual_type == INT_TYPE || actual_type == LONGINT_TYPE);
+        int expected_is_wider_int = (expected_type == LONGINT_TYPE ||
+                                     expected_type == INT64_TYPE ||
+                                     expected_type == QWORD_TYPE);
+        int needs_int_to_long = (actual_is_s32 && expected_is_wider_int && !is_ptr_like);
         int pass_on_stack = (arg_infos != NULL && arg_infos[i].pass_via_stack);
+        if (arg_infos != NULL && arg_infos[i].emitted_via_prepass)
+            continue;
 
         int reg_index = arg_start_index + i;
         if (!pass_on_stack && arg_infos != NULL && arg_infos[i].assigned_index >= 0)
