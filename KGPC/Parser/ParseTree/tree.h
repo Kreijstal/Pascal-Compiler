@@ -155,6 +155,11 @@ typedef struct Tree
             int has_static_storage;
             int static_storage_emitted;
             char *static_label;
+            int static_init_emitted; /* set when a typed-const record's storage
+                                      * has been initialised statically in .data,
+                                      * so the runtime field-by-field init can be
+                                      * skipped (avoids clobbering C-side constructor
+                                      * overrides of fields like MemoryManager.*) */
             int currency_scaled;
             struct RecordType *inline_record_type;  /* For inline record declarations */
             struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */

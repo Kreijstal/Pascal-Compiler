@@ -5702,9 +5702,26 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     /* Public name: make it globally visible */
                                     fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
                                 }
-                                codegen_emit_bss_or_comm(ctx->output_file,
-                                    (const char *)id_list->cur, static_label,
-                                    alloc_size, alignment, defined_for_alias);
+                                /* Typed-const record whose initialiser is wholly static:
+                                 * emit a .data block instead of .bss so the loader fills
+                                 * the storage at program start.  Any C constructor that
+                                 * later runs (e.g. kgpc_init_memory_manager) is then free
+                                 * to override individual fields without being clobbered by
+                                 * runtime field-by-field stores from the program body. */
+                                int statically_emitted = 0;
+                                if (cname_override == NULL &&
+                                    tree->tree_data.var_decl_data.is_typed_const &&
+                                    codegen_try_emit_typed_const_record_static_alias(ctx, symtab,
+                                        tree, (const char *)id_list->cur, static_label,
+                                        alloc_size, defined_for_alias) == 0)
+                                {
+                                    statically_emitted = 1;
+                                }
+                                if (!statically_emitted) {
+                                    codegen_emit_bss_or_comm(ctx->output_file,
+                                        (const char *)id_list->cur, static_label,
+                                        alloc_size, alignment, defined_for_alias);
+                                }
                             }
                         }
                         char *storage_key = codegen_var_storage_key(ctx, symtab, tree, (const char *)id_list->cur);

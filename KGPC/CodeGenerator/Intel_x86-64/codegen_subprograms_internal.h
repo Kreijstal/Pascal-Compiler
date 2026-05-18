@@ -39,4 +39,15 @@ int add_absolute_var_alias_with_offset(const char *alias_label,
 int add_absolute_static_symbol_alias(const char *alias_label,
     const char *target_symbol, int alias_size);
 
+/* Attempt to emit a typed-const record's storage as static .data so the
+ * loader populates the record at program start.  Returns 0 if the record's
+ * full layout was emitted (the caller must then skip the .bss/.comm
+ * directive for the same storage label).  Sets
+ * decl->tree_data.var_decl_data.static_init_emitted on success.
+ * `emit_bare_alias` is non-zero when the bare Pascal name should be
+ * `.set` to the storage label for cross-unit visibility. */
+int codegen_try_emit_typed_const_record_static_alias(CodeGenContext *ctx,
+    SymTab_t *symtab, Tree_t *decl, const char *var_name,
+    const char *static_label, long long total_size, int emit_bare_alias);
+
 #endif
