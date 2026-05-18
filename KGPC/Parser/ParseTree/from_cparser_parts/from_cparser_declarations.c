@@ -997,7 +997,38 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             ++actual_count;
     }
 
-    if (expected_count >= 0 && actual_count != expected_count) {
+    /* For multi-dimensional char arrays with a flat-string initializer
+     * (e.g. msgtxt: array[0..N, 1..M] of char = ('row0row1...')), the
+     * actual_count is the total string length and must equal outer*inner
+     * (and any further dims).  Compute the expected total here so the
+     * subsequent count check below validates against the right product. */
+    int flat_string_multidim_total = -1;
+    if (is_string_initializer && is_multidim && !is_shortstring_target) {
+        int inner_count = (multidim_inner_end >= multidim_inner_start) ?
+            (multidim_inner_end - multidim_inner_start + 1) : -1;
+        int outer_count = expected_count;
+        if (outer_count > 0 && inner_count > 0) {
+            int total = outer_count * inner_count;
+            if (is_3d) {
+                int third = (dim3_end >= dim3_start) ? (dim3_end - dim3_start + 1) : -1;
+                if (third > 0)
+                    total *= third;
+                else
+                    total = -1;
+            }
+            if (is_4d && total > 0) {
+                int fourth = (dim4_end >= dim4_start) ? (dim4_end - dim4_start + 1) : -1;
+                if (fourth > 0)
+                    total *= fourth;
+                else
+                    total = -1;
+            }
+            flat_string_multidim_total = total;
+        }
+    }
+
+    if (expected_count >= 0 && actual_count != expected_count &&
+        flat_string_multidim_total < 0) {
         if (start == 0 && end == 0 && type_info->array_dimensions != NULL &&
             type_info->array_dimensions->cur != NULL) {
             const char *range_str = (const char *)type_info->array_dimensions->cur;
@@ -1022,6 +1053,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             fprintf(stderr,
                     "ERROR: Const shortstring %s initializer length %d exceeds declared capacity %d.\n",
                     *id_ptr, actual_count, visible_capacity);
+            return -1;
+        }
+    } else if (flat_string_multidim_total >= 0) {
+        if (actual_count != flat_string_multidim_total) {
+            ast_string_value_reset(&owned_string_initializer);
+            fprintf(stderr,
+                    "ERROR: Const array %s flat-string initializer length %d does not match total element count %d.\n",
+                    *id_ptr, actual_count, flat_string_multidim_total);
             return -1;
         }
     } else if (expected_count >= 0 && actual_count != expected_count) {
@@ -1168,28 +1207,53 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             list_builder_append(&stmt_builder, len_assign, LIST_STMT);
             ++index;
         }
-        for (int i = 0; i < actual_count; ++i) {
-            unsigned char byte = (str != NULL) ? str[i] : 0;
-            struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
-            struct Expression *index_expr = mk_inum(const_decl_node->line, index);
-            struct Expression *base_expr = mk_varid(const_decl_node->line, strdup(*id_ptr));
-            if (is_widechar_array_target) {
-                base_expr->is_array_expr = 1;
-                base_expr->array_element_type = CHAR_TYPE;
-                base_expr->array_element_size = 2;
-                base_expr->array_element_type_id = strdup("WideChar");
+        if (flat_string_multidim_total >= 0 && !is_3d && !is_4d) {
+            /* 2-D flat-string init: m[outer, inner] = byte (row-major) */
+            int inner_count = multidim_inner_end - multidim_inner_start + 1;
+            for (int i = 0; i < actual_count; ++i) {
+                unsigned char byte = (str != NULL) ? str[i] : 0;
+                int outer_off = i / inner_count;
+                int inner_off = i % inner_count;
+                struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
+                struct Expression *lhs = mk_const_array_element_lhs(
+                    const_decl_node->line, *id_ptr,
+                    start + outer_off,
+                    multidim_inner_start + inner_off,
+                    is_multidim);
+                if (is_widechar_array_target) {
+                    lhs->array_element_type = CHAR_TYPE;
+                    lhs->array_element_size = 2;
+                    lhs->array_element_type_id = strdup("WideChar");
+                    lhs->array_lower_bound = multidim_inner_start;
+                    lhs->array_upper_bound = multidim_inner_end;
+                }
+                struct Statement *assign = mk_varassign(const_decl_node->line, const_decl_node->col, lhs, rhs);
+                list_builder_append(&stmt_builder, assign, LIST_STMT);
             }
-            struct Expression *lhs = mk_arrayaccess(const_decl_node->line, base_expr, index_expr);
-            if (is_widechar_array_target) {
-                lhs->array_element_type = CHAR_TYPE;
-                lhs->array_element_size = 2;
-                lhs->array_element_type_id = strdup("WideChar");
-                lhs->array_lower_bound = start;
-                lhs->array_upper_bound = end;
+        } else {
+            for (int i = 0; i < actual_count; ++i) {
+                unsigned char byte = (str != NULL) ? str[i] : 0;
+                struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
+                struct Expression *index_expr = mk_inum(const_decl_node->line, index);
+                struct Expression *base_expr = mk_varid(const_decl_node->line, strdup(*id_ptr));
+                if (is_widechar_array_target) {
+                    base_expr->is_array_expr = 1;
+                    base_expr->array_element_type = CHAR_TYPE;
+                    base_expr->array_element_size = 2;
+                    base_expr->array_element_type_id = strdup("WideChar");
+                }
+                struct Expression *lhs = mk_arrayaccess(const_decl_node->line, base_expr, index_expr);
+                if (is_widechar_array_target) {
+                    lhs->array_element_type = CHAR_TYPE;
+                    lhs->array_element_size = 2;
+                    lhs->array_element_type_id = strdup("WideChar");
+                    lhs->array_lower_bound = start;
+                    lhs->array_upper_bound = end;
+                }
+                struct Statement *assign = mk_varassign(const_decl_node->line, const_decl_node->col, lhs, rhs);
+                list_builder_append(&stmt_builder, assign, LIST_STMT);
+                ++index;
             }
-            struct Statement *assign = mk_varassign(const_decl_node->line, const_decl_node->col, lhs, rhs);
-            list_builder_append(&stmt_builder, assign, LIST_STMT);
-            ++index;
         }
     } else {
         ast_t *element = single_record_element ? tuple_node : tuple_node->child;
