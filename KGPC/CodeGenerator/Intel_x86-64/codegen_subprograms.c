@@ -700,19 +700,23 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
 
         if (freeinstance_slot >= 0) {
-            /* %rdi already holds Self.  The body emitted above implements
-             * `if Self <> nil then Destroy`, and on the nil branch falls
-             * through to here.  Guard the FreeInstance dispatch with a
-             * Self <> nil check so a nil receiver simply returns. */
+            /* arg_reg already holds Self (loaded above using the ABI-correct
+             * first GPR arg register — %rdi on SysV, %rcx on Win64).  The
+             * body emitted above implements `if Self <> nil then Destroy`,
+             * and on the nil branch falls through to here.  Guard the
+             * FreeInstance dispatch with a Self <> nil check so a nil
+             * receiver simply returns. */
             char skip_label[64];
             gen_label(skip_label, sizeof(skip_label), ctx);
-            inst_list = add_inst(inst_list, "\ttestq\t%rdi, %rdi\n");
+            snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", arg_reg, arg_reg);
+            inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
             inst_list = add_inst(inst_list, buffer);
 
             /* Load VMT from (Self), then the method pointer from
              * <slot*8>(VMT), and dispatch. */
-            inst_list = add_inst(inst_list, "\tmovq\t(%rdi), %r11\n");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %%r11\n", arg_reg);
+            inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer),
                 "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * 8);
             inst_list = add_inst(inst_list, buffer);
