@@ -1877,10 +1877,16 @@ void *SysTryResizeMem(void *p, intptr_t size)
 /* MemoryManager initialization                                        */
 /*                                                                     */
 /* FPC's heap functions (GetMem, FreeMem, etc.) call through function  */
-/* pointers in the MemoryManager typed constant.  KGPC doesn't yet     */
-/* support typed const initialization with @function values, so        */
-/* MemoryManager is emitted as all-zeros (BSS).  We initialize it at   */
-/* program startup with simple malloc/free wrappers.                   */
+/* pointers in the MemoryManager typed constant.  When KGPC compiles   */
+/* the KGPC-bundled system.p the MemoryManager record is uninitialized */
+/* (BSS) and we must populate it at startup with libc-backed wrappers. */
+/* When KGPC compiles against FPC's RTL, system.pp's typed-const       */
+/* initialiser already binds every slot to FPC's real Sys* routines    */
+/* (SysGetMem, SysGetFPCHeapStatus, ...), and the runtime startup hook */
+/* must NOT clobber those pointers — overwriting GetFPCHeapStatus etc. */
+/* with NULL breaks heap.inc's `Result := MemoryManager.GetFPCHeapStatus()`. */
+/* The init routine therefore fills only NULL slots, preserving any    */
+/* compile-time initialiser supplied by the host system unit.          */
 /*                                                                     */
 /* TMemoryManager layout (x86-64):                                     */
 /*   offset  0: NeedLock (boolean, padded to 8 bytes)                  */
@@ -2023,11 +2029,19 @@ static void kgpc_init_memory_manager(void)
         kgpc_mm_noop,         /* 56: InitThread */
         kgpc_mm_noop,         /* 64: DoneThread */
         kgpc_mm_noop,         /* 72: RelocateHeap */
-        NULL,                 /* 80: GetHeapStatus (unused) */
-        NULL,                 /* 88: GetFPCHeapStatus (unused) */
+        NULL,                 /* 80: GetHeapStatus (no libc fallback) */
+        NULL,                 /* 88: GetFPCHeapStatus (no libc fallback) */
     };
+    /* Only fill NULL slots — if the host system unit's typed-const
+     * initialiser bound a slot (e.g. FPC RTL's SysGetFPCHeapStatus),
+     * keep that pointer instead of overwriting it with the libc stub. */
     for (int i = 0; i < 11; i++)
-        memcpy(mm + 8 + i * 8, &ptrs[i], sizeof(void *));
+    {
+        void *existing = NULL;
+        memcpy(&existing, mm + 8 + i * 8, sizeof(existing));
+        if (existing == NULL)
+            memcpy(mm + 8 + i * 8, &ptrs[i], sizeof(void *));
+    }
 }
 
 char *kgpc_string_concat(const char *lhs, const char *rhs)
