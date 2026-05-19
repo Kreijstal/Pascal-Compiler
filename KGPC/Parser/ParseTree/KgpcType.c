@@ -3738,7 +3738,32 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
         KgpcType *curr = type;
         while (curr != NULL && curr->kind == TYPE_KIND_ARRAY && info->dim_count < 10)
         {
-            KgpcType *elem_type = curr->info.array_info.element_type;
+            /* Resolve deferred element types: dynamic-array params declared
+             * `array of Treference` may carry only element_type_id, with
+             * element_type set lazily.  Without resolution, kgpc_type_sizeof
+             * returns -1 and the stride collapses to 1, miscompiling the
+             * index expression.  Try the resolver first (handles same-scope
+             * deferred lookup), then fall back to the unit-aware FindSymbol
+             * tree walk when the element type lives in a different unit. */
+            KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(curr, symtab);
+            if (elem_type == NULL)
+                elem_type = curr->info.array_info.element_type;
+            if (elem_type == NULL && curr->info.array_info.element_type_id != NULL &&
+                symtab != NULL)
+            {
+                /* kgpc_type_get_array_element_type_resolved walks only the current
+                 * scope chain via kgpc_find_type_node, which misses cross-unit
+                 * type aliases.  Fall back to the unit-aware FindSymbol tree walk
+                 * so dynamic-array parameters like `array of Treference` —
+                 * where Treference is declared in another unit — get a non-null
+                 * element type. */
+                HashNode_t *node = NULL;
+                if (FindSymbol(&node, symtab, curr->info.array_info.element_type_id) != 0 &&
+                    node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL)
+                {
+                    elem_type = node->type;
+                }
+            }
             long long elem_size = kgpc_type_sizeof(elem_type);
             if (elem_size <= 0)
                 elem_size = 1;
