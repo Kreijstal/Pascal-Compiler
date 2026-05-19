@@ -3710,21 +3710,36 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                         expr->line_num);
                     if (ws == 0 && with_expr != NULL)
                     {
-                        /* Successfully resolved via WITH — evaluate the
-                         * expression type to get SizeOf */
-                        KgpcType *with_type = NULL;
-                        int with_err = semcheck_expr_with_type(&with_type, symtab,
-                            with_expr, max_scope_lev, NO_MUTATE);
-                        if (with_err == 0 && with_type != NULL)
+                        /* semcheck_with_try_resolve returns a clone of the WITH
+                         * base expression (the record), not the field access.
+                         * Wrap it in a RECORD_ACCESS for arg_id so the type
+                         * resolves to the field's type, not the record's. */
+                        char *field_name = strdup(arg_id);
+                        struct Expression *field_access = NULL;
+                        if (field_name != NULL)
+                            field_access = mk_recordaccess(expr->line_num,
+                                with_expr, field_name);
+                        if (field_access != NULL)
                         {
-                            long long with_size = kgpc_type_sizeof(with_type);
-                            if (with_size >= 0)
+                            KgpcType *with_type = NULL;
+                            int with_err = semcheck_expr_with_type(&with_type, symtab,
+                                field_access, max_scope_lev, NO_MUTATE);
+                            if (with_err == 0 && with_type != NULL)
                             {
-                                computed_size = with_size;
-                                size_computed = 1;
+                                long long with_size = kgpc_type_sizeof(with_type);
+                                if (with_size >= 0)
+                                {
+                                    computed_size = with_size;
+                                    size_computed = 1;
+                                }
                             }
+                            destroy_expr(field_access);
                         }
-                        destroy_expr(with_expr);
+                        else
+                        {
+                            destroy_expr(with_expr);
+                            free(field_name);
+                        }
                     }
                     else if (with_expr != NULL)
                     {
