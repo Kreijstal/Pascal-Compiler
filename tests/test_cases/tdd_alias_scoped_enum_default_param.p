@@ -2,8 +2,6 @@ program tdd_alias_scoped_enum_default_param;
 
 {$mode objfpc}
 
-uses objpas;
-
 type
   TLocalEndian = ObjPas.TEndian;
 
