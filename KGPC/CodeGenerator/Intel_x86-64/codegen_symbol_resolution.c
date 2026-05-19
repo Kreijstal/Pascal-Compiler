@@ -33,6 +33,9 @@ extern int codegen_float_native_distance(Tree_t *sub);
 /* External declaration — defined in SemCheck_Expr_Internal.c */
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 
+static char *codegen_build_unit_qualified_mangled(const char *base_mangled,
+    int source_unit_index);
+
 int codegen_runtime_owns_exported_symbol(const char *symbol)
 {
     if (symbol == NULL)
@@ -395,6 +398,40 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.function_call_data.id != NULL)
     {
+        if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+            expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type
+                ->info.proc_info.definition;
+            int source_unit_index = def->tree_data.subprogram_data.source_unit_index;
+            if (source_unit_index > 0)
+            {
+                char *qualified_target = codegen_build_unit_qualified_mangled(
+                    call_target, source_unit_index);
+                if (qualified_target != NULL)
+                {
+                    HashNode_t *qualified_node = NULL;
+                    if (FindSymbol(&qualified_node, ctx->symtab, qualified_target) != 0 ||
+                        codegen_has_available_subprogram_label(qualified_target))
+                    {
+                        if (owned_target_out != NULL)
+                        {
+                            if (*owned_target_out != NULL)
+                                free(*owned_target_out);
+                            *owned_target_out = qualified_target;
+                        }
+                        else
+                        {
+                            return qualified_target;
+                        }
+                        return owned_target_out != NULL ? *owned_target_out : call_target;
+                    }
+                    free(qualified_target);
+                }
+            }
+        }
+
         ListNode_t *candidates = FindAllIdents(ctx->symtab,
             expr->expr_data.function_call_data.id);
         for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)

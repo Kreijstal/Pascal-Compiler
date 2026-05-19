@@ -857,6 +857,50 @@ int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContex
 {
     if (expr == NULL)
         return 0;
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        StackNode_t *slot = find_label(expr->expr_data.id);
+        if (slot == NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+                node != NULL && node->mangled_id != NULL)
+            {
+                slot = find_label(node->mangled_id);
+            }
+        }
+        int slot_size = 0;
+        if (slot != NULL && !slot->is_reference)
+        {
+            slot_size = slot->element_size > 0 ? slot->element_size : slot->size;
+            if (slot_size > (int)CODEGEN_POINTER_SIZE_BYTES && slot_size <= 256 &&
+                (expr_get_type_tag(expr) == STRING_TYPE ||
+                 expr_get_type_tag(expr) == SHORTSTRING_TYPE))
+            {
+                return 1;
+            }
+        }
+    }
+
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr->type != EXPR_FUNCTION_CALL &&
+        expr_type != NULL &&
+        kgpc_type_equals_tag(expr_type, STRING_TYPE) &&
+        !kgpc_type_is_shortstring(expr_type))
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+        if (alias != NULL && !alias->is_shortstring &&
+            alias->target_type_id != NULL &&
+            (pascal_identifier_equals(alias->target_type_id, "AnsiString") ||
+             pascal_identifier_equals(alias->target_type_id, "RawByteString") ||
+             pascal_identifier_equals(alias->target_type_id, "UnicodeString") ||
+             pascal_identifier_equals(alias->target_type_id, "WideString")))
+        {
+            return 0;
+        }
+    }
+
     if (codegen_expr_is_shortstring_value_ctx(expr, ctx))
         return 1;
     if (codegen_expr_is_shortstring_value_local(expr))

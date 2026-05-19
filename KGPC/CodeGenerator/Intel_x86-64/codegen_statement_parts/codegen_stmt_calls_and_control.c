@@ -992,6 +992,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
          * extended value.  Convert it to a double via kgpc_load_extended_to_bits
          * so the store below writes the correct IEEE-754 double bits. */
         int var_type = expr_get_type_tag(var_expr);
+        if (lhs_kgpc_type != NULL)
+        {
+            if (kgpc_type_is_shortstring(lhs_kgpc_type))
+                var_type = SHORTSTRING_TYPE;
+            else if (kgpc_type_equals_tag(lhs_kgpc_type, STRING_TYPE))
+                var_type = STRING_TYPE;
+        }
         if (var_type == REAL_TYPE &&
             assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL &&
             expr_returns_sret(assign_expr) &&
@@ -1011,6 +1018,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
 
         int assign_type = expr_get_type_tag(assign_expr);
+        if (rhs_kgpc_type != NULL)
+        {
+            if (kgpc_type_is_shortstring(rhs_kgpc_type))
+                assign_type = SHORTSTRING_TYPE;
+            else if (kgpc_type_equals_tag(rhs_kgpc_type, STRING_TYPE))
+                assign_type = STRING_TYPE;
+        }
         int skip_real_coercion = 0;
         if (var != NULL && var_type == REAL_TYPE)
         {
@@ -2549,11 +2563,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             /* If assigning a char to a string field, promote it first */
             int assign_type_2 = assign_expr != NULL ? expr_get_type_tag(assign_expr) : -1;
+            int rhs_is_shortstring = codegen_expr_is_shortstring_rhs(assign_expr, ctx);
             if (assign_type_2 == CHAR_TYPE)
             {
                 inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
             }
-            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+            if (rhs_is_shortstring)
+                inst_list = codegen_call_string_assign_func(inst_list, ctx,
+                    addr_reload, value_reg, "kgpc_string_assign_from_shortstring");
+            else
+                inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if (use_qword)
         {

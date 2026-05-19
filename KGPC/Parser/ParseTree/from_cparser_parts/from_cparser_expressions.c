@@ -566,6 +566,32 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         }
         if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS)
         {
+            ast_t *lhs = child->child;
+            ast_t *rhs = (lhs != NULL) ? lhs->next : NULL;
+            if (lhs != NULL && lhs->typ == PASCAL_T_IDENTIFIER && rhs != NULL)
+            {
+                char *lhs_name = dup_symbol(lhs);
+                if (lhs_name != NULL)
+                {
+                    ast_t *func_ident = unwrap_pascal_node(rhs);
+                    if (func_ident != NULL && func_ident->typ == PASCAL_T_IDENTIFIER)
+                    {
+                        char *func_name = dup_symbol(func_ident);
+                        ListNode_t *args = convert_expression_list(child->next);
+                        struct Expression *call_expr = mk_functioncall(expr_node->line, func_name, args);
+                        if (call_expr != NULL)
+                        {
+                            call_expr->expr_data.function_call_data.call_qualifier = lhs_name;
+                            tag_operator_call(call_expr, is_operator_token_name(func_name));
+                            return call_expr;
+                        }
+                        destroy_list(args);
+                        free(func_name);
+                    }
+                }
+                free(lhs_name);
+            }
+
             struct Expression *callee = convert_expression(child);
             ListNode_t *args = convert_expression_list(child->next);
             if (callee != NULL && callee->type == EXPR_RECORD_ACCESS &&

@@ -214,10 +214,8 @@ if (ctx->id != NULL)
     if (qualifier != NULL)
     {
         int prefix_is_unit = semcheck_is_unit_name(qualifier);
-        HashNode_t *prefix_node = NULL;
-        int prefix_found = (FindSymbol(&prefix_node, ctx->symtab, qualifier) && prefix_node != NULL);
 
-        if (!prefix_is_unit && prefix_found)
+        if (!prefix_is_unit)
         {
             /* Treat qualified identifier as a member/procedural field call. */
             struct Expression *receiver_expr = mk_varid(ctx->expr->line_num, strdup(qualifier));
