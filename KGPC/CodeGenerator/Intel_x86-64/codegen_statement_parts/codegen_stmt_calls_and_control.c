@@ -1049,14 +1049,31 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                  * also guards against invalid (<= 1) values internally. */
                 int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
 
-                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+                int short_rhs_is_shortstring = codegen_expr_is_shortstring_rhs(assign_expr, ctx);
+                int short_assign_type = expr_get_type_tag(assign_expr);
+                /* A CHAR RHS (direct or via typecast) leaves value_reg holding
+                 * the character's ordinal, not a string pointer.  Promote it
+                 * to a one-character heap AnsiString so the subsequent
+                 * kgpc_string_to_shortstring call can dereference it. */
+                int short_rhs_is_char = !short_rhs_is_shortstring &&
+                    (short_assign_type == CHAR_TYPE ||
+                     (assign_expr != NULL && assign_expr->type == EXPR_TYPECAST &&
+                      assign_expr->expr_data.typecast_data.expr != NULL &&
+                      expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) == CHAR_TYPE));
+                if (short_rhs_is_char)
+                {
+                    inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
+                }
+
+                if (short_rhs_is_shortstring)
                 {
                     /* Both sides are ShortString — copy preserving the length byte */
                     inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
                 }
                 else
                 {
-                    /* RHS is an AnsiString or string literal — convert to ShortString
+                    /* RHS is an AnsiString, string literal, or promoted char
+                     * — convert to ShortString
                      * (kgpc_string_to_shortstring writes length byte + payload) */
                     inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
                 }
