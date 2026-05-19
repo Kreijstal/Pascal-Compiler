@@ -665,22 +665,50 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
      * coercion). RecordField metadata is the canonical truth for the
      * field's declared shape regardless of any expression-level rewrites. */
     int field_is_array_kind = 0;
+    int field_is_dynamic_array = 0;
     if (expr->resolved_kgpc_type != NULL &&
         kgpc_type_is_array(expr->resolved_kgpc_type))
     {
         field_is_array_kind = 1;
+        if (kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))
+            field_is_dynamic_array = 1;
     }
     else
     {
         struct RecordField *fmeta = codegen_expr_lookup_record_field(expr, ctx);
         if (fmeta != NULL && fmeta->is_array)
+        {
             field_is_array_kind = 1;
+            /* Dynamic arrays are flagged at the parser via array_is_open
+             * (bounds end < start, e.g. [0..-1]); same marker is used for
+             * dynamic-array fields whose storage is a {data,length}
+             * descriptor instead of inline element bytes. */
+            if (fmeta->array_is_open)
+                field_is_dynamic_array = 1;
+        }
     }
     if (field_is_array_kind)
     {
         char buffer[64];
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-            addr_reg->bit_64, target_reg->bit_64);
+        if (field_is_dynamic_array)
+        {
+            /* Dynamic-array field storage is a 16-byte descriptor
+             * { data; length } embedded inline in the record. The
+             * "decay-to-pointer" value of such a field is the .data
+             * pointer (first 8 bytes of the descriptor), not the
+             * descriptor's own address. Without this dereference, casts
+             * like `pointer(rec.dyn_arr)` would yield the descriptor's
+             * address rather than the heap data pointer, producing
+             * struct-shaped garbage when the result is later read as
+             * raw bytes. */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                addr_reg->bit_64, target_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                addr_reg->bit_64, target_reg->bit_64);
+        }
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), addr_reg);
         return inst_list;
