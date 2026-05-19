@@ -40,7 +40,11 @@ jobs:
       run: |
         cd quasi-msys2
         # Install GCC, GMP, and other required packages
-        make install _gcc _gmp _meson _ninja _python 
+        make install _gcc _gmp _meson _ninja _python || {
+          echo "Default MSYS2 mirror failed; retrying against primary repo.msys2.org"
+          rm -f database.db database.db.unverified database.db.sig
+          make MIRROR_URL= install _gcc _gmp _meson _ninja _python
+        }
       timeout-minutes: 30
 
     - name: Configure build environment
