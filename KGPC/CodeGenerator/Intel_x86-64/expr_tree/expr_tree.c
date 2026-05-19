@@ -2243,6 +2243,19 @@ static expr_node_t *build_expr_tree_internal(struct Expression *expr,
         {
             preserve_leaf_typecast = 1;
         }
+        /* Narrowing typecast Extended -> Double/Single (e.g. FPC's
+         * `ts64real(value_real)` where value_real:bestreal=extended).  If we
+         * strip this typecast, the inner load reads only 8 bytes of the
+         * 10-byte extended representation and treats them as a double — that
+         * yields garbage (e.g. extended 3.0 -> double -2.0).  Preserve the
+         * typecast as a leaf so gencode_case0 can emit a proper FPU-based
+         * narrowing conversion via kgpc_load_extended_to_bits. */
+        else if (tc_target == REAL_TYPE)
+        {
+            KgpcType *inner_type = expr_get_kgpc_type(tc_inner);
+            if (inner_type != NULL && kgpc_type_is_extended(inner_type))
+                preserve_leaf_typecast = 1;
+        }
 
         if (!preserve_leaf_typecast)
         {
@@ -5132,6 +5145,45 @@ cleanup_constructor:
             }
         }
         return inst_list;
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             expr->expr_data.typecast_data.target_type == REAL_TYPE)
+    {
+        /* Narrowing typecast Extended -> Double (preserved as a leaf by
+         * build_expr_tree_internal).  Take the address of the inner
+         * extended-typed source, call kgpc_load_extended_to_bits to perform
+         * an FPU-precision narrowing conversion (fldt + fstpl), and leave
+         * the resulting double bits in target_reg. */
+        struct Expression *src_expr = expr->expr_data.typecast_data.expr;
+        KgpcType *src_type = expr_get_kgpc_type(src_expr);
+        if (src_type != NULL && kgpc_type_is_extended(src_type))
+        {
+            Register_t *src_addr = NULL;
+            inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr);
+            if (src_addr != NULL && !codegen_had_error(ctx))
+            {
+                char tmpl[128];
+                if (codegen_target_is_windows())
+                    snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, %%rcx\n");
+                else
+                    snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, %%rdi\n");
+                Register_t *u[] = {src_addr};
+                inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+                free_arg_regs();
+                {
+                    char res[64];
+                    snprintf(res, sizeof(res), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+                    inst_list = add_inst(inst_list, res);
+                }
+                free_reg(get_reg_stack(), src_addr);
+                return inst_list;
+            }
+            if (src_addr != NULL)
+                free_reg(get_reg_stack(), src_addr);
+        }
     }
     else if (expr->type == EXPR_POINTER_DEREF)
     {

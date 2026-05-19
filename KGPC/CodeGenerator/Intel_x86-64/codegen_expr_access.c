@@ -714,6 +714,36 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
     }
 
+    /* Extended (10-byte / bestreal) record/class field load: the consumer
+     * works with double-precision values in GP registers (this code path is
+     * reached for arithmetic, comparisons, and assignment targets that are
+     * not themselves extended).  A plain `movq (%addr), %reg` would silently
+     * truncate the 10-byte representation to its low 8 bytes (the mantissa),
+     * yielding nonsense like extended 1.0 -> -0.0 / 3.0 -> -2.0.  Route
+     * through the FPU truncation helper to convert the value before the
+     * caller observes only 8 bytes.  This keeps FPC compiler internals
+     * (e.g. `value_real = 0.0`, `ts64real(value_real)`) numerically faithful
+     * when KGPC builds pp_bootstrap. */
+    {
+        KgpcType *field_type = expr_get_kgpc_type(expr);
+        if (field_type != NULL && kgpc_type_is_extended(field_type))
+        {
+            char buffer[128];
+            if (codegen_target_is_windows())
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+            free_arg_regs();
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+    }
+
     long long field_size = codegen_record_field_effective_size(expr, ctx);
     /* Cross-check with resolved_kgpc_type for sub-dword types that
        codegen_record_field_effective_size may miss (e.g. Integer=SmallInt in FPC mode) */

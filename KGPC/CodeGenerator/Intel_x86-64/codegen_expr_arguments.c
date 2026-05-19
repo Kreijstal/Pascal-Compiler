@@ -858,6 +858,8 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
 
     if (decl->type == TREE_VAR_DECL)
     {
+        if (decl->tree_data.var_decl_data.type == EXTENDED_TYPE)
+            return 16;
         if (decl->tree_data.var_decl_data.type_id != NULL)
         {
             const char *type_id = decl->tree_data.var_decl_data.type_id;
@@ -876,6 +878,13 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         }
         if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
         {
+            /* Extended (10-byte long double) is passed via the SysV X87 class
+             * which the codegen lowers to a 16-byte stack slot.  Treat any
+             * extended-typed parameter (including type aliases like
+             * `bestreal = extended;`) as 16 so the caller-side classifier
+             * matches the callee's prologue (codegen_real_param_storage_size). */
+            if (kgpc_type_is_extended(decl->tree_data.var_decl_data.cached_kgpc_type))
+                return 16;
             long long size = kgpc_type_sizeof(decl->tree_data.var_decl_data.cached_kgpc_type);
             if (size > 0)
             {
@@ -891,6 +900,8 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
+            if (kgpc_type_is_extended(type_node->type))
+                return 16;
             long long size = kgpc_type_sizeof(type_node->type);
             if (size > 0)
                 return (int)size;
