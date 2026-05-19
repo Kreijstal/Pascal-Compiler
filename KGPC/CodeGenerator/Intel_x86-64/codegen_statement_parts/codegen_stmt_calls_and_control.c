@@ -746,8 +746,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
     }
 
-    /* Character sets (set of char) need special handling like records due to 32-byte size */
-    if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
+    /* Large sets (>4 bytes, e.g. set of char or set of enum with >32 members)
+     * need memory-based assignment like records.  expr_is_char_set_ctx resolves
+     * the LHS via the symbol table when its resolved_kgpc_type is not yet set
+     * on the AST node — which is the case for typed-const initializers: their
+     * lhs Expression reaches codegen with resolved_kgpc_type = NULL, so
+     * expr_get_type_tag returns UNKNOWN_TYPE and the conjunctive SET_TYPE
+     * guard falls through to the 8-byte scalar pointer-store path.  That
+     * stores the rodata-literal address into bytes [0..7] of the set and
+     * leaves bytes [8..31] untouched — e.g. the typed-const
+     *   tgeneric_param_nodes : tnodetypeset = [typen,...]
+     * in pgenutil.pas is mis-initialised, so the IN test inside
+     * parse_generic_specialization_types_internal mis-classifies typen
+     * as not-a-valid-param and emits "Type identifier expected" at the
+     * first specialize TFoo<Integer> in any user program. */
+    if (expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     /* ShortStrings returned via SRET still need shortstring-aware copy semantics.
