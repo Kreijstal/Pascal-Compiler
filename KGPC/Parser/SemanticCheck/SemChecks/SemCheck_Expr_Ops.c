@@ -3054,6 +3054,19 @@ int semcheck_varid(int *type_return,
                                 char *literal_name = (char *)literal_node->cur;
                                 if (strcasecmp(literal_name, suffix) == 0)
                                 {
+                                    /* Free EXPR_VAR_ID payload before switching
+                                     * the union to i_num; the joined id and
+                                     * id_ref otherwise leak. */
+                                    if (expr->expr_data.id != NULL)
+                                    {
+                                        free(expr->expr_data.id);
+                                        expr->expr_data.id = NULL;
+                                    }
+                                    if (expr->id_ref != NULL)
+                                    {
+                                        qualified_ident_free(expr->id_ref);
+                                        expr->id_ref = NULL;
+                                    }
                                     expr->type = EXPR_INUM;
                                     expr->expr_data.i_num = ordinal;
                                     semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -3100,6 +3113,18 @@ int semcheck_varid(int *type_return,
                     {
                         if (field_node->hash_type == HASHTYPE_CONST)
                         {
+                            /* Free EXPR_VAR_ID payload before switching the
+                             * union to i_num — same union-clobber pattern. */
+                            if (expr->expr_data.id != NULL)
+                            {
+                                free(expr->expr_data.id);
+                                expr->expr_data.id = NULL;
+                            }
+                            if (expr->id_ref != NULL)
+                            {
+                                qualified_ident_free(expr->id_ref);
+                                expr->id_ref = NULL;
+                            }
                             expr->type = EXPR_INUM;
                             expr->expr_data.i_num = field_node->const_int_value;
                             semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
