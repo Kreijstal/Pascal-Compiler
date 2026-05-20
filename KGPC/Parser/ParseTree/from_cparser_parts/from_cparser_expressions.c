@@ -521,11 +521,10 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                             }
                         }
                     }
-                    /* args_copy ownership: instantiate_generic_record takes ownership
-                     * on success (it stores args in the record); on failure it may or
-                     * may not have freed them, but we can safely destroy_list a NULL. */
-                    if (record == NULL)
-                        destroy_list(args_copy);
+                    /* instantiate_generic_record strdups its args internally
+                     * and never consumes the input list; the caller owns
+                     * args_copy on both paths. */
+                    destroy_list(args_copy);
                     if (inst_name != NULL)
                         free(inst_name);
                 }

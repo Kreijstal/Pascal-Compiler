@@ -3459,6 +3459,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             char *specialized_name = NULL;
             struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
             free(base_name);
+            /* instantiate_generic_record strdups its args internally and does
+             * not consume type_args on the success path; the caller owns the
+             * list either way (it destroys on its error path at line 305). */
+            if (type_args != NULL)
+                destroy_list(type_args);
             if (record != NULL) {
                 free(specialized_name);
                 return create_record_type(record);

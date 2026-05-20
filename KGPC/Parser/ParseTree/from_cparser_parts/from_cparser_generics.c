@@ -302,7 +302,8 @@ struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t 
         if (debug_env != NULL)
             fprintf(stderr, "[KGPC] instantiate_generic_record wrong arg count for %s: got %d expected %d\n",
                     base_name, arg_count, generic->num_type_params);
-        destroy_list(type_args);
+        /* Caller owns type_args on all paths (other callers destroy it after
+         * the call). Don't free here or we double-free. */
         return NULL;
     }
 
