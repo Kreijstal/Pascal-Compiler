@@ -593,6 +593,13 @@ if (ctx->id == NULL) {
     if (ctx->overload_candidates != NULL) { destroy_list(ctx->overload_candidates); ctx->overload_candidates = NULL; }
     do { ctx->final_status = ++ctx->return_val; return FC_CLEANUP; } while (0);
 }
+/* The earlier method-placeholder branch (lines ~70-82) may have stashed a
+ * synthesized "Owner__Method" name into ctx->mangled_name; free it before
+ * the unconditional reassignment below to avoid orphaning the allocation. */
+if (ctx->mangled_name != NULL) {
+    free(ctx->mangled_name);
+    ctx->mangled_name = NULL;
+}
 ctx->mangled_name = MangleFunctionNameFromCallSite(ctx->id, ctx->args_given, ctx->symtab, ctx->max_scope_lev);
 if (ctx->mangled_name == NULL)
 {
