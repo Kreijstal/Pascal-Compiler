@@ -1266,7 +1266,7 @@ static Register_t *codegen_clone_register_if_rcx(ListNode_t **inst_list, CodeGen
     if (reg->reg_id != REG_RCX)
         return reg;
 
-    static const RegisterId_t preferred_regs[] = { REG_RAX, REG_R10, REG_R11, REG_R8, REG_R9 };
+    static const RegisterId_t preferred_regs[] = { REG_R12, REG_R13, REG_R14, REG_R15, REG_RBX };
     Register_t *replacement = NULL;
     for (size_t i = 0; i < sizeof(preferred_regs) / sizeof(preferred_regs[0]); ++i)
     {

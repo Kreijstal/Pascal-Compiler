@@ -3244,6 +3244,38 @@ sys.exit(3)
 
         self.assertEqual(result.stdout.strip(), "36")
 
+    def test_fixed_register_division_under_pressure(self):
+        """Ensures div/mod lowering survives when the general register pool is constrained."""
+        input_file, asm_file, executable_file = self._get_test_paths("fixed_register_div_pressure")
+
+        prev_limit = os.environ.get("KGPC_FORCE_REGISTER_LIMIT")
+        os.environ["KGPC_FORCE_REGISTER_LIMIT"] = "2"
+        try:
+            run_compiler(input_file, asm_file)
+        finally:
+            if prev_limit is None:
+                os.environ.pop("KGPC_FORCE_REGISTER_LIMIT", None)
+            else:
+                os.environ["KGPC_FORCE_REGISTER_LIMIT"] = prev_limit
+
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_output = read_file_content(
+            os.path.join(TEST_CASES_DIR, "fixed_register_div_pressure.expected")
+        )
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            expected_output.strip().splitlines(),
+        )
+
     def test_record_exotic_program(self):
         """Parses a program that uses packed and variant record constructs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_exotic.p")
