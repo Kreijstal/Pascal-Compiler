@@ -1562,10 +1562,16 @@ static void unbuild_combined_program_view(CompilationContext *comp_ctx)
             var_list, unit_idx, get_var_decl_unit_index);
         unit_tree->tree_data.unit_data.interface_var_decls = unit_vars;
 
-        /* Extract subprograms */
+        /* Extract subprograms. For UNIT compilation, build_combined_program_view
+         * extracted only the *public* subprograms via extract_public_unit_subprograms,
+         * leaving the non-public ones still attached to unit_tree->subprograms.
+         * Concatenate the round-tripped public subs back onto that residual list
+         * — overwriting it would orphan the private impl-only subprograms
+         * (and their nested type_decls + records). */
         ListNode_t *unit_subs = extract_unit_nodes(
             sub_list, unit_idx, get_subprogram_unit_index);
-        unit_tree->tree_data.unit_data.subprograms = unit_subs;
+        unit_tree->tree_data.unit_data.subprograms =
+            ConcatList(unit_subs, unit_tree->tree_data.unit_data.subprograms);
     }
 }
 
