@@ -1,6 +1,7 @@
 #include "../SemCheck_internal.h"
 
 char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count);
 static void semcheck_ensure_implicit_tobject_parent(struct RecordType *record_info,
                                                     const char *class_name)
 {
@@ -126,8 +127,9 @@ if (record_info->parent_class_name != NULL) {
             {
                 ListNode_t *matches = FindAllIdents(symtab, base_name);
                 HashNode_t *best = NULL;
-                if (binding->param_sig != NULL)
+                if (binding->param_sig != NULL || binding->param_types != NULL)
                 {
+                    int have_binding_types = (binding->param_types != NULL && binding->param_types_count >= 0);
                     for (ListNode_t *m = matches; m != NULL; m = m->next)
                     {
                         HashNode_t *cand = (HashNode_t *)m->cur;
@@ -135,16 +137,31 @@ if (record_info->parent_class_name != NULL) {
                             cand->type->kind != TYPE_KIND_PROCEDURE)
                             continue;
                         int skip_self = (!binding->is_static);
-                        char *sig = semcheck_param_sig_from_params(
-                            cand->type->info.proc_info.params, skip_self);
-                        if (sig != NULL && strcasecmp(sig, binding->param_sig) == 0)
+                        int matched = 0;
+                        if (have_binding_types)
+                        {
+                            int cand_count = 0;
+                            TypeRef **cand_types = semcheck_param_types_from_params(
+                                cand->type->info.proc_info.params, skip_self, &cand_count);
+                            if (type_ref_array_equal_ci(binding->param_types, binding->param_types_count,
+                                                        cand_types, cand_count))
+                                matched = 1;
+                            param_types_free(cand_types, cand_count);
+                        }
+                        if (!matched && binding->param_sig != NULL)
+                        {
+                            char *sig = semcheck_param_sig_from_params(
+                                cand->type->info.proc_info.params, skip_self);
+                            if (sig != NULL && strcasecmp(sig, binding->param_sig) == 0)
+                                matched = 1;
+                            if (sig != NULL)
+                                free(sig);
+                        }
+                        if (matched)
                         {
                             best = cand;
-                            free(sig);
                             break;
                         }
-                        if (sig != NULL)
-                            free(sig);
                     }
                 }
                 if (best == NULL && binding->param_count >= 0)
@@ -427,8 +444,19 @@ if (record_info->parent_class_name != NULL) {
             if (cand == NULL || cand->type == NULL ||
                 cand->type->kind != TYPE_KIND_PROCEDURE)
                 continue;
-            /* Match by param signature if available */
-            if (mi->param_sig != NULL) {
+            /* Match by param signature if available.  Prefer structural TypeRef
+             * comparison when both sides have populated param_types; fall back to
+             * the rendered-mangled-string compare otherwise. */
+            if (mi->param_types != NULL && mi->param_types_count >= 0) {
+                int cand_count = 0;
+                TypeRef **cand_types = semcheck_param_types_from_params(
+                    cand->type->info.proc_info.params, 1, &cand_count);
+                int sig_match = type_ref_array_equal_ci(
+                    mi->param_types, mi->param_types_count, cand_types, cand_count);
+                param_types_free(cand_types, cand_count);
+                if (!sig_match)
+                    continue;
+            } else if (mi->param_sig != NULL) {
                 char *cand_sig = semcheck_param_sig_from_params(
                     cand->type->info.proc_info.params, 1);
                 int sig_match = (cand_sig != NULL && strcasecmp(cand_sig, mi->param_sig) == 0);
@@ -791,6 +819,77 @@ char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param)
     }
 
     return sig;
+}
+
+/* Structural counterpart of semcheck_param_sig_from_params.  Walks a Tree_t
+ * parameter list and returns an owned TypeRef** array (one entry per declared
+ * parameter name, cloning the param's type_ref); writes the count to
+ * *out_count.  Returns NULL with *out_count=0 when the list is empty. */
+TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count)
+{
+    if (out_count != NULL)
+        *out_count = 0;
+    if (params == NULL)
+        return NULL;
+
+    int capacity = 0;
+    int count = 0;
+    TypeRef **arr = NULL;
+    ListNode_t *cur = params;
+    int skipped = 0;
+    while (cur != NULL)
+    {
+        Tree_t *param = (Tree_t *)cur->cur;
+        cur = cur->next;
+        if (skip_first_param && !skipped)
+        {
+            skipped = 1;
+            continue;
+        }
+        if (param == NULL)
+            continue;
+
+        TypeRef *base = NULL;
+        int name_count = 1;
+        if (param->type == TREE_VAR_DECL)
+        {
+            base = param->tree_data.var_decl_data.type_ref;
+            if (param->tree_data.var_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.var_decl_data.ids);
+        }
+        else if (param->type == TREE_ARR_DECL)
+        {
+            base = param->tree_data.arr_decl_data.type_ref;
+            if (param->tree_data.arr_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.arr_decl_data.ids);
+        }
+        if (name_count <= 0)
+            name_count = 1;
+
+        for (int i = 0; i < name_count; ++i)
+        {
+            if (count == capacity)
+            {
+                int new_cap = (capacity == 0) ? 4 : capacity * 2;
+                TypeRef **grown = (TypeRef **)realloc(arr, (size_t)new_cap * sizeof(TypeRef *));
+                if (grown == NULL)
+                {
+                    for (int j = 0; j < count; ++j)
+                        type_ref_free(arr[j]);
+                    free(arr);
+                    if (out_count != NULL)
+                        *out_count = 0;
+                    return NULL;
+                }
+                arr = grown;
+                capacity = new_cap;
+            }
+            arr[count++] = (base != NULL) ? type_ref_clone(base) : NULL;
+        }
+    }
+    if (out_count != NULL)
+        *out_count = count;
+    return arr;
 }
 
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
