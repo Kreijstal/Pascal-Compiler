@@ -429,6 +429,11 @@ int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangle
 void codegen_destroy_static_link_procs(CodeGenContext *ctx);
 
 void codegen_reset_static_link_cache(CodeGenContext *ctx);
+/* Clears the cached static-link register/spill-slot fields WITHOUT
+ * dereferencing them — safe to call after reset_reg_stack() has freed
+ * the underlying Register_t storage or after the owning scope has been
+ * popped (making the spill slot invalid). */
+void codegen_invalidate_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);

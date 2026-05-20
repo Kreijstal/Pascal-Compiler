@@ -1878,14 +1878,36 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
 
         /* Fallback: resolve via symbol table mangled_id (e.g. class constants
-           registered as "TSingleHelper__Epsilon" but referenced as "Epsilon") */
+           registered as "TSingleHelper__Epsilon" but referenced as "Epsilon").
+           When two units declare a same-named typed-const (e.g. each FPC
+           charmap unit's `unicodemap`, or aggas.pas / agx86nsm.pas both
+           declaring `ait_const2str`), FindSymbol returns the last-write-wins
+           entry — which is the WRONG unit when the read site lives in the
+           other unit's subprogram body.  Try the current unit's qualified
+           key first; only fall back to the global mangled_id when no node
+           is registered under the per-unit key. */
         if (var_node == NULL && ctx->symtab != NULL)
         {
             HashNode_t *sym_node = NULL;
             if (FindSymbol(&sym_node, ctx->symtab, expr->expr_data.id) != 0 &&
-                sym_node != NULL && sym_node->mangled_id != NULL)
+                sym_node != NULL)
             {
-                var_node = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+                if (sym_node->is_typed_const &&
+                    ctx->symtab->current_unit_index > 0 &&
+                    ctx->symtab->current_unit_index != sym_node->source_unit_index)
+                {
+                    char *qualified = codegen_make_unit_qualified_key(
+                        ctx->symtab->current_unit_index, expr->expr_data.id);
+                    if (qualified != NULL)
+                    {
+                        StackNode_t *unit_node = find_label_with_depth(qualified, &scope_depth);
+                        if (unit_node != NULL)
+                            var_node = unit_node;
+                        free(qualified);
+                    }
+                }
+                if (var_node == NULL && sym_node->mangled_id != NULL)
+                    var_node = find_label_with_depth(sym_node->mangled_id, &scope_depth);
             }
         }
 

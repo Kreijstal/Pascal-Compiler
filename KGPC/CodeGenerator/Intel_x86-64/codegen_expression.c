@@ -378,6 +378,8 @@ static int codegen_return_type_is_shortstring_value(KgpcType *ret_type,
                  pascal_identifier_equals(ret_id, "UnicodeString") ||
                  pascal_identifier_equals(ret_id, "WideString")))
                 return 0;
+            if (ret_id != NULL && !pascal_identifier_equals(ret_id, "String"))
+                return 0;
             if (pascal_frontend_default_shortstring())
                 return 1;
         }

@@ -652,7 +652,23 @@ static void arginfo_assign_register(ArgInfo *info, Register_t *reg, struct Expre
         register_set_spill_callback(reg, arginfo_register_spill_handler, info);
 }
 
-static int formal_decl_expects_string(Tree_t *decl)
+static int kgpc_type_is_non_short_string(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    if (kgpc_type_equals_tag(type, STRING_TYPE) &&
+        !kgpc_type_is_shortstring(type))
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+        if (alias == NULL || !alias->is_shortstring)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int formal_decl_expects_string(Tree_t *decl, SymTab_t *symtab)
 {
     if (decl == NULL)
         return 0;
@@ -663,15 +679,28 @@ static int formal_decl_expects_string(Tree_t *decl)
     if (decl->tree_data.var_decl_data.type == STRING_TYPE)
         return 1;
 
+    KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
+    if (kgpc_type_is_non_short_string(cached))
+        return 1;
+
     if (decl->tree_data.var_decl_data.type_id != NULL)
     {
         const char *type_id = decl->tree_data.var_decl_data.type_id;
         if (pascal_identifier_equals(type_id, "string") ||
             pascal_identifier_equals(type_id, "ansistring") ||
             pascal_identifier_equals(type_id, "rawbytestring") ||
-            pascal_identifier_equals(type_id, "utf8string") ||
-            pascal_identifier_equals(type_id, "shortstring"))
+             pascal_identifier_equals(type_id, "utf8string") ||
+             pascal_identifier_equals(type_id, "shortstring"))
             return 1;
+
+        if (symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, symtab, type_id) != 0 &&
+                type_node != NULL &&
+                kgpc_type_is_non_short_string(type_node->type))
+                return 1;
+        }
     }
 
     return 0;
@@ -858,6 +887,8 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
 
     if (decl->type == TREE_VAR_DECL)
     {
+        if (decl->tree_data.var_decl_data.type == EXTENDED_TYPE)
+            return 16;
         if (decl->tree_data.var_decl_data.type_id != NULL)
         {
             const char *type_id = decl->tree_data.var_decl_data.type_id;
@@ -876,6 +907,13 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         }
         if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
         {
+            /* Extended (10-byte long double) is passed via the SysV X87 class
+             * which the codegen lowers to a 16-byte stack slot.  Treat any
+             * extended-typed parameter (including type aliases like
+             * `bestreal = extended;`) as 16 so the caller-side classifier
+             * matches the callee's prologue (codegen_real_param_storage_size). */
+            if (kgpc_type_is_extended(decl->tree_data.var_decl_data.cached_kgpc_type))
+                return 16;
             long long size = kgpc_type_sizeof(decl->tree_data.var_decl_data.cached_kgpc_type);
             if (size > 0)
             {
@@ -891,6 +929,8 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
+            if (kgpc_type_is_extended(type_node->type))
+                return 16;
             long long size = kgpc_type_sizeof(type_node->type);
             if (size > 0)
                 return (int)size;
@@ -2674,7 +2714,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * the AnsiString-family case from the formal's type_id. */
                 if (!formal_wants_ansistring && formal_arg_decl != NULL &&
                     formal_arg_decl->type == TREE_VAR_DECL &&
-                    formal_decl_expects_string(formal_arg_decl))
+                    formal_decl_expects_string(formal_arg_decl, ctx != NULL ? ctx->symtab : NULL))
                 {
                     int formal_is_shortstring = 0;
                     KgpcType *cached = formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type;
@@ -3549,7 +3589,7 @@ pass_value_arg:
                     char_to_string_typecast = 1;
                 }
                 int formal_expects_string =
-                    (formal_decl_expects_string(formal_arg_decl) ||
+                    (formal_decl_expects_string(formal_arg_decl, ctx != NULL ? ctx->symtab : NULL) ||
                      builtin_arg_expects_string(procedure_name, arg_num));
                 int formal_expects_wide_string =
                     formal_decl_expects_wide_string(formal_arg_decl, ctx->symtab);
@@ -3593,6 +3633,15 @@ pass_value_arg:
                     }
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_unicodestring_from_string");
                     { Register_t *d[] = {top_reg}; inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n"); }
+                }
+
+                if (formal_expects_string &&
+                    !formal_expects_wide_string &&
+                    arg_expr != NULL &&
+                    codegen_expr_is_shortstring_value_ctx(arg_expr, ctx) &&
+                    !codegen_current_param_is_ansistring(arg_expr, ctx))
+                {
+                    inst_list = codegen_promote_shortstring_reg(inst_list, ctx, top_reg);
                 }
 
                 if (formal_expects_string &&
@@ -4382,4 +4431,3 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
     #endif
     return inst_list;
 }
-

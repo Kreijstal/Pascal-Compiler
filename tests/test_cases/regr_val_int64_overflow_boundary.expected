@@ -1,0 +1,7 @@
+ok: int64 rejected 9223372036854775808
+ok: int64 max
+ok: int64 min
+ok: int64 rejected -9223372036854775809
+ok: qword 2^63
+ok: qword max
+ok: qword rejected 18446744073709551616

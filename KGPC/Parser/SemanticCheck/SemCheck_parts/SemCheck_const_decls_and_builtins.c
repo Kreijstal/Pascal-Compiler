@@ -636,17 +636,49 @@ void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls,
 
         /* Imported string aliases/concatenations (e.g. sLineBreak = LineEnding)
          * must preserve string type here even if the underlying literal was a
-         * single character. Otherwise dependent units see them as ordinals. */
+         * single character. Otherwise dependent units see them as ordinals.
+         *
+         * Exception: a *simple* alias to a Char const (e.g. cbeg = uns where
+         * uns: Char = #1) must keep CHAR_TYPE. Otherwise dependent code that
+         * uses `cbeg` in char-set expressions or compile-time set-range
+         * evaluation gets routed through the string-rodata path and the
+         * value-vs-address comparison breaks (e.g. FPC scanner.pas's
+         * internal_macro_escape_begin..end check). The "alias" criterion is
+         * stricter than expression_is_string: only a bare EXPR_VAR_ID whose
+         * referenced const is itself a primitive CHAR with a length-1
+         * const_string_value preserves CHAR_TYPE. Concatenations (EXPR_ADDOP)
+         * and any other expression remain STRING_TYPE. */
+        int alias_is_char_const = 0;
+        if (value_expr->type == EXPR_VAR_ID && value_expr->expr_data.id != NULL)
+        {
+            HashNode_t *src = NULL;
+            if (FindSymbol(&src, symtab, value_expr->expr_data.id) != 0 &&
+                src != NULL &&
+                (src->hash_type == HASHTYPE_CONST || src->is_constant) &&
+                src->type != NULL &&
+                src->type->kind == TYPE_KIND_PRIMITIVE &&
+                src->type->info.primitive_type_tag == CHAR_TYPE &&
+                src->const_string_value != NULL &&
+                src->const_string_value[0] != '\0' &&
+                src->const_string_value[1] == '\0')
+            {
+                alias_is_char_const = 1;
+            }
+        }
         if (expression_is_string(symtab, value_expr))
         {
             char *string_value = NULL;
             if (evaluate_string_const_expr(symtab, value_expr, &string_value) == 0 &&
                 string_value != NULL)
             {
-                KgpcType *string_type = create_primitive_type(STRING_TYPE);
-                if (string_type != NULL &&
+                int promote_to_char = alias_is_char_const &&
+                    string_value[0] != '\0' && string_value[1] == '\0';
+                KgpcType *const_type = promote_to_char
+                    ? create_primitive_type(CHAR_TYPE)
+                    : create_primitive_type(STRING_TYPE);
+                if (const_type != NULL &&
                     AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
-                        NULL, HASHTYPE_CONST, string_type) == 0)
+                        NULL, HASHTYPE_CONST, const_type) == 0)
                 {
                     HashNode_t *node = FindIdentInTable(target_scope->table,
                         tree->tree_data.const_decl_data.id);
@@ -666,7 +698,7 @@ void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls,
                         mark_hashnode_source_unit(node, target_unit_index);
                     }
                 }
-                destroy_kgpc_type(string_type);
+                destroy_kgpc_type(const_type);
             }
             free(string_value);
             semcheck_restore_scope(symtab, saved_scope_for_prepush);

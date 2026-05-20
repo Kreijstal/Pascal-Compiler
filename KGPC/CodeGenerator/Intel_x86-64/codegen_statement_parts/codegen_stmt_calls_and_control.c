@@ -746,8 +746,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
     }
 
-    /* Character sets (set of char) need special handling like records due to 32-byte size */
-    if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
+    /* Large sets (>4 bytes, e.g. set of char or set of enum with >32 members)
+     * need memory-based assignment like records.  expr_is_char_set_ctx resolves
+     * the LHS via the symbol table when its resolved_kgpc_type is not yet set
+     * on the AST node — which is the case for typed-const initializers: their
+     * lhs Expression reaches codegen with resolved_kgpc_type = NULL, so
+     * expr_get_type_tag returns UNKNOWN_TYPE and the conjunctive SET_TYPE
+     * guard falls through to the 8-byte scalar pointer-store path.  That
+     * stores the rodata-literal address into bytes [0..7] of the set and
+     * leaves bytes [8..31] untouched — e.g. the typed-const
+     *   tgeneric_param_nodes : tnodetypeset = [typen,...]
+     * in pgenutil.pas is mis-initialised, so the IN test inside
+     * parse_generic_specialization_types_internal mis-classifies typen
+     * as not-a-valid-param and emits "Type identifier expected" at the
+     * first specialize TFoo<Integer> in any user program. */
+    if (expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     /* ShortStrings returned via SRET still need shortstring-aware copy semantics.
@@ -979,6 +992,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
          * extended value.  Convert it to a double via kgpc_load_extended_to_bits
          * so the store below writes the correct IEEE-754 double bits. */
         int var_type = expr_get_type_tag(var_expr);
+        if (lhs_kgpc_type != NULL)
+        {
+            if (kgpc_type_is_shortstring(lhs_kgpc_type))
+                var_type = SHORTSTRING_TYPE;
+            else if (kgpc_type_equals_tag(lhs_kgpc_type, STRING_TYPE))
+                var_type = STRING_TYPE;
+        }
         if (var_type == REAL_TYPE &&
             assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL &&
             expr_returns_sret(assign_expr) &&
@@ -998,6 +1018,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
 
         int assign_type = expr_get_type_tag(assign_expr);
+        if (rhs_kgpc_type != NULL)
+        {
+            if (kgpc_type_is_shortstring(rhs_kgpc_type))
+                assign_type = SHORTSTRING_TYPE;
+            else if (kgpc_type_equals_tag(rhs_kgpc_type, STRING_TYPE))
+                assign_type = STRING_TYPE;
+        }
         int skip_real_coercion = 0;
         if (var != NULL && var_type == REAL_TYPE)
         {
@@ -1049,14 +1076,31 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                  * also guards against invalid (<= 1) values internally. */
                 int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
 
-                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+                int short_rhs_is_shortstring = codegen_expr_is_shortstring_rhs(assign_expr, ctx);
+                int short_assign_type = expr_get_type_tag(assign_expr);
+                /* A CHAR RHS (direct or via typecast) leaves value_reg holding
+                 * the character's ordinal, not a string pointer.  Promote it
+                 * to a one-character heap AnsiString so the subsequent
+                 * kgpc_string_to_shortstring call can dereference it. */
+                int short_rhs_is_char = !short_rhs_is_shortstring &&
+                    (short_assign_type == CHAR_TYPE ||
+                     (assign_expr != NULL && assign_expr->type == EXPR_TYPECAST &&
+                      assign_expr->expr_data.typecast_data.expr != NULL &&
+                      expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) == CHAR_TYPE));
+                if (short_rhs_is_char)
+                {
+                    inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
+                }
+
+                if (short_rhs_is_shortstring)
                 {
                     /* Both sides are ShortString — copy preserving the length byte */
                     inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
                 }
                 else
                 {
-                    /* RHS is an AnsiString or string literal — convert to ShortString
+                    /* RHS is an AnsiString, string literal, or promoted char
+                     * — convert to ShortString
                      * (kgpc_string_to_shortstring writes length byte + payload) */
                     inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
                 }
@@ -2519,11 +2563,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             /* If assigning a char to a string field, promote it first */
             int assign_type_2 = assign_expr != NULL ? expr_get_type_tag(assign_expr) : -1;
+            int rhs_is_shortstring = codegen_expr_is_shortstring_rhs(assign_expr, ctx);
             if (assign_type_2 == CHAR_TYPE)
             {
                 inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
             }
-            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+            if (rhs_is_shortstring)
+                inst_list = codegen_call_string_assign_func(inst_list, ctx,
+                    addr_reload, value_reg, "kgpc_string_assign_from_shortstring");
+            else
+                inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if (use_qword)
         {

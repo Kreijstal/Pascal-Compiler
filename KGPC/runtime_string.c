@@ -2942,10 +2942,30 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
     if (endptr == ptr)
         return 1;
 
-    long long value = negative ? -(long long)uvalue : (long long)uvalue;
+    /* strtoull only returns ERANGE on values exceeding ULLONG_MAX, so check
+     * that the magnitude fits the requested signed range before converting to
+     * long long.  Without this, positive inputs above LLONG_MAX silently wrap
+     * to negative values (e.g. "9223372036854775808" became LLONG_MIN with
+     * code=0), and similarly for negative overflow. */
+    unsigned long long max_magnitude;
+    if (negative)
+        max_magnitude = (unsigned long long)(-(min_value + 1)) + 1ULL;
+    else
+        max_magnitude = (unsigned long long)max_value;
 
-    if (errno == ERANGE || value < min_value || value > max_value)
+    if (errno == ERANGE || uvalue > max_magnitude)
         return kgpc_val_error_position(text, endptr);
+
+    long long value;
+    if (negative)
+    {
+        if (uvalue == max_magnitude && min_value == LLONG_MIN)
+            value = LLONG_MIN;
+        else
+            value = -(long long)uvalue;
+    }
+    else
+        value = (long long)uvalue;
 
     const char *rest = kgpc_val_skip_trailing_whitespace(endptr);
     if (rest != NULL && *rest != '\0')

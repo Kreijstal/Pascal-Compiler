@@ -2,7 +2,7 @@ program tdd_scoped_enum_qualified_import_conflict;
 
 {$mode objfpc}
 
-uses tdd_alias_scoped_enum_shadow_import_unit, objpas;
+uses tdd_alias_scoped_enum_shadow_import_unit;
 
 const
   CLocalEndian = ObjPas.TEndian.Little;
