@@ -1094,12 +1094,12 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
-    /* Check if this method was declared as static. Use signature-aware lookup
-     * for overload disambiguation. Also detect class methods (Self = VMT). */
+    /* Check if this method was declared as static.  Compare bindings
+     * structurally by parameter TypeRef array for overload disambiguation.
+     * Also detect class methods (Self = VMT). */
     int is_static_method = 0;
     int is_class_method_impl = from_cparser_is_method_class_method(effective_class, method_name);
     int method_param_count = count_params_in_method_impl(method_node);
-    char *method_param_sig = param_type_signature_from_method_impl(method_node);
     int method_param_types_count = 0;
     TypeRef **method_param_types = param_types_from_method_impl(method_node, &method_param_types_count);
     int method_declares_operator = method_decl_uses_operator_keyword;
@@ -1115,12 +1115,8 @@ Tree_t *convert_method_impl(ast_t *method_node) {
             is_class_method_impl = 1;
     }
     if (!is_static_method) {
-        if (method_param_types != NULL)
-            is_static_method = is_method_static_with_types(effective_class, method_name,
-                method_param_count, method_param_types, method_param_types_count);
-        else
-            is_static_method = is_method_static_with_signature(effective_class, method_name,
-                method_param_count, method_param_sig);
+        is_static_method = is_method_static_with_types(effective_class, method_name,
+            method_param_count, method_param_types, method_param_types_count);
     }
     /* A static class method (class function ... static) has no Self */
     if (is_class_method_impl && is_static_method)
@@ -1143,8 +1139,6 @@ Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         free(method_name);
         free(effective_class_last);
-        if (method_param_sig != NULL)
-            free(method_param_sig);
         param_types_free(method_param_types, method_param_types_count);
         return NULL;
     }
@@ -1219,7 +1213,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     /* Add Self parameter only for instance methods, not for class operators or static methods */
     if (kgpc_getenv("KGPC_ASSERT_STATIC_SELF") != NULL && is_static_method) {
         assert(!is_class_operator && "static method should not be class operator");
-        assert(method_param_sig != NULL || method_param_count >= 0);
+        assert(method_param_types != NULL || method_param_count >= 0);
     }
 
     if (!is_class_operator && !is_static_method) {
@@ -1521,8 +1515,6 @@ Tree_t *convert_method_impl(ast_t *method_node) {
         free(method_name);
         free(effective_class_last);
         free(effective_class_outer);
-        if (method_param_sig != NULL)
-            free(method_param_sig);
         param_types_free(method_param_types, method_param_types_count);
         g_current_method_name = prev_method_name_ctx;
         return NULL;
@@ -1543,8 +1535,6 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     free(method_name);
     free(effective_class_last);
     free(effective_class_outer);
-    if (method_param_sig != NULL)
-        free(method_param_sig);
     param_types_free(method_param_types, method_param_types_count);
     g_current_method_name = prev_method_name_ctx;
     return tree;
@@ -2281,8 +2271,6 @@ void from_cparser_cleanup(void)
         ListNode_t *next = class_method_bindings->next;
         ClassMethodBinding *binding = (ClassMethodBinding *)class_method_bindings->cur;
         if (binding != NULL) {
-            if (binding->param_sig != NULL)
-                free(binding->param_sig);
             param_types_free(binding->param_types, binding->param_types_count);
         }
         free(binding); /* ClassMethodBinding struct */

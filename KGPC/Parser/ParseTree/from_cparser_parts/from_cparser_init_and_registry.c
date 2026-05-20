@@ -1666,81 +1666,11 @@ static ast_t *find_param_type_spec(ast_t *param) {
     return NULL;
 }
 
-static char *append_sig(char *sig, const char *type_str) {
-    const char *part = (type_str != NULL) ? type_str : "<unknown>";
-    size_t part_len = strlen(part);
-    if (sig == NULL) {
-        char *out = (char *)malloc(part_len + 1);
-        if (out == NULL)
-            return NULL;
-        memcpy(out, part, part_len + 1);
-        return out;
-    }
-    size_t sig_len = strlen(sig);
-    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
-    if (out == NULL) {
-        free(sig);
-        return NULL;
-    }
-    out[sig_len] = ',';
-    memcpy(out + sig_len + 1, part, part_len + 1);
-    return out;
-}
-
-static char *param_type_string_from_type_node(ast_t *type_node) {
-    if (type_node == NULL)
-        return strdup("<unknown>");
-
-    char *type_id = NULL;
-    TypeInfo type_info;
-    memset(&type_info, 0, sizeof(TypeInfo));
-    convert_type_spec(type_node, &type_id, NULL, &type_info);
-    TypeRef *type_ref = type_info.type_ref;
-    type_info.type_ref = NULL;
-    if (type_ref == NULL)
-        type_ref = type_ref_from_info_or_id(&type_info, type_id);
-    char *rendered = NULL;
-    if (type_ref != NULL)
-        rendered = type_ref_render_mangled(type_ref);
-    if (rendered == NULL && type_id != NULL)
-        rendered = strdup(type_id);
-    if (rendered == NULL)
-        rendered = strdup("<unknown>");
-    if (type_ref != NULL)
-        type_ref_free(type_ref);
-    destroy_type_info_contents(&type_info);
-    if (type_id != NULL)
-        free(type_id);
-    return rendered;
-}
-
-char *param_type_signature_from_params_ast(ast_t *params_ast) {
-    if (params_ast == NULL)
-        return NULL;
-    ast_t *param = params_ast;
-    if (param->typ == PASCAL_T_PARAM_LIST)
-        param = param->child;
-
-    char *sig = NULL;
-    for (; param != NULL; param = param->next) {
-        if (param->typ != PASCAL_T_PARAM)
-            continue;
-        int name_count = count_param_names_in_param(param);
-        ast_t *type_node = find_param_type_spec(param);
-        char *type_str = param_type_string_from_type_node(type_node);
-        for (int i = 0; i < name_count; i++)
-            sig = append_sig(sig, type_str);
-        if (type_str != NULL)
-            free(type_str);
-    }
-    return sig;
-}
-
-/* Parallel TypeRef-array builder.  Returns a heap-allocated array of N TypeRef*
- * pointers (caller owns each TypeRef* and the outer array) and writes the
- * element count to *out_count.  Returns NULL with *out_count=0 when params_ast
- * is empty.  Each TypeRef is produced from convert_type_spec on the param's
- * type node, so generic args and qualified names are preserved structurally. */
+/* Returns a heap-allocated array of N TypeRef* pointers (caller owns each
+ * TypeRef* and the outer array) and writes the element count to *out_count.
+ * Returns NULL with *out_count=0 when params_ast is empty.  Each TypeRef is
+ * produced from convert_type_spec on the param's type node, so generic args
+ * and qualified names are preserved structurally. */
 static TypeRef *param_type_ref_from_type_node(ast_t *type_node) {
     if (type_node == NULL)
         return NULL;
@@ -1837,30 +1767,6 @@ int count_params_in_method_impl(ast_t *method_node) {
     return count;
 }
 
-char *param_type_signature_from_method_impl(ast_t *method_node) {
-    if (method_node == NULL)
-        return NULL;
-    char *sig = NULL;
-    for (ast_t *cur = method_node->child; cur != NULL; cur = cur->next) {
-        ast_t *node = unwrap_pascal_node(cur);
-        if (node == NULL)
-            node = cur;
-        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM) {
-            char *chunk = param_type_signature_from_params_ast(node);
-            if (chunk == NULL)
-                continue;
-            if (sig == NULL) {
-                sig = chunk;
-            } else {
-                char *combined = append_sig(sig, chunk);
-                free(chunk);
-                sig = combined;
-            }
-        }
-    }
-    return sig;
-}
-
 TypeRef **param_types_from_method_impl(ast_t *method_node, int *out_count) {
     if (out_count != NULL)
         *out_count = 0;
@@ -1900,19 +1806,15 @@ TypeRef **param_types_from_method_impl(ast_t *method_node, int *out_count) {
 void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
                                       int is_class_method,
-                                      int param_count, char *param_sig,
+                                      int param_count,
                                       TypeRef **param_types, int param_types_count) {
     if (class_name == NULL || method_name == NULL) {
-        if (param_sig != NULL)
-            free(param_sig);
         param_types_free(param_types, param_types_count);
         return;
     }
 
     ClassMethodBinding *binding = (ClassMethodBinding *)calloc(1, sizeof(ClassMethodBinding));
     if (binding == NULL) {
-        if (param_sig != NULL)
-            free(param_sig);
         param_types_free(param_types, param_types_count);
         return;
     }
@@ -1924,7 +1826,6 @@ void register_class_method_ex(const char *class_name, const char *method_name,
     binding->is_static = is_static;
     binding->is_class_method = is_class_method;
     binding->param_count = param_count;
-    binding->param_sig = param_sig;
     binding->param_types = param_types;
     binding->param_types_count = (param_types != NULL) ? param_types_count : -1;
 
@@ -1934,8 +1835,6 @@ void register_class_method_ex(const char *class_name, const char *method_name,
 
     if (node == NULL) {
         /* class_name and method_name are interned -- do not free */
-        if (binding->param_sig != NULL)
-            free(binding->param_sig);
         param_types_free(binding->param_types, binding->param_types_count);
         free(binding);
         return;
@@ -1950,16 +1849,16 @@ void register_class_method_ex(const char *class_name, const char *method_name,
 
     if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr,
-            "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d, sig=%s)\n",
+            "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d)\n",
             class_name, method_name, is_virtual, is_override, is_static, is_class_method,
-            param_count, param_sig != NULL ? param_sig : "<null>");
+            param_count);
     }
 }
 
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
     int is_virtual, int is_override, int is_static, int param_count) {
     register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
-        0, param_count, NULL, NULL, -1);
+        0, param_count, NULL, -1);
 }
 
 
@@ -2044,56 +1943,6 @@ int is_method_static_with_types(const char *class_name, const char *method_name,
     }
     if (has_match) {
         if (has_instance) return 0;
-        return has_static;
-    }
-    return is_method_static(class_name, method_name);
-}
-
-int is_method_static_with_signature(const char *class_name, const char *method_name,
-                                           int param_count, const char *param_sig) {
-    if (class_name == NULL || method_name == NULL)
-        return 0;
-    if (param_sig == NULL && param_count < 0)
-        return is_method_static(class_name, method_name);
-
-    const char *cn = string_intern(class_name);
-    const char *mn = string_intern(method_name);
-    if (cn == NULL || mn == NULL)
-        return 0;
-
-    CMBIndexEntry *entry = cmb_index_find(cn);
-    if (entry == NULL)
-        return is_method_static(class_name, method_name);
-
-    int has_static = 0;
-    int has_instance = 0;
-    int has_match = 0;
-    if (param_sig != NULL)
-        kgpc_param_types_strict_miss(
-            "is_method_static_with_signature:legacy-call",
-            "query", 0, "bindings", 1);
-    for (int i = 0; i < entry->count; i++) {
-        ClassMethodBinding *binding = entry->bindings[i];
-        if (binding->method_name == mn) {
-            int matches = 0;
-            if (param_sig != NULL && binding->param_sig != NULL) {
-                if (strcasecmp(binding->param_sig, param_sig) == 0)
-                    matches = 1;
-            } else if (param_count >= 0 && binding->param_count == param_count) {
-                matches = 1;
-            }
-            if (matches) {
-                has_match = 1;
-                if (binding->is_static)
-                    has_static = 1;
-                else
-                    has_instance = 1;
-            }
-        }
-    }
-    if (has_match) {
-        if (has_instance)
-            return 0;
         return has_static;
     }
     return is_method_static(class_name, method_name);
@@ -2254,61 +2103,6 @@ int from_cparser_is_method_virtual_with_types(const char *class_name, const char
     if (has_match)
         return has_virtual;
     return from_cparser_is_method_virtual(class_name, method_name);
-}
-
-int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
-    int param_count, const char *param_sig)
-{
-    if (class_name == NULL || method_name == NULL)
-        return 0;
-
-    if (param_sig == NULL && param_count < 0)
-        return from_cparser_is_method_virtual(class_name, method_name);
-
-    const char *mn = string_intern(method_name);
-    if (mn == NULL)
-        return 0;
-
-    int has_match = 0;
-    int has_virtual = 0;
-    if (param_sig != NULL)
-        kgpc_param_types_strict_miss(
-            "from_cparser_is_method_virtual_with_signature:legacy-call",
-            "query", 0, "bindings", 1);
-
-    /* Helper: check bindings for a given interned class name. */
-    #define CHECK_INDEX_FOR(interned_cname) \
-        do { \
-            CMBIndexEntry *_entry = cmb_index_find(interned_cname); \
-            if (_entry != NULL) { \
-                for (int _i = 0; _i < _entry->count; _i++) { \
-                    ClassMethodBinding *_b = _entry->bindings[_i]; \
-                    if (_b->method_name == mn) { \
-                        int _matches = 0; \
-                        if (param_sig != NULL && _b->param_sig != NULL) { \
-                            if (strcasecmp(_b->param_sig, param_sig) == 0) _matches = 1; \
-                        } else if (param_count >= 0 && _b->param_count == param_count) { \
-                            _matches = 1; \
-                        } \
-                        if (_matches) { \
-                            has_match = 1; \
-                            if (_b->is_virtual || _b->is_override) has_virtual = 1; \
-                        } \
-                    } \
-                } \
-            } \
-        } while (0)
-
-    /* Exact class name lookup only.  Qualified nested-type names are
-     * pre-registered by cmb_index_alias_as_qualified in
-     * append_type_decls_from_section, so no unqualified fallback is needed. */
-    const char *cn = string_intern(class_name);
-    if (cn != NULL)
-        CHECK_INDEX_FOR(cn);
-    #undef CHECK_INDEX_FOR
-    if (has_match)
-        return has_virtual;
-    return 0;
 }
 
 /* Find all class names that have a method with the given name */

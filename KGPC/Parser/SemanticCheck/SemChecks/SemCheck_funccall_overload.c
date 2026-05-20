@@ -969,10 +969,10 @@ if (num_best_matches == 1)
         !ctx->expr->expr_data.function_call_data.is_virtual_call &&
         !ctx->expr->expr_data.function_call_data.is_inherited_call &&
         !from_cparser_is_method_static(best_match->owner_class, best_match->method_name) &&
-        from_cparser_is_method_virtual_with_signature(best_match->owner_class,
+        from_cparser_is_method_virtual_with_types(best_match->owner_class,
             best_match->method_name,
             best_match_param_count,
-            NULL))
+            NULL, 0))
     {
         {
             struct RecordType *class_record = semcheck_lookup_record_type(ctx->symtab,

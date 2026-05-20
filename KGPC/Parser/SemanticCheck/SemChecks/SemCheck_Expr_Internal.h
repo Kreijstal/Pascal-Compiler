@@ -358,6 +358,13 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     struct RecordType *record_info, const char *method_name,
     struct RecordType **owner_out);
 
+/* Walk a Tree_t parameter list and return an owned TypeRef** array (one entry
+ * per declared parameter name, cloning each param's type_ref).  Writes the
+ * count to *out_count.  Returns NULL with *out_count=0 when the list is
+ * empty.  Caller frees with param_types_free(). */
+struct TypeRef **semcheck_param_types_from_params(ListNode_t *params,
+    int skip_first_param, int *out_count);
+
 /* Collect all method overloads across the full class hierarchy.
  * Walks from start_record up through parent classes, collecting
  * all overloads of the named method into a single list.

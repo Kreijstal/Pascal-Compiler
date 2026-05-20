@@ -2052,7 +2052,6 @@ void destroy_record_type(struct RecordType *record_type)
             if (method != NULL) {
                 free(method->name);
                 free(method->mangled_name);
-                free(method->param_sig);
                 param_types_free(method->param_types, method->param_types_count);
                 free(method->resolved_mangled_id);
                 free(method);

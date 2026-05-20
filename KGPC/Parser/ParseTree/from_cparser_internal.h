@@ -291,8 +291,6 @@ int from_cparser_scopedenums_enabled_at_line(int target_line);
 void frontend_error(const char *format, ...);
 char *generate_anonymous_method_name(int is_function);
 int is_external_directive(const char *directive);
-int is_method_static_with_signature(const char *class_name, const char *method_name,
-                                           int param_count, const char *param_sig);
 int is_method_static_with_types(const char *class_name, const char *method_name,
                                 int param_count,
                                 struct TypeRef *const *param_types, int param_types_count);
@@ -306,8 +304,6 @@ char *mangle_method_name(const char *class_name, const char *method_name);
 char *mangle_method_name_raw(const char *class_name, const char *method_name);
 void mark_var_decl_static_storage(Tree_t *decl);
 char *method_param_type_suffix(Tree_t *param_decl);
-char *param_type_signature_from_method_impl(ast_t *method_node);
-char *param_type_signature_from_params_ast(ast_t *params_ast);
 struct TypeRef **param_types_from_params_ast(ast_t *params_ast, int *out_count);
 struct TypeRef **param_types_from_method_impl(ast_t *method_node, int *out_count);
 void param_types_free(struct TypeRef **types, int count);
@@ -320,7 +316,7 @@ void cmb_index_alias_as_qualified(const char *unqualified_name, const char *qual
 void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
                                       int is_class_method,
-                                      int param_count, char *param_sig,
+                                      int param_count,
                                       struct TypeRef **param_types, int param_types_count);
 void register_const_int(const char *name, int value);
 void register_const_section(ast_t *const_section);

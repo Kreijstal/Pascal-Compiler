@@ -634,8 +634,8 @@ if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && ctx->id != NULL &&
                         }
                         if (class_name != NULL &&
                             !ctx->expr->expr_data.function_call_data.is_inherited_call &&
-                            from_cparser_is_method_virtual_with_signature(class_name, ctx->id,
-                                method_param_count, NULL) &&
+                            from_cparser_is_method_virtual_with_types(class_name, ctx->id,
+                                method_param_count, NULL, 0) &&
                             !from_cparser_is_method_static(class_name, ctx->id))
                         {
                             ctx->expr->expr_data.function_call_data.is_virtual_call = 1;

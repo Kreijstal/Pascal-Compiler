@@ -422,30 +422,6 @@ int type_ref_array_equal_ci(TypeRef *const *lhs, int lhs_count,
     return 1;
 }
 
-int kgpc_param_types_strict_check_enabled(void)
-{
-    static int cached = -1;
-    if (cached < 0)
-        cached = (getenv("KGPC_REQUIRE_STRUCTURAL_PARAM_TYPES") != NULL) ? 1 : 0;
-    return cached;
-}
-
-void kgpc_param_types_strict_miss(const char *site,
-                                  const char *lhs_label, int lhs_has_types,
-                                  const char *rhs_label, int rhs_has_types)
-{
-    fprintf(stderr,
-            "[param_types-miss] site=%s lhs=%s(types=%s) rhs=%s(types=%s)\n",
-            site != NULL ? site : "<unknown>",
-            lhs_label != NULL ? lhs_label : "?",
-            lhs_has_types ? "yes" : "NO",
-            rhs_label != NULL ? rhs_label : "?",
-            rhs_has_types ? "yes" : "NO");
-    fflush(stderr);
-    if (kgpc_param_types_strict_check_enabled())
-        abort();
-}
-
 char *type_ref_render_source(const TypeRef *ref)
 {
     if (ref == NULL || ref->name == NULL)

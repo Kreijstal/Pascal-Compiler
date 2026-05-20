@@ -45,16 +45,12 @@
 #include "codegen_vmt_internal.h"
 
 /* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
- * Build a parameter signature string for overload disambiguation. */
-char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+ * Build a parameter TypeRef array for overload disambiguation. */
 struct TypeRef;
 struct TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count);
 void param_types_free(struct TypeRef **types, int count);
 int type_ref_array_equal_ci(struct TypeRef *const *lhs, int lhs_count,
                             struct TypeRef *const *rhs, int rhs_count);
-void kgpc_param_types_strict_miss(const char *site,
-                                  const char *lhs_label, int lhs_has_types,
-                                  const char *rhs_label, int rhs_has_types);
 
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
@@ -647,17 +643,13 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
              * Don't use MangleFunctionName(base_name, ..) directly: the
              * template's Self type isn't fully resolved at codegen time, so
              * Self mangles to `_u` whereas the real symbol used `_p`,
-             * producing spurious mismatches.  Compare param signatures
+             * producing spurious mismatches.  Compare parameter TypeRefs
              * (which already exclude Self) instead. */
-            char *template_param_sig = NULL;
             struct TypeRef **template_param_types = NULL;
             int template_param_types_count = 0;
             KgpcType *tmpl_proc_type =
                 from_cparser_method_template_to_proctype(tmpl, record_info, symtab);
             if (tmpl_proc_type != NULL && tmpl_proc_type->kind == TYPE_KIND_PROCEDURE) {
-                template_param_sig = semcheck_param_sig_from_params(
-                    tmpl_proc_type->info.proc_info.params,
-                    tmpl->is_static ? 0 : 1);
                 template_param_types = semcheck_param_types_from_params(
                     tmpl_proc_type->info.proc_info.params,
                     tmpl->is_static ? 0 : 1,
@@ -723,21 +715,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                                                 cand_types, cand_count))
                         sig_match = 1;
                     param_types_free(cand_types, cand_count);
-                } else if (template_param_sig != NULL) {
-                    kgpc_param_types_strict_miss(
-                        "codegen_vmt:template-cand-match",
-                        "template", 0, "cand-params(sema)", 1);
-                }
-                if (!sig_match && template_param_sig != NULL) {
-                    char *cand_sig = semcheck_param_sig_from_params(
-                        cand->type->info.proc_info.params,
-                        tmpl->is_static ? 0 : 1);
-                    if (cand_sig != NULL &&
-                        strcasecmp(cand_sig, template_param_sig) == 0)
-                        sig_match = 1;
-                    else if (cand_sig == NULL && template_param_sig[0] == '\0')
-                        sig_match = 1;
-                    free(cand_sig);
                 }
 
                 if (any_any_id == NULL)
@@ -764,7 +741,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 class_label, tmpl->name);
             free(base_name);
             if (resolved_id == NULL) {
-                free(template_param_sig);
                 param_types_free(template_param_types, template_param_types_count);
                 continue;
             }
@@ -785,8 +761,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             }
 
             /* Find a MethodInfo not yet claimed by an earlier template.
-             * Prefer the one whose param_sig matches this template's
-             * param_sig (precise pairing for overloads with same arity).
+             * Prefer the one whose param_types match this template's
+             * param_types (precise pairing for overloads with same arity).
              * Otherwise take the first unclaimed name+arity match. */
             int method_idx = 0;
             int sig_match_idx = -1;
@@ -801,21 +777,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 if (first_match_idx < 0)
                     first_match_idx = method_idx;
                 int sig_eq = 0;
-                int lhs_has = (template_param_types != NULL);
-                int rhs_has = (method->param_types != NULL && method->param_types_count >= 0);
-                if (lhs_has && rhs_has) {
-                    if (type_ref_array_equal_ci(template_param_types, template_param_types_count,
-                                                method->param_types, method->param_types_count))
-                        sig_eq = 1;
-                }
-                if (!sig_eq && template_param_sig != NULL && method->param_sig != NULL) {
-                    if (lhs_has != rhs_has)
-                        kgpc_param_types_strict_miss(
-                            "codegen_vmt:template-MethodInfo-pair",
-                            "template", lhs_has, "MethodInfo", rhs_has);
-                    if (strcasecmp(template_param_sig, method->param_sig) == 0)
-                        sig_eq = 1;
-                }
+                if (template_param_types != NULL &&
+                    method->param_types != NULL && method->param_types_count >= 0 &&
+                    type_ref_array_equal_ci(template_param_types, template_param_types_count,
+                                            method->param_types, method->param_types_count))
+                    sig_eq = 1;
                 if (sig_eq) {
                     sig_match_idx = method_idx;
                     break;
@@ -840,7 +806,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 }
             }
 
-            free(template_param_sig);
             param_types_free(template_param_types, template_param_types_count);
         }
 

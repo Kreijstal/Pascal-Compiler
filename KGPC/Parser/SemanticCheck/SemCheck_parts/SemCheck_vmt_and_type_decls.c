@@ -1,6 +1,5 @@
 #include "../SemCheck_internal.h"
 
-char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
 TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count);
 static void semcheck_ensure_implicit_tobject_parent(struct RecordType *record_info,
                                                     const char *class_name)
@@ -77,7 +76,6 @@ if (record_info->parent_class_name != NULL) {
 	                            if (cloned->vmt_index > max_vmt_index)
 	                                max_vmt_index = cloned->vmt_index;
 	                            cloned->param_count = parent_method->param_count;
-                            cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
                             cloned->param_types = param_types_clone(parent_method->param_types, parent_method->param_types_count);
                             cloned->param_types_count = (cloned->param_types != NULL) ? parent_method->param_types_count : -1;
                             cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
@@ -103,7 +101,6 @@ if (record_info->parent_class_name != NULL) {
                             } else {
                                 free(cloned->name);
                                 free(cloned->mangled_name);
-                                free(cloned->param_sig);
                                 param_types_free(cloned->param_types, cloned->param_types_count);
                                 free(cloned);
                             }
@@ -127,13 +124,8 @@ if (record_info->parent_class_name != NULL) {
             {
                 ListNode_t *matches = FindAllIdents(symtab, base_name);
                 HashNode_t *best = NULL;
-                if (binding->param_sig != NULL || binding->param_types != NULL)
+                if (binding->param_types != NULL && binding->param_types_count >= 0)
                 {
-                    int have_binding_types = (binding->param_types != NULL && binding->param_types_count >= 0);
-                    if (!have_binding_types)
-                        kgpc_param_types_strict_miss(
-                            "SemCheck_vmt:FindAllIdents-lookup",
-                            "binding", 0, "cand-params(sema)", 1);
                     for (ListNode_t *m = matches; m != NULL; m = m->next)
                     {
                         HashNode_t *cand = (HashNode_t *)m->cur;
@@ -141,26 +133,13 @@ if (record_info->parent_class_name != NULL) {
                             cand->type->kind != TYPE_KIND_PROCEDURE)
                             continue;
                         int skip_self = (!binding->is_static);
-                        int matched = 0;
-                        if (have_binding_types)
-                        {
-                            int cand_count = 0;
-                            TypeRef **cand_types = semcheck_param_types_from_params(
-                                cand->type->info.proc_info.params, skip_self, &cand_count);
-                            if (type_ref_array_equal_ci(binding->param_types, binding->param_types_count,
-                                                        cand_types, cand_count))
-                                matched = 1;
-                            param_types_free(cand_types, cand_count);
-                        }
-                        if (!matched && binding->param_sig != NULL)
-                        {
-                            char *sig = semcheck_param_sig_from_params(
-                                cand->type->info.proc_info.params, skip_self);
-                            if (sig != NULL && strcasecmp(sig, binding->param_sig) == 0)
-                                matched = 1;
-                            if (sig != NULL)
-                                free(sig);
-                        }
+                        int cand_count = 0;
+                        TypeRef **cand_types = semcheck_param_types_from_params(
+                            cand->type->info.proc_info.params, skip_self, &cand_count);
+                        int matched = type_ref_array_equal_ci(
+                            binding->param_types, binding->param_types_count,
+                            cand_types, cand_count);
+                        param_types_free(cand_types, cand_count);
                         if (matched)
                         {
                             best = cand;
@@ -212,13 +191,13 @@ if (record_info->parent_class_name != NULL) {
             /* Check if this method overrides a parent method.
              *
              * We try matching in three passes of decreasing strictness:
-             *   1. strict: name + param_sig equal
+             *   1. strict: name + structural param_types equal
              *   2. name + param_count equal (handles aliased integer types
-             *      such as TRelocDataInt vs aint that mangle differently
-             *      but denote the same underlying type)
+             *      such as TRelocDataInt vs aint that have the same underlying
+             *      type but distinct TypeRef structures)
              *   3. name only with matching param_count when a parent's
-             *      param_sig is NULL (abstract methods declared without a
-             *      body never get param_sig populated, see the body-walk
+             *      param_types is NULL (abstract methods declared without a
+             *      body never get param_types populated, see the body-walk
              *      around the FindAllIdents block above).
              *
              * Passes 2 and 3 are only used when the binding is explicitly
@@ -242,16 +221,9 @@ if (record_info->parent_class_name != NULL) {
                     int rhs_has = (info->param_types != NULL && info->param_types_count >= 0);
                     if (lhs_has && rhs_has) {
                         /* Structural match: compare parameter TypeRefs element-wise
-                         * case-insensitively, instead of string-matching mangled names. */
+                         * case-insensitively. */
                         if (type_ref_array_equal_ci(binding->param_types, binding->param_types_count,
                                                     info->param_types, info->param_types_count))
-                            signature_matches = 1;
-                    } else if (binding->param_sig != NULL && info->param_sig != NULL) {
-                        if (lhs_has != rhs_has)
-                            kgpc_param_types_strict_miss(
-                                "SemCheck_vmt:strict-override-match",
-                                "binding", lhs_has, "info", rhs_has);
-                        if (strcasecmp(binding->param_sig, info->param_sig) == 0)
                             signature_matches = 1;
                     } else if (binding->param_count >= 0 && info->param_count >= 0) {
                         if (binding->param_count == info->param_count)
@@ -291,17 +263,17 @@ if (record_info->parent_class_name != NULL) {
                 }
 
                 /* Pass 3: name + (any) param_count when the parent slot has
-                 * a NULL param_sig and the binding is declared `override`.
+                 * NULL param_types and the binding is declared `override`.
                  * Abstract methods declared without a body never get their
-                 * param_sig recomputed by the FindAllIdents body walk
+                 * param_types populated by the FindAllIdents body walk
                  * earlier in this function, so they may carry NULL even
-                 * when the child has a fully resolved param_sig. */
+                 * when the child has fully resolved param_types. */
                 if (override_target == NULL && binding->is_override) {
                     for (ListNode_t *vmt_entry = vmt; vmt_entry != NULL;
                          vmt_entry = vmt_entry->next) {
                         struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
                         if (info == NULL || info->name == NULL ||
-                            info->param_sig != NULL)
+                            info->param_types != NULL)
                             continue;
                         if (strcasecmp(info->name, binding->method_name) != 0)
                             continue;
@@ -329,8 +301,6 @@ if (record_info->parent_class_name != NULL) {
                     info->is_override = 1;
                     if (info->param_count < 0 && binding->param_count >= 0)
                         info->param_count = binding->param_count;
-                    if (info->param_sig == NULL && binding->param_sig != NULL)
-                        info->param_sig = strdup(binding->param_sig);
                     if (info->param_types == NULL && binding->param_types != NULL) {
                         info->param_types = param_types_clone(binding->param_types, binding->param_types_count);
                         info->param_types_count = (info->param_types != NULL) ? binding->param_types_count : -1;
@@ -354,7 +324,6 @@ if (record_info->parent_class_name != NULL) {
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
                     new_method->param_count = binding->param_count;
-                    new_method->param_sig = binding->param_sig ? strdup(binding->param_sig) : NULL;
                     new_method->param_types = param_types_clone(binding->param_types, binding->param_types_count);
                     new_method->param_types_count = (new_method->param_types != NULL) ? binding->param_types_count : -1;
                     new_method->resolved_mangled_id = NULL;
@@ -385,7 +354,6 @@ if (record_info->parent_class_name != NULL) {
                     } else {
                         free(new_method->name);
                         free(new_method->mangled_name);
-                        free(new_method->param_sig);
                         param_types_free(new_method->param_types, new_method->param_types_count);
                         free(new_method);
                     }
@@ -453,9 +421,8 @@ if (record_info->parent_class_name != NULL) {
             if (cand == NULL || cand->type == NULL ||
                 cand->type->kind != TYPE_KIND_PROCEDURE)
                 continue;
-            /* Match by param signature if available.  Prefer structural TypeRef
-             * comparison when both sides have populated param_types; fall back to
-             * the rendered-mangled-string compare otherwise. */
+            /* Match by structural TypeRef comparison when MethodInfo has
+             * populated param_types. */
             if (mi->param_types != NULL && mi->param_types_count >= 0) {
                 int cand_count = 0;
                 TypeRef **cand_types = semcheck_param_types_from_params(
@@ -463,16 +430,6 @@ if (record_info->parent_class_name != NULL) {
                 int sig_match = type_ref_array_equal_ci(
                     mi->param_types, mi->param_types_count, cand_types, cand_count);
                 param_types_free(cand_types, cand_count);
-                if (!sig_match)
-                    continue;
-            } else if (mi->param_sig != NULL) {
-                kgpc_param_types_strict_miss(
-                    "SemCheck_vmt:resolved-id-cand-filter",
-                    "MethodInfo", 0, "cand-params(sema)", 1);
-                char *cand_sig = semcheck_param_sig_from_params(
-                    cand->type->info.proc_info.params, 1);
-                int sig_match = (cand_sig != NULL && strcasecmp(cand_sig, mi->param_sig) == 0);
-                free(cand_sig);
                 if (!sig_match)
                     continue;
             }
@@ -484,8 +441,9 @@ if (record_info->parent_class_name != NULL) {
 
             match_count++;
             /* Track whether Phase-1 mangled_name exactly matches this candidate.
-             * Phase 1 uses param_sig to find the correct declaration; if it found
-             * mi->mangled_name, we should trust that label for the VMT slot. */
+             * Phase 1 uses structural param_types to find the correct
+             * declaration; if it found mi->mangled_name, we should trust that
+             * label for the VMT slot. */
             if (cand->mangled_id != NULL && mi->mangled_name != NULL &&
                 strcmp(cand->mangled_id, mi->mangled_name) == 0)
                 exact_name_match = 1;
@@ -510,11 +468,12 @@ if (record_info->parent_class_name != NULL) {
                 single_mangled = (cand->type->info.proc_info.definition != NULL)
                     ? cand_mangled : NULL;
         }
-        /* If Phase 1 identified mi->mangled_name via param_sig matching, and that
-         * name exists as a candidate, and there is at least one definition for this
-         * method (possibly under a stale mangled_id from early type resolution),
-         * trust mi->mangled_name — the implementation will be emitted under that label
-         * once semcheck_subprograms processes it with fully resolved types. */
+        /* If Phase 1 identified mi->mangled_name via structural param_types
+         * matching, and that name exists as a candidate, and there is at
+         * least one definition for this method (possibly under a stale
+         * mangled_id from early type resolution), trust mi->mangled_name —
+         * the implementation will be emitted under that label once
+         * semcheck_subprograms processes it with fully resolved types. */
         if (exact_name_match && def_match_count > 0 && mi->mangled_name != NULL)
             mi->resolved_mangled_id = strdup(mi->mangled_name);
         else if (unique_ok && unique_mangled != NULL && def_match_count > 0)
@@ -756,87 +715,9 @@ static int semcheck_try_resolve_enum_literal_by_base(SymTab_t *symtab, const cha
     return 0;
 }
 
-static char *semcheck_append_param_sig(char *sig, const char *type_str)
-{
-    const char *part = (type_str != NULL) ? type_str : "<unknown>";
-    size_t part_len = strlen(part);
-    if (sig == NULL)
-    {
-        char *out = (char *)malloc(part_len + 1);
-        if (out == NULL)
-            return NULL;
-        memcpy(out, part, part_len + 1);
-        return out;
-    }
-    size_t sig_len = strlen(sig);
-    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
-    if (out == NULL)
-    {
-        free(sig);
-        return NULL;
-    }
-    out[sig_len] = ',';
-    memcpy(out + sig_len + 1, part, part_len + 1);
-    return out;
-}
-
-char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param)
-{
-    if (params == NULL)
-        return NULL;
-
-    char *sig = NULL;
-    ListNode_t *cur = params;
-    int skipped = 0;
-    while (cur != NULL)
-    {
-        Tree_t *param = (Tree_t *)cur->cur;
-        cur = cur->next;
-        if (skip_first_param && !skipped)
-        {
-            skipped = 1;
-            continue;
-        }
-        if (param == NULL)
-            continue;
-
-        char *type_str = NULL;
-        int name_count = 1;
-        if (param->type == TREE_VAR_DECL)
-        {
-            if (param->tree_data.var_decl_data.type_ref != NULL)
-                type_str = type_ref_render_mangled(param->tree_data.var_decl_data.type_ref);
-            else if (param->tree_data.var_decl_data.type_id != NULL)
-                type_str = strdup(param->tree_data.var_decl_data.type_id);
-            if (param->tree_data.var_decl_data.ids != NULL)
-                name_count = ListLength(param->tree_data.var_decl_data.ids);
-        }
-        else if (param->type == TREE_ARR_DECL)
-        {
-            if (param->tree_data.arr_decl_data.type_ref != NULL)
-                type_str = type_ref_render_mangled(param->tree_data.arr_decl_data.type_ref);
-            else if (param->tree_data.arr_decl_data.type_id != NULL)
-                type_str = strdup(param->tree_data.arr_decl_data.type_id);
-            if (param->tree_data.arr_decl_data.ids != NULL)
-                name_count = ListLength(param->tree_data.arr_decl_data.ids);
-        }
-
-        if (name_count <= 0)
-            name_count = 1;
-        for (int i = 0; i < name_count; i++)
-            sig = semcheck_append_param_sig(sig, type_str);
-
-        if (type_str != NULL)
-            free(type_str);
-    }
-
-    return sig;
-}
-
-/* Structural counterpart of semcheck_param_sig_from_params.  Walks a Tree_t
- * parameter list and returns an owned TypeRef** array (one entry per declared
- * parameter name, cloning the param's type_ref); writes the count to
- * *out_count.  Returns NULL with *out_count=0 when the list is empty. */
+/* Walk a Tree_t parameter list and return an owned TypeRef** array (one entry
+ * per declared parameter name, cloning each param's type_ref); writes the
+ * count to *out_count.  Returns NULL with *out_count=0 when the list is empty. */
 TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count)
 {
     if (out_count != NULL)

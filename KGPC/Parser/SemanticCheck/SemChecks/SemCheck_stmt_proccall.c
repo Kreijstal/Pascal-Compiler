@@ -874,11 +874,11 @@ skip_type_receiver_rewrite:
                     method_param_count = actual_arg_count;
                 }
                 if (self_record->type_id != NULL && bare_method_name != NULL &&
-                    from_cparser_is_method_virtual_with_signature(
+                    from_cparser_is_method_virtual_with_types(
                         self_record->type_id,
                         bare_method_name,
                         method_param_count,
-                        NULL) &&
+                        NULL, 0) &&
                     !from_cparser_is_method_static(self_record->type_id, bare_method_name))
                 {
                     stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
@@ -2876,10 +2876,10 @@ proccall_parent_resolve_done:
             !stmt->stmt_data.procedure_call_data.is_virtual_call &&
             !from_cparser_is_method_static(resolved_proc->owner_class,
                 resolved_proc->method_name) &&
-            from_cparser_is_method_virtual_with_signature(resolved_proc->owner_class,
+            from_cparser_is_method_virtual_with_types(resolved_proc->owner_class,
                 resolved_proc->method_name,
                 resolved_param_count,
-                NULL))
+                NULL, 0))
         {
             struct RecordType *class_record = semcheck_lookup_record_type(symtab,
                 resolved_proc->owner_class);

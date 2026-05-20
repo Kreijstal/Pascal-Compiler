@@ -686,13 +686,12 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     if (record->type_id != NULL && method_template->name != NULL)
     {
         int param_count = from_cparser_count_params_ast(method_template->params_ast);
-        char *param_sig = param_type_signature_from_params_ast(method_template->params_ast);
         int param_types_count = 0;
         TypeRef **param_types = param_types_from_params_ast(method_template->params_ast, &param_types_count);
         register_class_method_ex(record->type_id, method_template->name,
             method_template->is_virtual, method_template->is_override,
             method_template->is_static, method_template->is_class_method,
-            param_count, param_sig,
+            param_count,
             param_types, param_types_count);
     }
 

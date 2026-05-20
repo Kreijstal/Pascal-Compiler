@@ -32,8 +32,7 @@ typedef struct {
     int is_static;         /* 1 if method is static (no Self parameter) */
     int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
     int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
-    char *param_sig; /* Mangled signature of parameter types, or NULL if unknown -- diagnostic only */
-    struct TypeRef **param_types; /* Structural parameter types, parallel to param_sig (preferred for compares) */
+    struct TypeRef **param_types; /* Structural parameter types (one entry per declared parameter) */
     int param_types_count; /* Number of entries in param_types (-1 if unknown) */
 } ClassMethodBinding;
 
@@ -67,8 +66,6 @@ int from_cparser_class_has_method_name(const char *class_name, const char *metho
  * Returns 1 if virtual or override, 0 otherwise.
  */
 int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
-int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
-    int param_count, const char *param_sig);
 int from_cparser_is_method_virtual_with_types(const char *class_name, const char *method_name,
     int param_count,
     struct TypeRef *const *param_types, int param_types_count);
