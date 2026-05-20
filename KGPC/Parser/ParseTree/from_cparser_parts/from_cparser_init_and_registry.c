@@ -1781,7 +1781,7 @@ void register_class_method_ex(const char *class_name, const char *method_name,
     if (class_name == NULL || method_name == NULL)
         return;
 
-    ClassMethodBinding *binding = (ClassMethodBinding *)malloc(sizeof(ClassMethodBinding));
+    ClassMethodBinding *binding = (ClassMethodBinding *)calloc(1, sizeof(ClassMethodBinding));
     if (binding == NULL)
         return;
 

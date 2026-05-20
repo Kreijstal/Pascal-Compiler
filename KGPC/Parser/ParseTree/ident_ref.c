@@ -390,6 +390,37 @@ char *type_ref_render_mangled(const TypeRef *ref)
     return type_ref_render_joined(ref, ".", "$");
 }
 
+int type_ref_equal_ci(const TypeRef *lhs, const TypeRef *rhs)
+{
+    if (lhs == NULL || rhs == NULL)
+        return lhs == rhs;
+    if (lhs->is_class_reference != rhs->is_class_reference)
+        return 0;
+    if (!qualified_ident_equals_ci(lhs->name, rhs->name))
+        return 0;
+    if (lhs->num_generic_args != rhs->num_generic_args)
+        return 0;
+    for (int i = 0; i < lhs->num_generic_args; ++i)
+        if (!type_ref_equal_ci(lhs->generic_args[i], rhs->generic_args[i]))
+            return 0;
+    return 1;
+}
+
+int type_ref_array_equal_ci(TypeRef *const *lhs, int lhs_count,
+                            TypeRef *const *rhs, int rhs_count)
+{
+    if (lhs_count != rhs_count)
+        return 0;
+    if (lhs_count == 0)
+        return 1;
+    if (lhs == NULL || rhs == NULL)
+        return 0;
+    for (int i = 0; i < lhs_count; ++i)
+        if (!type_ref_equal_ci(lhs[i], rhs[i]))
+            return 0;
+    return 1;
+}
+
 char *type_ref_render_source(const TypeRef *ref)
 {
     if (ref == NULL || ref->name == NULL)

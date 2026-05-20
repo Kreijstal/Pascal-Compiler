@@ -34,4 +34,14 @@ char *type_ref_render_mangled(const TypeRef *ref);
 char *type_ref_render_source(const TypeRef *ref);
 const char *type_ref_base_name(const TypeRef *ref);
 
+/* Pascal case-insensitive structural equality on TypeRef.  Both NULL match.
+ * Compares qualified name (case-insensitive), is_class_reference flag, and
+ * recursively compares generic argument lists. */
+int type_ref_equal_ci(const TypeRef *lhs, const TypeRef *rhs);
+
+/* Same comparison applied element-wise to two parallel TypeRef arrays.
+ * NULL arrays with count 0 are treated as equal. */
+int type_ref_array_equal_ci(TypeRef *const *lhs, int lhs_count,
+                            TypeRef *const *rhs, int rhs_count);
+
 #endif /* KGPC_IDENT_REF_H */

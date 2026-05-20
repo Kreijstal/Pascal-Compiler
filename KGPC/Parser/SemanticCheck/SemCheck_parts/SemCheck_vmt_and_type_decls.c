@@ -66,7 +66,7 @@ if (record_info->parent_class_name != NULL) {
                 while (parent_vmt != NULL) {
                     struct MethodInfo *parent_method = (struct MethodInfo *)parent_vmt->cur;
                     if (parent_method != NULL) {
-                        struct MethodInfo *cloned = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
+                        struct MethodInfo *cloned = (struct MethodInfo *)calloc(1, sizeof(struct MethodInfo));
                         if (cloned != NULL) {
                             cloned->name = parent_method->name ? strdup(parent_method->name) : NULL;
                             cloned->mangled_name = parent_method->mangled_name ? strdup(parent_method->mangled_name) : NULL;
@@ -307,7 +307,7 @@ if (record_info->parent_class_name != NULL) {
                  * (e.g., FPC system unit with unsupported features).
                  * Treat as a new virtual method instead of an error. */
                 
-                struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
+                struct MethodInfo *new_method = (struct MethodInfo *)calloc(1, sizeof(struct MethodInfo));
                 if (new_method != NULL) {
                     new_method->name = binding->method_name ? strdup(binding->method_name) : NULL;
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;

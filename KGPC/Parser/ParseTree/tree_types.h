@@ -158,7 +158,9 @@ struct MethodInfo
     int is_override;          /* 1 if declared override */
     int vmt_index;            /* Index in VMT (-1 if not virtual) */
     int param_count;          /* Parameter count (excluding implicit Self) */
-    char *param_sig;          /* Optional parameter signature string */
+    char *param_sig;          /* Optional parameter signature string -- diagnostic only */
+    struct TypeRef **param_types; /* Structural parameter types parallel to param_sig (preferred for compares) */
+    int param_types_count;    /* Entries in param_types; -1 if unknown */
     char *resolved_mangled_id; /* Fully resolved mangled ID for codegen (set by semcheck) */
 };
 

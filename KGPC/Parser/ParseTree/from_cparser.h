@@ -27,7 +27,9 @@ typedef struct {
     int is_static;         /* 1 if method is static (no Self parameter) */
     int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
     int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
-    char *param_sig; /* Mangled signature of parameter types, or NULL if unknown */
+    char *param_sig; /* Mangled signature of parameter types, or NULL if unknown -- diagnostic only */
+    struct TypeRef **param_types; /* Structural parameter types, parallel to param_sig (preferred for compares) */
+    int param_types_count; /* Number of entries in param_types (-1 if unknown) */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
