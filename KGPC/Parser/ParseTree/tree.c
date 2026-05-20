@@ -436,6 +436,8 @@ static void destroy_record_field(struct RecordField *field)
         free(field->pointer_type_id);
     if (field->pointer_type_ref != NULL)
         type_ref_free(field->pointer_type_ref);
+    if (field->set_element_type_id != NULL)
+        free(field->set_element_type_id);
     if (field->enum_literals != NULL)
         destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
