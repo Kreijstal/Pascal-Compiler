@@ -30,6 +30,14 @@ typedef enum {
     KGPC_FLOAT_ABI_X87 = 2
 } KgpcFloatAbiClass;
 
+typedef enum {
+    KGPC_STRING_STORAGE_NONE = 0,
+    KGPC_STRING_STORAGE_SHORTSTRING,
+    KGPC_STRING_STORAGE_MANAGED_ANSI,
+    KGPC_STRING_STORAGE_MANAGED_WIDE,
+    KGPC_STRING_STORAGE_CHAR_ARRAY
+} KgpcStringStorageKind;
+
 // Defines what kind of type we are dealing with.
 typedef enum {
     TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
@@ -162,6 +170,7 @@ int kgpc_type_is_char(const KgpcType *type);
 int kgpc_type_is_string(const KgpcType *type);
 int kgpc_type_is_wide_string(const KgpcType *type);
 int kgpc_type_is_shortstring(const KgpcType *type);
+KgpcStringStorageKind kgpc_type_string_storage_kind(const KgpcType *type);
 int kgpc_type_is_integer(const KgpcType *type);
 int kgpc_type_is_real(const KgpcType *type);
 int kgpc_type_is_extended(const KgpcType *type);

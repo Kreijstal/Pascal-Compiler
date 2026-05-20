@@ -3426,6 +3426,63 @@ int kgpc_type_is_shortstring(const KgpcType *type)
     return 0;
 }
 
+KgpcStringStorageKind kgpc_type_string_storage_kind(const KgpcType *type)
+{
+    if (type == NULL)
+        return KGPC_STRING_STORAGE_NONE;
+
+    struct TypeAlias *alias = type->type_alias;
+    if (kgpc_type_is_shortstring(type) ||
+        (alias != NULL && alias->is_shortstring))
+    {
+        return KGPC_STRING_STORAGE_SHORTSTRING;
+    }
+
+    if (type->kind == TYPE_KIND_ARRAY &&
+        type->info.array_info.element_type != NULL &&
+        type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
+        type->info.array_info.start_index == 0 &&
+        type->info.array_info.end_index >= 0 &&
+        type->info.array_info.end_index <= 255)
+    {
+        return KGPC_STRING_STORAGE_SHORTSTRING;
+    }
+
+    if (kgpc_type_is_wide_string(type) ||
+        (alias != NULL && alias->target_type_id != NULL &&
+         (pascal_identifier_equals(alias->target_type_id, "UnicodeString") ||
+          pascal_identifier_equals(alias->target_type_id, "WideString"))))
+    {
+        return KGPC_STRING_STORAGE_MANAGED_WIDE;
+    }
+
+    if (type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == STRING_TYPE)
+    {
+        return KGPC_STRING_STORAGE_MANAGED_ANSI;
+    }
+
+    if (alias != NULL && alias->target_type_id != NULL &&
+        (pascal_identifier_equals(alias->target_type_id, "AnsiString") ||
+         pascal_identifier_equals(alias->target_type_id, "RawByteString") ||
+         pascal_identifier_equals(alias->target_type_id, "UTF8String") ||
+         pascal_identifier_equals(alias->target_type_id, "String")))
+    {
+        return KGPC_STRING_STORAGE_MANAGED_ANSI;
+    }
+
+    if (type->kind == TYPE_KIND_ARRAY &&
+        type->info.array_info.element_type != NULL &&
+        type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+    {
+        return KGPC_STRING_STORAGE_CHAR_ARRAY;
+    }
+
+    return KGPC_STRING_STORAGE_NONE;
+}
+
 int kgpc_type_is_integer(const KgpcType *type)
 {
     return (type != NULL &&

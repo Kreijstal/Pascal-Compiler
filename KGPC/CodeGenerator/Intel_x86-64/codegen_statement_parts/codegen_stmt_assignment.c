@@ -434,12 +434,6 @@ int codegen_expr_is_shortstring_array(const struct Expression *expr)
         return 0;
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
         return 1;
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
-        if (alias != NULL && alias->is_shortstring)
-            return 1;
-    }
     /* For record field access, only the RecordField's type is authoritative.
      * Plain array[0..255] of AnsiChar fields are NOT shortstrings. */
     if (expr->type == EXPR_RECORD_ACCESS)
@@ -453,18 +447,10 @@ int codegen_expr_is_shortstring_array(const struct Expression *expr)
          * array[0..255] fields like TextRec.Name. */
         return 0;
     }
-    /* Also check by type bounds: string[N] is char array with bounds 0..N */
-    if (expr->is_array_expr &&
-        expr->array_element_type == CHAR_TYPE &&
-        expr->array_element_size != 2 &&
-        (expr->array_element_type_id == NULL ||
-         (!pascal_identifier_equals(expr->array_element_type_id, "WideChar") &&
-          !pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))) &&
-        expr_get_array_lower_bound(expr) == 0)
+    if (expr->resolved_kgpc_type != NULL)
     {
-        /* Any char array starting at 0 and sized up to 256 is treated as shortstring */
-        int upper = expr_get_array_upper_bound(expr);
-        if (upper >= 0 && upper <= 255)
+        if (kgpc_type_string_storage_kind(expr->resolved_kgpc_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING)
             return 1;
     }
     return 0;
@@ -495,9 +481,8 @@ int codegen_expr_is_shortstring_value_local(const struct Expression *expr)
         return 1;
     if (expr->resolved_kgpc_type != NULL)
     {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
-        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
-            (alias != NULL && alias->is_shortstring))
+        if (kgpc_type_string_storage_kind(expr->resolved_kgpc_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING)
             return 1;
     }
     return 0;
@@ -518,7 +503,7 @@ int codegen_shortstring_capacity_from_type_local(KgpcType *type)
         return 256;
     }
 
-    if (kgpc_type_is_shortstring(type))
+    if (kgpc_type_string_storage_kind(type) == KGPC_STRING_STORAGE_SHORTSTRING)
     {
         long long type_size = kgpc_type_sizeof(type);
         if (type_size > 1 && type_size <= INT_MAX)
@@ -588,9 +573,8 @@ static int codegen_record_field_shortstring_capacity(const struct Expression *ex
         KgpcType *expr_type = expr_get_kgpc_type(expr);
         if (expr_type != NULL)
         {
-            struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
-            if (kgpc_type_is_shortstring(expr_type) ||
-                (alias != NULL && alias->is_shortstring))
+            if (kgpc_type_string_storage_kind(expr_type) ==
+                KGPC_STRING_STORAGE_SHORTSTRING)
                 shortstring_like = 1;
         }
     }
@@ -836,11 +820,9 @@ int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenContext 
             if (!is_short)
             {
                 KgpcType *kgpc = expr_get_kgpc_type(expr);
-                if (kgpc != NULL && kgpc->type_alias != NULL && kgpc->type_alias->is_shortstring)
+                if (kgpc_type_string_storage_kind(kgpc) == KGPC_STRING_STORAGE_SHORTSTRING)
                     is_short = 1;
             }
-            if (!is_short && lower == 0 && upper == 255)
-                is_short = 1;
             *is_shortstring_out = is_short;
         }
     }
@@ -887,7 +869,7 @@ int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContex
     if (expr->type != EXPR_FUNCTION_CALL &&
         expr_type != NULL &&
         kgpc_type_equals_tag(expr_type, STRING_TYPE) &&
-        !kgpc_type_is_shortstring(expr_type))
+        kgpc_type_string_storage_kind(expr_type) != KGPC_STRING_STORAGE_SHORTSTRING)
     {
         struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
         if (alias != NULL && !alias->is_shortstring &&
