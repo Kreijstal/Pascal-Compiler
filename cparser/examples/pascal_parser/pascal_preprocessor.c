@@ -1331,6 +1331,8 @@ static bool handle_directive(PascalPreprocessor *pp,
             if (strcasecmp(asmmode_val, "INTEL") == 0)
                 pp->asmmode_intel = true;
             else if (strcasecmp(asmmode_val, "ATT") == 0 ||
+                     strcasecmp(asmmode_val, "GAS") == 0 ||
+                     strcasecmp(asmmode_val, "STANDARD") == 0 ||
                      strcasecmp(asmmode_val, "DEFAULT") == 0)
                 pp->asmmode_intel = false;
         }

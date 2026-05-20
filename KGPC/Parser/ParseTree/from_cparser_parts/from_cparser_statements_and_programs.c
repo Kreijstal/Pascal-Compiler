@@ -1,5 +1,66 @@
 #include "../from_cparser_internal.h"
 
+static int directive_keyword_matches(const char *start, const char *end, const char *keyword)
+{
+    size_t keyword_len = strlen(keyword);
+    if ((size_t)(end - start) < keyword_len)
+        return 0;
+    if (strncasecmp(start, keyword, keyword_len) != 0)
+        return 0;
+    const char *after = start + keyword_len;
+    return after == end || isspace((unsigned char)*after);
+}
+
+static enum AsmSyntaxMode asm_syntax_mode_before_source_index(ast_t *stmt_node)
+{
+    enum AsmSyntaxMode mode = ASM_SYNTAX_ATT;
+    if (stmt_node == NULL || stmt_node->index <= 0 ||
+        preprocessed_source == NULL || preprocessed_length == 0)
+        return mode;
+
+    size_t limit = (size_t)stmt_node->index;
+    if (limit > preprocessed_length)
+        limit = preprocessed_length;
+
+    const char *src = preprocessed_source;
+    const char *end = preprocessed_source + limit;
+    for (const char *p = src; p < end; p++)
+    {
+        if (*p != '{' || p + 1 >= end || p[1] != '$')
+            continue;
+
+        const char *dir = p + 2;
+        while (dir < end && isspace((unsigned char)*dir))
+            dir++;
+
+        const char *close = dir;
+        while (close < end && *close != '}')
+            close++;
+        if (close >= end)
+            break;
+
+        if (directive_keyword_matches(dir, close, "ASMMODE"))
+        {
+            const char *arg = dir + strlen("ASMMODE");
+            while (arg < close && isspace((unsigned char)*arg))
+                arg++;
+            if (close - arg >= 5 && strncasecmp(arg, "INTEL", 5) == 0)
+                mode = ASM_SYNTAX_INTEL;
+            else if (close - arg >= 3 && strncasecmp(arg, "ATT", 3) == 0)
+                mode = ASM_SYNTAX_ATT;
+            else if (close - arg >= 3 && strncasecmp(arg, "GAS", 3) == 0)
+                mode = ASM_SYNTAX_ATT;
+            else if (close - arg >= 7 && strncasecmp(arg, "DEFAULT", 7) == 0)
+                mode = ASM_SYNTAX_ATT;
+            else if (close - arg >= 8 && strncasecmp(arg, "STANDARD", 8) == 0)
+                mode = ASM_SYNTAX_ATT;
+        }
+        p = close;
+    }
+
+    return mode;
+}
+
 struct Statement *convert_statement(ast_t *stmt_node) {
     stmt_node = unwrap_pascal_node(stmt_node);
     if (stmt_node == NULL)
@@ -91,7 +152,7 @@ struct Statement *convert_statement(ast_t *stmt_node) {
         asm_body_node->next = NULL;
         char *code = collect_asm_text(asm_body_node);
         asm_body_node->next = saved_next;
-        return mk_asmblock(stmt_node->line, code);
+        return mk_asmblock(stmt_node->line, code, asm_syntax_mode_before_source_index(stmt_node));
     }
     case PASCAL_T_BREAK_STMT:
         return mk_break(stmt_node->line);

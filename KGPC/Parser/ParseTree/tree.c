@@ -2973,7 +2973,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
     return new_stmt;
 }
 
-struct Statement *mk_asmblock(int line_num, char *code)
+struct Statement *mk_asmblock(int line_num, char *code, enum AsmSyntaxMode syntax_mode)
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
@@ -2984,6 +2984,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
     new_stmt->source_index = -1;
     new_stmt->type = STMT_ASM_BLOCK;
     new_stmt->stmt_data.asm_block_data.code = code;
+    new_stmt->stmt_data.asm_block_data.syntax_mode = syntax_mode;
 
     return new_stmt;
 }

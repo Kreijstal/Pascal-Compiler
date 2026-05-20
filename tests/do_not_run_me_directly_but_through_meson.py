@@ -3443,6 +3443,31 @@ sys.exit(3)
         self.assertEqual(process.returncode, 0)
         self.assertEqual(process.stdout, "OK\n")
 
+    def test_asmmode_intel_directive_controls_inline_asm(self):
+        input_file = os.path.join(TEST_CASES_DIR, "asmmode_intel_explicit.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "asmmode_intel_explicit.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"asmmode_intel_explicit{EXE_EXT}")
+
+        run_compiler(input_file, asm_file)
+
+        with open(asm_file, "r", encoding="utf-8") as f:
+            asm_source = f.read()
+
+        self.assertIn(".intel_syntax noprefix", asm_source)
+        self.assertIn("mov eax, 42", asm_source)
+        self.assertIn("movl $7, %eax", asm_source)
+        self.assertEqual(asm_source.count(".intel_syntax noprefix"), 1)
+
+        self.compile_executable(asm_file, executable_file)
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "OK\n")
+
     def test_unix_gethostname(self):
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
