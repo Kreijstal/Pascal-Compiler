@@ -594,7 +594,6 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     return inst_list;
 }
 
-/* TODO: Assumes eax and edx registers are free for division */
 ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register_t *left_reg,
     const char *right, const Register_t *right_reg,
     OperandKind left_kind, OperandKind right_kind,

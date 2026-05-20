@@ -1247,9 +1247,10 @@ RegStack_t *init_reg_stack()
     return reg_stack;
 }
 
-/* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
-/* The returned int is the temp offset to restore the value */
-/* TODO: Doesn't actually kick variable out to temp yet */
+/* Returns 0 and assigns return_reg when reg_id is in this allocator's pool.
+ * If the requested register is currently allocated, its value is spilled to a
+ * temp slot before returning it. Caller-saved fixed registers such as rax/rdx
+ * are intentionally outside this pool and return -1. */
 int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id, Register_t **return_reg, ListNode_t **inst_list)
 {
     assert(regstack != NULL);
