@@ -1570,9 +1570,14 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     GenericTypeDecl *generic_decl = generic_registry_find_decl(effective_class);
     if (generic_decl != NULL && generic_decl->record_template != NULL) {
         if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
-            fprintf(stderr, "[KGPC] convert_method_impl: recorded template for %s.%s, not generating concrete impl\n", 
+            fprintf(stderr, "[KGPC] convert_method_impl: recorded template for %s.%s, not generating concrete impl\n",
                     effective_class, method_name);
         }
+        /* The Tree_t was already built (line ~1485) before we knew this was a
+         * generic template; destroy it before returning NULL to avoid leaking
+         * the whole subtree (params, var decls, body). */
+        if (tree != NULL)
+            destroy_tree(tree);
         if (cleaned_class_name != NULL)
             free(cleaned_class_name);
         free(class_name);
