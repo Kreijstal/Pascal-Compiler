@@ -2993,7 +2993,11 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         }
                         else if (nested_info.record_type != NULL)
                         {
-                            inner_elem = create_record_type(clone_record_type(nested_info.record_type));
+                            /* Fresh clone has no AST owner — KgpcType must take
+                             * ownership so the record is destroyed when the
+                             * KgpcType is released. */
+                            inner_elem = create_record_type_owned(
+                                clone_record_type(nested_info.record_type));
                         }
                         else if (nested_info.element_type != UNKNOWN_TYPE)
                         {
@@ -3006,6 +3010,10 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         {
                             type_info->element_kgpc_type = create_array_type(
                                 inner_elem, nested_info.start, nested_info.end);
+                            /* create_array_type retains element_type internally; release
+                             * our local ref so the only owner is the array, otherwise
+                             * inner_elem leaks at compile-end (ref never reaches 0). */
+                            kgpc_type_release(inner_elem);
                         }
                         else if (nested_info.element_type_id != NULL)
                         {
@@ -3398,7 +3406,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             if (specialized_name != NULL)
                 free(specialized_name);
             if (record != NULL) {
-                return create_record_type(record);
+                /* instantiate_generic_record returns a freshly cloned record
+                 * with no AST owner; wrap as owned so the KgpcType destroys it. */
+                return create_record_type_owned(record);
             }
         }
     }

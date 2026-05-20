@@ -863,6 +863,13 @@ KgpcType* create_record_type(struct RecordType *record_info) {
     return type;
 }
 
+KgpcType* create_record_type_owned(struct RecordType *record_info) {
+    KgpcType *type = create_record_type(record_info);
+    if (type != NULL)
+        type->owns_record_info = 1;
+    return type;
+}
+
 KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *src)
 {
     if (src == NULL)
@@ -1285,6 +1292,10 @@ void destroy_kgpc_type(KgpcType *type) {
         case TYPE_KIND_PRIMITIVE:
             break;
         case TYPE_KIND_RECORD:
+            if (type->owns_record_info && type->info.record_info != NULL) {
+                destroy_record_type(type->info.record_info);
+                type->info.record_info = NULL;
+            }
             break;
     }
     

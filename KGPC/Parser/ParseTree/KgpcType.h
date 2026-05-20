@@ -99,7 +99,12 @@ struct KgpcType {
     int alignment_in_bytes; // For future architecture support.
     int ref_count;
     size_t live_index;
-    
+
+    /* When 1 and kind == TYPE_KIND_RECORD, the wrapped record_info is owned
+     * by this KgpcType and must be destroyed on teardown. Default 0 means
+     * record_info is owned by the AST (the typical case). */
+    int owns_record_info;
+
     // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
     // This is owned by the AST, not by KgpcType, so should not be freed.
     struct TypeAlias *type_alias;
@@ -125,6 +130,11 @@ KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type);
 KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_index);
 KgpcType* create_array_of_const_type(void);
 KgpcType* create_record_type(struct RecordType *record_info);
+/* Like create_record_type, but the resulting KgpcType takes ownership of
+ * record_info and will destroy it when released. Use this when the
+ * record_info is a fresh allocation (e.g. clone_record_type) that no AST
+ * node references — otherwise the record leaks. */
+KgpcType* create_record_type_owned(struct RecordType *record_info);
 KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *type);
 
 /* Create KgpcType from TypeAlias structure
