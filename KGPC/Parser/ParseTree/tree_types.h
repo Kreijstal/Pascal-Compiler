@@ -281,6 +281,12 @@ struct CaseBranch
     struct Statement *stmt;
 };
 
+enum AsmSyntaxMode
+{
+    ASM_SYNTAX_ATT = 0,
+    ASM_SYNTAX_INTEL = 1
+};
+
 /* A statement subtree */
 struct Statement
 {
@@ -302,6 +308,7 @@ struct Statement
         struct AsmBlock
         {
             char *code;
+            enum AsmSyntaxMode syntax_mode;
         } asm_block_data;
 
         /* Procedure call */
