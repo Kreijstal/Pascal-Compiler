@@ -122,12 +122,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (inherit_owner_full == NULL)
             inherit_owner_full = prev_owner;
 
+        /* owner_class fields on TREE_SUBPROGRAM are expected to be interned
+         * (the destructor at tree.c:1371 skips them). Use string_intern so
+         * later free attempts find the same pointer everywhere else uses. */
         if (inherit_owner != NULL)
-            subprogram->tree_data.subprogram_data.owner_class = strdup(inherit_owner);
+            subprogram->tree_data.subprogram_data.owner_class = (char *)string_intern(inherit_owner);
         if (inherit_owner_full != NULL)
-            subprogram->tree_data.subprogram_data.owner_class_full = strdup(inherit_owner_full);
+            subprogram->tree_data.subprogram_data.owner_class_full = (char *)string_intern(inherit_owner_full);
         if (inherit_owner_outer != NULL)
-            subprogram->tree_data.subprogram_data.owner_class_outer = strdup(inherit_owner_outer);
+            subprogram->tree_data.subprogram_data.owner_class_outer = (char *)string_intern(inherit_owner_outer);
     }
 
     char *id_to_use_for_lookup;
