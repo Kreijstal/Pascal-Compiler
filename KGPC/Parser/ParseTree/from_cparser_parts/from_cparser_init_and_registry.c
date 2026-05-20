@@ -2036,73 +2036,49 @@ int from_cparser_class_has_method_name(const char *class_name, const char *metho
     return 0;
 }
 
-/* Check if a method is virtual (needs VMT dispatch) */
-int from_cparser_is_method_virtual(const char *class_name, const char *method_name) {
-    if (class_name == NULL || method_name == NULL)
-        return 0;
-
-    const char *cn = string_intern(class_name);
-    const char *mn = string_intern(method_name);
-    if (cn == NULL || mn == NULL)
-        return 0;
-
-    /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
-     * Overloaded methods may have both virtual and non-virtual variants
-     * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads).
-     * Qualified nested-type names (e.g. TMarshaller.TDeferBase) are registered
-     * under their qualified key by cmb_index_alias_as_qualified in
-     * append_type_decls_from_section, so no unqualified fallback is needed. */
-    CMBIndexEntry *entry = cmb_index_find(cn);
-    if (entry != NULL) {
-        for (int i = 0; i < entry->count; i++) {
-            ClassMethodBinding *binding = entry->bindings[i];
-            if (binding->method_name == mn &&
-                (binding->is_virtual || binding->is_override))
-                return 1;
-        }
-    }
-    return 0;
-}
-
+/* Check if a method is virtual (needs VMT dispatch).
+ * Returns 1 iff at least one overload matching the given signature is virtual
+ * or override. Matching: if param_types != NULL, compare structurally against
+ * b->param_types; otherwise count-only matching when param_count >= 0, where
+ * the caller's actual arg count must be ≤ the binding's declared param count
+ * (≤, not ==, so calls that omit trailing default arguments still match — e.g.
+ * TGNUAssembler.WriteSection has 6 declared params with 2 defaults and is
+ * called with 4 args).
+ */
 int from_cparser_is_method_virtual_with_types(const char *class_name, const char *method_name,
     int param_count,
     TypeRef *const *param_types, int param_types_count)
 {
     if (class_name == NULL || method_name == NULL)
         return 0;
-    if (param_types == NULL && param_count < 0)
-        return from_cparser_is_method_virtual(class_name, method_name);
 
     const char *mn = string_intern(method_name);
     if (mn == NULL)
         return 0;
-
-    int has_match = 0, has_virtual = 0;
     const char *cn = string_intern(class_name);
-    if (cn != NULL) {
-        CMBIndexEntry *entry = cmb_index_find(cn);
-        if (entry != NULL) {
-            for (int i = 0; i < entry->count; i++) {
-                ClassMethodBinding *b = entry->bindings[i];
-                if (b->method_name != mn) continue;
-                int matches = 0;
-                if (param_types != NULL && b->param_types != NULL && b->param_types_count >= 0) {
-                    if (type_ref_array_equal_ci(b->param_types, b->param_types_count,
-                                                param_types, param_types_count))
-                        matches = 1;
-                } else if (param_count >= 0 && b->param_count == param_count) {
-                    matches = 1;
-                }
-                if (matches) {
-                    has_match = 1;
-                    if (b->is_virtual || b->is_override) has_virtual = 1;
-                }
-            }
+    if (cn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *b = entry->bindings[i];
+        if (b->method_name != mn) continue;
+        int matches = 0;
+        if (param_types != NULL && b->param_types != NULL && b->param_types_count >= 0) {
+            if (type_ref_array_equal_ci(b->param_types, b->param_types_count,
+                                        param_types, param_types_count))
+                matches = 1;
+        } else if (param_count >= 0 && b->param_count >= 0 &&
+                   param_count <= b->param_count) {
+            matches = 1;
         }
+        if (matches && (b->is_virtual || b->is_override))
+            return 1;
     }
-    if (has_match)
-        return has_virtual;
-    return from_cparser_is_method_virtual(class_name, method_name);
+    return 0;
 }
 
 /* Find all class names that have a method with the given name */

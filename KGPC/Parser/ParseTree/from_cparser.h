@@ -63,9 +63,12 @@ int from_cparser_is_type_helper(const char *helper_id);
 int from_cparser_class_has_method_name(const char *class_name, const char *method_name);
 
 /* Check if a method is virtual (needs VMT dispatch).
- * Returns 1 if virtual or override, 0 otherwise.
+ * Returns 1 iff at least one overload matching the given signature is virtual
+ * or override. Matching is structural when param_types != NULL, otherwise
+ * count-only when param_count >= 0. Pass the method's *declared* param count
+ * (not the call site's actual arg count) so calls that omit trailing default
+ * parameters still match the right overload.
  */
-int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
 int from_cparser_is_method_virtual_with_types(const char *class_name, const char *method_name,
     int param_count,
     struct TypeRef *const *param_types, int param_types_count);
