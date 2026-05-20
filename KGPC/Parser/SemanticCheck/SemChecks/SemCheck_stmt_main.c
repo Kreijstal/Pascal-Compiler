@@ -1740,7 +1740,11 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 if (FindSymbol(&rhs_symbol, symtab, expr->expr_data.id) != 0 &&
                     rhs_symbol != NULL && rhs_symbol->hash_type == HASHTYPE_PROCEDURE)
                 {
-                    /* Transform the expression to EXPR_ADDR_OF_PROC */
+                    /* Transform the expression to EXPR_ADDR_OF_PROC.
+                     * expr_data is a union; the EXPR_VAR_ID slot's strdup'd
+                     * id must be freed before we reassign expr_data via
+                     * addr_of_proc_data, or it leaks. */
+                    free(expr->expr_data.id);
                     expr->type = EXPR_ADDR_OF_PROC;
                     expr->expr_data.addr_of_proc_data.proc_mangled_id = rhs_symbol->mangled_id ? strdup(rhs_symbol->mangled_id) : NULL;
                     expr->expr_data.addr_of_proc_data.proc_id = rhs_symbol->id ? strdup(rhs_symbol->id) : NULL;
