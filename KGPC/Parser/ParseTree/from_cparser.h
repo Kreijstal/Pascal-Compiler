@@ -18,6 +18,11 @@ int from_cparser_get_error_count(void);
 /* Forward declaration for symbol table - avoid circular dependency */
 struct SymTab;
 
+/* Forward declarations for TypeRef-array helpers used in struct fields below. */
+struct TypeRef;
+void param_types_free(struct TypeRef **types, int count);
+struct TypeRef **param_types_clone(struct TypeRef *const *src, int count);
+
 /* Method binding information */
 typedef struct {
     char *class_name;
@@ -27,7 +32,9 @@ typedef struct {
     int is_static;         /* 1 if method is static (no Self parameter) */
     int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
     int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
-    char *param_sig; /* Mangled signature of parameter types, or NULL if unknown */
+    char *param_sig; /* Mangled signature of parameter types, or NULL if unknown -- diagnostic only */
+    struct TypeRef **param_types; /* Structural parameter types, parallel to param_sig (preferred for compares) */
+    int param_types_count; /* Number of entries in param_types (-1 if unknown) */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
@@ -62,6 +69,9 @@ int from_cparser_class_has_method_name(const char *class_name, const char *metho
 int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
 int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
     int param_count, const char *param_sig);
+int from_cparser_is_method_virtual_with_types(const char *class_name, const char *method_name,
+    int param_count,
+    struct TypeRef *const *param_types, int param_types_count);
 
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);

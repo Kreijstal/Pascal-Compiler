@@ -293,6 +293,9 @@ char *generate_anonymous_method_name(int is_function);
 int is_external_directive(const char *directive);
 int is_method_static_with_signature(const char *class_name, const char *method_name,
                                            int param_count, const char *param_sig);
+int is_method_static_with_types(const char *class_name, const char *method_name,
+                                int param_count,
+                                struct TypeRef *const *param_types, int param_types_count);
 int is_operator_token_name(const char *name);
 bool is_safe_to_continue(VisitedSet *visited, ast_t *node);
 int kgpc_debug_decl_scan_enabled(void);
@@ -305,6 +308,10 @@ void mark_var_decl_static_storage(Tree_t *decl);
 char *method_param_type_suffix(Tree_t *param_decl);
 char *param_type_signature_from_method_impl(ast_t *method_node);
 char *param_type_signature_from_params_ast(ast_t *params_ast);
+struct TypeRef **param_types_from_params_ast(ast_t *params_ast, int *out_count);
+struct TypeRef **param_types_from_method_impl(ast_t *method_node, int *out_count);
+void param_types_free(struct TypeRef **types, int count);
+struct TypeRef **param_types_clone(struct TypeRef *const *src, int count);
 int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8]);
 int parse_range_bound(const char *s);
 QualifiedIdent *qualified_ident_from_ast(ast_t *node);
@@ -313,7 +320,8 @@ void cmb_index_alias_as_qualified(const char *unqualified_name, const char *qual
 void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
                                       int is_class_method,
-                                      int param_count, char *param_sig);
+                                      int param_count, char *param_sig,
+                                      struct TypeRef **param_types, int param_types_count);
 void register_const_int(const char *name, int value);
 void register_const_section(ast_t *const_section);
 void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info);

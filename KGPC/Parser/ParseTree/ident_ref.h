@@ -34,4 +34,31 @@ char *type_ref_render_mangled(const TypeRef *ref);
 char *type_ref_render_source(const TypeRef *ref);
 const char *type_ref_base_name(const TypeRef *ref);
 
+/* Pascal case-insensitive structural equality on TypeRef.  Both NULL match.
+ * Compares qualified name (case-insensitive), is_class_reference flag, and
+ * recursively compares generic argument lists. */
+int type_ref_equal_ci(const TypeRef *lhs, const TypeRef *rhs);
+
+/* Same comparison applied element-wise to two parallel TypeRef arrays.
+ * NULL arrays with count 0 are treated as equal. */
+int type_ref_array_equal_ci(TypeRef *const *lhs, int lhs_count,
+                            TypeRef *const *rhs, int rhs_count);
+
+/* Returns nonzero when KGPC_REQUIRE_STRUCTURAL_PARAM_TYPES is set in the
+ * environment.  When set, callers should treat any fallback to the
+ * rendered-mangled-string compare as a population bug and abort with a
+ * diagnostic naming the site, so the missing population path can be
+ * traced to its source and fixed structurally. */
+int kgpc_param_types_strict_check_enabled(void);
+
+/* Reports an asymmetry where the structural-compare primary path could not
+ * run because one or both sides lack populated param_types[].  Prints
+ * "[param_types-miss] site=<site> lhs=<details> rhs=<details>" to stderr
+ * once per call (no rate-limiting; callers should gate themselves on the
+ * env helper above).  If KGPC_REQUIRE_STRUCTURAL_PARAM_TYPES is set, this
+ * is followed by abort(). */
+void kgpc_param_types_strict_miss(const char *site,
+                                  const char *lhs_label, int lhs_has_types,
+                                  const char *rhs_label, int rhs_has_types);
+
 #endif /* KGPC_IDENT_REF_H */

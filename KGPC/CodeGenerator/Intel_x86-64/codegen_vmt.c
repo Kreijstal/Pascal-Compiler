@@ -47,6 +47,14 @@
 /* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
  * Build a parameter signature string for overload disambiguation. */
 char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+struct TypeRef;
+struct TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count);
+void param_types_free(struct TypeRef **types, int count);
+int type_ref_array_equal_ci(struct TypeRef *const *lhs, int lhs_count,
+                            struct TypeRef *const *rhs, int rhs_count);
+void kgpc_param_types_strict_miss(const char *site,
+                                  const char *lhs_label, int lhs_has_types,
+                                  const char *rhs_label, int rhs_has_types);
 
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
@@ -642,12 +650,18 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
              * producing spurious mismatches.  Compare param signatures
              * (which already exclude Self) instead. */
             char *template_param_sig = NULL;
+            struct TypeRef **template_param_types = NULL;
+            int template_param_types_count = 0;
             KgpcType *tmpl_proc_type =
                 from_cparser_method_template_to_proctype(tmpl, record_info, symtab);
             if (tmpl_proc_type != NULL && tmpl_proc_type->kind == TYPE_KIND_PROCEDURE) {
                 template_param_sig = semcheck_param_sig_from_params(
                     tmpl_proc_type->info.proc_info.params,
                     tmpl->is_static ? 0 : 1);
+                template_param_types = semcheck_param_types_from_params(
+                    tmpl_proc_type->info.proc_info.params,
+                    tmpl->is_static ? 0 : 1,
+                    &template_param_types_count);
             }
             if (tmpl_proc_type != NULL)
                 destroy_kgpc_type(tmpl_proc_type);
@@ -700,7 +714,21 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 }
 
                 int sig_match = 0;
-                if (template_param_sig != NULL) {
+                if (template_param_types != NULL) {
+                    int cand_count = 0;
+                    struct TypeRef **cand_types = semcheck_param_types_from_params(
+                        cand->type->info.proc_info.params,
+                        tmpl->is_static ? 0 : 1, &cand_count);
+                    if (type_ref_array_equal_ci(template_param_types, template_param_types_count,
+                                                cand_types, cand_count))
+                        sig_match = 1;
+                    param_types_free(cand_types, cand_count);
+                } else if (template_param_sig != NULL) {
+                    kgpc_param_types_strict_miss(
+                        "codegen_vmt:template-cand-match",
+                        "template", 0, "cand-params(sema)", 1);
+                }
+                if (!sig_match && template_param_sig != NULL) {
                     char *cand_sig = semcheck_param_sig_from_params(
                         cand->type->info.proc_info.params,
                         tmpl->is_static ? 0 : 1);
@@ -737,6 +765,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             free(base_name);
             if (resolved_id == NULL) {
                 free(template_param_sig);
+                param_types_free(template_param_types, template_param_types_count);
                 continue;
             }
 
@@ -771,8 +800,23 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     continue;
                 if (first_match_idx < 0)
                     first_match_idx = method_idx;
-                if (template_param_sig != NULL && method->param_sig != NULL &&
-                    strcasecmp(template_param_sig, method->param_sig) == 0) {
+                int sig_eq = 0;
+                int lhs_has = (template_param_types != NULL);
+                int rhs_has = (method->param_types != NULL && method->param_types_count >= 0);
+                if (lhs_has && rhs_has) {
+                    if (type_ref_array_equal_ci(template_param_types, template_param_types_count,
+                                                method->param_types, method->param_types_count))
+                        sig_eq = 1;
+                }
+                if (!sig_eq && template_param_sig != NULL && method->param_sig != NULL) {
+                    if (lhs_has != rhs_has)
+                        kgpc_param_types_strict_miss(
+                            "codegen_vmt:template-MethodInfo-pair",
+                            "template", lhs_has, "MethodInfo", rhs_has);
+                    if (strcasecmp(template_param_sig, method->param_sig) == 0)
+                        sig_eq = 1;
+                }
+                if (sig_eq) {
                     sig_match_idx = method_idx;
                     break;
                 }
@@ -797,6 +841,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             }
 
             free(template_param_sig);
+            param_types_free(template_param_types, template_param_types_count);
         }
 
         if (claimed_resolved_ids != NULL) {

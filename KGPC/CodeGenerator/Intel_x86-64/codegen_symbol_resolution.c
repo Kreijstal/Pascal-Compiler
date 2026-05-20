@@ -10,6 +10,8 @@
 #include "codegen_string_set.h"
 #include "codegen_symbol_resolution.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/ParseTree/from_cparser.h"
+#include "../../Parser/ParseTree/ident_ref.h"
 #include "../../Parser/SemanticCheck/NameMangling.h"
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
@@ -19,6 +21,7 @@
 /* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
  * Build a parameter signature for overload disambiguation. */
 char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_param, int *out_count);
 
 /* Globals defined in codegen.c; accessed here for label collection. */
 extern ListNode_t *g_codegen_available_subprograms;
@@ -517,6 +520,8 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
      * types (e.g. tloopnode.create(tnodetype,4*tnode) vs
      * tfornode.create(4*tnode,boolean)). */
     char *call_param_sig = NULL;
+    TypeRef **call_param_types = NULL;
+    int call_param_types_count = 0;
     if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
     {
         ListNode_t *params = call_type->info.proc_info.params;
@@ -534,6 +539,7 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
             }
         }
         call_param_sig = semcheck_param_sig_from_params(params, skip_self);
+        call_param_types = semcheck_param_types_from_params(params, skip_self, &call_param_types_count);
     }
 
     struct MethodInfo *name_match = NULL;
@@ -561,16 +567,32 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
             if (first_count_match == NULL)
                 first_count_match = method;
             count_match_count++;
-            if (call_param_sig != NULL && method->param_sig != NULL &&
-                strcasecmp(call_param_sig, method->param_sig) == 0)
+            int matched = 0;
+            int lhs_has = (call_param_types != NULL);
+            int rhs_has = (method->param_types != NULL && method->param_types_count >= 0);
+            if (lhs_has && rhs_has)
             {
-                sig_match = method;
+                if (type_ref_array_equal_ci(call_param_types, call_param_types_count,
+                                            method->param_types, method->param_types_count))
+                    matched = 1;
             }
+            if (!matched && call_param_sig != NULL && method->param_sig != NULL)
+            {
+                if (lhs_has != rhs_has)
+                    kgpc_param_types_strict_miss(
+                        "codegen_symbol_resolution:vmt-slot-picker",
+                        "call", lhs_has, "method", rhs_has);
+                if (strcasecmp(call_param_sig, method->param_sig) == 0)
+                    matched = 1;
+            }
+            if (matched)
+                sig_match = method;
         }
     }
 
     if (call_param_sig != NULL)
         free(call_param_sig);
+    param_types_free(call_param_types, call_param_types_count);
 
     if (sig_match != NULL)
         return sig_match->vmt_index;

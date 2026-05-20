@@ -8,6 +8,7 @@
 #include "type_tags.h"
 #include "KgpcType.h"
 #include "ident_ref.h"
+#include "from_cparser.h"
 #include "../SemanticCheck/HashTable/HashTable.h"  /* For HashType enum */
 #include <stdlib.h>
 #include <stdio.h>
@@ -2052,6 +2053,7 @@ void destroy_record_type(struct RecordType *record_type)
                 free(method->name);
                 free(method->mangled_name);
                 free(method->param_sig);
+                param_types_free(method->param_types, method->param_types_count);
                 free(method->resolved_mangled_id);
                 free(method);
             }
