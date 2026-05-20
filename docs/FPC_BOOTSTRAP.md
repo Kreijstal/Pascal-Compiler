@@ -356,6 +356,23 @@ The generated compiler also supports a quick startup check:
 ./tests/output/pp_bootstrap -h
 ```
 
+### Cleaning generated bootstrap outputs
+
+Bootstrap and FPC RTL runs generate large local artifacts under `tests/output/`.
+Use the cleanup helper to inspect or remove them:
+
+```bash
+scripts/clean_test_outputs.sh
+scripts/clean_test_outputs.sh --yes
+```
+
+To keep the most useful generated compiler artifacts while deleting other test
+outputs:
+
+```bash
+scripts/clean_test_outputs.sh --yes --keep-bootstrap
+```
+
 ### FPC RTL (56 units)
 
 All 56 FPC RTL units now compile with 0 semantic errors via `meson test -C build-fpc "FPC RTL tests"`.
