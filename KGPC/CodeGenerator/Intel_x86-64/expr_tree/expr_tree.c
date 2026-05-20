@@ -2639,28 +2639,8 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
         return 1;
     if (expr->resolved_kgpc_type != NULL)
     {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
-        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
-            (alias != NULL && alias->is_shortstring))
-            return 1;
-        if (kgpc_type_is_array(expr->resolved_kgpc_type))
-        {
-            KgpcType *elem = kgpc_type_get_array_element_type(expr->resolved_kgpc_type);
-            int start = 0;
-            int end = -1;
-            if (elem != NULL &&
-                elem->kind == TYPE_KIND_PRIMITIVE &&
-                elem->info.primitive_type_tag == CHAR_TYPE &&
-                kgpc_type_get_array_bounds(expr->resolved_kgpc_type, &start, &end) == 0 &&
-                start == 0 && end >= 0 && end <= 255)
-                return 1;
-        }
-    }
-    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
-    {
-        int lower = expr_get_array_lower_bound(expr);
-        int upper = expr_get_array_upper_bound(expr);
-        if (lower == 0 && upper >= 0 && upper <= 255)
+        if (kgpc_type_string_storage_kind(expr->resolved_kgpc_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING)
             return 1;
     }
     if (expr->type == EXPR_POINTER_DEREF)
@@ -2672,17 +2652,8 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
             KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
             if (points_to != NULL)
             {
-                struct TypeAlias *alias = kgpc_type_get_type_alias(points_to);
-                if (kgpc_type_is_shortstring(points_to) ||
-                    (alias != NULL && alias->is_shortstring))
-                    return 1;
-                if (points_to->kind == TYPE_KIND_ARRAY &&
-                    points_to->info.array_info.element_type != NULL &&
-                    points_to->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-                    points_to->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
-                    points_to->info.array_info.start_index == 0 &&
-                    points_to->info.array_info.end_index >= 0 &&
-                    points_to->info.array_info.end_index <= 255)
+                if (kgpc_type_string_storage_kind(points_to) ==
+                    KGPC_STRING_STORAGE_SHORTSTRING)
                     return 1;
             }
         }
@@ -2702,10 +2673,7 @@ int expr_function_call_returns_ansistring(const struct Expression *expr, CodeGen
     {
         KgpcType *ret_type = kgpc_type_get_return_type(call_type);
         const char *ret_id = call_type->info.proc_info.return_type_id;
-        if (ret_type != NULL &&
-            ret_type->kind == TYPE_KIND_PRIMITIVE &&
-            kgpc_type_get_primitive_tag(ret_type) == STRING_TYPE &&
-            !kgpc_type_is_shortstring(ret_type))
+        if (kgpc_type_string_storage_kind(ret_type) == KGPC_STRING_STORAGE_MANAGED_ANSI)
         {
             return 1;
         }
@@ -2767,25 +2735,8 @@ int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGenContex
         if (base_type != NULL && kgpc_type_is_array(base_type))
         {
             KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
-            if (elem_type != NULL)
-            {
-                struct TypeAlias *alias = kgpc_type_get_type_alias(elem_type);
-                if (kgpc_type_is_shortstring(elem_type) ||
-                    (alias != NULL && alias->is_shortstring))
-                    return 1;
-                if (kgpc_type_is_array(elem_type))
-                {
-                    KgpcType *inner = kgpc_type_get_array_element_type(elem_type);
-                    int start = 0;
-                    int end = -1;
-                    if (inner != NULL &&
-                        inner->kind == TYPE_KIND_PRIMITIVE &&
-                        inner->info.primitive_type_tag == CHAR_TYPE &&
-                        kgpc_type_get_array_bounds(elem_type, &start, &end) == 0 &&
-                        start == 0 && end >= 0 && end <= 255)
-                        return 1;
-                }
-            }
+            if (kgpc_type_string_storage_kind(elem_type) == KGPC_STRING_STORAGE_SHORTSTRING)
+                return 1;
         }
     }
 
@@ -2797,25 +2748,8 @@ int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGenContex
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL && node->type != NULL)
         {
-            if (kgpc_type_is_shortstring(node->type))
+            if (kgpc_type_string_storage_kind(node->type) == KGPC_STRING_STORAGE_SHORTSTRING)
                 return 1;
-            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-            if (alias != NULL && alias->is_shortstring)
-                return 1;
-            if (kgpc_type_is_array(node->type))
-            {
-                KgpcType *elem = kgpc_type_get_array_element_type(node->type);
-                if (elem != NULL &&
-                    elem->kind == TYPE_KIND_PRIMITIVE &&
-                    elem->info.primitive_type_tag == CHAR_TYPE)
-                {
-                    int start = 0;
-                    int end = -1;
-                    if (kgpc_type_get_array_bounds(node->type, &start, &end) == 0 &&
-                        start == 0 && end >= 0 && end <= 255)
-                        return 1;
-                }
-            }
         }
     }
     return 0;

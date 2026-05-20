@@ -768,17 +768,8 @@ static int codegen_expr_is_shortstring_array_local(const struct Expression *expr
         return 0;
     if (expr->resolved_kgpc_type != NULL)
     {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
-        if (alias != NULL && alias->is_shortstring)
-            return 1;
-    }
-    if (expr->is_array_expr &&
-        expr->array_element_type == CHAR_TYPE &&
-        expr_get_array_lower_bound(expr) == 0 &&
-        expr_get_array_upper_bound(expr) == 255)
-    {
-        if (expr->resolved_kgpc_type == NULL ||
-            kgpc_type_get_type_alias(expr->resolved_kgpc_type) == NULL)
+        if (kgpc_type_string_storage_kind(expr->resolved_kgpc_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING)
             return 1;
     }
     return 0;
@@ -819,51 +810,13 @@ static int codegen_expr_is_shortstring_value(const struct Expression *expr)
     KgpcType *expr_type = expr_get_kgpc_type(expr);
     if (expr_type != NULL)
     {
-        if (kgpc_type_is_shortstring(expr_type))
+        if (kgpc_type_string_storage_kind(expr_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING)
             return 1;
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
-        if (alias != NULL && alias->is_shortstring)
-            return 1;
-        if (kgpc_type_is_array(expr_type) &&
-            expr_type->type_alias != NULL &&
-            expr_type->type_alias->is_shortstring)
-        {
-            return 1;
-        }
     }
 
     if (codegen_expr_is_shortstring_array_local(expr))
         return 1;
-
-    if (expr_type != NULL && kgpc_type_is_array(expr_type))
-    {
-        KgpcType *elem_type = kgpc_type_get_array_element_type(expr_type);
-        if (elem_type != NULL &&
-            elem_type->kind == TYPE_KIND_PRIMITIVE &&
-            elem_type->info.primitive_type_tag == CHAR_TYPE)
-        {
-            if (codegen_expr_has_widechar_array_metadata(expr))
-                return 0;
-            int start = 0;
-            int end = -1;
-            if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
-                start == 0 && end >= 0 && end <= 255)
-                return 1;
-        }
-    }
-
-    if (expr->is_array_expr &&
-        expr->array_element_type == CHAR_TYPE &&
-        expr->array_element_size != 2 &&
-        (expr->array_element_type_id == NULL ||
-         (!pascal_identifier_equals(expr->array_element_type_id, "WideChar") &&
-          !pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))) &&
-        expr_get_array_lower_bound(expr) == 0)
-    {
-        int upper = expr_get_array_upper_bound(expr);
-        if (upper >= 0 && upper <= 255)
-            return 1;
-    }
 
     return 0;
 }
@@ -875,10 +828,7 @@ static int codegen_expr_is_char_array_like(const struct Expression *expr)
     if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
         return 1;
     KgpcType *expr_type = expr_get_kgpc_type(expr);
-    if (expr_type != NULL && kgpc_type_is_array(expr_type) &&
-        expr_type->info.array_info.element_type != NULL &&
-        expr_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-        expr_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+    if (kgpc_type_string_storage_kind(expr_type) == KGPC_STRING_STORAGE_CHAR_ARRAY)
         return 1;
     return 0;
 }
@@ -989,7 +939,7 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
                     return 1;
             }
             if (kgpc_type_equals_tag(node->type, STRING_TYPE) &&
-                !kgpc_type_is_shortstring(node->type))
+                kgpc_type_string_storage_kind(node->type) != KGPC_STRING_STORAGE_SHORTSTRING)
             {
                 struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
                 if (alias != NULL && !alias->is_shortstring)
@@ -999,25 +949,8 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
                 if (alias == NULL)
                     return 1;
             }
-            if (kgpc_type_is_shortstring(node->type))
+            if (kgpc_type_string_storage_kind(node->type) == KGPC_STRING_STORAGE_SHORTSTRING)
                 return 1;
-            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-            if (alias != NULL && alias->is_shortstring)
-                return 1;
-            if (kgpc_type_is_array(node->type))
-            {
-                KgpcType *elem = kgpc_type_get_array_element_type(node->type);
-                if (elem != NULL &&
-                    elem->kind == TYPE_KIND_PRIMITIVE &&
-                    elem->info.primitive_type_tag == CHAR_TYPE)
-                {
-                    int start = 0;
-                    int end = -1;
-                    if (kgpc_type_get_array_bounds(node->type, &start, &end) == 0 &&
-                        start == 0 && end >= 0 && end <= 255)
-                        return 1;
-                }
-            }
         }
     }
 
@@ -1249,26 +1182,8 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
     if (base_type != NULL && kgpc_type_is_array(base_type))
     {
         KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
-        if (elem_type != NULL)
-        {
-            if (kgpc_type_is_shortstring(elem_type))
-                return 1;
-            struct TypeAlias *alias = kgpc_type_get_type_alias(elem_type);
-            if (alias != NULL && alias->is_shortstring)
-                return 1;
-            if (kgpc_type_is_array(elem_type))
-            {
-                KgpcType *inner = kgpc_type_get_array_element_type(elem_type);
-                int start = 0;
-                int end = 0;
-                if (inner != NULL && kgpc_type_is_char(inner) &&
-                    kgpc_type_get_array_bounds(elem_type, &start, &end) == 0 &&
-                    start == 0 && end >= 0 && end <= 255)
-                {
-                    return 1;
-                }
-            }
-        }
+        if (kgpc_type_string_storage_kind(elem_type) == KGPC_STRING_STORAGE_SHORTSTRING)
+            return 1;
     }
 
     return 0;
@@ -1288,7 +1203,7 @@ static int codegen_shortstring_capacity_from_type_expr(KgpcType *type)
             return (int)alias->storage_size;
     }
 
-    if (kgpc_type_is_shortstring(type))
+    if (kgpc_type_string_storage_kind(type) == KGPC_STRING_STORAGE_SHORTSTRING)
     {
         long long type_size = kgpc_type_sizeof(type);
         if (type_size > 1 && type_size <= INT_MAX)
