@@ -548,7 +548,7 @@ static ListNode_t *codegen_builtin_new_function_call(struct Expression *expr,
         return inst_list;
     }
 
-    PushVarOntoScope_Typed(ctx->symtab, strdup(temp_name), ptr_type);
+    PushVarOntoScope_Typed(ctx->symtab, temp_name, ptr_type);
 
     struct Expression *target_expr = mk_varid(expr->line_num, strdup(temp_name));
     if (target_expr == NULL)

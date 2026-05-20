@@ -668,7 +668,9 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
         alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
         if (alias != NULL) {
             alias->base_type = return_type;
-            alias->target_type_id = return_type_id;
+            /* Tree owns return_type_id (passed to mk_function); copy it so
+             * the inline_return_type alias has its own freeable storage. */
+            alias->target_type_id = (return_type_id != NULL) ? strdup(return_type_id) : NULL;
             if (type_info->is_array) {
                 alias->is_array = 1;
                 alias->array_start = type_info->start;
@@ -1293,6 +1295,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
             if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
                 return_type_id = strdup(node->sym->name);
             inline_return_type = build_inline_return_alias(&type_info, return_type, return_type_id);
+            destroy_type_info_contents(&type_info);
             break;
         }
         case PASCAL_T_TYPE_SECTION:
@@ -2074,6 +2077,7 @@ Tree_t *convert_function(ast_t *func_node) {
         if (return_type_id == NULL && cur->sym != NULL && cur->sym->name != NULL)
             return_type_id = strdup(cur->sym->name);
         inline_return_type = build_inline_return_alias(&type_info, return_type, return_type_id);
+        destroy_type_info_contents(&type_info);
         cur = cur->next;
     }
 

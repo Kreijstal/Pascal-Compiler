@@ -3319,15 +3319,7 @@ int semcheck_addressof(int *type_return,
                     KgpcType *generic_proc = create_procedure_type(NULL, NULL);
                     if (generic_proc != NULL)
                     {
-                        char *id_dup = strdup(synth_name);
-                        char *mangled_dup = strdup(synth_name);
-                        if (id_dup != NULL && mangled_dup != NULL)
-                            (void)PushProcedureOntoScope_Typed(symtab, id_dup, mangled_dup, generic_proc);
-                        else
-                        {
-                            free(id_dup);
-                            free(mangled_dup);
-                        }
+                        (void)PushProcedureOntoScope_Typed(symtab, synth_name, synth_name, generic_proc);
                         destroy_kgpc_type(generic_proc);
                     }
                 }

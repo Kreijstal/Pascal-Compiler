@@ -865,7 +865,9 @@ skip_type_receiver_rewrite:
                  * use a different VMT dispatch convention (single indirection). */
                 /* Use the actual call argument count (excluding Self) for VMT overload
                  * matching instead of method_node's parameter count, because
-                 * semcheck_find_class_method may return the wrong overload. */
+                 * semcheck_find_class_method may return the wrong overload. The
+                 * binding matcher accepts param_count <= b->param_count so calls
+                 * that omit trailing default arguments still resolve correctly. */
                 int method_param_count = -1;
                 {
                     int actual_arg_count = ListLength(args_given);
@@ -3285,15 +3287,7 @@ proccall_parent_resolve_done:
                         KgpcType *synth_type = create_procedure_type(NULL, NULL);
                         if (synth_type != NULL)
                         {
-                            char *id_dup = strdup(proc_id);
-                            char *mangled_dup = strdup(proc_id);
-                            if (id_dup != NULL && mangled_dup != NULL)
-                                (void)PushProcedureOntoScope_Typed(symtab, id_dup, mangled_dup, synth_type);
-                            else
-                            {
-                                free(id_dup);
-                                free(mangled_dup);
-                            }
+                            (void)PushProcedureOntoScope_Typed(symtab, proc_id, proc_id, synth_type);
                             destroy_kgpc_type(synth_type);
                         }
                     }

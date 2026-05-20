@@ -195,6 +195,7 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
         free(field_type_id);
     if (nested_record != NULL)
         destroy_record_type(nested_record);
+    destroy_type_info_contents(&field_info);
 
     return list_builder_finish(&result);
 }

@@ -793,14 +793,8 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
 
     err->message = message;
 
-    const char *stage = "preprocessor";
-    err->parser_name = strdup(stage);
-    if (err->parser_name == NULL)
-    {
-        free(message);
-        free(err);
-        return NULL;
-    }
+    /* parser_name is a borrowed/static reference per free_error contract — do not strdup. */
+    err->parser_name = "preprocessor";
 
     err->unexpected = NULL;
     err->context = NULL;
@@ -1464,7 +1458,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 err->col = input->col;
                 err->index = remaining;
                 err->message = strdup("Unexpected trailing input after program.");
-                err->parser_name = strdup("pascal_frontend");
+                /* parser_name is a borrowed/static reference per free_error contract — do not strdup. */
+                err->parser_name = "pascal_frontend";
                 err->committed = true;
                 ensure_parse_error_contexts(err, input);
                 if (error_out != NULL)

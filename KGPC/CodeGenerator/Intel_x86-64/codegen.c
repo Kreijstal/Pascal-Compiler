@@ -2323,7 +2323,7 @@ static void codegen_register_inline_var_enum_literals(Tree_t *decl, SymTab_t *sy
          * insertion if the current scope already has an exact symbol. */
         HashNode_t *existing = FindIdentInCurrentScope(symtab, literal_name);
         if (existing == NULL)
-            PushConstOntoScope_Typed(symtab, strdup(literal_name), ordinal, enum_type);
+            PushConstOntoScope_Typed(symtab, (char *)literal_name, ordinal, enum_type);
     }
 
     if (created_enum_type)

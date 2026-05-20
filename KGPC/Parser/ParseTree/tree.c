@@ -1340,6 +1340,12 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.subprogram_data.return_type_id);
           if (tree->tree_data.subprogram_data.return_type_ref != NULL)
             type_ref_free(tree->tree_data.subprogram_data.return_type_ref);
+          if (tree->tree_data.subprogram_data.inline_return_type != NULL)
+          {
+              clear_type_alias_fields(tree->tree_data.subprogram_data.inline_return_type);
+              free(tree->tree_data.subprogram_data.inline_return_type);
+              tree->tree_data.subprogram_data.inline_return_type = NULL;
+          }
 
           destroy_list(tree->tree_data.subprogram_data.args_var);
 
