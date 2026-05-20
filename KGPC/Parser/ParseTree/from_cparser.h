@@ -18,6 +18,11 @@ int from_cparser_get_error_count(void);
 /* Forward declaration for symbol table - avoid circular dependency */
 struct SymTab;
 
+/* Forward declarations for TypeRef-array helpers used in struct fields below. */
+struct TypeRef;
+void param_types_free(struct TypeRef **types, int count);
+struct TypeRef **param_types_clone(struct TypeRef *const *src, int count);
+
 /* Method binding information */
 typedef struct {
     char *class_name;

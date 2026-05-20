@@ -2270,8 +2270,11 @@ void from_cparser_cleanup(void)
     while (class_method_bindings != NULL) {
         ListNode_t *next = class_method_bindings->next;
         ClassMethodBinding *binding = (ClassMethodBinding *)class_method_bindings->cur;
-        if (binding != NULL && binding->param_sig != NULL)
-            free(binding->param_sig);
+        if (binding != NULL) {
+            if (binding->param_sig != NULL)
+                free(binding->param_sig);
+            param_types_free(binding->param_types, binding->param_types_count);
+        }
         free(binding); /* ClassMethodBinding struct */
         free(class_method_bindings);
         class_method_bindings = next;

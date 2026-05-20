@@ -955,10 +955,13 @@ static void collect_class_members(ast_t *node, const char *class_name,
                                 if (!template->is_interface_delegation) {
                                     int param_count = from_cparser_count_params_ast(template->params_ast);
                                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                                    int param_types_count = 0;
+                                    TypeRef **param_types = param_types_from_params_ast(template->params_ast, &param_types_count);
                                     register_class_method_ex(class_name, template->name,
                                         template->is_virtual, template->is_override, template->is_static,
                                         template->is_class_method,
-                                        param_count, param_sig);
+                                        param_count, param_sig,
+                                        param_types, param_types_count);
                                 }
                                 if (method_builder != NULL)
                                     list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
@@ -1052,10 +1055,13 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 if (!template->is_interface_delegation) {
                     int param_count = from_cparser_count_params_ast(template->params_ast);
                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                    int param_types_count = 0;
+                    TypeRef **param_types = param_types_from_params_ast(template->params_ast, &param_types_count);
                     register_class_method_ex(class_name, template->name,
                         template->is_virtual, template->is_override, template->is_static,
                         template->is_class_method,
-                        param_count, param_sig);
+                        param_count, param_sig,
+                        param_types, param_types_count);
                 }
 
                 if (method_builder != NULL)

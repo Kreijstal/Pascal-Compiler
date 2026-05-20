@@ -2500,10 +2500,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                            int param_types_count = 0;
+                            TypeRef **param_types = param_types_from_params_ast(template->params_ast, &param_types_count);
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
                                 template->is_class_method,
-                                param_count, param_sig);
+                                param_count, param_sig,
+                                param_types, param_types_count);
                         }
                         if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
@@ -2530,10 +2533,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                            int param_types_count = 0;
+                            TypeRef **param_types = param_types_from_params_ast(template->params_ast, &param_types_count);
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
                                 template->is_class_method,
-                                param_count, param_sig);
+                                param_count, param_sig,
+                                param_types, param_types_count);
                         }
                         if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered helper method %s.%s (static=%d)\n",

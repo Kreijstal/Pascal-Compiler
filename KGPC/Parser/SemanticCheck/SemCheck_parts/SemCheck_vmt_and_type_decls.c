@@ -77,6 +77,8 @@ if (record_info->parent_class_name != NULL) {
 	                                max_vmt_index = cloned->vmt_index;
 	                            cloned->param_count = parent_method->param_count;
                             cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
+                            cloned->param_types = param_types_clone(parent_method->param_types, parent_method->param_types_count);
+                            cloned->param_types_count = (cloned->param_types != NULL) ? parent_method->param_types_count : -1;
                             cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
 
                             /* For generic specializations, inherited methods must use
@@ -101,6 +103,7 @@ if (record_info->parent_class_name != NULL) {
                                 free(cloned->name);
                                 free(cloned->mangled_name);
                                 free(cloned->param_sig);
+                                param_types_free(cloned->param_types, cloned->param_types_count);
                                 free(cloned);
                             }
                         }
@@ -214,7 +217,14 @@ if (record_info->parent_class_name != NULL) {
                     if (strcasecmp(info->name, binding->method_name) != 0)
                         continue;
                     int signature_matches = 0;
-                    if (binding->param_sig != NULL && info->param_sig != NULL) {
+                    if (binding->param_types != NULL && binding->param_types_count >= 0 &&
+                        info->param_types != NULL && info->param_types_count >= 0) {
+                        /* Structural match: compare parameter TypeRefs element-wise
+                         * case-insensitively, instead of string-matching mangled names. */
+                        if (type_ref_array_equal_ci(binding->param_types, binding->param_types_count,
+                                                    info->param_types, info->param_types_count))
+                            signature_matches = 1;
+                    } else if (binding->param_sig != NULL && info->param_sig != NULL) {
                         if (strcasecmp(binding->param_sig, info->param_sig) == 0)
                             signature_matches = 1;
                     } else if (binding->param_count >= 0 && info->param_count >= 0) {
@@ -295,6 +305,10 @@ if (record_info->parent_class_name != NULL) {
                         info->param_count = binding->param_count;
                     if (info->param_sig == NULL && binding->param_sig != NULL)
                         info->param_sig = strdup(binding->param_sig);
+                    if (info->param_types == NULL && binding->param_types != NULL) {
+                        info->param_types = param_types_clone(binding->param_types, binding->param_types_count);
+                        info->param_types_count = (info->param_types != NULL) ? binding->param_types_count : -1;
+                    }
                 }
             }
             
@@ -315,6 +329,8 @@ if (record_info->parent_class_name != NULL) {
                     new_method->is_override = 0;
                     new_method->param_count = binding->param_count;
                     new_method->param_sig = binding->param_sig ? strdup(binding->param_sig) : NULL;
+                    new_method->param_types = param_types_clone(binding->param_types, binding->param_types_count);
+                    new_method->param_types_count = (new_method->param_types != NULL) ? binding->param_types_count : -1;
                     new_method->resolved_mangled_id = NULL;
                     /* FPC VMT has 12 metadata slots (96 bytes) before virtual methods:
                      * vInstanceSize, vInstanceSize2, vParentRef, vClassName,
@@ -344,6 +360,7 @@ if (record_info->parent_class_name != NULL) {
                         free(new_method->name);
                         free(new_method->mangled_name);
                         free(new_method->param_sig);
+                        param_types_free(new_method->param_types, new_method->param_types_count);
                         free(new_method);
                     }
                 }
