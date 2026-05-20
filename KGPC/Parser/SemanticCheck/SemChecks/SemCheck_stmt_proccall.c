@@ -2987,77 +2987,13 @@ proccall_parent_resolve_done:
             }
         }
 
-        /* Fill in missing arguments with default values */
-        if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
-        {
-            ListNode_t *formal_params = resolved_proc->type->info.proc_info.params;
-            ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
-            int given_count = ListLength(call_args);
-            int formal_count = ListLength(formal_params);
-            
-            if (given_count < formal_count)
-            {
-                /* Need to add default arguments */
-                ListNode_t *formal_cur = formal_params;
-                int arg_index = 0;
-                
-                /* Skip to the position after the last given argument */
-                while (arg_index < given_count && formal_cur != NULL)
-                {
-                    arg_index++;
-                    formal_cur = formal_cur->next;
-                }
-                
-                /* For each remaining formal parameter, add its default value */
-                ListNode_t *args_tail = call_args;
-                while (args_tail != NULL && args_tail->next != NULL)
-                    args_tail = args_tail->next;
-                
-                while (formal_cur != NULL)
-                {
-                    Tree_t *param_decl = (Tree_t *)formal_cur->cur;
-                    struct Expression *default_expr = get_param_default_value_stmt(param_decl);
-                    
-                    if (default_expr != NULL)
-                    {
-                        struct Expression *copy = copy_default_expr(default_expr);
-                        if (copy != NULL)
-                        {
-                            ListNode_t *new_arg = CreateListNode(copy, LIST_EXPR);
-                            if (args_tail != NULL)
-                            {
-                                args_tail->next = new_arg;
-                                args_tail = new_arg;
-                            }
-                            else
-                            {
-                                /* No arguments given, start the list */
-                                stmt->stmt_data.procedure_call_data.expr_args = new_arg;
-                                args_tail = new_arg;
-                            }
-                            
-                            if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
-                                fprintf(stderr, "[SemCheck] Added default arg %d for %s\n", 
-                                    arg_index, proc_id != NULL ? proc_id : "(null)");
-                            }
-                        }
-                        else
-                        {
-                            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
-                                "Error on line %d, could not copy default value for parameter %d of %s.\n\n",
-                                stmt->line_num,
-                                arg_index,
-                                proc_id != NULL ? proc_id : "(null)");
-                            return_val++;
-                        }
-                    }
-                    
-                    arg_index++;
-                    formal_cur = formal_cur->next;
-                }
-            }
-        }
-        
+        /* NOTE: default-argument injection is handled later via
+         * append_default_args at the unified site below (stmt->expr_args =
+         * args_given). A previous duplicate injection here mutated
+         * stmt->expr_args directly, but was then overwritten by the unified
+         * site — orphaning the listnode + cloned expression and leaking
+         * them on every defaulted call. */
+
         sym_return = resolved_proc;
         scope_return = 1; // found
     }
