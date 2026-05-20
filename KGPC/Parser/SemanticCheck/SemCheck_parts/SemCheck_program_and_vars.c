@@ -3085,7 +3085,33 @@ next_identifier:
                                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE ||
                                  proc_symbol->hash_type == HASHTYPE_FUNCTION))
                             {
+                                /* expr_data is a union; free the old variant's
+                                 * owned payload before clobbering with addr_of_proc_data,
+                                 * otherwise those strdup'd strings leak. */
+                                if (init_expr->type == EXPR_VAR_ID)
+                                {
+                                    free(init_expr->expr_data.id);
+                                    init_expr->expr_data.id = NULL;
+                                }
+                                else if (init_expr->type == EXPR_FUNCTION_CALL)
+                                {
+                                    free(init_expr->expr_data.function_call_data.id);
+                                    free(init_expr->expr_data.function_call_data.mangled_id);
+                                    destroy_list(init_expr->expr_data.function_call_data.args_expr);
+                                    if (init_expr->expr_data.function_call_data.procedural_var_expr != NULL)
+                                        destroy_expr(init_expr->expr_data.function_call_data.procedural_var_expr);
+                                    if (init_expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                                        destroy_expr(init_expr->expr_data.function_call_data.constructor_receiver_expr);
+                                    if (init_expr->expr_data.function_call_data.call_kgpc_type != NULL)
+                                        destroy_kgpc_type(init_expr->expr_data.function_call_data.call_kgpc_type);
+                                    free(init_expr->expr_data.function_call_data.placeholder_method_name);
+                                    free(init_expr->expr_data.function_call_data.call_qualifier);
+                                    free(init_expr->expr_data.function_call_data.self_class_name);
+                                    free(init_expr->expr_data.function_call_data.cached_owner_class);
+                                    free(init_expr->expr_data.function_call_data.cached_method_name);
+                                }
                                 init_expr->type = EXPR_ADDR_OF_PROC;
+                                init_expr->expr_data.addr_of_proc_data.receiver_expr = NULL;
                                 {
                                     const char *proc_target = NULL;
                                     if (proc_symbol->internproc_id != NULL &&
