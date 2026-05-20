@@ -3629,8 +3629,12 @@ proccall_parent_resolve_done:
                         if (FindSymbol(&arg_node, symtab, arg_expr->expr_data.id) != 0 &&
                             arg_node != NULL && arg_node->hash_type == HASHTYPE_PROCEDURE)
                         {
-                            /* Transform the expression to EXPR_ADDR_OF_PROC */
+                            /* Transform the expression to EXPR_ADDR_OF_PROC.
+                             * expr_data is a union; free the EXPR_VAR_ID id
+                             * before reassigning the slot, or it leaks. */
+                            free(arg_expr->expr_data.id);
                             arg_expr->type = EXPR_ADDR_OF_PROC;
+                            arg_expr->expr_data.addr_of_proc_data.receiver_expr = NULL;
                             arg_expr->expr_data.addr_of_proc_data.proc_mangled_id = arg_node->mangled_id ? strdup(arg_node->mangled_id) : NULL;
                             arg_expr->expr_data.addr_of_proc_data.proc_id = arg_node->id ? strdup(arg_node->id) : NULL;
                             arg_expr->expr_data.addr_of_proc_data.source_unit_index = arg_node->source_unit_index;
