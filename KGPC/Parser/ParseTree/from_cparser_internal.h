@@ -293,6 +293,9 @@ char *generate_anonymous_method_name(int is_function);
 int is_external_directive(const char *directive);
 int is_method_static_with_signature(const char *class_name, const char *method_name,
                                            int param_count, const char *param_sig);
+int is_method_static_with_types(const char *class_name, const char *method_name,
+                                int param_count,
+                                struct TypeRef *const *param_types, int param_types_count);
 int is_operator_token_name(const char *name);
 bool is_safe_to_continue(VisitedSet *visited, ast_t *node);
 int kgpc_debug_decl_scan_enabled(void);
@@ -306,6 +309,7 @@ char *method_param_type_suffix(Tree_t *param_decl);
 char *param_type_signature_from_method_impl(ast_t *method_node);
 char *param_type_signature_from_params_ast(ast_t *params_ast);
 struct TypeRef **param_types_from_params_ast(ast_t *params_ast, int *out_count);
+struct TypeRef **param_types_from_method_impl(ast_t *method_node, int *out_count);
 void param_types_free(struct TypeRef **types, int count);
 struct TypeRef **param_types_clone(struct TypeRef *const *src, int count);
 int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8]);

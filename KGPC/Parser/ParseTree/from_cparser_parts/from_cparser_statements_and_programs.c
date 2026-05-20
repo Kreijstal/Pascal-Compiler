@@ -1100,6 +1100,8 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     int is_class_method_impl = from_cparser_is_method_class_method(effective_class, method_name);
     int method_param_count = count_params_in_method_impl(method_node);
     char *method_param_sig = param_type_signature_from_method_impl(method_node);
+    int method_param_types_count = 0;
+    TypeRef **method_param_types = param_types_from_method_impl(method_node, &method_param_types_count);
     int method_declares_operator = method_decl_uses_operator_keyword;
     if (method_node != NULL && method_name != NULL)
     {
@@ -1112,9 +1114,14 @@ Tree_t *convert_method_impl(ast_t *method_node) {
         if (impl_template.is_class_method)
             is_class_method_impl = 1;
     }
-    if (!is_static_method)
-        is_static_method = is_method_static_with_signature(effective_class, method_name,
-            method_param_count, method_param_sig);
+    if (!is_static_method) {
+        if (method_param_types != NULL)
+            is_static_method = is_method_static_with_types(effective_class, method_name,
+                method_param_count, method_param_types, method_param_types_count);
+        else
+            is_static_method = is_method_static_with_signature(effective_class, method_name,
+                method_param_count, method_param_sig);
+    }
     /* A static class method (class function ... static) has no Self */
     if (is_class_method_impl && is_static_method)
         is_static_method = 1;
@@ -1138,6 +1145,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
         free(effective_class_last);
         if (method_param_sig != NULL)
             free(method_param_sig);
+        param_types_free(method_param_types, method_param_types_count);
         return NULL;
     }
     
@@ -1515,6 +1523,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
         free(effective_class_outer);
         if (method_param_sig != NULL)
             free(method_param_sig);
+        param_types_free(method_param_types, method_param_types_count);
         g_current_method_name = prev_method_name_ctx;
         return NULL;
     }
@@ -1536,6 +1545,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     free(effective_class_outer);
     if (method_param_sig != NULL)
         free(method_param_sig);
+    param_types_free(method_param_types, method_param_types_count);
     g_current_method_name = prev_method_name_ctx;
     return tree;
 }

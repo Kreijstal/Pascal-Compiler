@@ -1861,6 +1861,42 @@ char *param_type_signature_from_method_impl(ast_t *method_node) {
     return sig;
 }
 
+TypeRef **param_types_from_method_impl(ast_t *method_node, int *out_count) {
+    if (out_count != NULL)
+        *out_count = 0;
+    if (method_node == NULL)
+        return NULL;
+    TypeRef **out = NULL;
+    int total = 0;
+    for (ast_t *cur = method_node->child; cur != NULL; cur = cur->next) {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node->typ != PASCAL_T_PARAM_LIST && node->typ != PASCAL_T_PARAM)
+            continue;
+        int chunk_count = 0;
+        TypeRef **chunk = param_types_from_params_ast(node, &chunk_count);
+        if (chunk == NULL || chunk_count == 0) {
+            param_types_free(chunk, chunk_count);
+            continue;
+        }
+        TypeRef **grown = (TypeRef **)realloc(out, (size_t)(total + chunk_count) * sizeof(TypeRef *));
+        if (grown == NULL) {
+            param_types_free(out, total);
+            param_types_free(chunk, chunk_count);
+            return NULL;
+        }
+        out = grown;
+        for (int i = 0; i < chunk_count; ++i)
+            out[total + i] = chunk[i];
+        free(chunk); /* steal entries, free outer */
+        total += chunk_count;
+    }
+    if (out_count != NULL)
+        *out_count = total;
+    return out;
+}
+
 void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
                                       int is_class_method,
@@ -1970,6 +2006,47 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (has_instance)
         return 0;
     return has_static;
+}
+
+int is_method_static_with_types(const char *class_name, const char *method_name,
+                                int param_count,
+                                TypeRef *const *param_types, int param_types_count) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    if (param_types == NULL && param_count < 0)
+        return is_method_static(class_name, method_name);
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return is_method_static(class_name, method_name);
+    int has_static = 0, has_instance = 0, has_match = 0;
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *b = entry->bindings[i];
+        if (b->method_name != mn)
+            continue;
+        int matches = 0;
+        if (param_types != NULL && b->param_types != NULL && b->param_types_count >= 0) {
+            if (type_ref_array_equal_ci(b->param_types, b->param_types_count,
+                                        param_types, param_types_count))
+                matches = 1;
+        } else if (param_count >= 0 && b->param_count == param_count) {
+            matches = 1;
+        }
+        if (matches) {
+            has_match = 1;
+            if (b->is_static) has_static = 1;
+            else has_instance = 1;
+        }
+    }
+    if (has_match) {
+        if (has_instance) return 0;
+        return has_static;
+    }
+    return is_method_static(class_name, method_name);
 }
 
 int is_method_static_with_signature(const char *class_name, const char *method_name,
@@ -2132,6 +2209,47 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
         }
     }
     return 0;
+}
+
+int from_cparser_is_method_virtual_with_types(const char *class_name, const char *method_name,
+    int param_count,
+    TypeRef *const *param_types, int param_types_count)
+{
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    if (param_types == NULL && param_count < 0)
+        return from_cparser_is_method_virtual(class_name, method_name);
+
+    const char *mn = string_intern(method_name);
+    if (mn == NULL)
+        return 0;
+
+    int has_match = 0, has_virtual = 0;
+    const char *cn = string_intern(class_name);
+    if (cn != NULL) {
+        CMBIndexEntry *entry = cmb_index_find(cn);
+        if (entry != NULL) {
+            for (int i = 0; i < entry->count; i++) {
+                ClassMethodBinding *b = entry->bindings[i];
+                if (b->method_name != mn) continue;
+                int matches = 0;
+                if (param_types != NULL && b->param_types != NULL && b->param_types_count >= 0) {
+                    if (type_ref_array_equal_ci(b->param_types, b->param_types_count,
+                                                param_types, param_types_count))
+                        matches = 1;
+                } else if (param_count >= 0 && b->param_count == param_count) {
+                    matches = 1;
+                }
+                if (matches) {
+                    has_match = 1;
+                    if (b->is_virtual || b->is_override) has_virtual = 1;
+                }
+            }
+        }
+    }
+    if (has_match)
+        return has_virtual;
+    return from_cparser_is_method_virtual(class_name, method_name);
 }
 
 int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
