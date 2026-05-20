@@ -897,6 +897,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     int single_record_element = 0;
     int is_widechar_array_target = 0;
     int is_char_array_target = type_info_targets_char_array(type_info, &is_widechar_array_target);
+    ast_t *synthetic_tuple_wrapper = NULL;
     if (tuple_node->typ == PASCAL_T_STRING) {
         if (is_char_array_target || is_widechar_array_target) {
             is_string_initializer = 1;
@@ -951,9 +952,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         ast_t *saved_next = tuple_node->next;
         tuple_node->next = NULL;
         tuple_node = wrapper;
-        /* Note: wrapper is a small allocation; it is not freed here because
-         * the AST is freed in bulk after translation.  saved_next is unused
-         * since single-element array consts only have one value. */
+        synthetic_tuple_wrapper = wrapper;
+        /* saved_next is unused — single-element array consts only have one value. */
         (void)saved_next;
     }
 
@@ -1673,6 +1673,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     list_builder_append(var_builder, array_decl, LIST_TREE);
 
     *id_ptr = NULL;
+    if (synthetic_tuple_wrapper != NULL) {
+        /* The wrapper held the real tuple_node as its child; detach so
+         * free_ast doesn't recurse into the still-live AST graph, then
+         * recycle the wrapper node itself. */
+        synthetic_tuple_wrapper->child = NULL;
+        synthetic_tuple_wrapper->next = NULL;
+        free_ast(synthetic_tuple_wrapper);
+    }
     return 0;
 }
 
