@@ -1661,7 +1661,10 @@ skip_type_receiver_rewrite:
                     /* For static methods, remove the first argument (the instance/type identifier) */
                     ListNode_t *old_head = args_given;
                     stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                    destroy_expr((struct Expression *)old_head->cur);
+                    old_head->cur = NULL;
                     old_head->next = NULL;
+                    free(old_head);
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
                 }
@@ -1671,7 +1674,10 @@ skip_type_receiver_rewrite:
                      * Static methods have no Self parameter, so strip the receiver. */
                     ListNode_t *old_head = args_given;
                     stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                    destroy_expr((struct Expression *)old_head->cur);
+                    old_head->cur = NULL;
                     old_head->next = NULL;
+                    free(old_head);
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
                 }
@@ -1966,15 +1972,27 @@ skip_type_receiver_rewrite:
 
             if (is_static && receiver_is_type_ident) {
                 /* For static methods, remove the first argument (the type identifier) */
-                args_given = args_given->next;
+                ListNode_t *old_head = args_given;
+                args_given = old_head->next;
                 stmt->stmt_data.procedure_call_data.expr_args = args_given;
+                destroy_expr((struct Expression *)old_head->cur);
+                old_head->cur = NULL;
+                old_head->next = NULL;
+                free(old_head);
+                static_arg_already_removed = 1;
             }
             else if (is_static && !receiver_is_type_ident && args_given != NULL)
             {
                 /* Static method called via instance variable or implicit Self.
                  * Static methods have no Self parameter, so strip the receiver. */
-                args_given = args_given->next;
+                ListNode_t *old_head = args_given;
+                args_given = old_head->next;
                 stmt->stmt_data.procedure_call_data.expr_args = args_given;
+                destroy_expr((struct Expression *)old_head->cur);
+                old_head->cur = NULL;
+                old_head->next = NULL;
+                free(old_head);
+                static_arg_already_removed = 1;
             }
         }
 
