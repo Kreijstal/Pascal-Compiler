@@ -1,6 +1,20 @@
 # FPC Bootstrap Analysis
 
-## Status: FPC RTL test suite passes; `pp.pas` self-hosts through `pp_stage2`
+## Status: Stage3 Bootstrap Verified
+
+As of PR #732 merged into `master`, the FPC bootstrap path is green:
+
+1. KGPC compiles and links `FPCSource/compiler/pp.pas` as `pp_bootstrap`.
+2. `pp_bootstrap` compiles `FPCSource/compiler/pp.pas` as `pp_stage2`.
+3. `pp_stage2 -h` starts successfully and prints the FPC compiler help banner.
+4. The generated stage3 compiler can compile and run a hello-world program.
+5. CI `fpc-rtl-tests` passes, along with the Linux, MSYS2, and Windows cross-compile checks.
+
+The previous stage3 startup failure was caused by an AnsiString record field
+receiving a ShortString local through the wrong assignment helper. That copied
+the ShortString length byte into the managed string payload, producing bad paths
+such as `!./FPCSource/compiler/pgenutil.pas`. Codegen now emits the
+ShortString-to-AnsiString helper for that typed assignment case.
 
 ## Prerequisites
 
@@ -307,6 +321,34 @@ search paths or host-generated `.ppu` files.
 Expected output:
 ```text
 Hello, World!
+```
+
+### Compile hello world with stage3
+
+After `TestCompiler.test_fpcrtl_pp_pas_bootstrap` has produced
+`tests/output/pp_bootstrap`, it can compile a standalone program directly:
+
+```bash
+tmpdir=$(mktemp -d /tmp/kgpc-hello.XXXXXX)
+cat > "$tmpdir/hello.pas" <<'EOF'
+program hello;
+begin
+  writeln('hello world');
+end.
+EOF
+
+tests/output/pp_bootstrap \
+  -Fu"$PWD/FPCSource/rtl/units/x86_64-linux" \
+  -FE"$tmpdir" \
+  -o"$tmpdir/hello" \
+  "$tmpdir/hello.pas"
+
+"$tmpdir/hello"
+```
+
+Expected output:
+```text
+hello world
 ```
 
 The generated compiler also supports a quick startup check:
