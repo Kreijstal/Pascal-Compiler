@@ -908,6 +908,11 @@ skip_type_receiver_rewrite:
                         }
                     }
                     stmt->stmt_data.procedure_call_data.vmt_index = vmt_index;
+                    /* Earlier method-placeholder resolution (line ~837) may
+                     * have already set self_class_name; free it before
+                     * reassigning so the prior strdup doesn't leak. */
+                    if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
+                        free(stmt->stmt_data.procedure_call_data.self_class_name);
                     stmt->stmt_data.procedure_call_data.self_class_name =
                         strdup(self_record->type_id);
                     if (stmt->stmt_data.procedure_call_data.cached_owner_class == NULL)
