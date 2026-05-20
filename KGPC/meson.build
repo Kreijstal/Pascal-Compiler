@@ -208,6 +208,11 @@ env.set('CC', ' '.join(compiler.cmd_array()))
 env.set('KGPC_RUNTIME_LIB', kgpc_runtime_lib.full_path())
 env.set('KGPC_CTYPES_HELPER', ctypes_helper.full_path())
 env.set('KGPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
+# Propagate the sanitizer option so the test harness can link
+# generated executables with matching -fsanitize=... flags. Without
+# this, linking a generated .s against an ASan-built libkgpc_runtime.a
+# fails with undefined references to __asan_report_*.
+env.set('KGPC_SANITIZE', get_option('b_sanitize'))
 
 if run_valgrind_tests
   env.set('VALGRIND_BIN', valgrind_prog.full_path())
@@ -243,6 +248,7 @@ if get_option('run_fpc_rtl_tests')
   fpc_rtl_env.set('CC', ' '.join(compiler.cmd_array()))
   fpc_rtl_env.set('KGPC_RUNTIME_LIB', kgpc_runtime_lib.full_path())
   fpc_rtl_env.set('KGPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
+  fpc_rtl_env.set('KGPC_SANITIZE', get_option('b_sanitize'))
   fpc_rtl_env.set('RUN_BUGGY_TEST', 'false')
   fpc_rtl_env.set('RUN_VALGRIND_TESTS', 'false')
   # FPC RTL compilation is CPU-bound (~4s per test parsing system.pp).

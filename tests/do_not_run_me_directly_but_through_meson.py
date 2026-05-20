@@ -1890,6 +1890,14 @@ class TestCompiler(unittest.TestCase):
                 command.append("-no-pie")
             if is_coverage_enabled():
                 command.append("--coverage")
+            # When the runtime archive was built with a sanitizer (e.g.
+            # build-asan via -Db_sanitize=address), generated executables
+            # must link with the matching -fsanitize=... flag or the link
+            # fails with undefined references to __asan_report_*. Meson
+            # forwards b_sanitize through KGPC_SANITIZE.
+            _sanitize = os.environ.get("KGPC_SANITIZE", "none")
+            if _sanitize and _sanitize != "none":
+                command.append(f"-fsanitize={_sanitize}")
             command.extend([
                 "-o",
                 executable_file,
