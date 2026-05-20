@@ -2068,6 +2068,10 @@ int is_method_static_with_signature(const char *class_name, const char *method_n
     int has_static = 0;
     int has_instance = 0;
     int has_match = 0;
+    if (param_sig != NULL)
+        kgpc_param_types_strict_miss(
+            "is_method_static_with_signature:legacy-call",
+            "query", 0, "bindings", 1);
     for (int i = 0; i < entry->count; i++) {
         ClassMethodBinding *binding = entry->bindings[i];
         if (binding->method_name == mn) {
@@ -2267,6 +2271,10 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
 
     int has_match = 0;
     int has_virtual = 0;
+    if (param_sig != NULL)
+        kgpc_param_types_strict_miss(
+            "from_cparser_is_method_virtual_with_signature:legacy-call",
+            "query", 0, "bindings", 1);
 
     /* Helper: check bindings for a given interned class name. */
     #define CHECK_INDEX_FOR(interned_cname) \

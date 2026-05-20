@@ -568,16 +568,23 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
                 first_count_match = method;
             count_match_count++;
             int matched = 0;
-            if (call_param_types != NULL && method->param_types != NULL &&
-                method->param_types_count >= 0)
+            int lhs_has = (call_param_types != NULL);
+            int rhs_has = (method->param_types != NULL && method->param_types_count >= 0);
+            if (lhs_has && rhs_has)
             {
                 if (type_ref_array_equal_ci(call_param_types, call_param_types_count,
                                             method->param_types, method->param_types_count))
                     matched = 1;
             }
-            if (!matched && call_param_sig != NULL && method->param_sig != NULL &&
-                strcasecmp(call_param_sig, method->param_sig) == 0)
-                matched = 1;
+            if (!matched && call_param_sig != NULL && method->param_sig != NULL)
+            {
+                if (lhs_has != rhs_has)
+                    kgpc_param_types_strict_miss(
+                        "codegen_symbol_resolution:vmt-slot-picker",
+                        "call", lhs_has, "method", rhs_has);
+                if (strcasecmp(call_param_sig, method->param_sig) == 0)
+                    matched = 1;
+            }
             if (matched)
                 sig_match = method;
         }

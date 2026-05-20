@@ -130,6 +130,10 @@ if (record_info->parent_class_name != NULL) {
                 if (binding->param_sig != NULL || binding->param_types != NULL)
                 {
                     int have_binding_types = (binding->param_types != NULL && binding->param_types_count >= 0);
+                    if (!have_binding_types)
+                        kgpc_param_types_strict_miss(
+                            "SemCheck_vmt:FindAllIdents-lookup",
+                            "binding", 0, "cand-params(sema)", 1);
                     for (ListNode_t *m = matches; m != NULL; m = m->next)
                     {
                         HashNode_t *cand = (HashNode_t *)m->cur;
@@ -234,14 +238,19 @@ if (record_info->parent_class_name != NULL) {
                     if (strcasecmp(info->name, binding->method_name) != 0)
                         continue;
                     int signature_matches = 0;
-                    if (binding->param_types != NULL && binding->param_types_count >= 0 &&
-                        info->param_types != NULL && info->param_types_count >= 0) {
+                    int lhs_has = (binding->param_types != NULL && binding->param_types_count >= 0);
+                    int rhs_has = (info->param_types != NULL && info->param_types_count >= 0);
+                    if (lhs_has && rhs_has) {
                         /* Structural match: compare parameter TypeRefs element-wise
                          * case-insensitively, instead of string-matching mangled names. */
                         if (type_ref_array_equal_ci(binding->param_types, binding->param_types_count,
                                                     info->param_types, info->param_types_count))
                             signature_matches = 1;
                     } else if (binding->param_sig != NULL && info->param_sig != NULL) {
+                        if (lhs_has != rhs_has)
+                            kgpc_param_types_strict_miss(
+                                "SemCheck_vmt:strict-override-match",
+                                "binding", lhs_has, "info", rhs_has);
                         if (strcasecmp(binding->param_sig, info->param_sig) == 0)
                             signature_matches = 1;
                     } else if (binding->param_count >= 0 && info->param_count >= 0) {
@@ -457,6 +466,9 @@ if (record_info->parent_class_name != NULL) {
                 if (!sig_match)
                     continue;
             } else if (mi->param_sig != NULL) {
+                kgpc_param_types_strict_miss(
+                    "SemCheck_vmt:resolved-id-cand-filter",
+                    "MethodInfo", 0, "cand-params(sema)", 1);
                 char *cand_sig = semcheck_param_sig_from_params(
                     cand->type->info.proc_info.params, 1);
                 int sig_match = (cand_sig != NULL && strcasecmp(cand_sig, mi->param_sig) == 0);
