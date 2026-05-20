@@ -117,6 +117,7 @@ kgpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
   'CodeGenerator/Intel_x86-64/graph_coloring_allocator.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
+  'CodeGenerator/Intel_x86-64/expr_tree/expr_tree_string.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree_op.c',
   'Optimizer/optimizer.c',
   'Optimizer/pass_manager.c',
