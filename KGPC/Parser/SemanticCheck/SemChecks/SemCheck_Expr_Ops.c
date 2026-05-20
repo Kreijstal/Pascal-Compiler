@@ -2424,11 +2424,19 @@ static int semcheck_try_helper_member(int *type_return, SymTab_t *symtab,
     HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
     if (method_node != NULL)
     {
+        /* expr_data is a union; the EXPR_VAR_ID strdup'd id (which `id`
+         * itself may alias) must be moved into the new slot, not freed
+         * and re-dup'd, or it leaks and the alias dangles. */
+        char *moved_id = NULL;
+        if (expr->type == EXPR_VAR_ID)
+        {
+            moved_id = expr->expr_data.id;
+            expr->expr_data.id = NULL;
+        }
         expr->type = EXPR_FUNCTION_CALL;
-        expr->expr_data.function_call_data.is_operator_call = 1;
         memset(&expr->expr_data.function_call_data, 0,
             sizeof(expr->expr_data.function_call_data));
-        expr->expr_data.function_call_data.id = strdup(id);
+        expr->expr_data.function_call_data.id = (moved_id != NULL) ? moved_id : strdup(id);
         expr->expr_data.function_call_data.args_expr = NULL;
         expr->expr_data.function_call_data.mangled_id = NULL;
         semcheck_reset_function_call_cache(expr);
