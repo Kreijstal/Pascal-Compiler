@@ -5,6 +5,89 @@
 #include <limits.h>
 #include "SemCheck_funccall_internal.h"
 
+/*
+ * BUILTIN_FUNC_MAP — table-driven dispatch for Pascal builtin functions
+ * that take no special argument-type pre-inspection.
+ *
+ * Each entry maps a Pascal builtin name (matched case-insensitively) to its
+ * semcheck handler.  Two handler slots handle the two calling conventions:
+ *
+ *   fn          — standard handler: (int*, SymTab_t*, Expression*, int)
+ *   fn_with_arg — extended handler: (int*, SymTab_t*, Expression*, int, int)
+ *                 used for Pred/Succ (is_succ) and Low/High (is_high)
+ *
+ * Exactly one of fn / fn_with_arg is non-NULL per entry; int_arg is only
+ * meaningful when fn_with_arg is set.
+ *
+ * Entries NOT in this table (UpCase, UpperCase, LowerCase, Trunc) require
+ * argument-type inspection before dispatching and are handled inline.
+ */
+typedef int (*SemcheckBuiltinFn)(int *, SymTab_t *, struct Expression *, int);
+typedef int (*SemcheckBuiltinFnWithArg)(int *, SymTab_t *, struct Expression *, int, int);
+
+typedef struct {
+    const char         *name;        /* Pascal builtin name */
+    SemcheckBuiltinFn   fn;          /* standard handler (NULL if fn_with_arg used) */
+    SemcheckBuiltinFnWithArg fn_with_arg; /* extended handler (NULL if fn used) */
+    int                 int_arg;     /* extra int for fn_with_arg */
+} BuiltinFuncEntry;
+
+static const BuiltinFuncEntry BUILTIN_FUNC_MAP[] = {
+    /* name       fn                          fn_with_arg                  int_arg */
+    { "Chr",      semcheck_builtin_chr,        NULL,                        0 },
+    { "Ord",      semcheck_builtin_ord,        NULL,                        0 },
+    { "Pred",     NULL,                        semcheck_builtin_predsucc,   0 },
+    { "Succ",     NULL,                        semcheck_builtin_predsucc,   1 },
+    { "Length",   semcheck_builtin_length,     NULL,                        0 },
+    { "Copy",     semcheck_builtin_copy,       NULL,                        0 },
+    { "Concat",   semcheck_builtin_concat,     NULL,                        0 },
+    { "Pos",      semcheck_builtin_pos,        NULL,                        0 },
+    { "StrPas",   semcheck_builtin_strpas,     NULL,                        0 },
+    { "EOF",      semcheck_builtin_eof,        NULL,                        0 },
+    { "EOLN",     semcheck_builtin_eoln,       NULL,                        0 },
+    { "Low",      NULL,                        semcheck_builtin_lowhigh,    0 },
+    { "High",     NULL,                        semcheck_builtin_lowhigh,    1 },
+    { "Default",  semcheck_builtin_default,    NULL,                        0 },
+    { "New",      semcheck_builtin_new_func,   NULL,                        0 },
+    { "Power",    semcheck_builtin_power,      NULL,                        0 },
+    { "Aligned",  semcheck_builtin_aligned,    NULL,                        0 },
+};
+
+#define BUILTIN_FUNC_MAP_COUNT \
+    ((int)(sizeof(BUILTIN_FUNC_MAP) / sizeof(BUILTIN_FUNC_MAP[0])))
+
+/*
+ * semcheck_dispatch_builtin_func — look up and invoke a table entry by name.
+ *
+ * Returns 1 and writes the handler's return value into *status_out if a
+ * matching entry is found; returns 0 if the name is not in the table.
+ */
+int semcheck_dispatch_builtin_func(
+    const char *id,
+    int *type_return,
+    SymTab_t *symtab,
+    struct Expression *expr,
+    int max_scope_lev,
+    int *status_out)
+{
+    if (id == NULL)
+        return 0;
+    for (int i = 0; i < BUILTIN_FUNC_MAP_COUNT; ++i)
+    {
+        if (pascal_identifier_equals(id, BUILTIN_FUNC_MAP[i].name))
+        {
+            if (BUILTIN_FUNC_MAP[i].fn != NULL)
+                *status_out = BUILTIN_FUNC_MAP[i].fn(type_return, symtab, expr, max_scope_lev);
+            else
+                *status_out = BUILTIN_FUNC_MAP[i].fn_with_arg(
+                    type_return, symtab, expr, max_scope_lev,
+                    BUILTIN_FUNC_MAP[i].int_arg);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 FunccallState funccall_state_normalize(FunccallCtx *ctx)
 {
 /* In objfpc mode, a bare method/function name inside its own body refers
@@ -403,40 +486,11 @@ if (ctx->id != NULL && !ctx->expr->expr_data.function_call_data.is_method_call_p
 
 if (allow_early_builtins && ctx->id != NULL)
 {
-    if (pascal_identifier_equals(ctx->id, "Chr"))
-        do { ctx->final_status = semcheck_builtin_chr(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Ord"))
-        do { ctx->final_status = semcheck_builtin_ord(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Pred"))
-        do { ctx->final_status = semcheck_builtin_predsucc(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 0); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Succ"))
-        do { ctx->final_status = semcheck_builtin_predsucc(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 1); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Length"))
-        do { ctx->final_status = semcheck_builtin_length(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Copy"))
-        do { ctx->final_status = semcheck_builtin_copy(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Concat"))
-        do { ctx->final_status = semcheck_builtin_concat(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Pos"))
-        do { ctx->final_status = semcheck_builtin_pos(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "StrPas"))
-        do { ctx->final_status = semcheck_builtin_strpas(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "EOF"))
-        do { ctx->final_status = semcheck_builtin_eof(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "EOLN"))
-        do { ctx->final_status = semcheck_builtin_eoln(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Low"))
-        do { ctx->final_status = semcheck_builtin_lowhigh(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 0); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "High"))
-        do { ctx->final_status = semcheck_builtin_lowhigh(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 1); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Default"))
-        do { ctx->final_status = semcheck_builtin_default(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "New"))
-        do { ctx->final_status = semcheck_builtin_new_func(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Power"))
-        do { ctx->final_status = semcheck_builtin_power(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-    if (pascal_identifier_equals(ctx->id, "Aligned"))
-        do { ctx->final_status = semcheck_builtin_aligned(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
+    /* Table-driven dispatch for builtins that need no argument-type inspection */
+    if (semcheck_dispatch_builtin_func(ctx->id, ctx->type_return, ctx->symtab,
+                                       ctx->expr, ctx->max_scope_lev, &ctx->final_status))
+        return FC_CLEANUP;
+
     /* UpCase/UpperCase/LowerCase(char) must be intercepted here (in the
      * early builtins section) because the later interception at the end of
      * the builtin block is never reached when overload resolution diverts

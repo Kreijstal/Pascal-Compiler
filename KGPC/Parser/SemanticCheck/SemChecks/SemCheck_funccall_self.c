@@ -1195,50 +1195,11 @@ if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && ctx->id != NULL &&
         ListLength(ctx->expr->expr_data.function_call_data.args_expr));
 }
 
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Chr"))
-    do { ctx->final_status = semcheck_builtin_chr(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Ord"))
-    do { ctx->final_status = semcheck_builtin_ord(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Pred"))
-    do { ctx->final_status = semcheck_builtin_predsucc(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 0); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Succ"))
-    do { ctx->final_status = semcheck_builtin_predsucc(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 1); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Length"))
-    do { ctx->final_status = semcheck_builtin_length(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Copy"))
-    do { ctx->final_status = semcheck_builtin_copy(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Concat"))
-    do { ctx->final_status = semcheck_builtin_concat(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Pos"))
-    do { ctx->final_status = semcheck_builtin_pos(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "StrPas"))
-    do { ctx->final_status = semcheck_builtin_strpas(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "EOF"))
-    do { ctx->final_status = semcheck_builtin_eof(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "EOLN"))
-    do { ctx->final_status = semcheck_builtin_eoln(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Low"))
-    do { ctx->final_status = semcheck_builtin_lowhigh(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 0); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "High"))
-    do { ctx->final_status = semcheck_builtin_lowhigh(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev, 1); return FC_CLEANUP; } while (0);
-
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Default"))
-    do { ctx->final_status = semcheck_builtin_default(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Power"))
-    do { ctx->final_status = semcheck_builtin_power(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
-if (allow_builtins && ctx->id != NULL && pascal_identifier_equals(ctx->id, "Aligned"))
-    do { ctx->final_status = semcheck_builtin_aligned(ctx->type_return, ctx->symtab, ctx->expr, ctx->max_scope_lev); return FC_CLEANUP; } while (0);
+/* Table-driven dispatch for builtins that need no argument-type inspection */
+if (allow_builtins && ctx->id != NULL &&
+    semcheck_dispatch_builtin_func(ctx->id, ctx->type_return, ctx->symtab,
+                                   ctx->expr, ctx->max_scope_lev, &ctx->final_status))
+    return FC_CLEANUP;
 
 /* Internal runtime function for open/dynamic array High - already resolved */
 if (ctx->id != NULL && strcmp(ctx->id, "kgpc_dynarray_compute_high") == 0)
