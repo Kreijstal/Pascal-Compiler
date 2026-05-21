@@ -1666,9 +1666,34 @@ ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
 
     {
         Register_t *uses_arr[] = {value_reg};
-        return add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
+        inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
             "\tmovq\t%0, kgpc_current_exception(%rip)\n");
     }
+
+    /* Tell the release helper whether the raised value is a class
+     * instance (in which case it should dispatch destructor + FreeInstance
+     * via the VMT) or a primitive value such as an integer (which must be
+     * left untouched).  Pascal classes are pointers-to-record under the
+     * hood, so we look through the resolved KgpcType: a class instance has
+     * a TYPE_KIND_POINTER whose pointee is TYPE_KIND_RECORD.  We also
+     * accept TYPE_KIND_RECORD direct (some semchecker paths label class
+     * temporaries that way) and exposed class-reference aliases. */
+    int is_object = 0;
+    KgpcType *type = expr_get_kgpc_type((struct Expression *)exc_expr);
+    if (type != NULL)
+    {
+        if (type->kind == TYPE_KIND_RECORD)
+            is_object = 1;
+        else if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+                 type->info.points_to->kind == TYPE_KIND_RECORD)
+            is_object = 1;
+    }
+    char buffer[96];
+    snprintf(buffer, sizeof(buffer),
+        "\tmovl\t$%d, kgpc_current_exception_is_object(%%rip)\n", is_object);
+    inst_list = add_inst(inst_list, buffer);
+
+    return inst_list;
 }
 
 ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,

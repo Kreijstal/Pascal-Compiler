@@ -169,6 +169,12 @@ long FPC_SYSCALL6(long sysnr, long p1, long p2, long p3, long p4, long p5, long 
 #endif
 
 int64_t kgpc_current_exception = 0;
+
+/* Set by codegen alongside kgpc_current_exception whenever the raised
+ * expression has a class-instance type.  Pure-integer raises (`raise 42`)
+ * leave this 0 so kgpc_release_current_exception will not dereference a
+ * non-pointer value as a VMT. */
+int kgpc_current_exception_is_object = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;
 
@@ -2725,6 +2731,60 @@ void kgpc_raise(int64_t value)
         fprintf(stderr, "Unhandled exception raised with code %lld.\n", (long long)value);
     fflush(stderr);
     exit(EXIT_FAILURE);
+}
+
+/* Release the exception object currently held in kgpc_current_exception
+ * and clear the slot.  Called by codegen at the exit of an exception
+ * handler block that ran to completion (matched on-handler exiting
+ * normally, or unmatched except body falling through).
+ *
+ * Re-raise paths (`raise` with no expression, or `raise E` for an outer
+ * handler) leave the handler via codegen_branch_through_finally before
+ * reaching the helper, so they do not invoke the release and the
+ * exception object continues to live with kgpc_current_exception.
+ *
+ * The actual destructor + instance free is dispatched through the VMT:
+ * we read the object's class VMT pointer (slot 0 of the instance),
+ * call Destroy through the VMT (slot 12, the first user-method slot)
+ * and then FreeInstance (slot 18 in TObject's layout — the seventh
+ * user-method slot, immediately after the six inherited
+ * Destroy/ClassName/ClassParent/ClassInfo/ClassType/InheritsFrom slots).
+ * This mirrors the inline VMT dispatch emitted by codegen for
+ * TObject.Free in codegen_subprograms.c, which is the canonical free
+ * sequence: virtual destructor, then virtual FreeInstance.
+ *
+ * The VMT layout is described in KGPC/CodeGenerator/Intel_x86-64/abi_constants.h
+ * (VMT_FIRST_VMETHOD_SLOT = 12, VMT_SLOT_SIZE_BYTES = 8).  TObject
+ * itself defines six fixed inherited methods plus FreeInstance, so
+ * FreeInstance always lands at slot 12 + 6 = 18 on every TObject
+ * descendant, and the codegen-emitted dispatch in
+ * codegen_subprograms.c uses the same slot. */
+#define KGPC_VMT_DESTROY_OFFSET       (12 * 8)
+#define KGPC_VMT_FREEINSTANCE_OFFSET  (18 * 8)
+
+void kgpc_release_current_exception(void)
+{
+    int64_t value = kgpc_current_exception;
+    int is_object = kgpc_current_exception_is_object;
+    kgpc_current_exception = 0;
+    kgpc_current_exception_is_object = 0;
+    if (value == 0 || !is_object)
+        return;
+    void *self = (void *)(uintptr_t)value;
+    void **vmt = *(void ***)self;
+    if (vmt == NULL)
+        return;
+
+    typedef void (*kgpc_vmt_method_t)(void *);
+    kgpc_vmt_method_t destroy_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
+    kgpc_vmt_method_t freeinstance_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
+
+    if (destroy_fn != NULL)
+        destroy_fn(self);
+    if (freeinstance_fn != NULL)
+        freeinstance_fn(self);
 }
 
 /* Forward declarations: New/Dispose route through MemoryManager so that
