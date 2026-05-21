@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 /* Flag for turning on non-local variable chasing */
 /* Set with '-non-local' */
@@ -87,7 +88,7 @@ void set_stdlib_loaded_flag(int loaded)
 {
     FLAG_STDLIB_LOADED = loaded ? 1 : 0;
 }
-void set_dump_ast_path(const char *path)
+bool set_dump_ast_path(const char *path)
 {
     if (FLAG_DUMP_AST_PATH != NULL)
     {
@@ -101,9 +102,10 @@ void set_dump_ast_path(const char *path)
         if (FLAG_DUMP_AST_PATH == NULL)
         {
             fprintf(stderr, "ERROR: Unable to allocate memory for dump-ast path.\n");
-            exit(1);
+            return false;
         }
     }
+    return true;
 }
 
 void set_target_windows_flag(void)
