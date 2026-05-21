@@ -497,6 +497,15 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_callee_r13 = ctx->callee_save_r13_offset;
     int prev_callee_r14 = ctx->callee_save_r14_offset;
     int prev_callee_r15 = ctx->callee_save_r15_offset;
+    /* Save the managed dynamic-array temp tracking and start fresh.  Each
+     * subprogram has its own frame, so rbp offsets do not survive across
+     * subprogram boundaries; tracking is per-frame. */
+    int *prev_dynarray_temp_offsets = ctx->managed_dynarray_temp_offsets;
+    int prev_dynarray_temp_count = ctx->managed_dynarray_temp_count;
+    int prev_dynarray_temp_capacity = ctx->managed_dynarray_temp_capacity;
+    ctx->managed_dynarray_temp_offsets = NULL;
+    ctx->managed_dynarray_temp_count = 0;
+    ctx->managed_dynarray_temp_capacity = 0;
     /* While emitting THIS subprogram's body, identifier resolution for
      * cross-unit references (typed-consts, file-level consts) must prefer
      * the subprogram's own owning unit before falling back to the
@@ -684,6 +693,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * also emit this cleanup so all return paths honor the same contract. */
     inst_list = codegen_emit_managed_local_cleanup(inst_list,
         proc->declarations, ctx, symtab);
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
     if (proc->owner_class != NULL &&
         proc->method_name != NULL &&
@@ -886,6 +896,13 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->callee_save_r13_offset = prev_callee_r13;
     ctx->callee_save_r14_offset = prev_callee_r14;
     ctx->callee_save_r15_offset = prev_callee_r15;
+    /* Restore the outer subprogram's managed dynarray temp tracking.
+     * Free this frame's buffer since its tracked offsets reference a
+     * stack frame that no longer exists. */
+    free(ctx->managed_dynarray_temp_offsets);
+    ctx->managed_dynarray_temp_offsets = prev_dynarray_temp_offsets;
+    ctx->managed_dynarray_temp_count = prev_dynarray_temp_count;
+    ctx->managed_dynarray_temp_capacity = prev_dynarray_temp_capacity;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -955,6 +972,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_callee_r13 = ctx->callee_save_r13_offset;
     int prev_callee_r14 = ctx->callee_save_r14_offset;
     int prev_callee_r15 = ctx->callee_save_r15_offset;
+    /* Save per-function managed dynamic-array temp tracking (see
+     * codegen_procedure for rationale). */
+    int *prev_dynarray_temp_offsets = ctx->managed_dynarray_temp_offsets;
+    int prev_dynarray_temp_count = ctx->managed_dynarray_temp_count;
+    int prev_dynarray_temp_capacity = ctx->managed_dynarray_temp_capacity;
+    ctx->managed_dynarray_temp_offsets = NULL;
+    ctx->managed_dynarray_temp_count = 0;
+    ctx->managed_dynarray_temp_capacity = 0;
     /* Save the caller's unit-index; we'll bind it to the function's own
      * source_unit_index below.  See codegen_procedure for rationale. */
     int prev_unit_index = symtab->current_unit_index;
@@ -1665,6 +1690,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     {
         inst_list = codegen_emit_managed_local_cleanup(inst_list,
             func->declarations, ctx, symtab);
+        inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
     }
 
     /* For nostackframe+assembler functions, the asm block handles the return
@@ -1934,6 +1960,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->callee_save_r15_offset = prev_callee_r15;
     ctx->returns_dynamic_array = prev_returns_dynamic_array;
     ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;
+    /* Restore the outer subprogram's managed dynarray temp tracking. */
+    free(ctx->managed_dynarray_temp_offsets);
+    ctx->managed_dynarray_temp_offsets = prev_dynarray_temp_offsets;
+    ctx->managed_dynarray_temp_count = prev_dynarray_temp_count;
+    ctx->managed_dynarray_temp_capacity = prev_dynarray_temp_capacity;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

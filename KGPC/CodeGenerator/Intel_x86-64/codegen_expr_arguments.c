@@ -2856,6 +2856,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_assign_from_temp");
                     free_arg_regs();
                     free_reg(get_reg_stack(), value_reg);
+
+                    /* The temp slot now owns the producer's element-data
+                     * buffer.  It is unreachable through any user-declared
+                     * variable, so register it for finalize-at-epilogue
+                     * cleanup; otherwise the data leaks for the remainder
+                     * of the enclosing function/program. */
+                    codegen_track_managed_dynarray_temp(ctx, temp_slot->offset);
+
                     /* Reload address because the call may clobber caller-saved regs. */
                     snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
                         temp_slot->offset, addr_reg->bit_64);

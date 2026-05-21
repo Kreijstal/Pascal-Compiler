@@ -393,6 +393,21 @@ typedef struct CodeGenContext {
     int *pending_ctor_temp_offsets;
     int pending_ctor_temp_count;
     int pending_ctor_temp_capacity;
+
+    /* Stack-offsets of dynarray temporaries produced by argument-marshalling
+     * (kgpc_dynarray_assign_from_temp into a `dynarray_arg` slot).  These
+     * slots own their element-data buffer for the lifetime of the function
+     * call site, but are never reachable through a user-declared variable,
+     * so the regular codegen_emit_managed_local_cleanup walk over
+     * declarations would never finalize them.  The function epilogue (and
+     * STMT_EXIT) walks this array and emits kgpc_dynarray_finalize_local
+     * for each slot to release the buffer before the frame is torn down.
+     *
+     * Idempotent: the runtime helper tolerates zeroed descriptors, so
+     * slots reused across iterations clean up cleanly. */
+    int *managed_dynarray_temp_offsets;
+    int managed_dynarray_temp_count;
+    int managed_dynarray_temp_capacity;
 } CodeGenContext;
 
 /* Generates a label */
@@ -470,6 +485,16 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
 void codegen_push_pending_ctor_temp(CodeGenContext *ctx, int rbp_offset);
 ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx, ListNode_t *inst_list);
 void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx);
+
+/* Track a dynamic-array temporary slot (e.g. a `dynarray_arg` produced by
+ * argument marshalling via kgpc_dynarray_assign_from_temp) so the function
+ * epilogue and STMT_EXIT can finalize its element-data buffer.  The slot
+ * is identified by its positive rbp offset (the value previously emitted
+ * via `leaq -N(%rbp), ...`).  Duplicate offsets are coalesced. */
+void codegen_track_managed_dynarray_temp(CodeGenContext *ctx, int rbp_offset);
+ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
+    ListNode_t *inst_list);
+void codegen_destroy_managed_dynarray_temps(CodeGenContext *ctx);
 
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
                        CompilationContext *comp_ctx);

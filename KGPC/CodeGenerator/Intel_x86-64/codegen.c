@@ -2569,6 +2569,76 @@ void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx)
     ctx->pending_ctor_temp_capacity = 0;
 }
 
+/* Record a dynamic-array temporary stack slot whose element-data buffer
+ * outlives the producing call but is not reachable through any declared
+ * variable.  The function epilogue and STMT_EXIT will emit
+ * kgpc_dynarray_finalize_local for each tracked slot.  Duplicate offsets
+ * are coalesced so the same slot reused across loop iterations does not
+ * accumulate redundant finalize calls. */
+void codegen_track_managed_dynarray_temp(CodeGenContext *ctx, int rbp_offset)
+{
+    if (ctx == NULL || rbp_offset <= 0)
+        return;
+
+    for (int i = 0; i < ctx->managed_dynarray_temp_count; ++i)
+    {
+        if (ctx->managed_dynarray_temp_offsets[i] == rbp_offset)
+            return;
+    }
+
+    if (ctx->managed_dynarray_temp_count == ctx->managed_dynarray_temp_capacity)
+    {
+        int new_capacity = (ctx->managed_dynarray_temp_capacity == 0) ? 4 :
+            (ctx->managed_dynarray_temp_capacity * 2);
+        int *new_buf = (int *)realloc(ctx->managed_dynarray_temp_offsets,
+            (size_t)new_capacity * sizeof(int));
+        if (new_buf == NULL)
+            return;
+        ctx->managed_dynarray_temp_offsets = new_buf;
+        ctx->managed_dynarray_temp_capacity = new_capacity;
+    }
+
+    ctx->managed_dynarray_temp_offsets[ctx->managed_dynarray_temp_count++] =
+        rbp_offset;
+}
+
+/* Emit kgpc_dynarray_finalize_local for every tracked dynarray temp slot.
+ * Idempotent at runtime: a slot that was never overwritten (descriptor
+ * still zero) produces no allocation, and finalize_local on a NULL data
+ * pointer is a no-op. */
+ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
+    ListNode_t *inst_list)
+{
+    if (ctx == NULL || ctx->managed_dynarray_temp_count == 0)
+        return inst_list;
+
+    char buffer[128];
+    const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+
+    for (int i = 0; i < ctx->managed_dynarray_temp_count; ++i)
+    {
+        int rbp_offset = ctx->managed_dynarray_temp_offsets[i];
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            rbp_offset, arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            "kgpc_dynarray_finalize_local");
+    }
+
+    return inst_list;
+}
+
+void codegen_destroy_managed_dynarray_temps(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    free(ctx->managed_dynarray_temp_offsets);
+    ctx->managed_dynarray_temp_offsets = NULL;
+    ctx->managed_dynarray_temp_count = 0;
+    ctx->managed_dynarray_temp_capacity = 0;
+}
+
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list,
     int levels_to_traverse)
 {
@@ -5344,7 +5414,13 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * Releasing aliased globals at the end would double-free.  Cleanup of
      * managed dynamic-array locals happens per-function in
      * codegen_function / codegen_procedure, where each frame owns its
-     * descriptor's storage exclusively. */
+     * descriptor's storage exclusively.
+     *
+     * However, dynamic-array TEMPORARIES allocated for argument marshalling
+     * inside the program body are uniquely owned by the temp slot — there
+     * is no user-visible variable that could alias them — so we finalize
+     * them here to release the producer-side buffer they hold. */
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);

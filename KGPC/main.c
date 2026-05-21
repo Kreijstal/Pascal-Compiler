@@ -569,6 +569,7 @@ int main(int argc, char **argv)
             int codegen_failed = codegen_had_error(&ctx);
             fclose(ctx.output_file);
             codegen_destroy_pending_ctor_temps(&ctx);
+            codegen_destroy_managed_dynarray_temps(&ctx);
             if (codegen_failed)
             {
                 fprintf(stderr, "Code generation failed; removing incomplete output file.\n");

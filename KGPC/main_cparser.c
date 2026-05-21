@@ -2350,6 +2350,7 @@ static int compile_single_program(
         int codegen_failed = codegen_had_error(&ctx);
         codegen_destroy_static_link_procs(&ctx);
         codegen_destroy_pending_ctor_temps(&ctx);
+        codegen_destroy_managed_dynarray_temps(&ctx);
         fclose(ctx.output_file);
         if (!codegen_failed)
             trim_duplicate_program_suffix(output_file);
@@ -3431,6 +3432,7 @@ ast_nil = NULL;
         int codegen_failed = codegen_had_error(&ctx);
         codegen_destroy_static_link_procs(&ctx);
         codegen_destroy_pending_ctor_temps(&ctx);
+        codegen_destroy_managed_dynarray_temps(&ctx);
         fclose(ctx.output_file);
         
         if (codegen_failed)
@@ -3722,6 +3724,7 @@ ast_nil = NULL;
         int codegen_failed = codegen_had_error(&ctx);
         codegen_destroy_static_link_procs(&ctx);
         codegen_destroy_pending_ctor_temps(&ctx);
+        codegen_destroy_managed_dynarray_temps(&ctx);
         fclose(ctx.output_file);
         if (!codegen_failed)
             trim_duplicate_program_suffix(output_file);
