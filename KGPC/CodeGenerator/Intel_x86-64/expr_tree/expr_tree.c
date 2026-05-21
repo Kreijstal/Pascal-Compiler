@@ -694,10 +694,22 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     }
 
     Register_t *desc_reg = NULL;
+    int desc_is_heap_temp = 0;
     if (!use_value && codegen_expr_is_addressable(array_expr))
         inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &desc_reg);
     else
+    {
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &desc_reg);
+        /* A non-var-param, non-SRET function-call result returning a dynamic
+         * array hands us a descriptor block malloc'd by
+         * kgpc_dynarray_clone_descriptor in the callee's epilogue.  We are
+         * the sole consumer of that temp, so we must release it after
+         * reading the length to prevent the descriptor (and its orphaned
+         * data buffer) from leaking. */
+        if (!use_value && array_expr->type == EXPR_FUNCTION_CALL &&
+            !expr_returns_sret(array_expr))
+            desc_is_heap_temp = 1;
+    }
 
     if (codegen_had_error(ctx) || desc_reg == NULL)
         return inst_list;
@@ -706,6 +718,39 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
         desc_reg->bit_64, target_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
+
+    if (desc_is_heap_temp)
+    {
+        /* Spill length result before the release call clobbers caller-saved
+         * registers (including target_reg). */
+        StackNode_t *len_spill = add_l_t("dynarray_length_spill");
+        if (len_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                target_reg->bit_64, len_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        if (codegen_target_is_windows())
+        {
+            Register_t *u[] = {desc_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+        }
+        else
+        {
+            Register_t *u[] = {desc_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            "kgpc_dynarray_release_temp_descriptor");
+        free_arg_regs();
+        if (len_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                len_spill->offset, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
     free_reg(get_reg_stack(), desc_reg);
     return inst_list;
