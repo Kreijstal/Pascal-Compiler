@@ -514,7 +514,7 @@ static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
     Register_t *value_reg, int source_type);
 static int codegen_dynamic_array_descriptor_size(const struct Expression *expr);
 static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenContext *ctx,
-    Register_t *dest_reg, Register_t *src_reg, int descriptor_size);
+    Register_t *dest_reg, Register_t *src_reg, int descriptor_size, int element_size);
 static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *dest_reg, Register_t *temp_reg, int descriptor_size);
 
@@ -1286,10 +1286,20 @@ static int codegen_dynamic_array_descriptor_size(const struct Expression *expr)
 }
 
 static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenContext *ctx,
-    Register_t *dest_reg, Register_t *src_reg, int descriptor_size)
+    Register_t *dest_reg, Register_t *src_reg, int descriptor_size, int element_size)
 {
     if (inst_list == NULL || ctx == NULL || dest_reg == NULL || src_reg == NULL)
         return inst_list;
+
+    /* Route through kgpc_dynarray_deep_copy_into so that `b := a` between
+     * two dynarray locals allocates a fresh element-data buffer for the
+     * destination instead of shallow-aliasing the source's buffer.  Without
+     * deep-copy semantics here both locals' epilogue cleanups would free
+     * the same heap block (double free) once dynarray finalization is
+     * enabled.  See runtime_string.c::kgpc_dynarray_deep_copy_into for the
+     * runtime contract. */
+    if (element_size <= 0)
+        element_size = CODEGEN_POINTER_SIZE_BYTES;
 
     char buffer[128];
     if (codegen_target_is_windows())
@@ -1306,6 +1316,8 @@ static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenCont
         }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
         inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r9d\n", element_size);
+        inst_list = add_inst(inst_list, buffer);
     }
     else
     {
@@ -1321,10 +1333,12 @@ static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenCont
         }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
         inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%ecx\n", element_size);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_assign_descriptor");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_deep_copy_into");
     free_arg_regs();
     return inst_list;
 }
@@ -1408,6 +1422,19 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
 
     int descriptor_size = codegen_dynamic_array_descriptor_size(dest_expr);
 
+    /* Element size on the destination drives deep-copy element-byte counts
+     * inside kgpc_dynarray_deep_copy_into; fall back to pointer size if the
+     * dest expression lacks resolved array metadata so the runtime helper
+     * is never invoked with element_size == 0 (which would bail out). */
+    int dest_element_size = 0;
+    {
+        long long es = expr_get_array_element_size(dest_expr, ctx);
+        if (es > 0)
+            dest_element_size = (int)es;
+    }
+    if (dest_element_size <= 0)
+        dest_element_size = CODEGEN_POINTER_SIZE_BYTES;
+
     if (src_expr != NULL && src_expr->type == EXPR_ARRAY_LITERAL &&
         src_expr->expr_data.array_literal_data.element_count == 0)
     {
@@ -1464,7 +1491,7 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
         }
 
-        inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, zero_reg, descriptor_size);
+        inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, zero_reg, descriptor_size, dest_element_size);
         free_reg(get_reg_stack(), zero_reg);
         free_reg(get_reg_stack(), dest_reload);
         return inst_list;
@@ -1503,7 +1530,7 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
             inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
         }
 
-        inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, src_reg, descriptor_size);
+        inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, src_reg, descriptor_size, dest_element_size);
         free_reg(get_reg_stack(), src_reg);
         free_reg(get_reg_stack(), dest_reload);
     }
