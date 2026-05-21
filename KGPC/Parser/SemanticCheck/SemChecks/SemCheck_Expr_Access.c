@@ -416,11 +416,18 @@ int semcheck_arrayaccess(int *type_return,
                 }
                 if (points_to == NULL || (!kgpc_type_is_array(points_to) && !points_to_is_string))
                 {
-                    /* Replace array_expr with the pointer (skip the deref) so we index the pointer */
+                    /* Replace array_expr with the pointer (skip the deref) so we
+                     * index the pointer. The original pointer_deref Expression
+                     * is now orphaned — its pointer_expr child has been moved
+                     * into the array_expr slot, so null the child first and
+                     * destroy the deref wrapper to avoid leaking it. */
+                    struct Expression *old_deref = array_expr;
+                    old_deref->expr_data.pointer_deref_data.pointer_expr = NULL;
                     expr->expr_data.array_access_data.array_expr = pointer_expr;
                     array_expr = pointer_expr;
                     base_kgpc_type = ptr_kgpc_type;
                     base_type = POINTER_TYPE;
+                    destroy_expr(old_deref);
                 }
             }
         }
