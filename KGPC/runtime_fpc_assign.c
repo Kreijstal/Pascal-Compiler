@@ -4,26 +4,27 @@
  * Provides runtime symbols referenced by KGPC-compiled FPC RTL code that are
  * not emitted by the compiler or provided elsewhere in the runtime library.
  *
- * TextRec layout (as KGPC allocates: 632 bytes, AnsiChar name):
+ * TextRec layout (KGPCTextRec, 640 bytes, AnsiChar name):
  *   0:  Handle (int32)
  *   4:  Mode   (int32)   — fmClosed=55216, fmInput=55217, fmOutput=55218, fmInOut=55219, fmAppend=55220
  *   8:  BufSize (int64)
- *  16:  _private / KGPC private_data (int64, stores FILE* pointer)
+ *  16:  private_data (int64, stores FILE* pointer)
  *  24:  BufPos  (int64)
  *  32:  BufEnd  (int64)
  *  40:  BufPtr  (ptr)
- *  48:  KGPC openfunc (ptr) — not used by FPC RTL compiled code
+ *  48:  openfunc  (ptr) — called by opentext_t_li_li (KGPC-compiled FPC RTL)
+ *  56:  inoutfunc (ptr) — called by close_t for output flush
+ *  64:  flushfunc (ptr)
+ *  72:  closefunc (ptr) — called by close_t
  *  80:  UserData[32]
- * 112:  name[256] (AnsiChar)  — KGPC's name field
+ * 112:  name[256] (AnsiChar)
+ * 368:  line_end[4]
+ * 372:  buffer[256]
+ * 628:  codepage (uint16)
+ * 632:  fullname (ptr)
+ * 640: end
  *
- * FPC RTL compiled code accesses these offsets (empirically confirmed for the
- * current x86_64 Linux RTL build):
- * 320:  OpenFunc   (codepointer) — called by opentext_t_li_li
- * 328:  InOutFunc  (codepointer) — called by close_t for output flush
- * 336:  FlushFunc  (codepointer)
- * 344:  CloseFunc  (codepointer) — called by close_t
- *
- * FileRec layout (as KGPC allocates: 368 bytes):
+ * FileRec layout (KGPCFileRec, 368 bytes):
  *   0:  Handle (int32)
  *   4:  Mode   (int32)
  *   8:  RecSize (int64)
@@ -45,6 +46,11 @@
 #include <unistd.h>
 #endif
 
+/* KgpcTextRecLayout: C mirror of KGPCTextRec (runtime_internal.h).
+ * Used here to derive field offsets via offsetof() without pulling in the
+ * Parser/SemanticCheck headers that runtime_internal.h depends on. */
+#include "textrec_layout.h"
+
 /* ------------------------------------------------------------------ */
 /* Forward declarations from KGPC runtime                              */
 /* ------------------------------------------------------------------ */
@@ -60,17 +66,22 @@ extern void kgpc_text_assign(void *file, const char *path);
 extern void kgpc_tfile_assign(void *file, const char *path);
 
 /* ------------------------------------------------------------------ */
-/* TextRec field offsets used by FPC RTL compiled code                 */
+/* TextRec field offsets — computed via offsetof(KgpcTextRecLayout, …) */
+/* so they stay correct if the struct layout ever changes.              */
 /* ------------------------------------------------------------------ */
-#define TR_HANDLE       0
-#define TR_MODE         4
-#define TR_PRIV        16   /* KGPC private_data = FILE* */
-#define TR_BUFPOS      24
-#define TR_NAME       112   /* KGPC's AnsiChar name[] */
-#define FPC_OPENFUNC  320
-#define FPC_INOUTFUNC 328
-#define FPC_FLUSHFUNC 336
-#define FPC_CLOSEFUNC 344
+#define TR_HANDLE  offsetof(KgpcTextRecLayout, handle)
+#define TR_MODE    offsetof(KgpcTextRecLayout, mode)
+#define TR_PRIV    offsetof(KgpcTextRecLayout, private_data)
+#define TR_BUFPOS  offsetof(KgpcTextRecLayout, bufpos)
+#define TR_NAME    offsetof(KgpcTextRecLayout, name)
+
+/* Function-pointer slots in KGPCTextRec / KgpcTextRecLayout.
+ * KGPC-compiled FPC RTL code (opentext_t_li_li, close_t, fileopenfunc_u_textrec,
+ * etc.) reads and writes these at the same offsets. */
+#define FPC_OPENFUNC  offsetof(KgpcTextRecLayout, openfunc)
+#define FPC_INOUTFUNC offsetof(KgpcTextRecLayout, inoutfunc)
+#define FPC_FLUSHFUNC offsetof(KgpcTextRecLayout, flushfunc)
+#define FPC_CLOSEFUNC offsetof(KgpcTextRecLayout, closefunc)
 
 #define KGPC_FM_CLOSED  0xD7B0   /* 55216 */
 #define KGPC_FM_INPUT   0xD7B1   /* 55217 */
