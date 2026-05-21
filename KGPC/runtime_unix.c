@@ -1,3 +1,31 @@
+/*
+ * runtime_unix.c — KGPC runtime support for FPC's Unix unit
+ *
+ * CONTRACT: This file provides the "higher-level" POSIX convenience layer
+ * that mirrors FPC's Unix unit (FPCSource/rtl/unix/unix.pp).  Every exported
+ * symbol carries the "kgpc_unix_" prefix and is declared as "external" inside
+ * KGPC/Units/unix.p.  Callers are Pascal programs that use the Unix unit.
+ *
+ * Belongs here:
+ *   - GetHostName / GetDomainName helpers (FQDN lookup, utsname fallback)
+ *   - WaitProcess / W_EXITCODE / W_STOPCODE / WIFSTOPPED (wait-status macros)
+ *   - Signal handling (kgpc_unix_sigaction bridging struct kgpc_sigaction ↔
+ *     struct sigaction)
+ *
+ * Does NOT belong here:
+ *   - Raw POSIX fd syscalls (fpOpen/fpClose/fpRead/fpWrite/…) — those live in
+ *     runtime_baseunix.c because they back FPC's BaseUnix unit.
+ *   - Anything that can be implemented entirely in Pascal inside Unix unit.
+ *
+ * Buffer-size note: KGPC_HOST_NAME_MAX (255 usable + NUL) is the de-facto
+ * limit on Linux (HOST_NAME_MAX = 64 per POSIX but kernels allow up to 64;
+ * glibc's NI_MAXHOST = 1025 is larger; 256 is a safe practical ceiling used
+ * here).  If a hostname ever exceeds 255 bytes, gethostname() will truncate
+ * and we force-NUL the last byte, so the string is always valid but possibly
+ * incomplete.  Raising this constant to 1025 (NI_MAXHOST) would be safe but
+ * wastes stack space on the common path.
+ */
+
 #include "runtime_internal.h"
 
 #include <errno.h>
@@ -5,6 +33,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Maximum buffer size for hostname/domainname operations.
+ * 256 bytes (255 usable + NUL) covers the Linux kernel limit.  See the
+ * contract comment at the top of this file for rationale. */
+#define KGPC_HOST_NAME_MAX 256
 
 #ifndef _WIN32
 #include <netdb.h>
@@ -64,7 +97,7 @@ int kgpc_unix_get_domainname(char *buffer, size_t buffer_size)
     {
         if (uts.nodename[0] != '\0')
         {
-            char temp[256];
+            char temp[KGPC_HOST_NAME_MAX];
             strncpy(temp, uts.nodename, sizeof(temp) - 1);
             temp[sizeof(temp) - 1] = '\0';
             char *dot = strchr(temp, '.');
@@ -76,7 +109,7 @@ int kgpc_unix_get_domainname(char *buffer, size_t buffer_size)
             }
         }
     }
-    char hostname[256];
+    char hostname[KGPC_HOST_NAME_MAX];
     if (gethostname(hostname, sizeof(hostname)) == 0)
     {
         char *dot = strchr(hostname, '.');
@@ -168,7 +201,7 @@ int kgpc_unix_wifstopped(int status)
 
 char *kgpc_unix_get_hostname_string(void)
 {
-    char buffer[256];
+    char buffer[KGPC_HOST_NAME_MAX];
     if (kgpc_unix_get_hostname(buffer, sizeof(buffer)) != 0)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(buffer);
@@ -176,7 +209,7 @@ char *kgpc_unix_get_hostname_string(void)
 
 char *kgpc_unix_get_domainname_string(void)
 {
-    char buffer[256];
+    char buffer[KGPC_HOST_NAME_MAX];
     if (kgpc_unix_get_domainname(buffer, sizeof(buffer)) != 0)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(buffer);
