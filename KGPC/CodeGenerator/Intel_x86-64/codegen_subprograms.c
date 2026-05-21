@@ -2665,14 +2665,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     /* Float (REAL_TYPE) parameters that are not passed by reference
                      * use SSE/XMM registers, NOT integer registers. Skip integer
                      * register allocation for them so subsequent integer params
-                     * get the correct registers. SSE regs are not clobbered by
-                     * kgpc_move calls, so no presave slot is needed. */
+                     * get the correct registers.
+                     * NOTE: SSE regs ARE clobbered by ASAN-intercepted memmove
+                     * (kgpc_move), so we must presave them to stack before any
+                     * kgpc_move call, just like GPR params. */
                     if (!scan_is_var &&
                         (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE) &&
                         scan_real_storage_size < 16)
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
+                        {
+                            const char *xmm_reg = current_arg_reg_xmm(scan_sse_index);
                             scan_sse_index++;
+                            if (xmm_reg != NULL)
+                            {
+                                char temp_name[64];
+                                snprintf(temp_name, sizeof(temp_name),
+                                    "__presaved_%s__", (char *)scan_ids->cur);
+                                StackNode_t *presaved_slot = add_q_z(temp_name);
+                                if (presaved_slot != NULL)
+                                {
+                                    if (scan_real_storage_size == 4)
+                                        snprintf(buffer, sizeof(buffer),
+                                            "\tmovss\t%s, -%d(%%rbp)\n",
+                                            xmm_reg, presaved_slot->offset);
+                                    else
+                                        snprintf(buffer, sizeof(buffer),
+                                            "\tmovsd\t%s, -%d(%%rbp)\n",
+                                            xmm_reg, presaved_slot->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                }
+                            }
+                        }
                         scan_ids = scan_ids->next;
                         continue;
                     }
@@ -3262,7 +3286,35 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
                     else if (use_sse_reg)
                     {
-                        if (next_sse_index < kgpc_max_sse_arg_regs())
+                        /* Check for a presaved slot: the pre-pass saves XMM register
+                         * params before any kgpc_move call (which can clobber XMM
+                         * registers under ASAN-intercepted memmove). */
+                        StackNode_t *sse_presaved_slot = NULL;
+                        if (has_record_or_dynarray)
+                        {
+                            char presaved_name[64];
+                            snprintf(presaved_name, sizeof(presaved_name),
+                                "__presaved_%s__", (char *)arg_ids->cur);
+                            sse_presaved_slot = find_label(presaved_name);
+                        }
+
+                        if (sse_presaved_slot != NULL)
+                        {
+                            /* Use presaved value — XMM reg may be clobbered by now */
+                            alloc_sse_arg_reg(&next_sse_index);  /* advance index only */
+                            if (real_storage_size == 4)
+                                snprintf(buffer, sizeof(buffer),
+                                    "\tmovss\t-%d(%%rbp), %%xmm0\n"
+                                    "\tmovss\t%%xmm0, -%d(%%rbp)\n",
+                                    sse_presaved_slot->offset, arg_stack->offset);
+                            else
+                                snprintf(buffer, sizeof(buffer),
+                                    "\tmovsd\t-%d(%%rbp), %%xmm0\n"
+                                    "\tmovsd\t%%xmm0, -%d(%%rbp)\n",
+                                    sse_presaved_slot->offset, arg_stack->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else if (next_sse_index < kgpc_max_sse_arg_regs())
                         {
                             const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
                             if (real_storage_size == 4)
