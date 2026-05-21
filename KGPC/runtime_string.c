@@ -935,6 +935,30 @@ void kgpc_dynarray_release_temp_descriptor(void *temp_descriptor)
     free(desc);
 }
 
+/* Finalize an inline dynamic-array descriptor: release its element data
+ * buffer and zero the descriptor in place.  Used at function/program
+ * epilogue for managed dynarray locals and globals whose backing buffer
+ * would otherwise outlive the only references to it.
+ *
+ * Unlike kgpc_dynarray_release_temp_descriptor, the descriptor block itself
+ * is NOT freed — it lives inline in a stack frame, .bss slot, or a record
+ * field, owned by the surrounding storage.  Only ->data is heap-owned.
+ *
+ * Idempotent: after this call the descriptor's data is NULL and length 0,
+ * so a second invocation (e.g. from a nested cleanup path) is a no-op. */
+void kgpc_dynarray_finalize_local(void *descriptor_ptr)
+{
+    if (descriptor_ptr == NULL)
+        return;
+    kgpc_dynarray_descriptor_t *desc = (kgpc_dynarray_descriptor_t *)descriptor_ptr;
+    if (desc->data != NULL)
+    {
+        free(desc->data);
+        desc->data = NULL;
+    }
+    desc->length = 0;
+}
+
 void *kgpc_dynarray_clone_descriptor(const void *descriptor, size_t descriptor_size)
 {
     if (descriptor_size == 0)
