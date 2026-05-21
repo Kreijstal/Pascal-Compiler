@@ -1911,6 +1911,26 @@ static int resolve_sizeof_type(const char *type_name) {
     /* 10-byte extended (padded to 16 on x86_64 in some ABIs, but SizeOf returns 10) */
     if (strcasecmp(type_name, "Extended") == 0)
         return 10;
+    /* C interop types — sizes are fixed on x86_64 Linux */
+    if (strcasecmp(type_name, "cuLong") == 0 ||
+        strcasecmp(type_name, "cLong") == 0 ||
+        strcasecmp(type_name, "cuLongLong") == 0 ||
+        strcasecmp(type_name, "cLongLong") == 0)
+        return 8;
+    if (strcasecmp(type_name, "cuInt") == 0 ||
+        strcasecmp(type_name, "cInt") == 0 ||
+        strcasecmp(type_name, "cUInt") == 0 ||
+        strcasecmp(type_name, "cULong32") == 0 ||
+        strcasecmp(type_name, "cLong32") == 0)
+        return 4;
+    if (strcasecmp(type_name, "cuShort") == 0 ||
+        strcasecmp(type_name, "cShort") == 0)
+        return 2;
+    if (strcasecmp(type_name, "cuChar") == 0 ||
+        strcasecmp(type_name, "cChar") == 0 ||
+        strcasecmp(type_name, "cSChar") == 0 ||
+        strcasecmp(type_name, "cUChar") == 0)
+        return 1;
     return -1;
 }
 
