@@ -2812,6 +2812,43 @@ void kgpc_release_current_exception(void)
         freeinstance_fn(self);
 }
 
+extern size_t kgpc_freemem_ptr(void *p);
+
+/* Release a class instance produced by a constructor call whose result is
+ * consumed transiently and never stored in a long-lived owner.  Codegen
+ * emits a call to this helper at end-of-statement for tracked temps; see
+ * codegen_push_pending_ctor_temp / codegen_flush_pending_ctor_temps.
+ *
+ * Mirrors the dispatch logic of kgpc_release_current_exception for the
+ * TObject-derived case (Destroy slot 12, FreeInstance slot 18).  For
+ * parentless classes (declared as `class` without an explicit base in
+ * modes that do not auto-inherit TObject), the VMT carries no virtual
+ * Destroy/FreeInstance — only the fixed 12-slot header — so we pair the
+ * instance with kgpc_freemem_ptr directly. */
+void kgpc_release_class_temp(void *self)
+{
+    if (self == NULL)
+        return;
+    void **vmt = *(void ***)self;
+    if (vmt == NULL)
+        return;
+    void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
+    if (parent_ref == NULL)
+    {
+        kgpc_freemem_ptr(self);
+        return;
+    }
+    typedef void (*kgpc_vmt_method_t)(void *);
+    kgpc_vmt_method_t destroy_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
+    kgpc_vmt_method_t freeinstance_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
+    if (destroy_fn != NULL)
+        destroy_fn(self);
+    if (freeinstance_fn != NULL)
+        freeinstance_fn(self);
+}
+
 /* Forward declarations: New/Dispose route through MemoryManager so that
  * the allocator pair stays consistent regardless of whether the FPC RTL
  * MemoryManager initializer (heap.inc) has overridden the libc-only

@@ -370,6 +370,29 @@ typedef struct CodeGenContext {
      * 0 when performing direct unit codegen (codegen_unit()).
      * Used to guard symtab-fallback passes that are only safe at link time. */
     int is_whole_program;
+
+    /* Pending releases of class instances produced by constructor calls used
+     * as transient sub-expressions.  Each entry records the rbp offset of
+     * the stack slot that holds the freshly constructed instance pointer;
+     * after the enclosing statement finishes, codegen emits a
+     * kgpc_release_class_temp(slot) for every entry, then clears the list.
+     *
+     * Ownership semantics:
+     * - The expr_tree.c constructor allocation site pushes the slot when
+     *   it allocates.  This is BEFORE the constructor's own call instruction.
+     * - After every EXPR_FUNCTION_CALL in expr_tree.c, entries pushed
+     *   during ARGUMENT evaluation (i.e. above the snapshot taken right
+     *   after this call's own push, if any) are discarded — they were
+     *   passed to the callee which may have taken ownership (e.g.
+     *   `TFoo.Create(TBar.Create(...))` stores TBar as a field).
+     * - At codegen_stmt boundaries the list is flushed via emitted
+     *   kgpc_release_class_temp calls.
+     * - When a statement's top-level expression takes ownership (var/field
+     *   assignment, raise statement), the dispatcher pops the topmost
+     *   entry that the constructor's allocation pushed for itself. */
+    int *pending_ctor_temp_offsets;
+    int pending_ctor_temp_count;
+    int pending_ctor_temp_capacity;
 } CodeGenContext;
 
 /* Generates a label */
@@ -441,6 +464,12 @@ void codegen_invalidate_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);
+
+/* Pending constructor-result temp tracking.  See the comment on the
+ * pending_ctor_temp_* fields in CodeGenContext. */
+void codegen_push_pending_ctor_temp(CodeGenContext *ctx, int rbp_offset);
+ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx, ListNode_t *inst_list);
+void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx);
 
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
                        CompilationContext *comp_ctx);

@@ -6244,6 +6244,16 @@ ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     int stored_exception = 0;
     char buffer[96];
 
+    /* Snapshot pending-temp count BEFORE evaluating the raised
+     * expression: if the expression is a constructor call, ownership
+     * transfers to the runtime via kgpc_current_exception, and any
+     * branch-through-finally that may run below must NOT release the
+     * fresh exception object via the end-of-statement flush. */
+    int raise_ctor_snapshot = (ctx != NULL) ? ctx->pending_ctor_temp_count : 0;
+    int raise_is_constructor =
+        (exc_expr != NULL && exc_expr->type == EXPR_FUNCTION_CALL &&
+         exc_expr->expr_data.function_call_data.is_constructor_call);
+
     if (exc_expr != NULL)
     {
         inst_list = codegen_expr_with_result(exc_expr, inst_list, ctx, &value_reg);
@@ -6289,6 +6299,18 @@ ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGen
         stored_exception = 1;
         free_reg(get_reg_stack(), value_reg);
         value_reg = NULL;
+
+        /* Ownership of the exception object has been transferred to
+         * kgpc_current_exception.  Drop the entry that the constructor
+         * allocation site pushed for transient-temp cleanup so that any
+         * branch-through-finally below — which inline-expands finally
+         * bodies, each of which flushes pending temps at statement-end —
+         * does not release the live exception object. */
+        if (raise_is_constructor && ctx != NULL &&
+            ctx->pending_ctor_temp_count > raise_ctor_snapshot)
+        {
+            ctx->pending_ctor_temp_count -= 1;
+        }
     }
 
     if (except_label != NULL)

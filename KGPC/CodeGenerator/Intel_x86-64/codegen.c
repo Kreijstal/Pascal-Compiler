@@ -2503,6 +2503,72 @@ void codegen_end_expression(CodeGenContext *ctx)
     codegen_reset_static_link_cache(ctx);
 }
 
+/* Record that a class instance produced by a constructor call lives in the
+ * stack slot at -<rbp_offset>(%rbp) and may need cleanup as a transient
+ * temp.  Codegen will emit a release for it at the end of the enclosing
+ * statement unless the statement dispatcher pops it (because the temp was
+ * consumed by an owning operation like assignment or raise) or the
+ * enclosing function-call expression pops it (because it was passed as an
+ * argument to a callee that may have taken ownership). */
+void codegen_push_pending_ctor_temp(CodeGenContext *ctx, int rbp_offset)
+{
+    if (ctx == NULL || rbp_offset <= 0)
+        return;
+
+    if (ctx->pending_ctor_temp_count == ctx->pending_ctor_temp_capacity)
+    {
+        int new_capacity = (ctx->pending_ctor_temp_capacity == 0) ? 4 :
+            (ctx->pending_ctor_temp_capacity * 2);
+        int *new_buf = (int *)realloc(ctx->pending_ctor_temp_offsets,
+            (size_t)new_capacity * sizeof(int));
+        if (new_buf == NULL)
+            return;
+        ctx->pending_ctor_temp_offsets = new_buf;
+        ctx->pending_ctor_temp_capacity = new_capacity;
+    }
+
+    ctx->pending_ctor_temp_offsets[ctx->pending_ctor_temp_count++] = rbp_offset;
+}
+
+/* Emit `kgpc_release_class_temp(slot)` for each pending constructor-temp
+ * entry, then clear the list.  Called at statement boundaries.
+ *
+ * The helper is tolerant of nil receivers and non-TObject classes, so it
+ * is safe to call regardless of which constructor produced the value. */
+ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx,
+    ListNode_t *inst_list)
+{
+    if (ctx == NULL || ctx->pending_ctor_temp_count == 0)
+        return inst_list;
+
+    char buffer[128];
+    const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+
+    for (int i = 0; i < ctx->pending_ctor_temp_count; ++i)
+    {
+        int rbp_offset = ctx->pending_ctor_temp_offsets[i];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            rbp_offset, arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            "kgpc_release_class_temp");
+    }
+
+    ctx->pending_ctor_temp_count = 0;
+    return inst_list;
+}
+
+void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    free(ctx->pending_ctor_temp_offsets);
+    ctx->pending_ctor_temp_offsets = NULL;
+    ctx->pending_ctor_temp_count = 0;
+    ctx->pending_ctor_temp_capacity = 0;
+}
+
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list,
     int levels_to_traverse)
 {
