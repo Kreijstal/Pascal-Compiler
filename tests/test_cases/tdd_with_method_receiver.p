@@ -33,6 +33,7 @@ begin
   f.Tag := 42;
   with f do
     Hit;            { should call f.Hit (Foo.Hit 42), not Self.Hit (User.Hit 1) }
+  f.Free;
 end;
 
 var u: TUser;
