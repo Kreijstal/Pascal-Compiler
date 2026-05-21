@@ -920,6 +920,21 @@ void kgpc_string_insert(const char *value, char **target, int64_t index)
     *target = result;
 }
 
+/* Release a heap descriptor produced by kgpc_dynarray_clone_descriptor
+ * whose value has been consumed inline (e.g. Length(F()), F()[i]) and is
+ * no longer needed.  The descriptor block was malloc'd by the producer,
+ * and so was the element data buffer it points to (allocated by SetLength
+ * or kgpc_dynarray_deep_copy* inside the producing function before that
+ * function abandoned its local Result slot on return).  Free both. */
+void kgpc_dynarray_release_temp_descriptor(void *temp_descriptor)
+{
+    if (temp_descriptor == NULL)
+        return;
+    kgpc_dynarray_descriptor_t *desc = (kgpc_dynarray_descriptor_t *)temp_descriptor;
+    free(desc->data);
+    free(desc);
+}
+
 void *kgpc_dynarray_clone_descriptor(const void *descriptor, size_t descriptor_size)
 {
     if (descriptor_size == 0)
@@ -942,9 +957,20 @@ void kgpc_dynarray_assign_descriptor(void *dest_descriptor, const void *src_desc
 {
     if (dest_descriptor == NULL || src_descriptor == NULL)
         return;
-    
+
     if (descriptor_size == 0)
         descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
+
+    /* Release the dest's previous element data buffer before overwriting,
+     * unless the source already references it (aliasing/self-assignment).
+     * Dynamic arrays in this runtime use unique ownership — every assignment
+     * either deep-copies or transfers ownership of a freshly produced buffer
+     * — so the old data is no longer reachable through any other variable. */
+    kgpc_dynarray_descriptor_t *dst = (kgpc_dynarray_descriptor_t *)dest_descriptor;
+    const kgpc_dynarray_descriptor_t *src =
+        (const kgpc_dynarray_descriptor_t *)src_descriptor;
+    if (dst->data != NULL && dst->data != src->data)
+        free(dst->data);
 
     memcpy(dest_descriptor, src_descriptor, descriptor_size);
 }
@@ -953,18 +979,43 @@ void kgpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor
     size_t descriptor_size)
 {
     if (dest_descriptor == NULL)
+    {
+        /* No destination, but we still own the temp by contract:
+         * release it to avoid leaking the producer's clone. */
+        free(temp_descriptor);
         return;
+    }
 
     if (descriptor_size == 0)
         descriptor_size = sizeof(kgpc_dynarray_descriptor_t);
 
+    /* Release dest's previous element data before we overwrite the slot.
+     * Dynamic arrays are uniquely owned here; the old buffer would otherwise
+     * be unreachable after the assignment. */
+    kgpc_dynarray_descriptor_t *dst = (kgpc_dynarray_descriptor_t *)dest_descriptor;
+    void *old_data = dst->data;
+
     if (temp_descriptor == NULL)
     {
+        if (old_data != NULL)
+            free(old_data);
         memset(dest_descriptor, 0, descriptor_size);
         return;
     }
 
+    kgpc_dynarray_descriptor_t *src = (kgpc_dynarray_descriptor_t *)temp_descriptor;
+    void *new_data = src->data;
+
     memcpy(dest_descriptor, temp_descriptor, descriptor_size);
+    if (old_data != NULL && old_data != new_data)
+        free(old_data);
+
+    /* The temp descriptor was heap-allocated by the producer (typically
+     * kgpc_dynarray_clone_descriptor at a function return).  We are the
+     * sole consumer: take ownership of the descriptor block and free it.
+     * The element data buffer referenced by descriptor->data is transferred
+     * to the destination. */
+    free(temp_descriptor);
 }
 
 /* Deep-copy a dynamic array: allocate heap buffer, copy element data,
@@ -1041,6 +1092,13 @@ void kgpc_dynarray_deep_copy_into(void *dest_descriptor, const void *src_descrip
     {
         count = 0;
     }
+
+    /* Release dst's previous element data before swapping in the freshly
+     * heap-allocated buffer.  src->data was just deep-copied into heap_data
+     * so any aliasing between dst and src has already been broken; the old
+     * dst->data is owned solely by the destination and now unreachable. */
+    if (dst->data != NULL && dst->data != heap_data)
+        free(dst->data);
 
     /* Mirror the full descriptor (matching kgpc_dynarray_deep_copy) so
      * any per-descriptor metadata beyond data/length is preserved, then
