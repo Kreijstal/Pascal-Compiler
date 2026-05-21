@@ -3265,6 +3265,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
         const char *func_id = expr->expr_data.function_call_data.id;
 
+        /* Snapshot the pending constructor-temp list BEFORE this call's
+         * own push (the constructor's alloc-site push happens later in
+         * this block).  After the call returns, any entries pushed by
+         * argument evaluation between (snapshot + this-call's own push)
+         * and the call site are discarded — they were passed to the
+         * callee, which may have stored them (a nested constructor's
+         * field-init argument, an external proc that takes ownership,
+         * etc.).  We cannot prove they remain transient, so we err on
+         * the side of leaving them alive to avoid use-after-free. */
+        int ctor_pending_snapshot_before_push = (ctx != NULL)
+            ? ctx->pending_ctor_temp_count : 0;
+
         if (func_id != NULL &&
             (pascal_identifier_equals(func_id, "Low") ||
              pascal_identifier_equals(func_id, "High")))
@@ -3948,6 +3960,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                             constructor_instance_reg->bit_64, constructor_instance_slot->offset);
                         inst_list = add_inst(inst_list, buffer);
+
+                        /* Track the spill slot for transient-temp cleanup.
+                         * The reaching expr_tree.c path runs only when the
+                         * constructor's result is being consumed as an
+                         * expression value (not by the assignment special
+                         * case in codegen_stmt_assignment.c, which has its
+                         * own allocator).  See codegen.h for the ownership
+                         * semantics; the statement dispatcher pops this
+                         * entry when the statement transfers ownership
+                         * (var assignment, raise), and the enclosing
+                         * function-call expression discards entries
+                         * pushed by argument evaluation. */
+                        codegen_push_pending_ctor_temp(ctx,
+                            constructor_instance_slot->offset);
                     }
                     
                     if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL)
@@ -4807,11 +4833,35 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             inst_list = add_inst(inst_list, buffer);
         }
+
+        /* Discard any constructor-temp pending entries pushed during this
+         * call's argument evaluation: the args have just been consumed by
+         * the callee (whose body we cannot analyse for ownership), so
+         * conservatively assume the callee may have stored them.  Keep
+         * this call's own push (when this call IS a constructor) so the
+         * caller can still observe ownership transfer at the statement
+         * boundary. */
+        if (ctx != NULL)
+        {
+            int keep_count = ctor_pending_snapshot_before_push;
+            if (is_constructor && constructor_instance_slot != NULL)
+                keep_count += 1;
+            if (ctx->pending_ctor_temp_count > keep_count)
+                ctx->pending_ctor_temp_count = keep_count;
+        }
         return inst_list;
-        
+
 cleanup_constructor:
         if (constructor_instance_reg != NULL)
             free_reg(get_reg_stack(), constructor_instance_reg);
+        if (ctx != NULL)
+        {
+            int keep_count = ctor_pending_snapshot_before_push;
+            if (is_constructor && constructor_instance_slot != NULL)
+                keep_count += 1;
+            if (ctx->pending_ctor_temp_count > keep_count)
+                ctx->pending_ctor_temp_count = keep_count;
+        }
         return inst_list;
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)

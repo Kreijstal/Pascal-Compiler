@@ -2349,6 +2349,7 @@ static int compile_single_program(
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         codegen_destroy_static_link_procs(&ctx);
+        codegen_destroy_pending_ctor_temps(&ctx);
         fclose(ctx.output_file);
         if (!codegen_failed)
             trim_duplicate_program_suffix(output_file);
@@ -3429,6 +3430,7 @@ ast_nil = NULL;
         
         int codegen_failed = codegen_had_error(&ctx);
         codegen_destroy_static_link_procs(&ctx);
+        codegen_destroy_pending_ctor_temps(&ctx);
         fclose(ctx.output_file);
         
         if (codegen_failed)
@@ -3719,6 +3721,7 @@ ast_nil = NULL;
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         codegen_destroy_static_link_procs(&ctx);
+        codegen_destroy_pending_ctor_temps(&ctx);
         fclose(ctx.output_file);
         if (!codegen_failed)
             trim_duplicate_program_suffix(output_file);
