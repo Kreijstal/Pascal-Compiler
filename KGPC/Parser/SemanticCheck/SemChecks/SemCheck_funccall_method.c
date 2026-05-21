@@ -107,6 +107,10 @@ if (!ctx->was_unit_qualified &&
                     self_expr, strdup(first_arg->expr_data.id));
                 if (member_expr != NULL)
                 {
+                    /* mk_recordaccess strdup'd the field id, so we can destroy
+                     * the original first_arg Expression — the list cur slot
+                     * now owns the new Self.<field> RECORD_ACCESS. */
+                    destroy_expr((struct Expression *)ctx->args_given->cur);
                     ctx->args_given->cur = member_expr;
                     first_arg = member_expr;
                 }
