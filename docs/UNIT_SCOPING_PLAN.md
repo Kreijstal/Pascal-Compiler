@@ -1,3 +1,8 @@
+<!-- Status: SUPERSEDED as of 2026-03-26 — this unit-tagging approach was replaced by
+the scope-tree refactor (see docs/SCOPE_TREE_REFACTORING.md). FindIdentInUnit, which
+this plan proposed adding, was instead removed in Phase 5 of the scope-tree work.
+Kept for historical reference only. -->
+
 # Unit Scoping Refactoring Plan
 
 ## 1. Current Architecture Overview
