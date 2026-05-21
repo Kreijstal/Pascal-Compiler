@@ -43,6 +43,7 @@
 #include "codegen_subprograms_internal.h"
 
 #include "codegen_vmt_internal.h"
+#include "abi_constants.h"
 
 /* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
  * Build a parameter TypeRef array for overload disambiguation. */
@@ -817,10 +818,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         free(method_claimed);
     }
 
-    /* Slots 12+: virtual methods.  Emit by vmt_index, not list order: imported
-     * parents can contribute sparse inherited slots while subclasses add new
-     * virtuals after the highest inherited index. */
-    int max_vmt_index = 11;
+    /* Slots VMT_FIRST_VMETHOD_SLOT+: virtual methods.  Emit by vmt_index, not
+     * list order: imported parents can contribute sparse inherited slots while
+     * subclasses add new virtuals after the highest inherited index. */
+    int max_vmt_index = VMT_FIRST_VMETHOD_SLOT - 1;
     for (struct RecordType *cur_record = record_info; cur_record != NULL; ) {
         for (ListNode_t *method_node = cur_record->methods;
              method_node != NULL; method_node = method_node->next) {
@@ -854,7 +855,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
      *      resolved_mangled_id.
      *   3. Otherwise the most-specific match (which the downstream symtab
      *      fallback may still resolve via mangled_name). */
-    for (int slot = 12; slot <= max_vmt_index; slot++) {
+    for (int slot = VMT_FIRST_VMETHOD_SLOT; slot <= max_vmt_index; slot++) {
         struct MethodInfo *method = NULL;          /* most-specific at slot */
         struct MethodInfo *resolved_method = NULL; /* most-specific with resolved in available set */
         struct MethodInfo *any_resolved = NULL;    /* most-specific with any non-NULL resolved */

@@ -36,6 +36,7 @@
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../identifier_utils.h"
+#include "abi_constants.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
