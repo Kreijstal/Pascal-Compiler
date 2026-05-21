@@ -39,6 +39,7 @@
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_liveness.h"
+#include "ir/ir_peephole.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "graph_coloring_allocator.h"
 #endif
@@ -821,6 +822,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     if (dump_ir_flag())
@@ -1847,6 +1851,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     if (dump_ir_flag())
@@ -2411,6 +2418,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
     if (dump_ir_flag())
