@@ -39,6 +39,7 @@
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_liveness.h"
+#include "ir/ir_peephole.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "graph_coloring_allocator.h"
 #endif
@@ -4133,6 +4134,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         ir_liveness_allocate(inst_list);
 #endif
         ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_peephole_remove_redundant_moves(&inst_list);
+#endif
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4218,6 +4222,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         ir_liveness_allocate(inst_list);
 #endif
         ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_peephole_remove_redundant_moves(&inst_list);
+#endif
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -5262,6 +5269,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     if (dump_ir_flag())
