@@ -282,7 +282,8 @@ static void print_usage(const char *prog_name)
 typedef enum
 {
     SET_FLAGS_CONTINUE = 0,
-    SET_FLAGS_HELP = 1
+    SET_FLAGS_HELP = 1,
+    SET_FLAGS_OOM = 2
 } SetFlagsResult;
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -699,7 +700,8 @@ static SetFlagsResult set_flags(char **optional_args, int count)
         else if ((strcmp(arg, "--dump-ast") == 0 || strcmp(arg, "-dump-ast") == 0) && count > 1)
         {
             const char *path = optional_args[i + 1];
-            set_dump_ast_path(path);
+            if (!set_dump_ast_path(path))
+                return SET_FLAGS_OOM;
             fprintf(stderr, "AST dump enabled: %s\n\n", path);
             --count;
             ++i;
@@ -707,7 +709,8 @@ static SetFlagsResult set_flags(char **optional_args, int count)
         else if (strncmp(arg, "--dump-ast=", 11) == 0)
         {
             const char *path = arg + 11;
-            set_dump_ast_path(path);
+            if (!set_dump_ast_path(path))
+                return SET_FLAGS_OOM;
             fprintf(stderr, "AST dump enabled: %s\n\n", path);
         }
         else if (strcmp(arg, "--time-passes") == 0)
@@ -1778,7 +1781,15 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
      * will merge declarations into the target tree before semcheck. */
     {
         int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
-        compilation_context_add_unit(comp_ctx, unit_tree, unit_idx);
+        if (!compilation_context_add_unit(comp_ctx, unit_tree, unit_idx))
+        {
+            /* Allocation failed; unit_tree ownership stays with caller scope —
+             * compilation_context_destroy() will NOT free it.  Destroy it now
+             * before returning so we don't leak the parsed tree. */
+            destroy_tree(unit_tree);
+            free(path);
+            return;
+        }
         /* Record source path for cache key computation */
         comp_ctx->loaded_units[comp_ctx->loaded_unit_count - 1].source_path = path;
         path = NULL; /* ownership transferred */
@@ -2916,6 +2927,15 @@ int main(int argc, char **argv)
             unit_search_paths_destroy(&g_unit_paths);
             arena_destroy(arena);
             return 0;
+        }
+        if (flag_result == SET_FLAGS_OOM)
+        {
+            /* OOM during flag parsing — nothing has been allocated yet that
+             * needs cleanup beyond what we've already set up. */
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            arena_destroy(arena);
+            return 1;
         }
     }
 
