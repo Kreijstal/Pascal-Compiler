@@ -2766,10 +2766,14 @@ void kgpc_release_current_exception(void)
 {
     int64_t value = kgpc_current_exception;
     int is_object = kgpc_current_exception_is_object;
-    kgpc_current_exception = 0;
-    kgpc_current_exception_is_object = 0;
     if (value == 0 || !is_object)
+    {
+        /* Nothing to free.  Preserve kgpc_current_exception so that any
+         * downstream handler that inspects the slot can still see the
+         * raised value, and so that ASAN treats the slot as a live
+         * reference to a still-allocated integer-exception payload. */
         return;
+    }
     void *self = (void *)(uintptr_t)value;
     void **vmt = *(void ***)self;
     if (vmt == NULL)
@@ -2782,11 +2786,19 @@ void kgpc_release_current_exception(void)
      * that by checking the parent-ref slot — TObject-derived classes
      * always have a non-null vParentRef, while a parentless class has
      * zero.  Without a guaranteed TObject ancestor we cannot safely
-     * dereference vmt+KGPC_VMT_DESTROY_OFFSET or +FREEINSTANCE_OFFSET,
-     * so just nil the slot and skip the dispatch. */
+     * dereference vmt+KGPC_VMT_DESTROY_OFFSET or +FREEINSTANCE_OFFSET.
+     * Leave kgpc_current_exception untouched so the existing root
+     * keeps the instance reachable (otherwise we would turn a never-
+     * freed-but-still-rooted object into an unrooted leak under ASAN). */
     void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
     if (parent_ref == NULL)
         return;
+
+    /* Now we are committed to freeing the object — clear the global
+     * slot first so that any handler the destructor calls into cannot
+     * observe a dangling exception pointer through kgpc_current_exception. */
+    kgpc_current_exception = 0;
+    kgpc_current_exception_is_object = 0;
 
     typedef void (*kgpc_vmt_method_t)(void *);
     kgpc_vmt_method_t destroy_fn =
