@@ -9,6 +9,10 @@ begin
   Result^ := s;
 end;
 
+var
+  p: PShort;
 begin
-  Writeln(DupShort('abc')^);
+  p := DupShort('abc');
+  Writeln(p^);
+  FreeMem(p);
 end.
