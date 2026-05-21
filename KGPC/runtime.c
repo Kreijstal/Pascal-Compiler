@@ -3785,7 +3785,17 @@ char *kgpc_format_datetime(const char *format, double datetime)
         }
     }
 
-    return result;
+    /* Convert the bare malloc'd buffer into a KGPC-headered AnsiString so
+     * the caller's `:= kgpc_format_datetime(...)` assignment path can
+     * refcount and release it via kgpc_string_release rather than leaking
+     * the raw allocation.  kgpc_string_assign duplicates non-headered
+     * char* values into a fresh headered copy without ever freeing the
+     * source — leaving the malloc'd buffer here would leak its bytes
+     * on every DateTimeToStr / FormatDateTime call. */
+    (void)length;  /* result is already NUL-terminated by append_char/text. */
+    char *headered = kgpc_string_duplicate(result);
+    free(result);
+    return headered;
 }
 
 typedef struct
