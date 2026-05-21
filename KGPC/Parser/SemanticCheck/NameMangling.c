@@ -19,6 +19,111 @@
 extern const char *kgpc_getenv(const char *name);
 static const char *g_mangle_caller_name = NULL; /* debug only */
 
+/*
+ * BUILTIN_TYPE_MAP — single source of truth for all Pascal builtin type names.
+ *
+ * Each entry maps one Pascal type name to its canonical VarType (used for name
+ * mangling) and primitive type tag (used by semcheck/codegen).  Aliases (e.g.
+ * AnsiChar → Char) are included with is_alias = 1 but point to the same
+ * canonical VarType as their primary type.
+ *
+ * Lookup is done via kgpc_lookup_builtin_type() which uses strcasecmp, matching
+ * the case-insensitive semantics of Pascal.
+ *
+ * NOTE: "Integer" is deliberately absent.  In ObjFPC/Delphi mode ObjPas
+ * redefines Integer = LongInt; hardcoding it here would bypass the live
+ * symbol-table lookup that reflects that override.  Callers that hit
+ * HASHVAR_UNTYPED fall through to find_type_node_for_mangling().
+ */
+static const KgpcBuiltinTypeInfo BUILTIN_TYPE_MAP[] = {
+    /* name                 mangle_var_type         primitive_type_tag  is_alias */
+
+    /* --- character types --- */
+    { "Char",               HASHVAR_CHAR,           CHAR_TYPE,          0 },
+    { "AnsiChar",           HASHVAR_CHAR,           CHAR_TYPE,          1 },
+    { "WideChar",           HASHVAR_WIDECHAR,       CHAR_TYPE,          0 },
+    { "UnicodeChar",        HASHVAR_WIDECHAR,       CHAR_TYPE,          1 },
+
+    /* --- string types --- */
+    { "String",             HASHVAR_PCHAR,          STRING_TYPE,        0 },
+    { "AnsiString",         HASHVAR_PCHAR,          STRING_TYPE,        0 },
+    { "RawByteString",      HASHVAR_RAWBYTESTRING,  STRING_TYPE,        0 },
+    { "UnicodeString",      HASHVAR_UNICODESTRING,  STRING_TYPE,        0 },
+    { "WideString",         HASHVAR_UNICODESTRING,  STRING_TYPE,        1 },
+    { "ShortString",        HASHVAR_SHORTSTRING,    SHORTSTRING_TYPE,   0 },
+
+    /* --- integer types --- */
+    { "Byte",               HASHVAR_INTEGER,        BYTE_TYPE,          0 },
+    { "Word",               HASHVAR_INTEGER,        WORD_TYPE,          0 },
+    { "TSystemCodePage",    HASHVAR_INTEGER,        WORD_TYPE,          1 },
+    { "LongInt",            HASHVAR_LONGINT,        LONGINT_TYPE,       0 },
+    { "Int64",              HASHVAR_INT64,          INT64_TYPE,         0 },
+    { "SizeInt",            HASHVAR_INT64,          INT64_TYPE,         1 },
+    { "QWord",              HASHVAR_QWORD,          QWORD_TYPE,         0 },
+    { "SizeUInt",           HASHVAR_QWORD,          QWORD_TYPE,         1 },
+
+    /* --- real types --- */
+    { "Real",               HASHVAR_REAL,           REAL_TYPE,          0 },
+    { "Double",             HASHVAR_REAL,           REAL_TYPE,          1 },
+
+    /* --- boolean --- */
+    { "Boolean",            HASHVAR_BOOLEAN,        BOOL,               0 },
+
+    /* --- pointer types --- */
+    { "Pointer",            HASHVAR_POINTER,        POINTER_TYPE,       0 },
+    { "CodePointer",        HASHVAR_POINTER,        POINTER_TYPE,       1 },
+    { "PChar",              HASHVAR_PANSICHAR,      POINTER_TYPE,       0 },
+    { "PAnsiChar",          HASHVAR_PANSICHAR,      POINTER_TYPE,       1 },
+    { "PWideChar",          HASHVAR_PWIDECHAR,      POINTER_TYPE,       0 },
+    { "PWChar",             HASHVAR_PWIDECHAR,      POINTER_TYPE,       1 },
+
+    /* --- file types --- */
+    { "Text",               HASHVAR_TEXT,           TEXT_TYPE,          0 },
+    { "TypedFile",          HASHVAR_TYPEDFILE,      FILE_TYPE,          0 },
+    { "File",               HASHVAR_FILE,           FILE_TYPE,          0 },
+};
+
+#define BUILTIN_TYPE_MAP_COUNT \
+    ((int)(sizeof(BUILTIN_TYPE_MAP) / sizeof(BUILTIN_TYPE_MAP[0])))
+
+int kgpc_lookup_builtin_type(const char *name, KgpcBuiltinTypeInfo *out)
+{
+    if (name == NULL)
+        return 0;
+    for (int i = 0; i < BUILTIN_TYPE_MAP_COUNT; ++i)
+    {
+        if (strcasecmp(name, BUILTIN_TYPE_MAP[i].name) == 0)
+        {
+            if (out != NULL)
+                *out = BUILTIN_TYPE_MAP[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * resolve_string_alias_to_vartype — map a string alias name to its mangling VarType.
+ *
+ * Given an alias_name that is known to belong to a STRING_TYPE primitive (e.g.
+ * the alias_name field of a TypeAlias or return_type_id of a function), return
+ * the VarType that distinguishes RawByteString, UnicodeString, and generic
+ * AnsiString/String from each other.
+ *
+ * Returns HASHVAR_UNTYPED if alias_name is NULL or not a recognized string alias,
+ * so callers can detect "no override needed" without a separate null check.
+ */
+static enum VarType resolve_string_alias_to_vartype(const char *alias_name)
+{
+    if (alias_name == NULL)
+        return HASHVAR_UNTYPED;
+    KgpcBuiltinTypeInfo info;
+    if (kgpc_lookup_builtin_type(alias_name, &info) &&
+        (info.primitive_type_tag == STRING_TYPE || info.primitive_type_tag == SHORTSTRING_TYPE))
+        return info.mangle_var_type;
+    return HASHVAR_UNTYPED;
+}
+
 // Helper to create a lowercase copy of a string (for case-insensitive mangling)
 static char* str_tolower_dup(const char* src) {
     if (src == NULL)
@@ -237,79 +342,17 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
     return HASHVAR_UNTYPED;
 }
 
-// Helper to map built-in type names to VarType (case-insensitive)
-static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
-    if (type_name == NULL)
-        return HASHVAR_UNTYPED;
-    
-    // Character types
-    if (strcasecmp(type_name, "Char") == 0 || strcasecmp(type_name, "AnsiChar") == 0)
-        return HASHVAR_CHAR;
-    if (strcasecmp(type_name, "WideChar") == 0 || strcasecmp(type_name, "UnicodeChar") == 0)
-        return HASHVAR_WIDECHAR;
-    
-    // String types
-    if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0)
-        return HASHVAR_PCHAR;
-    if (strcasecmp(type_name, "WideString") == 0)
-        return HASHVAR_UNICODESTRING;  /* WideString mangles like UnicodeString (both are wide) */
-    if (strcasecmp(type_name, "ShortString") == 0)
-        return HASHVAR_SHORTSTRING;
-    if (strcasecmp(type_name, "RawByteString") == 0)
-        return HASHVAR_RAWBYTESTRING;
-    if (strcasecmp(type_name, "UnicodeString") == 0)
-        return HASHVAR_UNICODESTRING;
-    
-    // Integer types
-    /* Note: "Integer" is intentionally NOT in this list.  In ObjFPC/Delphi mode
-     * ObjPas redefines Integer = LongInt (overriding System's Integer = SmallInt).
-     * Hardcoding Integer -> HASHVAR_INTEGER here would bypass the symbol-table
-     * lookup that correctly reflects that override.  Returning HASHVAR_UNTYPED
-     * causes the caller to fall through to find_type_node_for_mangling(), which
-     * consults the live symbol table and returns HASHVAR_LONGINT after the
-     * ObjPas override has been applied. */
-    if (strcasecmp(type_name, "Byte") == 0 ||
-        strcasecmp(type_name, "Word") == 0 || strcasecmp(type_name, "TSystemCodePage") == 0)
-        return HASHVAR_INTEGER;
-    
-    if (strcasecmp(type_name, "LongInt") == 0)
-        return HASHVAR_LONGINT;
-    
-    if (strcasecmp(type_name, "Int64") == 0 || strcasecmp(type_name, "SizeInt") == 0)
-        return HASHVAR_INT64;
-
-    if (strcasecmp(type_name, "QWord") == 0 || strcasecmp(type_name, "SizeUInt") == 0)
-        return HASHVAR_QWORD;
-    
-    // Real types
-    if (strcasecmp(type_name, "Real") == 0 || strcasecmp(type_name, "Double") == 0)
-        return HASHVAR_REAL;
-    
-    // Boolean type
-    if (strcasecmp(type_name, "Boolean") == 0)
-        return HASHVAR_BOOLEAN;
-
-    if (strcasecmp(type_name, "CodePointer") == 0)
-        return HASHVAR_POINTER;
-    
-    // File types
-    if (strcasecmp(type_name, "Text") == 0)
-        return HASHVAR_TEXT;
-    if (strcasecmp(type_name, "TypedFile") == 0)
-        return HASHVAR_TYPEDFILE;
-    if (strcasecmp(type_name, "File") == 0)
-        return HASHVAR_FILE;
-    
-    // Pointer type
-    if (strcasecmp(type_name, "Pointer") == 0)
-        return HASHVAR_POINTER;
-    
-    // PAnsiChar/PChar types (distinct from String for name mangling)
-    if (strcasecmp(type_name, "PChar") == 0 || strcasecmp(type_name, "PAnsiChar") == 0)
-        return HASHVAR_PANSICHAR;
-    if (strcasecmp(type_name, "PWideChar") == 0 || strcasecmp(type_name, "PWChar") == 0)
-        return HASHVAR_PWIDECHAR;
-    
+/*
+ * MapBuiltinTypeNameToVarType — map a Pascal builtin type name to its VarType.
+ *
+ * Implemented via BUILTIN_TYPE_MAP; see the table comment for the "Integer"
+ * exclusion rationale (symbol-table override must win).
+ */
+static enum VarType MapBuiltinTypeNameToVarType(const char *type_name)
+{
+    KgpcBuiltinTypeInfo info;
+    if (kgpc_lookup_builtin_type(type_name, &info))
+        return info.mangle_var_type;
     return HASHVAR_UNTYPED;
 }
 
@@ -999,14 +1042,9 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
                 {
                     struct TypeAlias *alias = kgpc_type->type_alias;
-                    if (alias->alias_name != NULL)
-                    {
-                        if (strcasecmp(alias->alias_name, "RawByteString") == 0 ||
-                            strcasecmp(alias->alias_name, "AnsiString") == 0)
-                            resolved_type = HASHVAR_RAWBYTESTRING;
-                        else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
-                            resolved_type = HASHVAR_UNICODESTRING;
-                    }
+                    enum VarType alias_vt = resolve_string_alias_to_vartype(alias->alias_name);
+                    if (alias_vt != HASHVAR_UNTYPED)
+                        resolved_type = alias_vt;
                 }
                 /* Fallback: if type_alias is missing on a function call result,
                  * look up the called function's return_type_id to distinguish
@@ -1040,11 +1078,9 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     }
                     if (ret_id != NULL)
                     {
-                        if (strcasecmp(ret_id, "RawByteString") == 0 ||
-                            strcasecmp(ret_id, "AnsiString") == 0)
-                            resolved_type = HASHVAR_RAWBYTESTRING;
-                        else if (strcasecmp(ret_id, "UnicodeString") == 0)
-                            resolved_type = HASHVAR_UNICODESTRING;
+                        enum VarType alias_vt = resolve_string_alias_to_vartype(ret_id);
+                        if (alias_vt != HASHVAR_UNTYPED)
+                            resolved_type = alias_vt;
                     }
                 }
             }
