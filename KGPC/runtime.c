@@ -2775,6 +2775,19 @@ void kgpc_release_current_exception(void)
     if (vmt == NULL)
         return;
 
+    /* Be defensive about VMT layout: not every class in user code
+     * inherits from TObject.  Programs that hand-roll an `Exception`
+     * class with no parent emit a 12-slot VMT (the fixed header only)
+     * and never produce Destroy / FreeInstance method slots.  Detect
+     * that by checking the parent-ref slot — TObject-derived classes
+     * always have a non-null vParentRef, while a parentless class has
+     * zero.  Without a guaranteed TObject ancestor we cannot safely
+     * dereference vmt+KGPC_VMT_DESTROY_OFFSET or +FREEINSTANCE_OFFSET,
+     * so just nil the slot and skip the dispatch. */
+    void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
+    if (parent_ref == NULL)
+        return;
+
     typedef void (*kgpc_vmt_method_t)(void *);
     kgpc_vmt_method_t destroy_fn =
         (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
