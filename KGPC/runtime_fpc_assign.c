@@ -121,8 +121,9 @@ static void kgpc_fpc_closefunc(void *textrec)
     memcpy(tr + TR_HANDLE, &neg1, sizeof(neg1));
 }
 
-/* OpenFunc (set at FPC offset 296): opens the file named at TR_NAME,
- * stores FILE* in KGPC private_data, fd in Handle, sets I/O func table. */
+/* OpenFunc (stored at offsetof(KgpcTextRecLayout, openfunc) = 48):
+ * opens the file named at TR_NAME, stores FILE* in KGPC private_data,
+ * fd in Handle, sets I/O func table. */
 static void kgpc_fpc_openfunc(void *textrec)
 {
     char *tr = (char *)textrec;
