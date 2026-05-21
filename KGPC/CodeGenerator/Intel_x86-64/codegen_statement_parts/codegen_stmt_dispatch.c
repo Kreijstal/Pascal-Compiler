@@ -1362,6 +1362,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
                 inst_list = add_inst(inst_list, buffer);
             }
+            /* Mirror the implicit-epilogue cleanup so EXIT releases the
+             * element data buffers of managed dynamic-array locals along
+             * the early-return path.  Skipped for dynarray-returning
+             * functions to preserve the Result.data transfer contract
+             * (see codegen_function's matching skip). */
+            if (ctx != NULL && !ctx->returns_dynamic_array)
+            {
+                inst_list = codegen_emit_managed_local_cleanup(inst_list,
+                    ctx->current_subprogram_declarations, ctx, symtab);
+            }
             /* Restore callee-saved registers before leaving the frame */
             if (ctx->callee_save_rbx_offset > 0) {
                 char buf[64];

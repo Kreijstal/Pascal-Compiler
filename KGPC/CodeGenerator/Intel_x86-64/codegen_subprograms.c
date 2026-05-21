@@ -487,6 +487,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
     ListNode_t *prev_sub_args = ctx->current_subprogram_args;
+    ListNode_t *prev_sub_declarations = ctx->current_subprogram_declarations;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
     StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
@@ -675,7 +676,14 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
+    ctx->current_subprogram_declarations = proc->declarations;
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
+
+    /* Release the element-data buffer behind every managed dynamic-array
+     * local before the frame is torn down.  STMT_EXIT branches out earlier
+     * also emit this cleanup so all return paths honor the same contract. */
+    inst_list = codegen_emit_managed_local_cleanup(inst_list,
+        proc->declarations, ctx, symtab);
 
     if (proc->owner_class != NULL &&
         proc->method_name != NULL &&
@@ -867,6 +875,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
     ctx->current_subprogram_args = prev_sub_args;
+    ctx->current_subprogram_declarations = prev_sub_declarations;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
     ctx->current_record_return_slot = prev_record_return_slot;
@@ -936,6 +945,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
     ListNode_t *prev_sub_args = ctx->current_subprogram_args;
+    ListNode_t *prev_sub_declarations = ctx->current_subprogram_declarations;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
     StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
@@ -1637,7 +1647,25 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
+    ctx->current_subprogram_declarations = func->declarations;
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
+
+    /* Release the element-data buffer behind every managed dynamic-array
+     * local before the frame is torn down.  STMT_EXIT branches out earlier
+     * also emit this cleanup so all return paths honor the same contract.
+     *
+     * Skipped for dynarray-returning functions: the Result slot's data
+     * buffer is about to be transferred to the caller via
+     * kgpc_dynarray_clone_descriptor, and any user-declared local may
+     * alias that buffer through `Result := localvar`.  Releasing here
+     * would dangle the returned descriptor's data pointer.  The caller's
+     * kgpc_dynarray_assign_from_temp / _release_temp_descriptor path
+     * already covers the transferred descriptor's lifecycle. */
+    if (!returns_dynamic_array)
+    {
+        inst_list = codegen_emit_managed_local_cleanup(inst_list,
+            func->declarations, ctx, symtab);
+    }
 
     /* For nostackframe+assembler functions, the asm block handles the return
      * value entirely.  Skip the compiler-generated return-value epilogue,
@@ -1893,6 +1921,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
     ctx->current_subprogram_args = prev_sub_args;
+    ctx->current_subprogram_declarations = prev_sub_declarations;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
     ctx->current_record_return_slot = prev_record_return_slot;

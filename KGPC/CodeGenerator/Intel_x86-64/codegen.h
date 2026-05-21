@@ -307,6 +307,10 @@ typedef struct CodeGenContext {
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
     ListNode_t *current_subprogram_args;
+    /* Variable declarations of the current subprogram/program body, so
+     * STMT_EXIT and the implicit epilogue can find managed locals (e.g.
+     * dynamic arrays) needing finalization before the frame is torn down. */
+    ListNode_t *current_subprogram_declarations;
     StackNode_t *current_return_slot;
     KgpcType *current_return_type;
     ListNode_t *static_link_procs;
@@ -441,6 +445,16 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
                        CompilationContext *comp_ctx);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
+
+/* Emit per-variable cleanup for managed dynamic-array locals/globals
+ * declared in `declarations`.  For each declaration whose type contains
+ * dynamic-array storage (whether the variable itself, a field of a record,
+ * or an element of a static array), append calls to
+ * kgpc_dynarray_finalize_local that release the data buffer reachable from
+ * each dynarray descriptor.  Safe to invoke at function epilogue and from
+ * STMT_EXIT — the helper is idempotent on already-cleared descriptors. */
+ListNode_t *codegen_emit_managed_local_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
