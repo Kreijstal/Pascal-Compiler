@@ -4,9 +4,14 @@ TypeRef **semcheck_param_types_from_params(ListNode_t *params, int skip_first_pa
 static void semcheck_ensure_implicit_tobject_parent(struct RecordType *record_info,
                                                     const char *class_name)
 {
+    /* In Pascal, every class type (in any mode) implicitly inherits from TObject
+     * when no explicit parent is declared.  This is the correct behaviour for
+     * {$mode fpc}, {$mode objfpc}, and {$mode delphi} alike.  Without this,
+     * Free / Destroy / FreeInstance are invisible on the receiver's class,
+     * causing the call-site mangler to emit T<Class>__Free symbols that are
+     * never defined, producing link-time "undefined reference" errors. */
     if (record_info == NULL || !record_info->is_class ||
-        record_info->parent_class_name != NULL ||
-        !pascal_frontend_is_objfpc_mode())
+        record_info->parent_class_name != NULL)
         return;
 
     if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
