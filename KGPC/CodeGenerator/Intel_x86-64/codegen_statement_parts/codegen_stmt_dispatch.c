@@ -698,7 +698,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 char *stripped_src = malloc(src_len + 1);
                 if (stripped_src == NULL)
                 {
-                    inst_list = add_inst(inst_list, strdup(src));
+                    inst_list = add_inst(inst_list, src);
                     break;
                 }
                 {
@@ -743,26 +743,26 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                 snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
                             else
                                 snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
+                            inst_list = add_inst(inst_list, buf);
                             /* Load sinus* and cosinus* pointers */
                             snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", sinus_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
+                            inst_list = add_inst(inst_list, buf);
                             snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", cosinus_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
+                            inst_list = add_inst(inst_list, buf);
                             /* Call fpc_in_sin_real; write Double result to *sinus */
-                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
-                            inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_sin_real\n"));
-                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r12)\n"));
+                            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                            inst_list = add_inst(inst_list, "\tcall\tfpc_in_sin_real\n");
+                            inst_list = add_inst(inst_list, "\tmovsd\t%xmm0, (%r12)\n");
                             /* Reload theta for fpc_in_cos_real */
                             if (theta_size == 4)
                                 snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
                             else
                                 snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
+                            inst_list = add_inst(inst_list, buf);
                             /* Call fpc_in_cos_real; write Double result to *cosinus */
-                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
-                            inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_cos_real\n"));
-                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r13)\n"));
+                            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                            inst_list = add_inst(inst_list, "\tcall\tfpc_in_cos_real\n");
+                            inst_list = add_inst(inst_list, "\tmovsd\t%xmm0, (%r13)\n");
                             free(stripped_src);
                             break;
                         }
@@ -770,7 +770,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     /* For other Intel-syntax asm blocks, wrap with GAS
                      * syntax-switching directives so they assemble correctly
                      * in the otherwise AT&T-syntax output file. */
-                    inst_list = add_inst(inst_list, strdup(".intel_syntax noprefix\n"));
+                    inst_list = add_inst(inst_list, ".intel_syntax noprefix\n");
                     /* stripped_src goes through identifier substitution below */
                 }
 
@@ -784,10 +784,10 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 char *cleaned = malloc(alloc_size);
                 if (cleaned == NULL)
                 {
-                    inst_list = add_inst(inst_list, strdup(stripped_src));
+                    inst_list = add_inst(inst_list, stripped_src);
                     free(stripped_src);
                     if (is_intel_syntax)
-                        inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
+                        inst_list = add_inst(inst_list, "\n.att_syntax prefix\n");
                     break;
                 }
                 {
@@ -1039,7 +1039,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 /* Intel-syntax blocks: close the syntax-switching directive */
                 if (is_intel_syntax)
                 {
-                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
+                    inst_list = add_inst(inst_list, "\n.att_syntax prefix\n");
                 }
             }
             break;
