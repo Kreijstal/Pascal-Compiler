@@ -1107,11 +1107,24 @@ SKIP_SELF_FIELD_REWRITE:
         if (enum_type_name != NULL &&
             semcheck_resolve_scoped_enum_literal(symtab, enum_type_name, field_id, &enum_value))
         {
+            /* Switching expr from EXPR_RECORD_ACCESS to EXPR_INUM overwrites the
+             * union, so the record_expr subtree and field_id strdup held in the
+             * record_access_data slot must be released first; otherwise the
+             * inner Expression and its strdup'd id both leak. record_kgpc_type
+             * is a borrowed reference owned by record_expr's resolved_kgpc_type,
+             * so retain it first to keep it alive across the destroy. See the
+             * ownership rule in docs/AST_OWNERSHIP_RULE.md. */
+            if (record_kgpc_type != NULL)
+                kgpc_type_retain(record_kgpc_type);
+            record_access_clear_payload(expr, 1);
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = enum_value;
             semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
             if (record_kgpc_type != NULL)
+            {
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, record_kgpc_type);
+                kgpc_type_release(record_kgpc_type);
+            }
             *type_return = ENUM_TYPE;
             return error_count;
         }
@@ -1121,10 +1134,16 @@ SKIP_SELF_FIELD_REWRITE:
             enum_type_name = record_kgpc_type->type_alias->target_type_id;
             if (semcheck_resolve_scoped_enum_literal(symtab, enum_type_name, field_id, &enum_value))
             {
+                /* Same union-overwrite pattern as above: reclaim the
+                 * record_access payload before switching to EXPR_INUM, and
+                 * keep record_kgpc_type alive across the destroy. */
+                kgpc_type_retain(record_kgpc_type);
+                record_access_clear_payload(expr, 1);
                 expr->type = EXPR_INUM;
                 expr->expr_data.i_num = enum_value;
                 semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, record_kgpc_type);
+                kgpc_type_release(record_kgpc_type);
                 *type_return = ENUM_TYPE;
                 return error_count;
             }
