@@ -619,10 +619,12 @@ skip_type_receiver_rewrite:
                 return_val += semcheck_stmt_expr_tag(&expr_type, symtab, exit_expr, max_scope_lev, 0);
         }
 
-        /* Transform the procedure call into an Exit statement for codegen. */
-        stmt->type = STMT_EXIT;
-        stmt->stmt_data.exit_data.return_expr = exit_expr;
-        stmt->stmt_data.procedure_call_data.expr_args = NULL;
+        /* Free all heap-owned procedure_call_data fields BEFORE switching the
+         * stmt_data union to exit_data — otherwise writes to exit_data.return_expr
+         * silently clobber procedure_call_data.id at the same offset, orphaning
+         * the strdup'd id; fields at other offsets (call_qualifier,
+         * placeholder_method_name, self_class_name, etc.) never get freed
+         * by destroy_stmt's STMT_EXIT branch either. */
         if (stmt->stmt_data.procedure_call_data.id != NULL)
         {
             free(stmt->stmt_data.procedure_call_data.id);
@@ -633,6 +635,16 @@ skip_type_receiver_rewrite:
             free(stmt->stmt_data.procedure_call_data.mangled_id);
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         }
+        free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+        free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+        free(stmt->stmt_data.procedure_call_data.cached_method_name);
+        free(stmt->stmt_data.procedure_call_data.self_class_name);
+        free(stmt->stmt_data.procedure_call_data.constructor_class_name);
+        free(stmt->stmt_data.procedure_call_data.call_qualifier);
+        if (stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
+            destroy_expr(stmt->stmt_data.procedure_call_data.procedural_var_expr);
+        if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
+            destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
         while (args_given != NULL)
         {
             ListNode_t *next = args_given->next;
@@ -640,6 +652,10 @@ skip_type_receiver_rewrite:
             free(args_given);
             args_given = next;
         }
+
+        /* Now switch the union to exit_data; the heap fields are reclaimed. */
+        stmt->type = STMT_EXIT;
+        stmt->stmt_data.exit_data.return_expr = exit_expr;
 
         return return_val;
     }
