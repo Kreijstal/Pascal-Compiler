@@ -49,6 +49,7 @@ typedef long long ssize_t;
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <signal.h>
 #endif
 
 /* File opening */
@@ -144,3 +145,31 @@ int fpchmod(const char *path, int mode)
     return chmod(path, (mode_t)mode);
 #endif
 }
+
+/*
+ * fpsigaction — wrapper for libc sigaction(2).
+ *
+ * FPCSource/rtl/unix/baseunix.pp declares this as:
+ *   function fpsigaction(signum: cint; act, oldact: psigactionrec): cint; external;
+ *
+ * "external" with no name string means the Pascal identifier becomes the
+ * link-time symbol.  KGPC's runtime does not export "fpsigaction" anywhere
+ * else, so without this wrapper the program would fail to link.
+ *
+ * Pascal's sigactionrec (in KGPC/Units/baseunix.p) is laid out to match
+ * the libc struct sigaction on x86-64 Linux (FPC_USE_LIBC path):
+ *   offset   0 : sa_handler  (8-byte pointer)
+ *   offset   8 : sa_mask     (128-byte sigset_t = 16 × uint64)
+ *   offset 136 : sa_flags    (4-byte int)
+ *   offset 144 : sa_restorer (8-byte pointer)
+ * Total: 152 bytes — identical to sizeof(struct sigaction).
+ *
+ * The layouts are binary-compatible, so we can cast the Pascal pointer
+ * directly to struct sigaction * and forward to the libc call.
+ */
+#ifndef _WIN32
+int fpsigaction(int signum, struct sigaction *act, struct sigaction *oldact)
+{
+    return sigaction(signum, act, oldact);
+}
+#endif

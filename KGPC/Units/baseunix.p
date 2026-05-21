@@ -55,12 +55,22 @@ type
     ffree: QWord;
   end;
   
-  sigset_t = QWord;
-  
+  { sigset_t mirrors the kernel/libc type: 128 bytes on x86-64 Linux,
+    expressed as an array of 16 QWords (16 * 8 = 128 bytes). }
+  sigset_t = array[0..15] of QWord;
+
+  { sigactionrec matches the libc struct sigaction layout on x86-64 Linux
+    (FPC_USE_LIBC path in FPCSource/rtl/linux/signal.inc):
+      offset   0: sa_handler   (8 bytes, pointer)
+      offset   8: sa_mask      (128 bytes, sigset_t)
+      offset 136: sa_flags     (4 bytes, cint)
+      offset 144: sa_restorer  (8 bytes, pointer, unused by callers but required for ABI)
+    Total: 152 bytes. }
   sigactionrec = record
-    sa_handler: Pointer;
-    sa_flags: cint;
-    sa_mask: sigset_t;
+    sa_handler:  Pointer;
+    sa_mask:     sigset_t;
+    sa_flags:    cint;
+    sa_restorer: Pointer;
   end;
   TSigActionRec = sigactionrec;
   PSigActionRec = ^sigactionrec;
