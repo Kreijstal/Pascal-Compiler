@@ -3336,7 +3336,10 @@ static void codegen_emit_enum_typeinfo_from_table(CodeGenContext *ctx, HashTable
                 }
             }
             if (already_emitted)
+            {
+                free(label);
                 continue;
+            }
 
             if (*emitted_count < 512)
             {
