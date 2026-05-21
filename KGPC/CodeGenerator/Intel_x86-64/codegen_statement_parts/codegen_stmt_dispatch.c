@@ -629,6 +629,34 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
      * loop's codegen reuses the cached register without emitting a reload). */
     codegen_reset_static_link_cache(ctx);
 
+    /* When the topmost expression of certain statements is a direct
+     * constructor call, the freshly allocated instance becomes the long-
+     * lived owner of the statement's target (variable, raised exception).
+     * The expr_tree.c constructor-allocation site has already pushed the
+     * spill slot onto ctx->pending_ctor_temp_offsets for transient-temp
+     * cleanup; we must pop the topmost entry after dispatch so the end-
+     * of-statement flush does not free a still-owned object. */
+    int ctor_owned_snapshot = ctx->pending_ctor_temp_count;
+    int ctor_owned_rhs_is_constructor = 0;
+    if (stmt->type == STMT_VAR_ASSIGN)
+    {
+        struct Expression *rhs_expr = stmt->stmt_data.var_assign_data.expr;
+        if (rhs_expr != NULL && rhs_expr->type == EXPR_FUNCTION_CALL &&
+            rhs_expr->expr_data.function_call_data.is_constructor_call)
+            ctor_owned_rhs_is_constructor = 1;
+    }
+    else if (stmt->type == STMT_RAISE)
+    {
+        /* `raise X.Create(...)` transfers ownership of the constructed
+         * exception object to the runtime (kgpc_current_exception), so
+         * the freshly allocated instance must not be released as a
+         * transient temp. */
+        struct Expression *raise_expr = stmt->stmt_data.raise_data.exception_expr;
+        if (raise_expr != NULL && raise_expr->type == EXPR_FUNCTION_CALL &&
+            raise_expr->expr_data.function_call_data.is_constructor_call)
+            ctor_owned_rhs_is_constructor = 1;
+    }
+
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -1417,6 +1445,31 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             assert(0 && "Unrecognized statement type in codegen");
             break;
     }
+
+    /* If the just-emitted statement has a direct constructor on its
+     * topmost expression (assignment RHS, raise expression), the topmost
+     * pending-temp entry corresponds to the instance that now belongs to
+     * the assignment target / raised exception object.  Drop it so the
+     * end-of-statement flush leaves it alive. */
+    if (ctor_owned_rhs_is_constructor &&
+        ctx->pending_ctor_temp_count > ctor_owned_snapshot)
+    {
+        ctx->pending_ctor_temp_count -= 1;
+    }
+
+    /* Release any class-instance temporaries produced by constructor
+     * calls whose result was consumed transiently within this statement
+     * (e.g. tested in a relational expression).  Codegen pushes entries
+     * at the constructor allocation site (expr_tree.c); enclosing
+     * function-call expressions discard entries pushed by their
+     * argument evaluation (those are now owned by the callee), and the
+     * dispatcher pops the entry corresponding to a statement-level
+     * owning operation above.  What remains here is the rare case where
+     * the constructor result was consumed by a non-call site that
+     * cannot take ownership (relational comparison, expression-
+     * statement).  Mirrors C++'s end-of-full-expression rule. */
+    inst_list = codegen_flush_pending_ctor_temps(ctx, inst_list);
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
