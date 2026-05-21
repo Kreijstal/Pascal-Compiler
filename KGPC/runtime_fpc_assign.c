@@ -178,9 +178,10 @@ static void kgpc_fpc_openfunc(void *textrec)
 /* ------------------------------------------------------------------ */
 /* assign_t_s: Assign(var t: Text; const s: string)                    */
 /* Single implementation for both standard and FPC RTL mode.           */
-/* Calls kgpc_text_assign (KGPC proper init), then sets FPC I/O        */
-/* function pointers at offsets 296-320 (harmless in standard mode,    */
-/* required for FPC RTL compiled code).                                 */
+/* Calls kgpc_text_assign (KGPC proper init), then sets the FPC I/O   */
+/* function pointers at KgpcTextRecLayout.openfunc/inoutfunc/flushfunc/ */
+/* closefunc (offsets 48/56/64/72), which KGPC-generated FPC RTL code  */
+/* (opentext_t_li_li, close_t, fileopenfunc_u_textrec, etc.) reads.    */
 /* ------------------------------------------------------------------ */
 void kgpc_assign_t_s(void *textrec, const char *path)
 {
@@ -221,9 +222,7 @@ __attribute__((unused)) static void assign_t_c(void *textrec, char c)
 /* assign_f_s: Assign(var f: File; const s: string)                    */
 /* Single implementation for both standard and FPC RTL mode.           */
 /* Forwards to kgpc_tfile_assign which writes the path into the        */
-/* FileRec.name field at offset 112 — the same offset FPC's            */
-/* x86_64 FileRec uses (Handle:4 + Mode:4 + RecSize:8 + _private:64    */
-/* + UserData:32 = 112).                                                */
+/* FileRec.name field at KGPCFileRec.name offset (112).                */
 /* ------------------------------------------------------------------ */
 
 void kgpc_assign_f_s(void *filerec, const char *path)
