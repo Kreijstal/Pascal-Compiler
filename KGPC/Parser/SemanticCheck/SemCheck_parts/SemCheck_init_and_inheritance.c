@@ -1031,6 +1031,15 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                         old_fields = next;
                                     }
                                 }
+                                else
+                                {
+                                    /* Full definition has a parent class: hidden fields from the
+                                     * forward declaration (e.g. __kgpc_class_typeinfo) are not
+                                     * re-inserted because they will be inherited from the parent
+                                     * during merge_parent_class_fields.  Free them here to avoid
+                                     * leaking the forward-stub's field list. */
+                                    destroy_list(old_fields);
+                                }
                                 /* Transfer method templates, properties, parent class, interfaces */
                                 if (new_record->method_templates != NULL)
                                 {
