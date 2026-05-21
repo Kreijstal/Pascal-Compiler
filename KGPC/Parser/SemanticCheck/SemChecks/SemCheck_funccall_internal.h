@@ -78,6 +78,25 @@ int semcheck_call_has_noarg_identifier_calls(ListNode_t *args);
 int semcheck_detach_unary_not_from_receiver(struct Expression *receiver_expr);
 int resolve_param_type(Tree_t *decl, SymTab_t *symtab);
 
+/*
+ * semcheck_dispatch_builtin_func — table-driven dispatch for Pascal builtins.
+ *
+ * Looks up id (case-insensitively) in BUILTIN_FUNC_MAP and calls its handler.
+ * Returns 1 and writes the handler's return code into *status_out on a hit;
+ * returns 0 if the name is not in the table.
+ *
+ * Builtins that require argument-type inspection before dispatching
+ * (UpCase, UpperCase, LowerCase, Trunc) are NOT in the table and must
+ * be handled inline.
+ */
+int semcheck_dispatch_builtin_func(
+    const char *id,
+    int *type_return,
+    SymTab_t *symtab,
+    struct Expression *expr,
+    int max_scope_lev,
+    int *status_out);
+
 /* State function declarations — defined in the _early/_builtins/_self/_method/_overload files */
 FunccallState funccall_state_normalize(FunccallCtx *ctx);
 FunccallState funccall_state_inherited(FunccallCtx *ctx);
