@@ -127,6 +127,7 @@ FPC_RTL_MODE = os.environ.get("KGPC_FPC_RTL", "").lower() in ("1", "true", "yes"
 FPC_RTL_DIR = os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "rtl")
 
 PP_BOOTSTRAP_FULL_CHAIN_TIMEOUT = 1800
+PP_BOOTSTRAP_COMPILE_TIMEOUT = 1500
 FPC_RTL_GENERATED_UNITS_DIRNAME = "units"
 
 FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")

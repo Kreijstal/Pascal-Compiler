@@ -10,6 +10,7 @@ from .env import (
     EXE_EXT,
     EXEC_TIMEOUT,
     PP_BOOTSTRAP_FULL_CHAIN_TIMEOUT,
+    PP_BOOTSTRAP_COMPILE_TIMEOUT,
     FPC_RTL_MODE,
     FPC_RTL_DIR,
     IS_WINDOWS_ABI,
@@ -619,7 +620,7 @@ def _add_pp_pas_bootstrap_test():
             print(f"msgidx.inc sha256: {msgidx_sha}", file=sys.stderr)
 
         try:
-            run_compiler(pp_pas, asm_file, flags=pp_flags, timeout=600)
+            run_compiler(pp_pas, asm_file, flags=pp_flags, timeout=PP_BOOTSTRAP_COMPILE_TIMEOUT)
         except subprocess.CalledProcessError as e:
             self.fail(f"pp.pas compilation failed: {e}")
             return
