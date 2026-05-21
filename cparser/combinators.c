@@ -507,6 +507,9 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
 
         // Check if this error was committed - if so, stop trying alternatives
         if (res.value.error->committed) {
+            if (has_best) {
+                free_error(best_res.value.error);
+            }
             return res;
         }
 
