@@ -3841,7 +3841,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
                 inst_list = add_inst(inst_list, buffer);
             }
-            int vmt_offset = vmt_index * 8;
+            int vmt_offset = VMT_VMETHOD_OFFSET(vmt_index);
             snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
@@ -6145,7 +6145,8 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, 
         inst_list = add_inst(inst_list, buffer);
         /* Load typeinfo from exception instance: VMT pointer → typeinfo slot */
         inst_list = add_inst(inst_list, "\tmovq\t(%rax), %rax\n");       /* VMT pointer */
-        inst_list = add_inst(inst_list, "\tmovq\t56(%rax), %rax\n");     /* vTypeInfo slot */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rax), %%rax\n", VMT_VTYPEINFO_OFFSET);
+        inst_list = add_inst(inst_list, buffer);                         /* vTypeInfo slot */
 
         /* Call kgpc_rtti_is(exception_typeinfo, handler_typeinfo) */
         if (codegen_target_is_windows())
