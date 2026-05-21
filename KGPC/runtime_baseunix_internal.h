@@ -1,3 +1,11 @@
+/*
+ * runtime_baseunix_internal.h — private helpers for runtime_baseunix.c
+ *
+ * This header is included ONLY by runtime_baseunix.c.  It provides
+ * Windows-portability shims (path translation, open-flag translation) that
+ * are not part of the public runtime ABI.  Do not include from other files.
+ */
+
 #ifndef KGPC_RUNTIME_BASEUNIX_INTERNAL_H
 #define KGPC_RUNTIME_BASEUNIX_INTERNAL_H
 

@@ -1,3 +1,41 @@
+/*
+ * runtime_baseunix.c — KGPC runtime support for FPC's BaseUnix unit
+ *
+ * CONTRACT: This file provides raw POSIX file-descriptor and filesystem
+ * syscall wrappers that mirror FPC's BaseUnix unit
+ * (FPCSource/rtl/unix/baseunix.pp).  Every exported symbol uses FPC's "fp"
+ * naming convention (fpOpen, fpClose, fpRead, fpWrite, fplSeek, fpGetCwd,
+ * fpchmod) and is declared as "external" inside KGPC/Units/baseunix.p.
+ *
+ * Belongs here:
+ *   - File-descriptor operations: fpOpen / fpClose / fpRead / fpWrite /
+ *     fplSeek / fpchmod
+ *   - Directory helpers: fpGetCwd
+ *   - Overload variants required by the KGPC name-mangling scheme:
+ *     fpOpen_i_i_i  (three-argument overload: path, flags, mode)
+ *     fpClose_i     (one-argument overload: fd; mangled name for Pascal call
+ *                    site fpClose(fd: cint) when cint maps to "_i")
+ *
+ * Does NOT belong here:
+ *   - Higher-level helpers with the "kgpc_unix_" prefix — those live in
+ *     runtime_unix.c because they back FPC's Unix unit.
+ *   - Stat, fork, exec, signal — those symbols are declared external in
+ *     baseunix.p but resolved directly against the system C library at link
+ *     time (stat, fork, execve, etc.); no wrapper layer is needed here.
+ *
+ * Overload naming: the KGPC name-mangler appends a type suffix per parameter
+ * (e.g. "_i" for Integer/cint, "_pc" for PAnsiChar).  fpOpen and fpClose
+ * each have exactly one Pascal declaration in baseunix.p but Pascal overload
+ * resolution always uses the mangled name at the call site.  Therefore BOTH
+ * the bare C name (fpOpen, fpClose) and the mangled C name (fpOpen_i_i_i,
+ * fpClose_i) are provided so that any variation in call-site mangling finds
+ * a defined symbol.
+ *
+ * Windows portability: the #ifdef _WIN32 guards translate Linux open-flag
+ * constants and paths (/dev/null → NUL) via helpers in
+ * runtime_baseunix_internal.h.
+ */
+
 #include "runtime_baseunix_internal.h"
 #include <stddef.h>
 #include <sys/types.h>
