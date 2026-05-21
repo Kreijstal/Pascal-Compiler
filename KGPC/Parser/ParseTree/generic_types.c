@@ -1,4 +1,5 @@
 #include "generic_types.h"
+#include "tree.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -239,6 +240,13 @@ void generic_registry_cleanup(void) {
             free(decl->type_parameters[i]);
         }
         free(decl->type_parameters);
+        /* nested_type_decls are appended into the registry exclusively from
+         * convert_generic_type_decl (line ~2868) for later specialization; no
+         * other owner destroys them, so reclaim here. */
+        if (decl->nested_type_decls != NULL) {
+            destroy_list(decl->nested_type_decls);
+            decl->nested_type_decls = NULL;
+        }
         free(decl);
         decl = next;
     }

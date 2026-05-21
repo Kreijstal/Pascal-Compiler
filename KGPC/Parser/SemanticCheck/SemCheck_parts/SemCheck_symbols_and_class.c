@@ -1146,7 +1146,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
 
                     generic_registry_add_specialization(base_name, record->generic_args, arg_count);
 
-                    KgpcType *kgpc_type = create_record_type(record);
+                    /* Fresh clone has no AST owner — KgpcType must own it. */
+                    KgpcType *kgpc_type = create_record_type_owned(record);
                     if (record_type_is_class(record))
                     {
                         KgpcType *ptr = create_pointer_type(kgpc_type);
