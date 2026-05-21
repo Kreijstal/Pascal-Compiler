@@ -15,6 +15,7 @@
 #ifndef KGPC_COMPILATION_CONTEXT_H
 #define KGPC_COMPILATION_CONTEXT_H
 
+#include <stdbool.h>
 #include "Parser/ParseTree/tree.h"
 #include "Parser/SemanticCheck/SymTab/SymTab.h"
 
@@ -53,12 +54,15 @@ void compilation_context_init(CompilationContext *ctx);
 void compilation_context_destroy(CompilationContext *ctx);
 
 /* Append a unit to the loaded-units list.  The context takes ownership
- * of `unit_tree`. */
-void compilation_context_add_unit(CompilationContext *ctx,
+ * of `unit_tree`.
+ * Returns true on success, false on allocation failure (unit_tree is NOT
+ * freed on failure; the caller retains ownership and must clean up). */
+bool compilation_context_add_unit(CompilationContext *ctx,
                                   Tree_t *unit_tree, int unit_idx);
 
-/* Record include files resolved during preprocessing (for cache key). */
-void compilation_context_add_include_files(CompilationContext *ctx,
+/* Record include files resolved during preprocessing (for cache key).
+ * Returns true if all files were recorded, false if any allocation failed. */
+bool compilation_context_add_include_files(CompilationContext *ctx,
                                             const char *const *files, int count);
 
 /* Look up a loaded unit by its registry index.

@@ -123,9 +123,14 @@ void kgpc_string_set_insert(const void *value)
         if (kgpc_string_set_cap == 0)
             return;
         if ((kgpc_string_set_count + 1) * 10 >= kgpc_string_set_cap * 7)
+        {
+            size_t pre_grow_cap = kgpc_string_set_cap;
             kgpc_string_set_grow(kgpc_string_set_cap * 2);
-        if (kgpc_string_set_cap == 0)
-            return;
+            /* If grow failed, cap is unchanged and the table is still too full.
+             * Proceeding would risk a probe-loop infinite-loop below; bail out. */
+            if (kgpc_string_set_cap == pre_grow_cap)
+                return;
+        }
 
         size_t mask = kgpc_string_set_cap - 1;
         size_t idx = kgpc_hash_ptr(value) & mask;
@@ -155,7 +160,13 @@ void kgpc_string_set_insert(const void *value)
             return;
         }
 
+        /* Table is completely full (no NULL or tombstone slots).
+         * Try to grow; if grow fails the capacity is unchanged, so
+         * a second attempt would loop forever — bail out instead. */
+        size_t old_cap = kgpc_string_set_cap;
         kgpc_string_set_grow(kgpc_string_set_cap * 2);
+        if (kgpc_string_set_cap == old_cap)
+            return; /* grow failed: drop the insert rather than loop */
     }
 }
 

@@ -6,6 +6,8 @@
 #ifndef FLAGS_H
 #define FLAGS_H
 
+#include <stdbool.h>
+
 typedef enum {
     KGPC_TARGET_ABI_SYSTEM_V = 0,
     KGPC_TARGET_ABI_WINDOWS = 1,
@@ -81,7 +83,9 @@ void set_parse_only_flag(void);
 void set_time_passes_flag(void);
 void set_target_windows_flag(void);
 void set_target_sysv_flag(void);
-void set_dump_ast_path(const char *path);
+/* Set the dump-ast output path.  Returns true on success, false if
+ * memory allocation failed (the previous path is cleared in that case). */
+bool set_dump_ast_path(const char *path);
 void set_asm_debug_flag(void);
 void set_disable_dce_flag(void);
 void set_stdlib_loaded_flag(int loaded);

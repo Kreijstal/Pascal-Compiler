@@ -31,8 +31,14 @@ int unit_registry_add(const char *name)
     if (count >= MAX_UNIT_NAMES - 1)
         return 0;
 
+    char *copy = strdup(name);
+    if (copy == NULL)
+    {
+        fprintf(stderr, "ERROR: Out of memory in unit_registry_add\n");
+        return 0;
+    }
     count++;
-    registry[count] = strdup(name);
+    registry[count] = copy;
     return count;
 }
 
