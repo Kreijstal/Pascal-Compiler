@@ -45,6 +45,7 @@
 
 #include "codegen_subprograms_internal.h"
 #include "codegen_vmt_internal.h"
+#include "abi_constants.h"
 
 int codegen_float_native_distance(Tree_t *sub);
 int codegen_list_contains_string(ListNode_t *list, const char *value);
@@ -2223,9 +2224,9 @@ void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
             if (set_type != NULL)
             {
                 if (is_char_set)
-                    set_type->size_in_bytes = 32;
+                    set_type->size_in_bytes = KGPC_CHAR_SET_SIZE_BYTES;
                 else
-                    set_type->size_in_bytes = 4;
+                    set_type->size_in_bytes = KGPC_SMALL_SET_SIZE_BYTES;
             }
             PushSetConstOntoScope(symtab, (char *)id, set_bytes, (int)set_size, set_type);
             if (set_type != NULL)
@@ -3917,7 +3918,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
         ctx->target_abi = current_target_abi();
 
     g_current_codegen_abi = ctx->target_abi;
-    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? KGPC_WINDOWS_SHADOW_SPACE_BYTES : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     ctx->comp_ctx = comp_ctx;
@@ -4054,7 +4055,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         ctx->target_abi = current_target_abi();
 
     g_current_codegen_abi = ctx->target_abi;
-    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? KGPC_WINDOWS_SHADOW_SPACE_BYTES : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
@@ -4710,7 +4711,7 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     fprintf(ctx->output_file, "\t.section\t.text\n");
     fprintf(ctx->output_file, "\t.globl\tmain\n");
     codegen_function_header("main", ctx);
-    call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
+    call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : KGPC_WINDOWS_SHADOW_SPACE_BYTES;
     if (call_space > 0)
     {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
