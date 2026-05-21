@@ -1762,17 +1762,12 @@ end;
 
 procedure FreeAndNil(var Obj: Pointer);
 var
-    Temp: Pointer;
+    Temp: TObject;
 begin
-    { Note: This is a simplified implementation.
-      A full implementation would call the object's destructor. }
-    Temp := Obj;
+    Temp := TObject(Obj);
+    Obj := nil;
     if Temp <> nil then
-    begin
-        { Set to nil. In a complete implementation, this would
-          call the object's destructor first. }
-        Obj := nil;
-    end;
+        Temp.Free;
 end;
 
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
