@@ -283,7 +283,8 @@ typedef enum
 {
     SET_FLAGS_CONTINUE = 0,
     SET_FLAGS_HELP = 1,
-    SET_FLAGS_OOM = 2
+    SET_FLAGS_OOM = 2,
+    SET_FLAGS_ERROR = 3  /* unrecognized or invalid flag argument */
 } SetFlagsResult;
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -671,7 +672,7 @@ static SetFlagsResult set_flags(char **optional_args, int count)
             else
             {
                 fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
-                exit(1);
+                return SET_FLAGS_ERROR;
             }
             --count;
             ++i;
@@ -694,7 +695,7 @@ static SetFlagsResult set_flags(char **optional_args, int count)
             else
             {
                 fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
-                exit(1);
+                return SET_FLAGS_ERROR;
             }
         }
         else if ((strcmp(arg, "--dump-ast") == 0 || strcmp(arg, "-dump-ast") == 0) && count > 1)
@@ -836,7 +837,7 @@ static SetFlagsResult set_flags(char **optional_args, int count)
         else if (arg[0] == '-')
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
-            exit(1);
+            return SET_FLAGS_ERROR;
         }
         /* else: positional argument (input/output file), skip silently */
 
@@ -2928,10 +2929,10 @@ int main(int argc, char **argv)
             arena_destroy(arena);
             return 0;
         }
-        if (flag_result == SET_FLAGS_OOM)
+        if (flag_result == SET_FLAGS_OOM || flag_result == SET_FLAGS_ERROR)
         {
-            /* OOM during flag parsing — nothing has been allocated yet that
-             * needs cleanup beyond what we've already set up. */
+            /* OOM or invalid flag during parsing — nothing has been allocated yet
+             * that needs cleanup beyond what we've already set up. */
             clear_dump_ast_path();
             unit_search_paths_destroy(&g_unit_paths);
             arena_destroy(arena);
