@@ -3,7 +3,7 @@ program tdd_baseunix_fpsigaction;
 uses baseunix;
 
 var
-  act, oldact: TSigActionRec;
+  act, oldact: SigActionRec;
   ret: cint;
 begin
   { Install SIG_IGN for SIGUSR1 via fpsigaction, then restore the old handler.
