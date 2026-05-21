@@ -1469,6 +1469,31 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         ctx->pending_ctor_temp_count -= 1;
     }
 
+    /* STMT_PROCEDURE_CALL has no equivalent of expr_tree.c's
+     * function-call truncation for the entries pushed by its argument
+     * evaluation: codegen_proc_call routes through
+     * codegen_pass_arguments which in turn invokes gencode_case0 for
+     * each argument expression; every nested `Foo.Create(...)` in the
+     * argument list pushes its spill slot at the constructor allocation
+     * site, but once the call has been emitted the callee may have
+     * stored the fresh instance into a long-lived structure (a tList
+     * container, the global tassemblerlistinfo / pass_typecheck
+     * registries inside FPC's pp.pas, an external proc that takes
+     * ownership), so we must NOT release those slots at the end of the
+     * statement.  Without this truncation, KGPC-built pp_bootstrap
+     * double-frees through the end-of-statement flush emitted below
+     * whenever pp.pas hands a constructor result to a retaining
+     * procedure (the helloworld.p regression).  Mirror the expr_tree.c
+     * EXPR_FUNCTION_CALL handler's keep_count truncation so call
+     * boundaries have uniform ownership-transfer semantics regardless
+     * of whether the call appears in statement position
+     * (codegen_proc_call) or expression position (gencode_case0). */
+    if (stmt->type == STMT_PROCEDURE_CALL &&
+        ctx->pending_ctor_temp_count > ctor_owned_snapshot)
+    {
+        ctx->pending_ctor_temp_count = ctor_owned_snapshot;
+    }
+
     /* Release any class-instance temporaries produced by constructor
      * calls whose result was consumed transiently within this statement
      * (e.g. tested in a relational expression).  Codegen pushes entries
