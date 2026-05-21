@@ -68,4 +68,66 @@
 /* Byte offset of virtual-method slot N (N >= VMT_FIRST_VMETHOD_SLOT) */
 #define VMT_VMETHOD_OFFSET(n)      ((n) * VMT_SLOT_SIZE_BYTES)
 
+/* ===================================================================
+ * KGPC RTTI record (kgpc_class_typeinfo) field offsets.
+ *
+ * kgpc_class_typeinfo is KGPC's own run-time type descriptor emitted
+ * alongside every class VMT.  The struct is declared in runtime_internal.h;
+ * the corresponding assembly layout is emitted by codegen_vmt.c
+ * (codegen_emit_class_vmt_and_rtti).
+ *
+ * On x86-64 all pointers are 8 bytes, so:
+ *
+ *   offset  size  field
+ *        0     8  parent         — pointer to parent kgpc_class_typeinfo (NULL for TObject)
+ *        8     8  class_name     — pointer to C-string class name (NUL-terminated)
+ *       16     8  vmt            — pointer to the class VMT (used to verify typeinfo identity)
+ *       24     8  interfaces     — pointer to kgpc_interface_table (NULL if none)
+ *       32     4  num_interfaces — int: count of implemented interfaces
+ *
+ * Ground truth: runtime_internal.h typedef struct kgpc_class_typeinfo.
+ * =================================================================== */
+#define KGPC_TYPEINFO_PARENT_OFFSET          0   /* ->parent */
+#define KGPC_TYPEINFO_CLASSNAME_OFFSET       8   /* ->class_name */
+#define KGPC_TYPEINFO_VMT_OFFSET            16   /* ->vmt */
+#define KGPC_TYPEINFO_INTERFACES_OFFSET     24   /* ->interfaces */
+#define KGPC_TYPEINFO_NUMINTERFACES_OFFSET  32   /* ->num_interfaces (int, 4 bytes) */
+
+/* ===================================================================
+ * FPC-compatible interface table entry (tinterfaceentry / kgpc_interface_entry).
+ *
+ * Declared in runtime_internal.h as kgpc_interface_entry; matches the
+ * FPC tinterfaceentry record from rtl/inc/objpash.inc exactly on x86-64.
+ *
+ *   offset  size  field
+ *        0     8  iid_ref    — ^pguid: pointer to the pguid indirection cell
+ *        8     8  vtable     — pointer to the per-interface vtable for this class
+ *       16     8  ioffset    — uint64: byte offset from instance base to the intf slot
+ *       24     8  iidstr_ref — ^pshortstring (currently unused / NULL)
+ *       32     4  itype      — tinterfaceentrytype enum (0 = etStandard)
+ *       36     4  _padding   — alignment padding to reach 40 bytes total
+ *
+ * Ground truth: FPC rtl/inc/objpash.inc tinterfaceentry record.
+ * =================================================================== */
+#define KGPC_INTF_ENTRY_IIDREF_OFFSET     0    /* ->iid_ref */
+#define KGPC_INTF_ENTRY_VTABLE_OFFSET     8    /* ->vtable */
+#define KGPC_INTF_ENTRY_IOFFSET_OFFSET   16    /* ->ioffset */
+#define KGPC_INTF_ENTRY_IIDSTRREF_OFFSET 24    /* ->iidstr_ref */
+#define KGPC_INTF_ENTRY_ITYPE_OFFSET     32    /* ->itype */
+#define KGPC_INTF_ENTRY_SIZE             40    /* total sizeof(kgpc_interface_entry) */
+
+/* FPC-compatible interface table header (tinterfacetable / kgpc_interface_table).
+ *
+ *   offset  size  field
+ *        0     8  entry_count — uint64: number of tinterfaceentry elements
+ *        8    40* entries[]   — flexible array of kgpc_interface_entry
+ *
+ * Ground truth: FPC rtl/inc/objpash.inc tinterfacetable record. */
+#define KGPC_INTF_TABLE_ENTRYCOUNT_OFFSET  0   /* ->entry_count */
+#define KGPC_INTF_TABLE_ENTRIES_OFFSET     8   /* &->entries[0] */
+
+/* GUID size in bytes (standard COM/FPC TGUID = 16 bytes).
+ * Used when comparing interface GUIDs with memcmp. */
+#define KGPC_GUID_SIZE_BYTES  16
+
 #endif /* KGPC_ABI_CONSTANTS_H */

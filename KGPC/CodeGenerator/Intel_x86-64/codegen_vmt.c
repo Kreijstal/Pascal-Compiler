@@ -361,18 +361,19 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             const char *iface_name = effective_iface_names[iidx];
             if (iface_name == NULL) continue;
             long long ioffset = base_instance_size + iface_slot_idx * 8;
-            fprintf(ctx->output_file, "\t# Entry for %s (40 bytes = tinterfaceentry)\n", iface_name);
-            /* offset +0: IIDRef (^pguid) — pointer to the pguid indirection cell */
+            fprintf(ctx->output_file, "\t# Entry for %s (%d bytes = tinterfaceentry)\n",
+                iface_name, KGPC_INTF_ENTRY_SIZE);
+            /* KGPC_INTF_ENTRY_IIDREF_OFFSET +0: IIDRef (^pguid) — pointer to the pguid indirection cell */
             fprintf(ctx->output_file, "\t.quad\t__kgpc_guidref_%s\n", iface_name);
-            /* offset +8: VTable — pointer to interface vtable for this class */
+            /* KGPC_INTF_ENTRY_VTABLE_OFFSET +8: VTable — pointer to interface vtable for this class */
             fprintf(ctx->output_file, "\t.quad\t%s_INTF_%s_VTABLE\n", class_label, iface_name);
-            /* offset +16: IOffset (sizeuint) — byte offset from object start to interface slot */
+            /* KGPC_INTF_ENTRY_IOFFSET_OFFSET +16: IOffset (sizeuint) — byte offset from object start to interface slot */
             fprintf(ctx->output_file, "\t.quad\t%lld\n", ioffset);
-            /* offset +24: IIDStrRef (^pshortstring) — NULL for now */
+            /* KGPC_INTF_ENTRY_IIDSTRREF_OFFSET +24: IIDStrRef (^pshortstring) — NULL for now */
             fprintf(ctx->output_file, "\t.quad\t0\n");
-            /* offset +32: IType (tinterfaceentrytype enum, 4 bytes) = etStandard = 0 */
+            /* KGPC_INTF_ENTRY_ITYPE_OFFSET +32: IType (tinterfaceentrytype enum, 4 bytes) = etStandard = 0 */
             fprintf(ctx->output_file, "\t.long\t0\n");
-            /* offset +36: padding to 40 bytes */
+            /* +36: padding to KGPC_INTF_ENTRY_SIZE bytes */
             fprintf(ctx->output_file, "\t.zero\t4\n");
             iface_slot_idx++;
         }
@@ -445,7 +446,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                          * pointers whose sum is extremely unlikely to be 0. */
                         fprintf(ctx->output_file, "\tmovq\t(%s), %%r11\n", self_reg);
                         fprintf(ctx->output_file, "\tmovq\t(%%r11), %%rax\n");
-                        fprintf(ctx->output_file, "\taddq\t8(%%r11), %%rax\n");
+                        /* VMT_VINSTANCESIZE2_OFFSET (slot 1): -vInstanceSize; sum with slot 0 == 0 iff VMT */
+                        fprintf(ctx->output_file, "\taddq\t%d(%%r11), %%rax\n", VMT_VINSTANCESIZE2_OFFSET);
                         fprintf(ctx->output_file, "\tjnz\t.L%s_adj\n", thunk_label);
                         /* Raw object pointer — no adjustment needed */
                         fprintf(ctx->output_file, "\tjmp\t%s\n", vtbl_resolved_id);

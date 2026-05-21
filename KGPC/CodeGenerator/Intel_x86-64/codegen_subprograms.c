@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include "register_types.h"
 #include "codegen.h"
+#include "abi_constants.h"
 #include "codegen_string_set.h"
 #include "codegen_symbol_resolution.h"
 #include "codegen_statement.h"
@@ -738,11 +739,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
             inst_list = add_inst(inst_list, buffer);
 
             /* Load VMT from (Self), then the method pointer from
-             * <slot*8>(VMT), and dispatch. */
+             * <slot*VMT_SLOT_SIZE_BYTES>(VMT), and dispatch. */
             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %%r11\n", arg_reg);
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer),
-                "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * 8);
+                "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * VMT_SLOT_SIZE_BYTES);
             inst_list = add_inst(inst_list, buffer);
             inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
             inst_list = codegen_call_with_shadow_space(inst_list, "*%r11");

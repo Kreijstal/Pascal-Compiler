@@ -3612,7 +3612,9 @@ ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\tmovq\t(%r11), %r11\n");
     inst_list = add_inst(inst_list, "\tmovq\t(%r11), %rax\n");
-    inst_list = add_inst(inst_list, "\taddq\t8(%r11), %rax\n");
+    /* VMT_VINSTANCESIZE2_OFFSET (slot 1): -vInstanceSize; sum with slot 0 == 0 iff VMT */
+    snprintf(buffer, sizeof(buffer), "\taddq\t%d(%%r11), %%rax\n", VMT_VINSTANCESIZE2_OFFSET);
+    inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjz\t.L%s_direct_%d\n", label_prefix, label_id);
     inst_list = add_inst(inst_list, buffer);
 
