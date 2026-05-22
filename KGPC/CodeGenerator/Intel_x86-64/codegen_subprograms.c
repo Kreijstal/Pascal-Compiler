@@ -1679,19 +1679,17 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * local before the frame is torn down.  STMT_EXIT branches out earlier
      * also emit this cleanup so all return paths honor the same contract.
      *
-     * Skipped for dynarray-returning functions: the Result slot's data
-     * buffer is about to be transferred to the caller via
-     * kgpc_dynarray_clone_descriptor, and any user-declared local may
-     * alias that buffer through `Result := localvar`.  Releasing here
-     * would dangle the returned descriptor's data pointer.  The caller's
-     * kgpc_dynarray_assign_from_temp / _release_temp_descriptor path
-     * already covers the transferred descriptor's lifecycle. */
-    if (!returns_dynamic_array)
-    {
-        inst_list = codegen_emit_managed_local_cleanup(inst_list,
-            func->declarations, ctx, symtab);
-        inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
-    }
+     * Since commit 7c840d0a dynarray assignment is a deep copy, so even
+     * `Result := localvar` gives Result its own independent buffer.
+     * User-declared locals can therefore be finalized here regardless of
+     * whether the function returns a dynamic array.  The Result slot itself
+     * is NOT included in func->declarations (it is added to the stack
+     * separately via add_dynamic_array), so codegen_emit_managed_local_cleanup
+     * never touches it — the kgpc_dynarray_clone_descriptor call below
+     * transfers its buffer to the caller safely. */
+    inst_list = codegen_emit_managed_local_cleanup(inst_list,
+        func->declarations, ctx, symtab);
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
     /* For nostackframe+assembler functions, the asm block handles the return
      * value entirely.  Skip the compiler-generated return-value epilogue,

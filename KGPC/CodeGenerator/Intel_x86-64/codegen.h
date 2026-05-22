@@ -509,6 +509,8 @@ void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab
  * STMT_EXIT — the helper is idempotent on already-cleared descriptors. */
 ListNode_t *codegen_emit_managed_local_cleanup(ListNode_t *inst_list,
     ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
+ListNode_t *codegen_emit_managed_global_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);

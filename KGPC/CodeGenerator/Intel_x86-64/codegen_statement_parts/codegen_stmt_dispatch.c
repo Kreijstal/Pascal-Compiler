@@ -1392,10 +1392,12 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             }
             /* Mirror the implicit-epilogue cleanup so EXIT releases the
              * element data buffers of managed dynamic-array locals along
-             * the early-return path.  Skipped for dynarray-returning
-             * functions to preserve the Result.data transfer contract
-             * (see codegen_function's matching skip). */
-            if (ctx != NULL && !ctx->returns_dynamic_array)
+             * the early-return path.  Since 7c840d0a dynarray assignment
+             * is a deep copy, user-declared locals are independent of the
+             * Result slot and can be finalized here for all function kinds.
+             * The Result slot is not in current_subprogram_declarations so
+             * codegen_emit_managed_local_cleanup never touches it. */
+            if (ctx != NULL)
             {
                 inst_list = codegen_emit_managed_local_cleanup(inst_list,
                     ctx->current_subprogram_declarations, ctx, symtab);
