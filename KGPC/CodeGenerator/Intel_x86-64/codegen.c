@@ -6590,8 +6590,14 @@ static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(ListNode_t *inst_
         else if (field->is_array)
         {
             long long element_size = 0;
+            /* Pass the in-memory record layout when the element is an
+             * anonymous record (no type_id); otherwise codegen_sizeof_type
+             * has no way to size it and bails with a spurious error. */
+            struct RecordType *elem_rec = NULL;
+            if (field->array_element_type == RECORD_TYPE)
+                elem_rec = field->array_element_record;
             if (codegen_sizeof_type(ctx, field->array_element_type,
-                    field->array_element_type_id, NULL,
+                    field->array_element_type_id, elem_rec,
                     &element_size, depth + 1) != 0)
                 element_size = 0;
             long long count = (long long)field->array_end - (long long)field->array_start + 1;
@@ -6671,8 +6677,11 @@ static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(ListNode_t *inst_
             if (count > 0)
             {
                 long long element_size = 0;
+                struct RecordType *elem_rec = NULL;
+                if (field->array_element_type == RECORD_TYPE)
+                    elem_rec = field->array_element_record;
                 if (codegen_sizeof_type(ctx, field->array_element_type,
-                        field->array_element_type_id, NULL,
+                        field->array_element_type_id, elem_rec,
                         &element_size, depth + 1) != 0)
                     element_size = 0;
                 int element_has_dynarray = 0;
