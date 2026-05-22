@@ -5406,20 +5406,17 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         symtab->current_scope = saved_scope;
     }
 
-    /* Program-scope dynamic-array globals are intentionally NOT finalised
-     * here: their descriptors live for the program's whole lifetime, can
-     * legitimately alias one another via `y := x` (KGPC's runtime
-     * assign_descriptor is a shallow copy), and the process exits right
-     * after — so the leak is bounded and the kernel reclaims the buffers.
-     * Releasing aliased globals at the end would double-free.  Cleanup of
-     * managed dynamic-array locals happens per-function in
-     * codegen_function / codegen_procedure, where each frame owns its
-     * descriptor's storage exclusively.
-     *
-     * However, dynamic-array TEMPORARIES allocated for argument marshalling
-     * inside the program body are uniquely owned by the temp slot — there
-     * is no user-visible variable that could alias them — so we finalize
-     * them here to release the producer-side buffer they hold. */
+    /* Since commit 7c840d0a dynarray assignment is a deep copy: every
+     * global descriptor independently owns its data buffer.  Walk all
+     * program-scope VAR declarations and emit kgpc_dynarray_finalize_local
+     * for each dynarray-typed global so ASAN does not report leaks at
+     * program exit.  Typed-consts and external symbols are excluded. */
+    inst_list = codegen_emit_managed_global_cleanup(inst_list,
+        data->var_declaration, ctx, symtab);
+
+    /* Dynamic-array TEMPORARIES allocated for argument marshalling inside
+     * the program body are uniquely owned by their temp slot; finalize them
+     * too to release the producer-side buffer. */
     inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
     codegen_function_header(prgm_name, ctx);
@@ -6855,6 +6852,132 @@ static ListNode_t *codegen_emit_dynarray_cleanup_for_var_by_name(
         return inst_list;
     return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
         NULL, slot->offset, 0, 0);
+}
+
+/* Emit kgpc_dynarray_finalize_local for one global (static-storage) variable.
+ * Used at program exit to release the data buffers behind module-level
+ * dynarray descriptors.  Since 7c840d0a dynarray assignment is a deep copy
+ * (not a shallow alias), every global descriptor independently owns its
+ * data buffer and must be freed to avoid ASAN leak reports. */
+static ListNode_t *codegen_emit_dynarray_cleanup_for_global_var(
+    ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab,
+    Tree_t *var_decl, const char *var_name)
+{
+    if (var_decl == NULL || var_name == NULL)
+        return inst_list;
+
+    struct Var *vd = &var_decl->tree_data.var_decl_data;
+    /* Skip typed-consts — their storage is statically initialised and
+     * shared; it is not heap-allocated and must not be freed. */
+    if (vd->is_typed_const)
+        return inst_list;
+    /* External symbols belong to another translation unit; don't touch them. */
+    if (vd->is_external || vd->absolute_target != NULL)
+        return inst_list;
+
+    /* Resolve the type. */
+    KgpcType *type = vd->cached_kgpc_type;
+    if (type == NULL && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, (char *)var_name) && node != NULL)
+            type = node->type;
+    }
+    if (type == NULL || !codegen_type_contains_dynarray(type))
+        return inst_list;
+
+    /* Find the storage slot — must be static (global). */
+    StackNode_t *slot = find_label((const char *)var_name);
+    if (slot == NULL && symtab != NULL)
+    {
+        char *storage_key = codegen_var_storage_key(ctx, symtab, var_decl, var_name);
+        if (storage_key != NULL)
+        {
+            slot = find_label(storage_key);
+            free(storage_key);
+        }
+    }
+    if (slot == NULL || !slot->is_static)
+        return inst_list;
+
+    /* Use the assembler label for the global.  The static_label field holds
+     * the mangled symbol (e.g. "__kgpc_program_var_Foo_1"); fall back to the
+     * bare variable name if no mangled label was recorded. */
+    const char *asm_label = (slot->static_label != NULL) ? slot->static_label : var_name;
+
+    return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
+        asm_label, 0, 0, 0);
+}
+
+/* Same as codegen_emit_dynarray_cleanup_for_global_var but takes only the
+ * name — used for TREE_ARR_DECL whose KgpcType is reached via symtab only. */
+static ListNode_t *codegen_emit_dynarray_global_cleanup_for_arr_by_name(
+    ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab,
+    const char *var_name)
+{
+    if (var_name == NULL || symtab == NULL)
+        return inst_list;
+    HashNode_t *node = NULL;
+    if (!FindSymbol(&node, symtab, (char *)var_name) || node == NULL)
+        return inst_list;
+    KgpcType *type = node->type;
+    if (type == NULL || !codegen_type_contains_dynarray(type))
+        return inst_list;
+    StackNode_t *slot = find_label(var_name);
+    if (slot == NULL || !slot->is_static)
+        return inst_list;
+    const char *asm_label = (slot->static_label != NULL) ? slot->static_label : var_name;
+    return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
+        asm_label, 0, 0, 0);
+}
+
+/* Walk program-scope (global) variable declarations and emit
+ * kgpc_dynarray_finalize_local for every dynarray-typed global.  Call this
+ * once at program exit, after all program and unit statements have run.
+ *
+ * Only genuine VAR declarations are walked.  Typed-consts, external symbols,
+ * and parameter-disguised vars are skipped — same exclusions as
+ * codegen_emit_managed_local_cleanup. */
+ListNode_t *codegen_emit_managed_global_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (declarations == NULL || ctx == NULL)
+        return inst_list;
+    for (ListNode_t *cur = declarations; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree == NULL)
+            continue;
+        if (tree->type == TREE_VAR_DECL)
+        {
+            if (tree->tree_data.var_decl_data.is_typed_const)
+                continue;
+            for (ListNode_t *id_node = tree->tree_data.var_decl_data.ids;
+                 id_node != NULL; id_node = id_node->next)
+            {
+                if (id_node->cur == NULL)
+                    continue;
+                inst_list = codegen_emit_dynarray_cleanup_for_global_var(
+                    inst_list, ctx, symtab, tree, (const char *)id_node->cur);
+            }
+        }
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            if (tree->tree_data.arr_decl_data.is_typed_const)
+                continue;
+            for (ListNode_t *id_node = tree->tree_data.arr_decl_data.ids;
+                 id_node != NULL; id_node = id_node->next)
+            {
+                if (id_node->cur == NULL)
+                    continue;
+                inst_list = codegen_emit_dynarray_global_cleanup_for_arr_by_name(
+                    inst_list, ctx, symtab, (const char *)id_node->cur);
+            }
+        }
+    }
+    return inst_list;
 }
 
 ListNode_t *codegen_emit_managed_local_cleanup(ListNode_t *inst_list,
