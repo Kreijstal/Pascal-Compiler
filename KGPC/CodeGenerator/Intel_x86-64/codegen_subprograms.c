@@ -420,6 +420,19 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         else
 #endif /* _WIN32 */
         {
+            /* Codegen errors are per-subprogram: a failure inside one body
+             * does not invalidate later bodies (and must not be observed by
+             * downstream codegen of the next subprogram as a stale "had we
+             * already errored?" gate).  Save and restore ctx->had_error
+             * around each subprogram so the OR of all subprograms' errors is
+             * surfaced to the caller while the in-flight flag accurately
+             * reflects ONLY the current subprogram.  The cache-miss branch
+             * above does the same dance for its own reasons; mirror it here
+             * to prevent error state from leaking forward when codegen runs
+             * directly (cache hit, Windows). */
+            int had_error_before = (ctx != NULL) ? ctx->had_error : 0;
+            if (ctx != NULL)
+                ctx->had_error = 0;
             switch(sub->tree_data.subprogram_data.sub_type)
             {
                 case TREE_SUBPROGRAM_PROC:
@@ -431,6 +444,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 default:
                     assert(0 && "Unrecognized subprogram type in codegen!");
             }
+            if (ctx != NULL)
+                ctx->had_error = (ctx->had_error || had_error_before);
         }
         sub_list = sub_list->next;
     }
