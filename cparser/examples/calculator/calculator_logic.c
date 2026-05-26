@@ -72,7 +72,7 @@ bool eval(ast_t *ast, long *out) {
   }
   default:
     fprintf(stderr, "Error: Unknown AST node type: %d in %s at %s:%d\n",
-            ast->typ, __func__, __FILE__, __LINE__);
+            (int)(ast->typ), __func__, __FILE__, __LINE__);
     return false;
   }
 }

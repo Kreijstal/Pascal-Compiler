@@ -1896,7 +1896,7 @@ static ParseResult record_type_fn(input_t *in, void *args, char *parser_name) {
       ast_t *node = adv_res.value.ast;
       int idx = 0;
       while (node != NULL && node != ast_nil) {
-        fprintf(stderr, "[RECORD]   node[%d] type=%d\n", idx++, node->typ);
+        fprintf(stderr, "[RECORD]   node[%d] type=%d\n", idx++, (int)(node->typ));
         node = node->next;
       }
     }

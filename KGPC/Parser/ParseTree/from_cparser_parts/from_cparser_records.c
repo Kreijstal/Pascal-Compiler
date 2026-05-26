@@ -224,7 +224,7 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node) {
   if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL) {
     fprintf(stderr, "[KGPC] property decl child list:\n");
     for (ast_t *dbg = cursor; dbg != NULL; dbg = dbg->next) {
-      fprintf(stderr, "  - typ=%d (%s)\n", dbg->typ,
+      fprintf(stderr, "  - typ=%d (%s)\n", (int)(dbg->typ),
               pascal_tag_to_string(dbg->typ));
     }
   }
@@ -837,7 +837,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
             stderr,
             "[KGPC] collect_class_members: node typ=%d (%s) raw_typ=%d sym=%s "
             "in %s\n",
-            unwrapped->typ, pascal_tag_to_string(unwrapped->typ), cursor->typ,
+            (int)(unwrapped->typ), pascal_tag_to_string(unwrapped->typ), (int)(cursor->typ),
             (cursor->sym && cursor->sym->name) ? cursor->sym->name : "(null)",
             class_name ? class_name : "<unknown>");
       }
@@ -947,7 +947,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
             const char *name =
                 (node != NULL && node->sym != NULL) ? node->sym->name : NULL;
             fprintf(stderr, " (%s:%d)", name ? name : "<null>",
-                    node != NULL ? node->typ : -1);
+                    (int)(node != NULL ? node->typ : -1));
           }
           fprintf(stderr, "\n");
         }
@@ -1128,7 +1128,7 @@ struct RecordType *convert_class_type_ex(const char *class_name,
     fprintf(stderr, "[KGPC] convert_class_type: processing class %s\n",
             class_name ? class_name : "<null>");
     if (body_start != NULL) {
-      fprintf(stderr, "[KGPC]   body_start type: %d\n", body_start->typ);
+      fprintf(stderr, "[KGPC]   body_start type: %d\n", (int)(body_start->typ));
     } else {
       fprintf(stderr, "[KGPC]   body_start is NULL\n");
     }
@@ -1140,7 +1140,7 @@ struct RecordType *convert_class_type_ex(const char *class_name,
       int idx = 0;
       while (raw != NULL && idx < 12) {
         fprintf(stderr, "[KGPC]   raw[%d] typ=%d name=%s child=%p next=%p\n",
-                idx, raw->typ,
+                idx, (int)(raw->typ),
                 (raw->sym && raw->sym->name) ? raw->sym->name : "<null>",
                 (void *)raw->child, (void *)raw->next);
         raw = raw->next;
@@ -1152,7 +1152,7 @@ struct RecordType *convert_class_type_ex(const char *class_name,
     while (dbg != NULL && dbg->typ == PASCAL_T_IDENTIFIER) {
       fprintf(stderr, "[KGPC]   additional parent/interface: %s (type=%d)\n",
               (dbg->sym && dbg->sym->name) ? dbg->sym->name : "<null>",
-              dbg->typ);
+              (int)(dbg->typ));
       dbg = dbg->next;
     }
   }
@@ -1816,7 +1816,7 @@ void convert_record_members(ast_t *node, ListBuilder *builder,
           const char *name =
               (node != NULL && node->sym != NULL) ? node->sym->name : NULL;
           fprintf(stderr, " (%s:%d)", name ? name : "<null>",
-                  node != NULL ? node->typ : -1);
+                  (int)(node != NULL ? node->typ : -1));
         }
         fprintf(stderr, "\n");
       }
@@ -2233,7 +2233,7 @@ ListNode_t *convert_param(ast_t *param_node) {
       fprintf(stderr,
               "[convert_param] type_node=%p type_node->next=%p next_typ=%d\n",
               (void *)type_node, (void *)(type_node ? type_node->next : NULL),
-              (type_node && type_node->next) ? type_node->next->typ : -1);
+              (int)((type_node && type_node->next) ? type_node->next->typ : -1));
     }
   }
 
@@ -2372,7 +2372,7 @@ ListNode_t *convert_param_list(ast_t **cursor) {
       fprintf(stderr,
               "ERROR: convert_param_list exceeded guard limit (%d); possible "
               "cycle in param list (node=%p typ=%d).\n",
-              guard_limit, (void *)cur, cur->typ);
+              guard_limit, (void *)cur, (int)(cur->typ));
       break;
     }
     if (fast != NULL && fast->next != NULL) {
@@ -2382,7 +2382,7 @@ ListNode_t *convert_param_list(ast_t **cursor) {
         fprintf(stderr,
                 "ERROR: Cycle detected in param list during conversion "
                 "(node=%p typ=%d).\n",
-                (void *)cur, cur->typ);
+                (void *)cur, (int)(cur->typ));
         break;
       }
     }

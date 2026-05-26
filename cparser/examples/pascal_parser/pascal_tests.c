@@ -3198,7 +3198,7 @@ void test_pascal_simple_case_statement(void) {
     printf("Parse error: %s at line %d, col %d\n", res.value.error->message,
            res.value.error->line, res.value.error->col);
     if (res.value.error->partial_ast) {
-      printf("Partial AST type: %d\n", res.value.error->partial_ast->typ);
+      printf("Partial AST type: %d\n", (int)(res.value.error->partial_ast->typ));
     }
     free_error(res.value.error);
     free(input->buffer);

@@ -480,7 +480,7 @@ int tuple_is_record_constructor(ast_t *tuple_node) {
     if (unwrapped->typ == PASCAL_T_NONE && unwrapped->child == NULL)
       continue;
     if (debug_this) {
-      fprintf(stderr, "  elem typ=%d\n", unwrapped->typ);
+      fprintf(stderr, "  elem typ=%d\n", (int)(unwrapped->typ));
     }
     if (unwrapped->typ == PASCAL_T_ASSIGNMENT ||
         unwrapped->typ == PASCAL_T_FIELD_WIDTH) {
@@ -2270,12 +2270,12 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
       fprintf(stderr,
               "[KGPC] sizeof node typ=%d child=%p child_typ=%d child_sym=%s "
               "next_typ=%d\n",
-              expr->typ, (void *)expr->child,
-              expr->child ? expr->child->typ : -1,
+              (int)(expr->typ), (void *)expr->child,
+              (int)(expr->child ? expr->child->typ : -1),
               (expr->child && expr->child->sym && expr->child->sym->name)
                   ? expr->child->sym->name
                   : "<null>",
-              expr->next ? expr->next->typ : -1);
+              (int)(expr->next ? expr->next->typ : -1));
     }
     if (strcasecmp(expr->sym->name, "sizeof") == 0 && expr->child != NULL) {
       char *inner = serialize_expr_to_string_internal(expr->child, 0);
@@ -2402,7 +2402,7 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
         arg_node = expr->child->next;
       if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
         fprintf(stderr, "[KGPC] sizeof wrapper typ=%d arg_typ=%d arg_sym=%s\n",
-                expr->child->typ, arg_node ? arg_node->typ : -1,
+                (int)(expr->child->typ), (int)(arg_node ? arg_node->typ : -1),
                 (arg_node && arg_node->sym && arg_node->sym->name)
                     ? arg_node->sym->name
                     : "<null>");
@@ -2532,7 +2532,7 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
 
   if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
     fprintf(stderr, "[KGPC] convert_type_spec node typ=%d (%s) sym=%s\n",
-            spec_node->typ, pascal_tag_to_string(spec_node->typ),
+            (int)(spec_node->typ), pascal_tag_to_string(spec_node->typ),
             (spec_node->sym != NULL && spec_node->sym->name != NULL)
                 ? spec_node->sym->name
                 : "<null>");
@@ -2869,7 +2869,7 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
       if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
         fprintf(stderr, "[KGPC] array type children:");
         for (ast_t *dim = child; dim != NULL; dim = dim->next) {
-          fprintf(stderr, " %d(%s)", dim->typ, pascal_tag_to_string(dim->typ));
+          fprintf(stderr, " %d(%s)", (int)(dim->typ), pascal_tag_to_string(dim->typ));
         }
         fprintf(stderr, "\n");
       }
@@ -2923,9 +2923,9 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
             fprintf(stderr,
                     "[KGPC] array bounds serialize failed: lower typ=%d (%s) "
                     "upper typ=%d (%s)\n",
-                    lower ? lower->typ : -1,
+                    (int)(lower ? lower->typ : -1),
                     lower ? pascal_tag_to_string(lower->typ) : "<null>",
-                    upper ? upper->typ : -1,
+                    (int)(upper ? upper->typ : -1),
                     upper ? pascal_tag_to_string(upper->typ) : "<null>");
           }
 
@@ -3476,7 +3476,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec,
 
   if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
     fprintf(stderr, "[KGPC] convert_type_spec_to_kgpctype node typ=%d sym=%s\n",
-            spec_node->typ,
+            (int)(spec_node->typ),
             (spec_node->sym != NULL && spec_node->sym->name != NULL)
                 ? spec_node->sym->name
                 : "<null>");

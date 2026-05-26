@@ -557,7 +557,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
       fprintf(
           stderr,
           "[KGPC_DEBUG_SPECIALIZE_CALLS] FUNC_CALL line=%d child_typ=%d(%s)\n",
-          expr_node->line, child != NULL ? child->typ : -1,
+          expr_node->line, (int)(child != NULL ? child->typ : -1),
           child != NULL ? pascal_tag_to_string(child->typ) : "<null>");
       if (child != NULL && child->sym != NULL && child->sym->name != NULL) {
         fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS]   child sym=%s\n",
@@ -567,7 +567,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         fprintf(
             stderr,
             "[KGPC_DEBUG_SPECIALIZE_CALLS]   child->child typ=%d(%s) sym=%s\n",
-            child->child->typ, pascal_tag_to_string(child->child->typ),
+            (int)(child->child->typ), pascal_tag_to_string(child->child->typ),
             (child->child->sym != NULL && child->child->sym->name != NULL)
                 ? child->child->sym->name
                 : "<null>");
@@ -846,10 +846,10 @@ struct Expression *convert_expression(ast_t *expr_node) {
 
   if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
     fprintf(stderr, "[KGPC] convert_expression: typ=%d line=%d\n",
-            expr_node->typ, expr_node->line);
+            (int)(expr_node->typ), expr_node->line);
     if (expr_node->next != NULL) {
       fprintf(stderr, "[KGPC] convert_expression: has next sibling typ=%d\n",
-              expr_node->next->typ);
+              (int)(expr_node->next->typ));
     }
   }
 
@@ -932,7 +932,7 @@ struct Expression *convert_expression(ast_t *expr_node) {
               "[KGPC] convert_expression IS: value_node=%p type_node=%p\n",
               value_node, type_node);
       if (type_node)
-        fprintf(stderr, "[KGPC]   type_node typ=%d\n", type_node->typ);
+        fprintf(stderr, "[KGPC]   type_node typ=%d\n", (int)(type_node->typ));
     }
 
     if (type_node != NULL) {
@@ -1095,7 +1095,7 @@ struct Expression *convert_expression(ast_t *expr_node) {
       if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
         fprintf(stderr,
                 "[KGPC] TYPECAST handler: type_node typ=%d unwrapped typ=%d\n",
-                type_node ? type_node->typ : -1, unwrapped_type->typ);
+                (int)(type_node ? type_node->typ : -1), (int)(unwrapped_type->typ));
       target_type = convert_type_spec(unwrapped_type, &target_type_id,
                                       &record_type, &type_info);
       if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
@@ -1570,7 +1570,7 @@ struct Expression *convert_expression(ast_t *expr_node) {
   default: {
     const char *name = tag_name(expr_node->typ);
     fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.\n",
-            expr_node->typ, name, expr_node->line);
+            (int)(expr_node->typ), name, expr_node->line);
     break;
   }
   }
@@ -1651,13 +1651,13 @@ ListNode_t *convert_expression_list(ast_t *arg_node) {
         fast = fast->next;
       }
       fprintf(stderr, "  Cycle starts at: %p type=%d line=%d sym=%s\n",
-              (void *)slow, slow->typ, slow->line,
+              (void *)slow, (int)(slow->typ), slow->line,
               (slow->sym && slow->sym->name) ? slow->sym->name : "?");
       /* Just dump first few nodes */
       ast_t *d = arg_node;
       for (int i = 0; i < 10 && d != NULL && d != ast_nil; i++) {
         fprintf(stderr, "  [%d] %p type=%d line=%d sym=%s%s\n", i, (void *)d,
-                d->typ, d->line, (d->sym && d->sym->name) ? d->sym->name : "?",
+                (int)(d->typ), d->line, (d->sym && d->sym->name) ? d->sym->name : "?",
                 d == slow ? " <-- CYCLE START" : "");
         d = d->next;
         if (d == slow && i > 0)
@@ -1767,20 +1767,20 @@ struct Expression *convert_member_access(ast_t *node) {
     fprintf(stderr,
             "[KGPC_DEBUG_SPECIALIZE_CALLS] MEMBER_ACCESS line=%d "
             "base=%d(%s:%s) field=%d(%s:%s) args=%d(%s:%s)\n",
-            node->line, base_node != NULL ? base_node->typ : -1,
+            node->line, (int)(base_node != NULL ? base_node->typ : -1),
             base_node != NULL ? pascal_tag_to_string(base_node->typ) : "<null>",
             (base_node != NULL && base_node->sym != NULL &&
              base_node->sym->name != NULL)
                 ? base_node->sym->name
                 : "<null>",
-            field_node != NULL ? field_node->typ : -1,
+            (int)(field_node != NULL ? field_node->typ : -1),
             field_node != NULL ? pascal_tag_to_string(field_node->typ)
                                : "<null>",
             (field_node != NULL && field_node->sym != NULL &&
              field_node->sym->name != NULL)
                 ? field_node->sym->name
                 : "<null>",
-            args_node != NULL ? args_node->typ : -1,
+            (int)(args_node != NULL ? args_node->typ : -1),
             args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>",
             (args_node != NULL && args_node->sym != NULL &&
              args_node->sym->name != NULL)
@@ -1792,9 +1792,9 @@ struct Expression *convert_member_access(ast_t *node) {
           stderr,
           "[KGPC_DEBUG_SPECIALIZE_CALLS]   field.child typ=%d(%s:%s) "
           "grandchild=%d(%s)\n",
-          it->typ, pascal_tag_to_string(it->typ),
+          (int)(it->typ), pascal_tag_to_string(it->typ),
           (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-          it->child != NULL ? it->child->typ : -1,
+          (int)(it->child != NULL ? it->child->typ : -1),
           it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
     }
   }
@@ -1807,11 +1807,11 @@ struct Expression *convert_member_access(ast_t *node) {
         stderr,
         "[KGPC_DEBUG_SPECIALIZE_CALLS] MEMBER_ACCESS base=%d(%s) "
         "field=%d(%s:%s) args=%d(%s)\n",
-        base_node != NULL ? base_node->typ : -1,
+        (int)(base_node != NULL ? base_node->typ : -1),
         base_node != NULL ? pascal_tag_to_string(base_node->typ) : "<null>",
-        field_node != NULL ? field_node->typ : -1,
+        (int)(field_node != NULL ? field_node->typ : -1),
         field_node != NULL ? pascal_tag_to_string(field_node->typ) : "<null>",
-        field_sym, args_node != NULL ? args_node->typ : -1,
+        field_sym, (int)(args_node != NULL ? args_node->typ : -1),
         args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
     if (field_node != NULL && field_node->typ == PASCAL_T_FUNC_CALL &&
         field_node->child != NULL) {
@@ -1821,7 +1821,7 @@ struct Expression *convert_member_access(ast_t *node) {
       fprintf(stderr,
               "[KGPC_DEBUG_SPECIALIZE_CALLS]   MEMBER_ACCESS func "
               "child=%d(%s:%s)\n",
-              fc->typ, pascal_tag_to_string(fc->typ), fc_sym);
+              (int)(fc->typ), pascal_tag_to_string(fc->typ), fc_sym);
       if (fc->child != NULL) {
         const char *fc2_sym =
             (fc->child->sym != NULL && fc->child->sym->name != NULL)
@@ -1830,15 +1830,15 @@ struct Expression *convert_member_access(ast_t *node) {
         fprintf(stderr,
                 "[KGPC_DEBUG_SPECIALIZE_CALLS]   MEMBER_ACCESS func "
                 "child->child=%d(%s:%s)\n",
-                fc->child->typ, pascal_tag_to_string(fc->child->typ), fc2_sym);
+                (int)(fc->child->typ), pascal_tag_to_string(fc->child->typ), fc2_sym);
       }
     }
   }
 
   if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
     fprintf(stderr, "[KGPC] convert_member_access: base=%d field=%d args=%d\n",
-            base_node ? base_node->typ : -1, field_node ? field_node->typ : -1,
-            args_node ? args_node->typ : -1);
+            (int)(base_node ? base_node->typ : -1), (int)(field_node ? field_node->typ : -1),
+            (int)(args_node ? args_node->typ : -1));
   }
 
   /* Check for function call (MEMBER_ACCESS with ARG_LIST as 3rd child) */
@@ -1910,15 +1910,15 @@ convert_member_access_chain(int line, struct Expression *base_expr,
     fprintf(
         stderr,
         "[KGPC] convert_member_access_chain: field_node typ=%d, has_next=%d\n",
-        field_node->typ, field_node->next != NULL);
+        (int)(field_node->typ), field_node->next != NULL);
     if (field_node->next != NULL) {
-      fprintf(stderr, "[KGPC]   next typ=%d\n", field_node->next->typ);
+      fprintf(stderr, "[KGPC]   next typ=%d\n", (int)(field_node->next->typ));
     }
     if (field_node->child != NULL) {
-      fprintf(stderr, "[KGPC]   child typ=%d\n", field_node->child->typ);
+      fprintf(stderr, "[KGPC]   child typ=%d\n", (int)(field_node->child->typ));
       if (field_node->child->next != NULL) {
         fprintf(stderr, "[KGPC]   child->next typ=%d\n",
-                field_node->child->next->typ);
+                (int)(field_node->child->next->typ));
       }
     }
   }
@@ -1953,7 +1953,7 @@ convert_member_access_chain(int line, struct Expression *base_expr,
                 "[KGPC_DEBUG_SPECIALIZE_CALLS] METHOD specialize-shape line=%d "
                 "base_expr_type=%d args_node=%d(%s)\n",
                 line, base_expr != NULL ? base_expr->type : -1,
-                args_node != NULL ? args_node->typ : -1,
+                (int)(args_node != NULL ? args_node->typ : -1),
                 args_node != NULL ? pascal_tag_to_string(args_node->typ)
                                   : "<null>");
         for (ast_t *dbg = args_node, *it = dbg; it != NULL; it = it->next) {
@@ -2345,12 +2345,12 @@ struct Statement *convert_assignment(ast_t *assign_node) {
         "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN rhs-convert-null line=%d "
         "lhs_typ=%d rhs_typ=%d(%s) rhs_sym=%s rhs_child_typ=%d(%s)\n",
         assign_node != NULL ? assign_node->line : -1,
-        lhs != NULL ? lhs->typ : -1, dbg_rhs != NULL ? dbg_rhs->typ : -1,
+        (int)(lhs != NULL ? lhs->typ : -1), (int)(dbg_rhs != NULL ? dbg_rhs->typ : -1),
         dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
         (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
             ? dbg_rhs->sym->name
             : "<null>",
-        (dbg_rhs != NULL && dbg_rhs->child != NULL) ? dbg_rhs->child->typ : -1,
+        (int)((dbg_rhs != NULL && dbg_rhs->child != NULL) ? dbg_rhs->child->typ : -1),
         (dbg_rhs != NULL && dbg_rhs->child != NULL)
             ? pascal_tag_to_string(dbg_rhs->child->typ)
             : "<null>");
@@ -2361,7 +2361,7 @@ struct Statement *convert_assignment(ast_t *assign_node) {
     ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
     fprintf(
         stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN line=256 rhs=%d(%s:%s)\n",
-        dbg_rhs != NULL ? dbg_rhs->typ : -1,
+        (int)(dbg_rhs != NULL ? dbg_rhs->typ : -1),
         dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
         (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
             ? dbg_rhs->sym->name
@@ -2372,9 +2372,9 @@ struct Statement *convert_assignment(ast_t *assign_node) {
           stderr,
           "[KGPC_DEBUG_SPECIALIZE_CALLS]   ASSIGN raw rhs.next typ=%d(%s:%s) "
           "child=%d(%s)\n",
-          it->typ, pascal_tag_to_string(it->typ),
+          (int)(it->typ), pascal_tag_to_string(it->typ),
           (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-          it->child != NULL ? it->child->typ : -1,
+          (int)(it->child != NULL ? it->child->typ : -1),
           it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
     }
     for (ast_t *it = dbg_rhs != NULL ? dbg_rhs->next : NULL; it != NULL;
@@ -2383,9 +2383,9 @@ struct Statement *convert_assignment(ast_t *assign_node) {
           stderr,
           "[KGPC_DEBUG_SPECIALIZE_CALLS]   ASSIGN rhs.next typ=%d(%s:%s) "
           "child=%d(%s)\n",
-          it->typ, pascal_tag_to_string(it->typ),
+          (int)(it->typ), pascal_tag_to_string(it->typ),
           (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-          it->child != NULL ? it->child->typ : -1,
+          (int)(it->child != NULL ? it->child->typ : -1),
           it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
     }
   }
@@ -2401,9 +2401,9 @@ struct Statement *convert_proc_call(ast_t *call_node,
                                     bool implicit_identifier) {
   if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
     fprintf(stderr, "[KGPC] convert_proc_call: typ=%d line=%d\n",
-            call_node ? call_node->typ : -1, call_node ? call_node->line : -1);
+            (int)(call_node ? call_node->typ : -1), call_node ? call_node->line : -1);
     if (call_node && call_node->child) {
-      fprintf(stderr, "[KGPC]   child typ=%d\n", call_node->child->typ);
+      fprintf(stderr, "[KGPC]   child typ=%d\n", (int)(call_node->child->typ));
     }
   }
   ast_t *child = call_node->child;

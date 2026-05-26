@@ -572,7 +572,7 @@ struct Statement *convert_statement(ast_t *stmt_node) {
 
     const char *name = tag_name(stmt_node->typ);
     fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",
-            stmt_node->typ, name, stmt_node->line);
+            (int)(stmt_node->typ), name, stmt_node->line);
     if (stmt_node->sym != NULL && stmt_node->sym->name != NULL)
       fprintf(stderr, " (symbol: %s)", stmt_node->sym->name);
     if (stmt_node->child != NULL)
@@ -630,7 +630,7 @@ ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
       fprintf(
           stderr,
           "[KGPC] convert_statement_list: processing stmt %d, typ=%d line=%d\n",
-          stmt_count, unwrapped->typ, unwrapped->line);
+          stmt_count, (int)(unwrapped->typ), unwrapped->line);
       fprintf(stderr, "[KGPC]   calling convert_statement...\n");
       fflush(stderr);
     }
@@ -653,7 +653,7 @@ ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
       fprintf(stderr,
               "[KGPC]   -> convert_statement returned NULL, dropped statement "
               "typ=%d line=%d\n",
-              unwrapped->typ, unwrapped->line);
+              (int)(unwrapped->typ), unwrapped->line);
       fflush(stderr);
     }
     cur = cur->next;
@@ -677,10 +677,10 @@ struct Statement *convert_block(ast_t *block_node) {
   }
 
   if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
-    fprintf(stderr, "[KGPC] convert_block: typ=%d line=%d\n", block_node->typ,
+    fprintf(stderr, "[KGPC] convert_block: typ=%d line=%d\n", (int)(block_node->typ),
             block_node->line);
     if (block_node->child) {
-      fprintf(stderr, "[KGPC]   child typ=%d line=%d\n", block_node->child->typ,
+      fprintf(stderr, "[KGPC]   child typ=%d line=%d\n", (int)(block_node->child->typ),
               block_node->child->line);
       // Check if child is ast_nil
       if (block_node->child == ast_nil) {
@@ -876,7 +876,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     fprintf(stderr, "[Operator] convert_method_impl: cur=%p qualified=%p\n",
             (void *)cur, (void *)qualified);
     if (qualified != NULL) {
-      fprintf(stderr, "[Operator]   qualified->typ=%d\n", qualified->typ);
+      fprintf(stderr, "[Operator]   qualified->typ=%d\n", (int)(qualified->typ));
       if (qualified->sym && qualified->sym->name) {
         fprintf(stderr, "[Operator]   qualified->sym->name=%s\n",
                 qualified->sym->name);
@@ -915,7 +915,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
       if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
         fprintf(stderr,
                 "[Operator] param_node=%p typ=%d (PARAM_LIST=%d, PARAM=%d)\n",
-                (void *)param_node, param_node ? param_node->typ : -1,
+                (void *)param_node, (int)(param_node ? param_node->typ : -1),
                 PASCAL_T_PARAM_LIST, PASCAL_T_PARAM);
       }
       ast_t *first_param = NULL;
@@ -1111,23 +1111,23 @@ Tree_t *convert_method_impl(ast_t *method_node) {
   if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
     if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
       fprintf(stderr, "[KGPC] convert_method_impl: cur=%p typ=%d\n",
-              (void *)cur, cur ? cur->typ : -1);
+              (void *)cur, (int)(cur ? cur->typ : -1));
       if (cur && cur->sym && cur->sym->name) {
         fprintf(stderr, "[KGPC]   cur->sym->name=%s\n", cur->sym->name);
       }
       fprintf(stderr, "[KGPC] convert_method_impl: qualified=%p typ=%d\n",
-              (void *)qualified, qualified ? qualified->typ : -1);
+              (void *)qualified, (int)(qualified ? qualified->typ : -1));
       if (qualified && qualified->sym && qualified->sym->name) {
         fprintf(stderr, "[KGPC]   qualified->sym->name=%s\n",
                 qualified->sym->name);
       }
       if (qualified && qualified->child) {
         fprintf(stderr, "[KGPC]   qualified->child->typ=%d\n",
-                qualified->child->typ);
+                (int)(qualified->child->typ));
       }
       fprintf(stderr,
               "[KGPC] convert_method_impl: no qualified identifier (typ=%d)\n",
-              qualified ? qualified->typ : -1);
+              (int)(qualified ? qualified->typ : -1));
     }
     return NULL;
   }
@@ -1158,7 +1158,7 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     }
     if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
       fprintf(stderr, "[KGPC] convert_method_impl: child typ=%d (%s) name=%s\n",
-              cursor->typ, pascal_tag_to_string(cursor->typ),
+              (int)(cursor->typ), pascal_tag_to_string(cursor->typ),
               (cursor->sym && cursor->sym->name) ? cursor->sym->name
                                                  : "<null>");
     }
@@ -2390,7 +2390,7 @@ ast_t *find_node_by_type(ast_t *node, int target_type) {
     fprintf(
         stderr,
         "[KGPC] find_node_by_type: visiting node typ=%d, looking for typ=%d\n",
-        node->typ, target_type);
+        (int)(node->typ), target_type);
   }
 
   if (node->typ == target_type) {
@@ -2566,7 +2566,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
   }
 
   if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
-    fprintf(stderr, "[KGPC] tree_from_pascal_ast: root typ=%d\n", cur->typ);
+    fprintf(stderr, "[KGPC] tree_from_pascal_ast: root typ=%d\n", (int)(cur->typ));
   }
 
   if (cur->typ == PASCAL_T_PROGRAM_DECL || cur->typ == 88) {
@@ -2588,7 +2588,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
               first_child);
       if (first_child) {
         fprintf(stderr, "[KGPC] tree_from_pascal_ast: first_child->typ=%d\n",
-                first_child->typ);
+                (int)(first_child->typ));
         fprintf(stderr, "[KGPC] tree_from_pascal_ast: first_child->next=%p\n",
                 first_child->next);
 
@@ -2599,7 +2599,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
           fprintf(stderr,
                   "[KGPC] tree_from_pascal_ast: sibling[%d] typ=%d next=%p "
                   "child=%p\n",
-                  sibling_count, sibling->typ, sibling->next, sibling->child);
+                  sibling_count, (int)(sibling->typ), sibling->next, sibling->child);
           sibling = sibling->next;
           sibling_count++;
         }
@@ -2618,14 +2618,14 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             fprintf(stderr,
                     "[KGPC] tree_from_pascal_ast: Last sibling (typ=%d) has "
                     "children:\n",
-                    last->typ);
+                    (int)(last->typ));
             ast_t *child = last->child;
             int child_count = 0;
             while (child != NULL && child_count < 20) {
               fprintf(
                   stderr,
                   "[KGPC] tree_from_pascal_ast:   child[%d] typ=%d next=%p\n",
-                  child_count, child->typ, child->next);
+                  child_count, (int)(child->typ), child->next);
 
               // Print siblings of this child
               if (child->next != NULL) {
@@ -2639,7 +2639,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                   fprintf(
                       stderr,
                       "[KGPC] tree_from_pascal_ast:       sibling[%d] typ=%d\n",
-                      sib_count, sibling->typ);
+                      sib_count, (int)(sibling->typ));
                   sibling = sibling->next;
                   sib_count++;
                 }
@@ -2704,7 +2704,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     while (section != NULL) {
       if (kgpc_getenv("KGPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
         fprintf(stderr, "[kgpc program] section typ=%d (%s) line=%d\n",
-                section->typ, pascal_tag_to_string(section->typ),
+                (int)(section->typ), pascal_tag_to_string(section->typ),
                 section->line);
       }
       /* Check for circular reference before processing */
@@ -2718,7 +2718,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         fprintf(
             stderr,
             "[KGPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n",
-            section->typ);
+            (int)(section->typ));
       }
 
       switch (section->typ) {
@@ -2765,7 +2765,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
       case PASCAL_T_MAIN_BLOCK: {
         if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
           fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found block type %d\n",
-                  section->typ);
+                  (int)(section->typ));
         }
         struct Statement *candidate_body = convert_block(section);
         /* Prefer the last non-empty block. If the candidate has no statements,
@@ -2800,7 +2800,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
           fprintf(stderr,
                   "[KGPC] tree_from_pascal_ast: Skipping declaration component "
                   "type %d (should be child of section)\n",
-                  section->typ);
+                  (int)(section->typ));
         }
         break;
       default:
@@ -2808,7 +2808,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
           fprintf(
               stderr,
               "[KGPC] tree_from_pascal_ast: Skipping unknown node type %d\n",
-              section->typ);
+              (int)(section->typ));
         }
         break;
       }
@@ -2874,7 +2874,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
           fprintf(stderr,
                   "[KGPC] tree_from_pascal_ast: Found MAIN_BLOCK via recursive "
                   "search (typ=%d)\n",
-                  main_block_node->typ);
+                  (int)(main_block_node->typ));
         }
         body = convert_block(main_block_node);
       } else {
@@ -2898,7 +2898,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
               fprintf(
                   stderr,
                   "[KGPC] tree_from_pascal_ast: typ=100 child[%d] has typ=%d\n",
-                  child_count, child->typ);
+                  child_count, (int)(child->typ));
             }
             if (child->typ == PASCAL_T_MAIN_BLOCK ||
                 child->typ == PASCAL_T_BEGIN_BLOCK) {
@@ -2906,7 +2906,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 fprintf(stderr,
                         "[KGPC] tree_from_pascal_ast: Found MAIN_BLOCK "
                         "(typ=%d) inside typ=100 wrapper\n",
-                        child->typ);
+                        (int)(child->typ));
               }
               main_block_node = child;
               body = convert_block(main_block_node);
@@ -3004,7 +3004,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
       if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr,
                 "[KGPC] tree_from_pascal_ast: Visiting section type %d\n",
-                section->typ);
+                (int)(section->typ));
       }
       /* Check for circular reference */
       if (!is_safe_to_continue(visited_unit, section)) {
@@ -3057,7 +3057,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             fprintf(stderr,
                     "[KGPC] tree_from_pascal_ast: Visiting PROGRAM section "
                     "type %d\n",
-                    section->typ);
+                    (int)(section->typ));
           }
           /* Check for circular reference */
           if (!is_safe_to_continue(visited_if, section)) {
@@ -3069,7 +3069,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
           if (node_cursor != NULL) {
             if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL) {
               fprintf(stderr, "[KGPC] interface node typ=%d (%s)\n",
-                      node_cursor->typ, pascal_tag_to_string(node_cursor->typ));
+                      (int)(node_cursor->typ), pascal_tag_to_string(node_cursor->typ));
             }
             switch (node_cursor->typ) {
             case PASCAL_T_USES_SECTION:
@@ -3207,7 +3207,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
           if (node_cursor != NULL) {
             if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
               fprintf(stderr, "[KGPC] implementation section node typ=%d\n",
-                      node_cursor->typ);
+                      (int)(node_cursor->typ));
             }
             switch (node_cursor->typ) {
             case PASCAL_T_USES_SECTION:
@@ -3321,10 +3321,10 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
       ast_t *stmt_list_seq = initialization_node->child;
       if (kgpc_getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
         fprintf(stderr, "[KGPC] initialization_node: typ=%d line=%d\n",
-                initialization_node->typ, initialization_node->line);
+                (int)(initialization_node->typ), initialization_node->line);
         if (stmt_list_seq != NULL) {
           fprintf(stderr, "[KGPC]   stmt_list_seq: typ=%d line=%d\n",
-                  stmt_list_seq->typ, stmt_list_seq->line);
+                  (int)(stmt_list_seq->typ), stmt_list_seq->line);
         }
       }
       if (stmt_list_seq != NULL) {
@@ -3374,7 +3374,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     return tree;
   }
 
-  fprintf(stderr, "ERROR: Unsupported Pascal AST root type %d.\n", cur->typ);
+  fprintf(stderr, "ERROR: Unsupported Pascal AST root type %d.\n", (int)(cur->typ));
   return NULL;
 }
 

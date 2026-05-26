@@ -1595,7 +1595,7 @@ static ParseResult until_fn(input_t *in, void *args, char *parser_name) {
     int delim_type = (uargs->delimiter) ? (int)uargs->delimiter->type : -1;
     fprintf(stderr,
             "[UNTIL] tag=%d line=%d len=%d delim=%s delim_type=%d: %.*s\n",
-            uargs->tag, in->line, len, delim_name, delim_type, preview, text);
+            (int)(uargs->tag), in->line, len, delim_name, delim_type, preview, text);
   }
   ast_t *ast = new_ast();
   ast->typ = uargs->tag;

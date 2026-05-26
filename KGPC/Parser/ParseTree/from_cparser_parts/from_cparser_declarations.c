@@ -513,7 +513,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
       int idx = 0;
       for (ast_t *dbg = abs_node; dbg != NULL; dbg = dbg->next) {
         fprintf(stderr, "[KGPC] absolute scan %d: typ=%d sym=%s\n", idx++,
-                dbg->typ,
+                (int)(dbg->typ),
                 (dbg->sym != NULL && dbg->sym->name != NULL) ? dbg->sym->name
                                                              : "<null>");
       }
@@ -2497,16 +2497,16 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node,
       fprintf(stderr,
               "[KGPC_TRACE_NONLOCAL] raw_type_decl id=%s spec typ=%d sym=%s "
               "child_typ=%d child_sym=%s next_typ=%d next_sym=%s\n",
-              id, dbg != NULL ? dbg->typ : -1,
+              id, (int)(dbg != NULL ? dbg->typ : -1),
               (dbg != NULL && dbg->sym != NULL && dbg->sym->name != NULL)
                   ? dbg->sym->name
                   : "<null>",
-              (dbg != NULL && dbg->child != NULL) ? dbg->child->typ : -1,
+              (int)((dbg != NULL && dbg->child != NULL) ? dbg->child->typ : -1),
               (dbg != NULL && dbg->child != NULL && dbg->child->sym != NULL &&
                dbg->child->sym->name != NULL)
                   ? dbg->child->sym->name
                   : "<null>",
-              (dbg != NULL && dbg->next != NULL) ? dbg->next->typ : -1,
+              (int)((dbg != NULL && dbg->next != NULL) ? dbg->next->typ : -1),
               (dbg != NULL && dbg->next != NULL && dbg->next->sym != NULL &&
                dbg->next->sym->name != NULL)
                   ? dbg->next->sym->name
@@ -2515,12 +2515,12 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node,
         fprintf(stderr,
                 "[KGPC_TRACE_NONLOCAL] raw_type_decl child child_typ=%d "
                 "child_sym=%s next_typ=%d next_sym=%s\n",
-                dbg->child->child != NULL ? dbg->child->child->typ : -1,
+                (int)(dbg->child->child != NULL ? dbg->child->child->typ : -1),
                 (dbg->child->child != NULL && dbg->child->child->sym != NULL &&
                  dbg->child->child->sym->name != NULL)
                     ? dbg->child->child->sym->name
                     : "<null>",
-                dbg->child->next != NULL ? dbg->child->next->typ : -1,
+                (int)(dbg->child->next != NULL ? dbg->child->next->typ : -1),
                 (dbg->child->next != NULL && dbg->child->next->sym != NULL &&
                  dbg->child->next->sym->name != NULL)
                     ? dbg->child->next->sym->name
@@ -2530,7 +2530,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node,
     if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
       fprintf(stderr,
               "[KGPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
-              spec_node->typ,
+              (int)(spec_node->typ),
               (spec_node->sym != NULL && spec_node->sym->name != NULL)
                   ? spec_node->sym->name
                   : "<null>",
@@ -3042,7 +3042,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     fprintf(stderr,
             "[KGPC] convert_generic_type_decl %s (type_spec_node=%p typ=%d)\n",
             id, (void *)type_spec_node,
-            type_spec_node != NULL ? type_spec_node->typ : -1);
+            (int)(type_spec_node != NULL ? type_spec_node->typ : -1));
   struct RecordType *record_template = NULL;
 
   int param_count = 0;
@@ -4433,7 +4433,7 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
     fprintf(stderr,
             "[KGPC] append_type_decls_from_section: type_section->typ=%d "
             "child=%p line=%d parent=%s\n",
-            type_section->typ, (void *)type_section->child, type_section->line,
+            (int)(type_section->typ), (void *)type_section->child, type_section->line,
             parent_type_name ? parent_type_name : "<none>");
 
     /* Count children and print info for each */
@@ -4441,7 +4441,7 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
     for (ast_t *c = type_section->child; c != NULL; c = c->next) {
       char *c_id = dup_first_identifier_in_node(c);
       fprintf(stderr, "[KGPC]   child[%d] typ=%d (%s) line=%d id=%s\n",
-              child_count++, c->typ, pascal_tag_to_string(c->typ), c->line,
+              child_count++, (int)(c->typ), pascal_tag_to_string(c->typ), c->line,
               c_id != NULL ? c_id : "<none>");
       if (c_id != NULL)
         free(c_id);
@@ -4458,7 +4458,7 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
     if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
       char *name = dup_first_identifier_in_node(unwrapped);
       fprintf(stderr, "[KGPC] type-section decl tag=%d (%s) name=%s\n",
-              unwrapped->typ, pascal_tag_to_string(unwrapped->typ),
+              (int)(unwrapped->typ), pascal_tag_to_string(unwrapped->typ),
               name != NULL ? name : "<none>");
       if (name != NULL)
         free(name);
@@ -4485,7 +4485,7 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
           fprintf(stderr,
                   "[KGPC] append_type_decls_from_section saw generic-like %s "
                   "(tag=%d)\n",
-                  type_name, unwrapped->typ);
+                  type_name, (int)(unwrapped->typ));
           free(type_name);
         }
       }

@@ -721,7 +721,7 @@ const char *pascal_tag_to_string(tag_t tag) {
     return "OF_OBJECT";
   default:
     fprintf(stderr, "FATAL: Unknown Pascal AST node type: %d in %s at %s:%d\n",
-            tag, __func__, __FILE__, __LINE__);
+            (int)(tag), __func__, __FILE__, __LINE__);
     abort();
   }
 }

@@ -18,7 +18,7 @@ char *dup_first_identifier_in_node(ast_t *node) {
   if (node == NULL)
     return NULL;
   if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
-    fprintf(stderr, "[KGPC] inspect node typ=%d (%s) sym=%s\n", node->typ,
+    fprintf(stderr, "[KGPC] inspect node typ=%d (%s) sym=%s\n", (int)(node->typ),
             pascal_tag_to_string(node->typ),
             (node->sym != NULL && node->sym->name != NULL) ? node->sym->name
                                                            : "<null>");
@@ -39,7 +39,7 @@ ListNode_t *collect_constructed_type_args(ast_t *args_node) {
   if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
     fprintf(stderr,
             "[KGPC] collect_constructed_type_args start node=%p typ=%d (%s)\n",
-            (void *)args_node, args_node != NULL ? args_node->typ : -1,
+            (void *)args_node, (int)(args_node != NULL ? args_node->typ : -1),
             args_node != NULL ? pascal_tag_to_string(args_node->typ)
                               : "<null>");
   if (args_node == NULL)
@@ -105,11 +105,11 @@ int extract_constructed_type_info(ast_t *spec_node, char **base_name_out,
     fprintf(stderr,
             "[KGPC] constructed type base node typ=%d (%s) sym=%s next_typ=%d "
             "(%s)\n",
-            name_node->typ, pascal_tag_to_string(name_node->typ),
+            (int)(name_node->typ), pascal_tag_to_string(name_node->typ),
             (name_node->sym != NULL && name_node->sym->name != NULL)
                 ? name_node->sym->name
                 : "<null>",
-            name_node->next != NULL ? name_node->next->typ : -1,
+            (int)(name_node->next != NULL ? name_node->next->typ : -1),
             name_node->next != NULL ? pascal_tag_to_string(name_node->next->typ)
                                     : "<null>");
   }

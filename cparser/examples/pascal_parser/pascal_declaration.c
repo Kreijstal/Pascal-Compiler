@@ -758,7 +758,7 @@ static ast_t *detach_type_spec(ast_t *identifier_start, ast_t **out_type_spec,
       fprintf(stderr,
               "ERROR: detach_type_spec exceeded guard limit (%d); possible "
               "cycle in param list (node=%p typ=%d).\n",
-              guard_limit, (void *)cursor, cursor->typ);
+              guard_limit, (void *)cursor, (int)(cursor->typ));
       *out_type_spec = NULL;
       if (out_default_value != NULL) {
         *out_default_value = NULL;
@@ -772,7 +772,7 @@ static ast_t *detach_type_spec(ast_t *identifier_start, ast_t **out_type_spec,
         fprintf(stderr,
                 "ERROR: Cycle detected in parameter list while detaching type "
                 "spec (node=%p typ=%d).\n",
-                (void *)cursor, cursor->typ);
+                (void *)cursor, (int)(cursor->typ));
         *out_type_spec = NULL;
         if (out_default_value != NULL) {
           *out_default_value = NULL;
@@ -784,9 +784,9 @@ static ast_t *detach_type_spec(ast_t *identifier_start, ast_t **out_type_spec,
       fprintf(stderr,
               "[detach_type_spec] cursor=%p typ=%d (TYPE_SPEC=%d "
               "DEFAULT_VALUE=%d) next=%p next_typ=%d\n",
-              (void *)cursor, cursor->typ, PASCAL_T_TYPE_SPEC,
+              (void *)cursor, (int)(cursor->typ), PASCAL_T_TYPE_SPEC,
               PASCAL_T_DEFAULT_VALUE, (void *)(cursor->next),
-              cursor->next ? cursor->next->typ : -1);
+              (int)(cursor->next ? cursor->next->typ : -1));
     }
     if (cursor->typ == PASCAL_T_TYPE_SPEC) {
       if (prev != NULL) {
@@ -826,7 +826,7 @@ static ast_t *find_tail(ast_t *node) {
       fprintf(stderr,
               "ERROR: find_tail exceeded guard limit (%d); possible cycle in "
               "param list (node=%p typ=%d).\n",
-              guard_limit, (void *)tail, tail->typ);
+              guard_limit, (void *)tail, (int)(tail->typ));
       return tail;
     }
     if (fast != NULL && fast->next != NULL) {
@@ -836,7 +836,7 @@ static ast_t *find_tail(ast_t *node) {
         fprintf(stderr,
                 "ERROR: Cycle detected while finding tail of parameter list "
                 "(node=%p typ=%d).\n",
-                (void *)tail, tail->typ);
+                (void *)tail, (int)(tail->typ));
         return tail;
       }
     }
@@ -1134,26 +1134,26 @@ static ParseResult main_block_content_fn(input_t *in, void *args,
               in ? in->start : -1);
       if (stmt_result.value.ast) {
         fprintf(stderr, "[pascal_parser]   result ast typ=%d\n",
-                stmt_result.value.ast->typ);
+                (int)(stmt_result.value.ast->typ));
         if (stmt_result.value.ast == ast_nil) {
           fprintf(stderr, "[pascal_parser]   result ast is ast_nil!\n");
         }
         if (stmt_result.value.ast->child) {
           fprintf(stderr, "[pascal_parser]   result ast has child typ=%d\n",
-                  stmt_result.value.ast->child->typ);
+                  (int)(stmt_result.value.ast->child->typ));
           // Check if the child is the sep_by result
           if (stmt_result.value.ast->child->next) {
             ast_t *sep_by_result = stmt_result.value.ast->child->next;
             fprintf(stderr,
                     "[pascal_parser]   sep_by result (second child) typ=%d\n",
-                    sep_by_result->typ);
+                    (int)(sep_by_result->typ));
             if (sep_by_result == ast_nil) {
               fprintf(stderr, "[pascal_parser]   sep_by result is ast_nil!\n");
             } else if (sep_by_result->child) {
               fprintf(
                   stderr,
                   "[pascal_parser]   sep_by has children, first child typ=%d\n",
-                  sep_by_result->child->typ);
+                  (int)(sep_by_result->child->typ));
             } else {
               fprintf(stderr,
                       "[pascal_parser]   sep_by result has NO children\n");
@@ -1194,17 +1194,17 @@ static ast_t *build_main_block_ast(ast_t *ast) {
   if (debug_flag != NULL) {
     fprintf(stderr, "[build_main_block_ast] input ast=%p\n", (void *)ast);
     if (ast && ast != ast_nil) {
-      fprintf(stderr, "[build_main_block_ast]   ast->typ=%d\n", ast->typ);
+      fprintf(stderr, "[build_main_block_ast]   ast->typ=%d\n", (int)(ast->typ));
       fprintf(stderr, "[build_main_block_ast]   ast->child=%p\n",
               (void *)ast->child);
       if (ast->child && ast->child != ast_nil) {
         fprintf(stderr, "[build_main_block_ast]     child->typ=%d\n",
-                ast->child->typ);
+                (int)(ast->child->typ));
         fprintf(stderr, "[build_main_block_ast]     child->next=%p\n",
                 (void *)ast->child->next);
         if (ast->child->next && ast->child->next != ast_nil) {
           fprintf(stderr, "[build_main_block_ast]       next->typ=%d\n",
-                  ast->child->next->typ);
+                  (int)(ast->child->next->typ));
         }
       }
     } else if (ast == ast_nil) {

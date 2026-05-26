@@ -730,7 +730,7 @@ void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram) {
             "[copy_method_decl_defaults] Found template for %s.%s, "
             "params_ast=%p typ=%d\n",
             class_name, method_name, (void *)template->params_ast,
-            template->params_ast->typ);
+            (int)(template->params_ast->typ));
 
   /* Convert the declaration's params_ast to a parameter list */
   /* The params_ast is a PASCAL_T_PARAM or PASCAL_T_PARAM_LIST node */
@@ -780,7 +780,7 @@ void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram) {
     if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
       fprintf(stderr,
               "[copy_method_decl_defaults] Processing decl_param typ=%d\n",
-              decl_param->typ);
+              (int)(decl_param->typ));
 
     if (decl_param->typ == PASCAL_T_PARAM) {
       /* Find the TYPE_SPEC and DEFAULT_VALUE in the declaration param */
@@ -791,7 +791,7 @@ void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram) {
            child = child->next) {
         if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
           fprintf(stderr, "[copy_method_decl_defaults]   child typ=%d\n",
-                  child->typ);
+                  (int)(child->typ));
         if (child->typ == PASCAL_T_TYPE_SPEC)
           type_spec = child;
         if (child->typ == PASCAL_T_DEFAULT_VALUE)
@@ -826,7 +826,7 @@ void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram) {
             if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
               fprintf(stderr,
                       "[copy_method_decl_defaults] expr_node=%p typ=%d\n",
-                      (void *)expr_node, expr_node ? expr_node->typ : -1);
+                      (void *)expr_node, (int)(expr_node ? expr_node->typ : -1));
 
             if (expr_node != NULL) {
               struct Expression *default_expr =

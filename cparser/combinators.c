@@ -397,7 +397,7 @@ static ParseResult many_fn(input_t *in, void *args, char *parser_name) {
               "[MANY] iter=%d SUCCESS, new pos=%d line=%d ast=%p (ast_nil=%p) "
               "typ=%d\n",
               iter, in->start, in->line, (void *)res.value.ast, (void *)ast_nil,
-              res.value.ast ? res.value.ast->typ : -1);
+              (int)(res.value.ast ? res.value.ast->typ : -1));
     }
     // Skip ast_nil results - they represent "matched but no output"
     if (res.value.ast != NULL && res.value.ast != ast_nil) {
