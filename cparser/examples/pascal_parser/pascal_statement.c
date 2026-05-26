@@ -567,10 +567,10 @@ static combinator_t *make_case_expression(combinator_t **expr_parser) {
       seq(new_combinator(), PASCAL_T_FUNC_CALL, case_allowed_call_name(),
           between(token(match("(")), token(match(")")),
                   optional(sep_by(lazy(expr_parser), token(match(","))))),
-          NULL);
+          (combinator_t *)NULL);
   combinator_t *case_typecast = seq(
       new_combinator(), PASCAL_T_TYPECAST, case_typecast_name(),
-      between(token(match("(")), token(match(")")), lazy(expr_parser)), NULL);
+      between(token(match("(")), token(match(")")), lazy(expr_parser)), (combinator_t *)NULL);
   combinator_t *const_expr_factor = multi(
       new_combinator(), PASCAL_T_NONE, hex_integer(PASCAL_T_INTEGER),
       binary_integer(PASCAL_T_INTEGER), octal_integer(PASCAL_T_INTEGER),
@@ -585,35 +585,35 @@ static combinator_t *make_case_expression(combinator_t **expr_parser) {
                                 // THorzRectAlign.Left
       between(token(match("(")), token(match(")")),
               lazy(expr_parser)), // parenthesized expressions
-      NULL);
+      (combinator_t *)NULL);
 
   // Unary prefix: -factor, +factor, not factor, or just factor
   combinator_t *unary_factor =
       multi(new_combinator(), PASCAL_T_NONE,
             seq(new_combinator(), PASCAL_T_NEG, token(match("-")),
-                const_expr_factor, NULL),
+                const_expr_factor, (combinator_t *)NULL),
             seq(new_combinator(), PASCAL_T_POS, token(match("+")),
-                const_expr_factor, NULL),
+                const_expr_factor, (combinator_t *)NULL),
             seq(new_combinator(), PASCAL_T_NOT, token(keyword_ci("not")),
-                const_expr_factor, NULL),
-            const_expr_factor, NULL);
+                const_expr_factor, (combinator_t *)NULL),
+            const_expr_factor, (combinator_t *)NULL);
 
   // Binary arithmetic operators for constant expressions in case labels
   // Supports: +, -, *, /, div, mod, and, or, xor, shl, shr
   combinator_t *case_binop = multi(
       new_combinator(), PASCAL_T_NONE,
-      token(seq(new_combinator(), PASCAL_T_ADD, match("+"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_SUB, match("-"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_MUL, match("*"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_DIV, match("/"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_INTDIV, keyword_ci("div"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_MOD, keyword_ci("mod"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_AND, keyword_ci("and"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_OR, keyword_ci("or"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_XOR, keyword_ci("xor"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_SHL, keyword_ci("shl"), NULL)),
-      token(seq(new_combinator(), PASCAL_T_SHR, keyword_ci("shr"), NULL)),
-      NULL);
+      token(seq(new_combinator(), PASCAL_T_ADD, match("+"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_SUB, match("-"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_MUL, match("*"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_DIV, match("/"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_INTDIV, keyword_ci("div"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_MOD, keyword_ci("mod"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_AND, keyword_ci("and"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_OR, keyword_ci("or"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_XOR, keyword_ci("xor"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_SHL, keyword_ci("shl"), (combinator_t *)NULL)),
+      token(seq(new_combinator(), PASCAL_T_SHR, keyword_ci("shr"), (combinator_t *)NULL)),
+      (combinator_t *)NULL);
 
   // Allow binary arithmetic in case labels like (Ofs2 - 1) or (A + B * C)
   return chainl1(unary_factor, case_binop);
@@ -1170,7 +1170,7 @@ static ast_t *wrap_array_lvalue_suffix(ast_t *parsed) {
 static combinator_t *pascal_label_identifier(void) {
   return multi(new_combinator(), PASCAL_T_NONE,
                token(integer(PASCAL_T_INTEGER)),
-               token(cident(PASCAL_T_IDENTIFIER)), NULL);
+               token(cident(PASCAL_T_IDENTIFIER)), (combinator_t *)NULL);
 }
 
 static ast_t *build_label_statement_ast(ast_t *parsed) {
@@ -1408,7 +1408,7 @@ void init_pascal_statement_parser(combinator_t **p) {
   empty_statement->name = strdup("empty_statement");
 
   combinator_t *stmt_or_empty = multi(new_combinator(), PASCAL_T_NONE,
-                                      lazy(stmt_parser), empty_statement, NULL);
+                                      lazy(stmt_parser), empty_statement, (combinator_t *)NULL);
 
   // Left-value parser: base identifier with optional pointer, array, or member
   // suffixes.
@@ -1426,10 +1426,10 @@ void init_pascal_statement_parser(combinator_t **p) {
 
   combinator_t *suffix_choice =
       multi(new_combinator(), PASCAL_T_NONE, array_suffix, pointer_suffix,
-            member_suffix, NULL);
+            member_suffix, (combinator_t *)NULL);
   combinator_t *suffixes = many(suffix_choice);
   combinator_t *required_suffixes =
-      seq(new_combinator(), PASCAL_T_NONE, suffix_choice, suffixes, NULL);
+      seq(new_combinator(), PASCAL_T_NONE, suffix_choice, suffixes, (combinator_t *)NULL);
 
   // Simple typecast lvalue without suffixes: Integer(x) := 42
   // Uses type_name for built-in types only (safer, avoids matching function
@@ -1437,7 +1437,7 @@ void init_pascal_statement_parser(combinator_t **p) {
   combinator_t *typecast_lvalue_simple = seq(
       new_combinator(), PASCAL_T_TYPECAST,
       token(type_name(PASCAL_T_IDENTIFIER)),
-      between(token(match("(")), token(match(")")), lazy(expr_parser)), NULL);
+      between(token(match("(")), token(match(")")), lazy(expr_parser)), (combinator_t *)NULL);
 
   // Typecast lvalue with required pointer suffix: PCardinal(@x)^ := 42
   // This requires at least one suffix starting with '^' to be a valid lvalue.
@@ -1447,36 +1447,36 @@ void init_pascal_statement_parser(combinator_t **p) {
   combinator_t *typecast_base = seq(
       new_combinator(), PASCAL_T_TYPECAST,
       token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-      between(token(match("(")), token(match(")")), lazy(expr_parser)), NULL);
+      between(token(match("(")), token(match(")")), lazy(expr_parser)), (combinator_t *)NULL);
 
   // specialize TypeName<T>(expr) typecast lvalues
   combinator_t *lvalue_type_arg =
       token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
   combinator_t *lvalue_type_arg_list =
       seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
-          sep_by1(lvalue_type_arg, token(match(","))), token(match(">")), NULL);
+          sep_by1(lvalue_type_arg, token(match(","))), token(match(">")), (combinator_t *)NULL);
   combinator_t *specialize_type_base =
       seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
           token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-          lvalue_type_arg_list, NULL);
+          lvalue_type_arg_list, (combinator_t *)NULL);
   combinator_t *specialize_typecast_base =
       seq(new_combinator(), PASCAL_T_TYPECAST, token(keyword_ci("specialize")),
           specialize_type_base,
           between(token(match("(")), token(match(")")),
                   sep_by(lazy(expr_parser), token(match(",")))),
-          NULL);
+          (combinator_t *)NULL);
   // Require pointer suffix followed by optional additional suffixes
   combinator_t *required_pointer_suffix =
-      seq(new_combinator(), PASCAL_T_NONE, pointer_suffix, suffixes, NULL);
+      seq(new_combinator(), PASCAL_T_NONE, pointer_suffix, suffixes, (combinator_t *)NULL);
   combinator_t *typecast_lvalue_with_deref =
       map(seq(new_combinator(), PASCAL_T_NONE, typecast_base,
-              required_pointer_suffix, NULL),
+              required_pointer_suffix, (combinator_t *)NULL),
           wrap_typecast_deref_lvalue);
 
   // Typecast lvalue with member/array/pointer suffix: TFoo(obj).Field := 1
   combinator_t *typecast_lvalue_with_suffixes =
       map(seq(new_combinator(), PASCAL_T_NONE, typecast_base, required_suffixes,
-              NULL),
+              (combinator_t *)NULL),
           build_pointer_lvalue_chain);
 
   combinator_t *specialize_lvalue_simple =
@@ -1484,15 +1484,15 @@ void init_pascal_statement_parser(combinator_t **p) {
           specialize_type_base,
           between(token(match("(")), token(match(")")),
                   sep_by(lazy(expr_parser), token(match(",")))),
-          NULL);
+          (combinator_t *)NULL);
 
   combinator_t *specialize_lvalue_with_suffixes =
       map(seq(new_combinator(), PASCAL_T_NONE, specialize_typecast_base,
-              required_suffixes, NULL),
+              required_suffixes, (combinator_t *)NULL),
           build_pointer_lvalue_chain);
 
   combinator_t *simple_lvalue = map(
-      seq(new_combinator(), PASCAL_T_NONE, simple_identifier, suffixes, NULL),
+      seq(new_combinator(), PASCAL_T_NONE, simple_identifier, suffixes, (combinator_t *)NULL),
       build_pointer_lvalue_chain);
 
   // Function call lvalue: unaligned(PUint16(Dest)^) := 0
@@ -1502,13 +1502,13 @@ void init_pascal_statement_parser(combinator_t **p) {
       map(seq(new_combinator(), PASCAL_T_NONE,
               typecast_base, // identifier(expr) - reuses typecast_base
               suffixes,      // optional suffixes after the call
-              NULL),
+              (combinator_t *)NULL),
           build_pointer_lvalue_chain);
 
   combinator_t *paren_expr_lvalue =
       map(seq(new_combinator(), PASCAL_T_NONE,
               between(token(match("(")), token(match(")")), lazy(expr_parser)),
-              pointer_suffix, suffixes, NULL),
+              pointer_suffix, suffixes, (combinator_t *)NULL),
           wrap_paren_deref_lvalue);
 
   expr_lvalue_args *expr_lvalue_cfg =
@@ -1533,7 +1533,7 @@ void init_pascal_statement_parser(combinator_t **p) {
       paren_expr_lvalue, // (expr)^ := value
       expr_lvalue,       // expression lvalues like (ptr+ofs)^ := value
       simple_lvalue,     // Finally simple identifier with optional suffixes
-      NULL);
+      (combinator_t *)NULL);
 
   // Assignment statement: support both ":=" and "+=" compound assignments
   combinator_t *simple_assignment = seq(
@@ -1543,32 +1543,32 @@ void init_pascal_statement_parser(combinator_t **p) {
       token(match(":=")), // assignment operator
       trace("Matched :="),
       lazy(expr_parser), // expression
-      trace("Matched expression"), NULL);
+      trace("Matched expression"), (combinator_t *)NULL);
 
   combinator_t *plus_assignment_seq =
       seq(new_combinator(), PASCAL_T_ASSIGNMENT, lvalue, token(match("+=")),
-          lazy(expr_parser), NULL);
+          lazy(expr_parser), (combinator_t *)NULL);
   combinator_t *plus_assignment =
       map(plus_assignment_seq, transform_plus_assignment);
 
   combinator_t *assignment = multi(new_combinator(), PASCAL_T_NONE,
-                                   plus_assignment, simple_assignment, NULL);
+                                   plus_assignment, simple_assignment, (combinator_t *)NULL);
 
   // Goto statement: goto <label>
   combinator_t *goto_stmt =
       map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("goto")),
-              pascal_label_identifier(), NULL),
+              pascal_label_identifier(), (combinator_t *)NULL),
           build_goto_ast);
 
   // Labeled statement: <label>: statement
   combinator_t *labeled_stmt =
       map(seq(new_combinator(), PASCAL_T_NONE, pascal_label_identifier(),
-              token(match(":")), stmt_or_empty, NULL),
+              token(match(":")), stmt_or_empty, (combinator_t *)NULL),
           build_label_statement_ast);
 
   // Simple expression statement: expression (no semicolon here)
   combinator_t *expr_stmt =
-      seq(new_combinator(), PASCAL_T_STATEMENT, lazy(expr_parser), NULL);
+      seq(new_combinator(), PASCAL_T_STATEMENT, lazy(expr_parser), (combinator_t *)NULL);
 
   // Begin-end block: begin [statement_list] end
   // Statement list parser that tolerates empty statements between semicolons.
@@ -1582,12 +1582,12 @@ void init_pascal_statement_parser(combinator_t **p) {
       new_combinator(), PASCAL_T_NONE,
       seq(new_combinator(), PASCAL_T_BEGIN_BLOCK, token(keyword_ci("begin")),
           trace("Enter empty begin block"), token(keyword_ci("end")),
-          trace("Exit empty begin block"), NULL),
+          trace("Exit empty begin block"), (combinator_t *)NULL),
       seq(new_combinator(), PASCAL_T_BEGIN_BLOCK, token(keyword_ci("begin")),
           trace("Enter begin block"), leading_semicolons, stmt_list,
           trace("About to match end of begin block"), token(keyword_ci("end")),
-          trace("Exit begin block"), NULL),
-      NULL);
+          trace("Exit begin block"), (combinator_t *)NULL),
+      (combinator_t *)NULL);
 
   // If statement: if expression then statement [else statement]
   // Once we see "if", commit to parsing an if statement
@@ -1604,9 +1604,9 @@ void init_pascal_statement_parser(combinator_t **p) {
               optional(seq(
                   new_combinator(), PASCAL_T_ELSE, // optional else part
                   token(keyword_ci("else")), // else keyword (case-insensitive)
-                  stmt_or_empty, NULL)),
-              trace("Exit if_stmt"), NULL)),
-          NULL);
+                  stmt_or_empty, (combinator_t *)NULL)),
+              trace("Exit if_stmt"), (combinator_t *)NULL)),
+          (combinator_t *)NULL);
 
   // For-in statement: for identifier in expression do statement
   // Use nested seq() pattern like for_stmt for consistent AST structure
@@ -1619,8 +1619,8 @@ void init_pascal_statement_parser(combinator_t **p) {
               lazy(expr_parser),       // collection expression
               token(keyword_ci("do")), // do keyword (case-insensitive)
               stmt_or_empty,           // loop body statement
-              NULL),
-          NULL);
+              (combinator_t *)NULL),
+          (combinator_t *)NULL);
 
   // For statement: for [identifier := expression | identifier] (to|downto)
   // expression do statement
@@ -1630,7 +1630,7 @@ void init_pascal_statement_parser(combinator_t **p) {
           "to", PASCAL_T_TO)), // to keyword (case-insensitive)
       token(create_keyword_parser(
           "downto", PASCAL_T_DOWNTO)), // downto keyword (case-insensitive)
-      NULL);
+      (combinator_t *)NULL);
   for_init_dispatch_args_t *for_init_args =
       (for_init_dispatch_args_t *)safe_malloc(sizeof(for_init_dispatch_args_t));
   for_init_args->assignment_parser = assignment;
@@ -1649,12 +1649,12 @@ void init_pascal_statement_parser(combinator_t **p) {
           lazy(expr_parser), // end expression
           token(keyword_ci("do")), // do keyword (case-insensitive)
           stmt_or_empty,           // loop body statement
-          NULL)),
-      NULL);
+          (combinator_t *)NULL)),
+      (combinator_t *)NULL);
 
   // Combined for statement parser (try for-in first, then regular for)
   combinator_t *any_for_stmt =
-      multi(new_combinator(), PASCAL_T_NONE, for_in_stmt, for_stmt, NULL);
+      multi(new_combinator(), PASCAL_T_NONE, for_in_stmt, for_stmt, (combinator_t *)NULL);
 
   // While statement: while expression do statement
   combinator_t *while_stmt =
@@ -1665,8 +1665,8 @@ void init_pascal_statement_parser(combinator_t **p) {
                      lazy(expr_parser),       // condition
                      token(keyword_ci("do")), // do keyword (case-insensitive)
                      stmt_or_empty,           // body statement
-                     trace("Exit while_stmt"), NULL)),
-          NULL);
+                     trace("Exit while_stmt"), (combinator_t *)NULL)),
+          (combinator_t *)NULL);
 
   // Repeat statement: repeat statement_list until expression
   combinator_t *repeat_stmt_list =
@@ -1681,16 +1681,16 @@ void init_pascal_statement_parser(combinator_t **p) {
                  trace("About to match until"),
                  token(keyword_ci("until")), // until keyword (case-insensitive)
                  lazy(expr_parser),          // termination expression
-                 trace("Exit repeat_stmt"), NULL)),
-      NULL);
+                 trace("Exit repeat_stmt"), (combinator_t *)NULL)),
+      (combinator_t *)NULL);
 
   // With statement: with expression[, expression...] do statement
   combinator_t *with_additional_context =
       seq(new_combinator(), PASCAL_T_NONE, token(match(",")),
-          commit(lazy(expr_parser)), NULL);
+          commit(lazy(expr_parser)), (combinator_t *)NULL);
   combinator_t *with_context_sequence =
       seq(new_combinator(), PASCAL_T_NONE, lazy(expr_parser),
-          many(with_additional_context), NULL);
+          many(with_additional_context), (combinator_t *)NULL);
   combinator_t *with_contexts = map(with_context_sequence, wrap_with_contexts);
 
   combinator_t *with_stmt =
@@ -1702,13 +1702,13 @@ void init_pascal_statement_parser(combinator_t **p) {
                      commit(with_context_comma_guard()),
                      token(keyword_ci("do")), // do keyword (case-insensitive)
                      stmt_or_empty,           // body statement
-                     NULL)),
-          NULL);
+                     (combinator_t *)NULL)),
+          (combinator_t *)NULL);
 
   // ASM block: asm ... end [reglist]
   combinator_t *asm_reg = multi(new_combinator(), PASCAL_T_NONE,
                                 token(pascal_string(PASCAL_T_STRING)),
-                                token(cident(PASCAL_T_IDENTIFIER)), NULL);
+                                token(cident(PASCAL_T_IDENTIFIER)), (combinator_t *)NULL);
   combinator_t *asm_reglist =
       optional(between(token(match("[")), token(match("]")),
                        sep_by(asm_reg, token(match(",")))));
@@ -1719,15 +1719,15 @@ void init_pascal_statement_parser(combinator_t **p) {
                      asm_body(PASCAL_T_NONE), // asm body content
                      token(match("end")),     // end keyword
                      asm_reglist,             // optional register list
-                     NULL)),
-          NULL);
+                     (combinator_t *)NULL)),
+          (combinator_t *)NULL);
 
   // Shared helper: list of statements allowing optional semicolons between
   // entries
   combinator_t *try_statement_list = many(
       seq(new_combinator(), PASCAL_T_NONE, pnot(peek(keyword_ci("except"))),
           pnot(peek(keyword_ci("finally"))), lazy(stmt_parser),
-          optional(token(match(";"))), NULL));
+          optional(token(match(";"))), (combinator_t *)NULL));
 
   // Try-finally block: try statements finally statements end
   // Wrap finally portion in a dedicated node so the converter can distinguish
@@ -1738,9 +1738,9 @@ void init_pascal_statement_parser(combinator_t **p) {
           seq(new_combinator(), PASCAL_T_FINALLY_BLOCK,
               token(keyword_ci("finally")),
               many(seq(new_combinator(), PASCAL_T_NONE, stmt_or_empty,
-                       optional(token(match(";"))), NULL)),
-              NULL),
-          token(keyword_ci("end")), NULL);
+                       optional(token(match(";"))), (combinator_t *)NULL)),
+              (combinator_t *)NULL),
+          token(keyword_ci("end")), (combinator_t *)NULL);
 
   // On-exception handler: "on <id>[:<type>] do <statement>"
   // Parse the variable name and optional type specification
@@ -1748,23 +1748,23 @@ void init_pascal_statement_parser(combinator_t **p) {
       token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
   combinator_t *exception_type_spec = optional(
       seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
-          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), NULL));
+          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), (combinator_t *)NULL));
 
   combinator_t *optional_handler_semicolon =
       map(optional(token(match(";"))), discard_ast_stmt);
   combinator_t *on_exception_handler =
       seq(new_combinator(), PASCAL_T_ON_CLAUSE, token(keyword_ci("on")),
           exception_var, exception_type_spec, token(keyword_ci("do")),
-          stmt_or_empty, optional_handler_semicolon, NULL);
+          stmt_or_empty, optional_handler_semicolon, (combinator_t *)NULL);
 
   // Try-except block: try statements except statements end
   combinator_t *except_item =
       seq(new_combinator(), PASCAL_T_NONE, pnot(peek(keyword_ci("else"))),
           multi(new_combinator(), PASCAL_T_NONE, on_exception_handler,
                 seq(new_combinator(), PASCAL_T_NONE, stmt_or_empty,
-                    optional(token(match(";"))), NULL),
-                NULL),
-          NULL);
+                    optional(token(match(";"))), (combinator_t *)NULL),
+                (combinator_t *)NULL),
+          (combinator_t *)NULL);
 
   combinator_t *try_except =
       seq(new_combinator(), PASCAL_T_TRY_BLOCK, token(keyword_ci("try")),
@@ -1773,9 +1773,9 @@ void init_pascal_statement_parser(combinator_t **p) {
               token(keyword_ci("except")), many(except_item),
               optional(seq(new_combinator(), PASCAL_T_NONE,
                            token(keyword_ci("else")), stmt_or_empty,
-                           optional(token(match(";"))), NULL)),
-              NULL),
-          token(keyword_ci("end")), NULL);
+                           optional(token(match(";"))), (combinator_t *)NULL)),
+              (combinator_t *)NULL),
+          token(keyword_ci("end")), (combinator_t *)NULL);
 
   // Raise statement: raise [expression] [at addr[, frame]]
   combinator_t *raise_stmt = seq(
@@ -1785,9 +1785,9 @@ void init_pascal_statement_parser(combinator_t **p) {
       optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("at")),
                    lazy(expr_parser),
                    optional(seq(new_combinator(), PASCAL_T_NONE,
-                                token(match(",")), lazy(expr_parser), NULL)),
-                   NULL)),
-      NULL);
+                                token(match(",")), lazy(expr_parser), (combinator_t *)NULL)),
+                   (combinator_t *)NULL)),
+      (combinator_t *)NULL);
 
   // Inherited statement: inherited [method_call]
   combinator_t *inherited_stmt = seq(
@@ -1795,14 +1795,14 @@ void init_pascal_statement_parser(combinator_t **p) {
       token(keyword_ci("inherited")), // inherited keyword (case-insensitive)
       optional(lazy(expr_parser)),    // optional method call expression (e.g.,
                                       // inherited Destroy)
-      NULL);
+      (combinator_t *)NULL);
 
   // Exit statement: exit; or exit(expression);
   combinator_t *exit_stmt =
       seq(new_combinator(), PASCAL_T_EXIT_STMT, token(keyword_ci("exit")),
           optional(seq(new_combinator(), PASCAL_T_NONE, token(match("(")),
-                       lazy(expr_parser), token(match(")")), NULL)),
-          NULL);
+                       lazy(expr_parser), token(match(")")), (combinator_t *)NULL)),
+          (combinator_t *)NULL);
 
   // Break statement: break
   combinator_t *break_stmt =
@@ -1823,19 +1823,19 @@ void init_pascal_statement_parser(combinator_t **p) {
   // Range case label: expression..expression
   combinator_t *range_case_label = seq(
       new_combinator(), PASCAL_T_RANGE, case_label_guard(case_expression_start),
-      token(match("..")), case_label_guard(case_expression_end), NULL);
+      token(match("..")), case_label_guard(case_expression_end), (combinator_t *)NULL);
 
   combinator_t *case_label =
       multi(new_combinator(), PASCAL_T_CASE_LABEL,
             token(range_case_label), // Try range first
             token(case_label_guard(
                 case_expression_single)), // Then single expressions
-            NULL);
+            (combinator_t *)NULL);
 
   combinator_t *case_label_list =
       seq(new_combinator(), PASCAL_T_CASE_LABEL_LIST,
           sep_by(case_label, token(match(","))), // labels separated by commas
-          NULL);
+          (combinator_t *)NULL);
 
   combinator_t *case_branch_body =
       case_branch_stmt_list(stmt_parser, case_label_list);
@@ -1844,7 +1844,7 @@ void init_pascal_statement_parser(combinator_t **p) {
           case_label_list,   // case labels
           token(match(":")), // colon
           case_branch_body,  // statement or statement list
-          NULL);
+          (combinator_t *)NULL);
 
   combinator_t *case_stmt = seq(
       new_combinator(), PASCAL_T_CASE_STMT,
@@ -1859,17 +1859,17 @@ void init_pascal_statement_parser(combinator_t **p) {
           optional(seq(
               new_combinator(), PASCAL_T_ELSE, // optional else/otherwise clause
               multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("else")),
-                    token(keyword_ci("otherwise")), NULL),
+                    token(keyword_ci("otherwise")), (combinator_t *)NULL),
               case_branch_body, // else statement or list
               optional(
                   token(match(";"))), // optional semicolon after else block
-              NULL)),
+              (combinator_t *)NULL)),
           token(keyword_ci("end")), // end keyword
-          NULL)),
-      NULL);
+          (combinator_t *)NULL)),
+      (combinator_t *)NULL);
 
   combinator_t *try_stmt = multi(new_combinator(), PASCAL_T_TRY_BLOCK,
-                                 try_finally, try_except, NULL);
+                                 try_finally, try_except, (combinator_t *)NULL);
 
   statement_dispatch_args_t *dispatch_args =
       (statement_dispatch_args_t *)safe_malloc(

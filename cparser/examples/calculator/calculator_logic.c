@@ -133,7 +133,7 @@ void init_calculator_parser(combinator_t **p) {
                    expect(token(integer(CALC_T_INT)), "Expected an integer"),
                    between(expect(token(match("(")), "Expected '('"),
                            expect(token(match(")")), "Expected ')'"), lazy(p)),
-                   NULL),
+                   (combinator_t *)NULL),
              "Expected a number or a parenthesized expression");
   expr(*p, factor);
   expr_insert(*p, 0, CALC_T_ADD, EXPR_INFIX, ASSOC_LEFT,

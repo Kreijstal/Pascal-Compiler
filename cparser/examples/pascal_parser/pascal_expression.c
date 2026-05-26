@@ -1159,7 +1159,7 @@ combinator_t *pascal_string(tag_t tag) {
       between(match("\""), match("\""), pascal_double_quoted_content(tag));
 
   return multi(new_combinator(), PASCAL_T_NONE, single_quoted, double_quoted,
-               NULL);
+               (combinator_t *)NULL);
 }
 
 // Parser for implicit string concatenation: 'hello'#13'world'
@@ -1175,7 +1175,7 @@ static ParseResult implicit_string_concat_fn(input_t *in, void *args,
   combinator_t *first_item = token(
       multi(new_combinator(), PASCAL_T_NONE, pascal_string(PASCAL_T_STRING),
             char_literal(PASCAL_T_CHAR), control_char_literal(PASCAL_T_CHAR),
-            char_code_literal(PASCAL_T_CHAR_CODE), NULL));
+            char_code_literal(PASCAL_T_CHAR_CODE), (combinator_t *)NULL));
 
   ParseResult first = parse(in, first_item);
   free_combinator(first_item);
@@ -1198,7 +1198,7 @@ static ParseResult implicit_string_concat_fn(input_t *in, void *args,
     combinator_t *next_item = token(
         multi(new_combinator(), PASCAL_T_NONE, pascal_string(PASCAL_T_STRING),
               char_code_literal(PASCAL_T_CHAR_CODE),
-              control_char_literal(PASCAL_T_CHAR), NULL));
+              control_char_literal(PASCAL_T_CHAR), (combinator_t *)NULL));
 
     ParseResult next = parse(in, next_item);
     free_combinator(next_item);
@@ -1331,7 +1331,7 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
   combinator_t *func_type_arg_list =
       seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
-          sep_by1(func_type_arg, token(match(","))), token(match(">")), NULL);
+          sep_by1(func_type_arg, token(match(","))), token(match(">")), (combinator_t *)NULL);
   combinator_t *arg_list =
       between(token(match("(")), token(match(")")),
               optional(sep_by(lazy(p), token(match(",")))));
@@ -1340,16 +1340,16 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       seq(new_combinator(), PASCAL_T_FUNC_CALL,
           func_name,                    // function name (built-in or custom)
           optional(func_type_arg_list), // optional generic type arguments
-          arg_list, NULL);
+          arg_list, (combinator_t *)NULL);
 
   // Pointer/array suffix parsing for identifiers like ptr^[i] or table[i]
   combinator_t *first_suffix = create_suffix_choice(p);
   combinator_t *more_suffixes = many(create_suffix_choice(p));
   combinator_t *suffixes =
-      seq(new_combinator(), PASCAL_T_NONE, first_suffix, more_suffixes, NULL);
+      seq(new_combinator(), PASCAL_T_NONE, first_suffix, more_suffixes, (combinator_t *)NULL);
 
   combinator_t *array_access =
-      map(seq(new_combinator(), PASCAL_T_NONE, func_name, suffixes, NULL),
+      map(seq(new_combinator(), PASCAL_T_NONE, func_name, suffixes, (combinator_t *)NULL),
           build_array_or_pointer_chain);
 
   // Type cast parser: TypeName(expression) - only for built-in types
@@ -1357,9 +1357,9 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       new_combinator(), PASCAL_T_TYPECAST,
       token(type_name(PASCAL_T_IDENTIFIER)), // type name - only built-in types
       between(token(match("(")), token(match(")")), lazy(p)), // expression
-      NULL);
+      (combinator_t *)NULL);
   combinator_t *typecast_with_suffixes =
-      map(seq(new_combinator(), PASCAL_T_NONE, typecast, suffixes, NULL),
+      map(seq(new_combinator(), PASCAL_T_NONE, typecast, suffixes, (combinator_t *)NULL),
           build_array_or_pointer_chain);
 
   // Type cast parser for identifier types with required suffixes (e.g.
@@ -1368,9 +1368,9 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
   combinator_t *typecast_any =
       seq(new_combinator(), PASCAL_T_TYPECAST,
           token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-          between(token(match("(")), token(match(")")), lazy(p)), NULL);
+          between(token(match("(")), token(match(")")), lazy(p)), (combinator_t *)NULL);
   combinator_t *typecast_any_with_suffixes =
-      map(seq(new_combinator(), PASCAL_T_NONE, typecast_any, suffixes, NULL),
+      map(seq(new_combinator(), PASCAL_T_NONE, typecast_any, suffixes, (combinator_t *)NULL),
           build_array_or_pointer_chain);
 
   // Boolean literal parsers
@@ -1387,14 +1387,14 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       seq(new_combinator(), PASCAL_T_FUNC_CALL,
           token(create_keyword_parser("inherited", PASCAL_T_IDENTIFIER)),
           optional(token(pascal_identifier(PASCAL_T_IDENTIFIER))),
-          optional(inherited_arg_list), NULL);
+          optional(inherited_arg_list), (combinator_t *)NULL);
 
   // Tuple constructor: (expr, expr, ...) - for nested array constants like
   // ((1,2),(3,4))
   combinator_t *tuple = seq(
       new_combinator(), PASCAL_T_TUPLE, token(match("(")),
       sep_by(lazy(p), token(match(","))), // comma-separated list of expressions
-      token(match(")")), NULL);
+      token(match(")")), (combinator_t *)NULL);
 
   // Use standard factor parser - defer complex pointer dereference for now
   combinator_t *nil_literal = map(token(keyword_ci("nil")), wrap_nil_literal);
@@ -1408,28 +1408,28 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
           sep_by1(type_arg,
                   token(match(","))), // Require at least one type argument
-          token(match(">")), NULL);
+          token(match(">")), (combinator_t *)NULL);
   combinator_t *constructed_type =
       seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
           token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),
           peek(create_generic_type_lookahead()), // Lookahead to ensure '<
                                                  // identifier' pattern
           type_arg_list, // Now parse the full type argument list
-          NULL);
+          (combinator_t *)NULL);
 
   // specialize TypeName<T>(args) - generic specialization call/typecast
   combinator_t *specialize_type =
       seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
           token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-          type_arg_list, NULL);
+          type_arg_list, (combinator_t *)NULL);
   combinator_t *specialize_typecast =
       seq(new_combinator(), PASCAL_T_TYPECAST, token(keyword_ci("specialize")),
           specialize_type,
           between(token(match("(")), token(match(")")),
                   sep_by(lazy(p), token(match(",")))),
-          NULL);
+          (combinator_t *)NULL);
   combinator_t *specialize_typecast_with_suffixes = map(
-      seq(new_combinator(), PASCAL_T_NONE, specialize_typecast, suffixes, NULL),
+      seq(new_combinator(), PASCAL_T_NONE, specialize_typecast, suffixes, (combinator_t *)NULL),
       build_array_or_pointer_chain);
 
   // specialize TypeName<T> as a bare expression factor (no args required)
@@ -1440,7 +1440,7 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
           token(keyword_ci("specialize")),
           token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-          type_arg_list, NULL);
+          type_arg_list, (combinator_t *)NULL);
 
   combinator_t *factor = multi(
       new_combinator(), PASCAL_T_NONE,
@@ -1484,7 +1484,7 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
       constructed_type, // Constructed types like TFoo<Integer> - try before
                         // identifier
       identifier,       // Identifiers (variables, built-ins)
-      NULL);
+      (combinator_t *)NULL);
 
   expr(*p, factor);
 
@@ -1507,9 +1507,9 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
   // Single character operators, guarded to avoid accidentally parsing malformed
   // '<<' or '>>'
   combinator_t *single_lt =
-      seq(new_combinator(), PASCAL_T_NONE, match("<"), pnot(match("<")), NULL);
+      seq(new_combinator(), PASCAL_T_NONE, match("<"), pnot(match("<")), (combinator_t *)NULL);
   combinator_t *single_gt =
-      seq(new_combinator(), PASCAL_T_NONE, match(">"), pnot(match(">")), NULL);
+      seq(new_combinator(), PASCAL_T_NONE, match(">"), pnot(match(">")), (combinator_t *)NULL);
   // In type-expression mode, exclude '=' to avoid consuming const declaration
   // '='
   if (!skip_relational)
@@ -1575,7 +1575,7 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
   // consuming the `:=` assignment operator)
   if (!skip_relational) {
     combinator_t *field_width_op = seq(new_combinator(), PASCAL_T_NONE,
-                                       match(":"), pnot(match("=")), NULL);
+                                       match(":"), pnot(match("=")), (combinator_t *)NULL);
     expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(field_width_op));
   }
 
@@ -1583,7 +1583,7 @@ static void init_pascal_expression_parser_ex(combinator_t **p,
   combinator_t *member_access_op =
       seq(new_combinator(), PASCAL_T_NONE, match("."),
           pnot(match(".")), // not followed by another dot
-          NULL);
+          (combinator_t *)NULL);
   expr_insert(*p, 5, PASCAL_T_MEMBER_ACCESS, EXPR_INFIX, ASSOC_LEFT,
               token(member_access_op));
 
@@ -1642,7 +1642,7 @@ static combinator_t *create_suffix_choice(combinator_t **expr_parser_ref) {
   combinator_t *call_suffix = map(call_args, wrap_call_suffix);
 
   combinator_t *choice = multi(new_combinator(), PASCAL_T_NONE, call_suffix,
-                               array_suffix, pointer_suffix, NULL);
+                               array_suffix, pointer_suffix, (combinator_t *)NULL);
 
   return choice;
 }

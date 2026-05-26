@@ -151,14 +151,14 @@ void test_gseq_combinator(void) {
   input->buffer = strdup("helloworld");
   input->length = 10;
   combinator_t *p1 =
-      gseq(new_combinator(), TEST_T_NONE, match("hello"), match("world"), NULL);
+      gseq(new_combinator(), TEST_T_NONE, match("hello"), match("world"), (combinator_t *)NULL);
   ParseResult res1 = parse(input, p1);
   TEST_ASSERT(res1.is_success);
   free_ast(res1.value.ast);
   free_combinator(p1);
   input->start = 0;
   combinator_t *p2 = gseq(new_combinator(), TEST_T_NONE, match("hello"),
-                          match("goodbye"), NULL);
+                          match("goodbye"), (combinator_t *)NULL);
   ParseResult res2 = parse(input, p2);
   TEST_ASSERT(!res2.is_success);
   free_error(res2.value.error);
@@ -337,12 +337,12 @@ void test_multi_prefers_furthest_error(void) {
 
   combinator_t *deep_failure =
       seq(new_combinator(), TEST_T_NONE, match("hello"),
-          expect(match("world"), "expected world"), NULL);
+          expect(match("world"), "expected world"), (combinator_t *)NULL);
 
   combinator_t *shallow_failure = match("hi");
 
   combinator_t *parser =
-      multi(new_combinator(), TEST_T_NONE, deep_failure, shallow_failure, NULL);
+      multi(new_combinator(), TEST_T_NONE, deep_failure, shallow_failure, (combinator_t *)NULL);
 
   ParseResult res = parse(input, parser);
 
@@ -476,7 +476,7 @@ void test_expression_parser_partial_ast(void) {
   // Create a proper expression parser
   combinator_t *expr_parser = new_combinator();
   combinator_t *factor = multi(new_combinator(), TEST_T_NONE,
-                               integer(TEST_T_INT), cident(TEST_T_IDENT), NULL);
+                               integer(TEST_T_INT), cident(TEST_T_IDENT), (combinator_t *)NULL);
   expr(expr_parser, factor);
   expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
   expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
@@ -530,7 +530,7 @@ void test_expression_parser_invalid_input(void) {
   // Create expression parser
   combinator_t *expr_parser = new_combinator();
   combinator_t *factor = multi(new_combinator(), TEST_T_NONE,
-                               integer(TEST_T_INT), cident(TEST_T_IDENT), NULL);
+                               integer(TEST_T_INT), cident(TEST_T_IDENT), (combinator_t *)NULL);
   expr(expr_parser, factor);
   expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
   expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
@@ -563,7 +563,7 @@ void test_expression_parser_behavior(void) {
   // Create expression parser
   combinator_t *expr_parser = new_combinator();
   combinator_t *factor = multi(new_combinator(), TEST_T_NONE,
-                               integer(TEST_T_INT), cident(TEST_T_IDENT), NULL);
+                               integer(TEST_T_INT), cident(TEST_T_IDENT), (combinator_t *)NULL);
   expr(expr_parser, factor);
   expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
   expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
