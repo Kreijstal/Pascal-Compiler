@@ -320,6 +320,9 @@ char *kgpc_string_alloc_with_length(size_t length) {
   char *data = (char *)(hdr + 1);
   data[length] = '\0';
   kgpc_string_set_insert(data);
+  /* cppcheck-suppress memleak ; `data` is `(hdr + 1)`; ownership of the
+     allocation moves into the kgpc_string_set, which frees via the data
+     pointer in kgpc_string_release(). */
   return data;
 }
 
@@ -645,6 +648,8 @@ void kgpc_unicodestring_setlength(uint16_t **target, int64_t new_length) {
   if (*target != NULL)
     kgpc_string_release((char *)*target);
   *target = data;
+  /* cppcheck-suppress memleak ; ownership of hdr's allocation moves into
+     *target via the (hdr + 1) payload pointer. */
 }
 
 void kgpc_setstring(char **target, const char *buffer, int64_t length) {
@@ -732,6 +737,8 @@ void kgpc_setstring_unicode(uint16_t **target, const uint16_t *buffer,
   if (current != NULL)
     kgpc_string_release((char *)current);
   *target = data;
+  /* cppcheck-suppress memleak ; ownership of hdr's allocation moves into
+     *target via the (hdr + 1) payload pointer. */
 }
 
 void kgpc_write_unicodestring(KGPCTextRec *file, int width,
@@ -2087,6 +2094,9 @@ uint16_t *kgpc_unicodestring_concat(const uint16_t *lhs, const uint16_t *rhs) {
       result[total_len] = 0;
       kgpc_string_set_insert((char *)result);
     }
+    /* result == (hdr + 1); ownership moves to the kgpc_string_set,
+       released later via the data pointer. */
+    /* cppcheck-suppress memleak */
   }
 
   if (lhs_owned != NULL)
@@ -2172,6 +2182,8 @@ uint16_t *kgpc_unicodestring_copy(const uint16_t *value, int64_t index,
   memcpy(result, value + start, (size_t)to_copy * sizeof(uint16_t));
   result[to_copy] = 0;
   kgpc_string_set_insert((char *)result);
+  /* cppcheck-suppress memleak ; result == (hdr + 1); ownership moves to
+     the kgpc_string_set, released later via the data pointer. */
   return result;
 }
 

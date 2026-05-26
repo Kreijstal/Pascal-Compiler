@@ -1536,7 +1536,15 @@ static void __attribute__((unused)) codegen_collect_inferred_interfaces(
         continue;
       if (*out_count == cap) {
         cap = cap == 0 ? 8 : cap * 2;
-        names = (const char **)realloc((void *)names, sizeof(char *) * cap);
+        const char **grown =
+            (const char **)realloc((void *)names, sizeof(char *) * cap);
+        if (grown == NULL) {
+          free((void *)names);
+          fprintf(stderr, "[KGPC] codegen_collect_inferred_interfaces: out of "
+                          "memory\n");
+          exit(1);
+        }
+        names = grown;
       }
       names[*out_count] = iface;
       (*out_count)++;
@@ -1581,7 +1589,15 @@ static void __attribute__((unused)) codegen_collect_inferred_interfaces(
           continue;
         if (*out_count == cap) {
           cap = cap == 0 ? 8 : cap * 2;
-          names = (const char **)realloc((void *)names, sizeof(char *) * cap);
+          const char **grown =
+              (const char **)realloc((void *)names, sizeof(char *) * cap);
+          if (grown == NULL) {
+            free((void *)names);
+            fprintf(stderr, "[KGPC] codegen_collect_inferred_interfaces: out "
+                            "of memory\n");
+            exit(1);
+          }
+          names = grown;
         }
         names[*out_count] = iface_name;
         (*out_count)++;

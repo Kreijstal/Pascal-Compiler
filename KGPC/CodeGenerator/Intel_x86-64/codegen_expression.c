@@ -4739,7 +4739,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list,
     return inst_list;
   default:
     assert(0 && "Unsupported expression type");
-    break;
+    return inst_list;
   }
 }
 

@@ -1104,8 +1104,18 @@ struct RecordType *convert_class_type_ex(const char *class_name,
       if (scan->sym != NULL && scan->sym->name != NULL) {
         if (iface_count >= iface_cap) {
           iface_cap = (iface_cap == 0) ? 4 : iface_cap * 2;
-          iface_names =
+          char **grown =
               (char **)realloc(iface_names, iface_cap * sizeof(char *));
+          if (grown == NULL) {
+            for (int i = 0; i < iface_count; i++)
+              free(iface_names[i]);
+            free(iface_names);
+            fprintf(stderr,
+                    "[KGPC] convert_class_type: out of memory growing "
+                    "iface_names\n");
+            exit(1);
+          }
+          iface_names = grown;
         }
         iface_names[iface_count++] = strdup(scan->sym->name);
       }

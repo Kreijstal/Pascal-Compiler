@@ -400,6 +400,8 @@ static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value,
                                             comparand);
 }
 #else
+/* cppcheck-suppress preprocessorErrorDirective ; intentional compile-time
+   guard: this branch only fires under unsupported compilers. */
 #error "Atomic operations require GCC, Clang, or MSVC"
 #endif
 

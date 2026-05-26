@@ -136,15 +136,6 @@ invalidPrintfArgType_sint:KGPC/Parser/SemanticCheck/SemCheck_parts/SemCheck_symb
 invalidPrintfArgType_sint:KGPC/Parser/SemanticCheck/SemCheck_parts/SemCheck_symbols_and_class.c:793
 invalidPrintfArgType_sint:KGPC/Parser/SemanticCheck/SemCheck_parts/SemCheck_symbols_and_class.c:827
 invalidscanf:KGPC/main_cparser.c:1858
-memleak:KGPC/runtime_string.c:2090
-memleak:KGPC/runtime_string.c:2175
-memleak:KGPC/runtime_string.c:323
-memleak:KGPC/runtime_string.c:648
-memleak:KGPC/runtime_string.c:735
-memleakOnRealloc:KGPC/CodeGenerator/Intel_x86-64/codegen_vmt.c:1539
-memleakOnRealloc:KGPC/CodeGenerator/Intel_x86-64/codegen_vmt.c:1584
-memleakOnRealloc:KGPC/Parser/ParseTree/from_cparser_parts/from_cparser_records.c:1107
-missingReturn:KGPC/CodeGenerator/Intel_x86-64/codegen_expression.c:4742
 nullPointerOutOfMemory:KGPC/CodeGenerator/Intel_x86-64/codegen_string_set.c:38
 nullPointerOutOfMemory:KGPC/CodeGenerator/Intel_x86-64/codegen_string_set.c:39
 nullPointerOutOfMemory:KGPC/CodeGenerator/Intel_x86-64/codegen_string_set.c:49
@@ -211,7 +202,6 @@ nullPointerRedundantCheck:KGPC/Parser/pascal_frontend.c:1309
 nullPointerRedundantCheck:KGPC/Parser/SemanticCheck/SemCheck_parts/SemCheck_env_types_errors.c:2134
 oppositeInnerCondition:KGPC/Parser/SemanticCheck/SemChecks/SemCheck_sizeof.c:1243
 pointerSize:KGPC/runtime_string.c:1965
-preprocessorErrorDirective:KGPC/runtime.c:403
 seekOnAppendedFile:KGPC/runtime_string.c:1451
 shiftTooManyBitsSigned:cparser/examples/pascal_parser/pascal_preprocessor.c:2703
 shiftTooManyBitsSigned:cparser/examples/pascal_parser/pascal_preprocessor.c:2713
