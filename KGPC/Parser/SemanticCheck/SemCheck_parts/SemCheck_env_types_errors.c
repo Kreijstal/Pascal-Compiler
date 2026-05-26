@@ -1,5 +1,10 @@
 #include "../SemCheck_internal.h"
 
+/* Forward declaration: parse-time g_const_sections resolver (defined in
+ * from_cparser_const_and_types.c).  Passing const_section=NULL makes it fall
+ * back to the global g_const_sections list which covers all FPC RTL includes. */
+extern int resolve_const_int_from_ast(const char *identifier, void *const_section,
+                                      int fallback_value);
 
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
@@ -1723,6 +1728,20 @@ static int eval_const_expr_parse_primary(SymTab_t *symtab, const char **p, long 
         memcpy(id, start, len);
         id[len] = '\0';
         int ok = (resolve_const_identifier(symtab, id, out_value) == 0);
+        if (!ok)
+        {
+            /* Symtab doesn't have this const yet (e.g. FPC RTL const sections
+             * whose values were captured at parse time but not yet folded into
+             * the semcheck symbol table).  Fall back to the global
+             * g_const_sections list so that identifiers like 'wordsinsigset'
+             * and 'SIG_MAXSIG' are resolvable when evaluating array bounds. */
+            int ast_val = resolve_const_int_from_ast(id, NULL, INT_MIN);
+            if (ast_val != INT_MIN)
+            {
+                *out_value = (long long)ast_val;
+                ok = 1;
+            }
+        }
         free(id);
         return ok ? 0 : -1;
     }

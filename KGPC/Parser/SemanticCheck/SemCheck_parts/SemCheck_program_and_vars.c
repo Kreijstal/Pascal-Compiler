@@ -1398,14 +1398,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         goto next_identifier;
                     }
                 }
-                if (ids->cur != NULL && strcmp((char *)ids->cur, "Sock") == 0) {
-#ifdef DEBUG
-                     fprintf(stderr, "DEBUG: semcheck_decls processing Sock. type_id=%s resolved_type=%p\n",
-                         tree->tree_data.var_decl_data.type_id ? tree->tree_data.var_decl_data.type_id : "<null>",
-                         resolved_type);
-#endif
-                }
-
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.is_typed_const)

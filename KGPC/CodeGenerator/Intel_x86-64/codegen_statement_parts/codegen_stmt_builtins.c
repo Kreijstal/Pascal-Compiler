@@ -2260,6 +2260,17 @@ static ListNode_t *codegen_builtin_dispose(struct Statement *stmt, ListNode_t *i
         { Register_t *u[] = {addr_reg}; inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n"); }
 
     free_reg(get_reg_stack(), addr_reg);
+
+    /* Actually dispatch the deallocation.  Prior codegen loaded the
+     * pointer's address into the first ABI arg register but never
+     * emitted the call, so every Dispose(p) on a heap node became a
+     * no-op and the New()-allocated storage leaked at program exit.
+     * kgpc_dispose takes a `void **` (address of the pointer slot),
+     * frees the pointee through MemoryManager and nils the slot,
+     * matching the Pascal-side `procedure Dispose(var p: Pointer)`
+     * contract. */
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dispose");
     free_arg_regs();
     return inst_list;
 }

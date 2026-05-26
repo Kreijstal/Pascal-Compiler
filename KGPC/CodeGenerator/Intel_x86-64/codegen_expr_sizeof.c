@@ -242,8 +242,16 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
                 else
                 {
                     long long element_size = 0;
+                    /* Anonymous element record (e.g. locHistory: array[0..24] of record ... end)
+                     * leaves array_element_type_id NULL.  Pass the in-memory
+                     * RecordType layout when we have one so codegen_sizeof_type
+                     * can size it directly instead of erroring on the missing
+                     * type-id. */
+                    struct RecordType *elem_rec = NULL;
+                    if (field->array_element_type == RECORD_TYPE)
+                        elem_rec = field->array_element_record;
                     if (codegen_sizeof_type(ctx, field->array_element_type,
-                            field->array_element_type_id, NULL,
+                            field->array_element_type_id, elem_rec,
                             &element_size, depth + 1) != 0)
                         return 1;
 

@@ -48,6 +48,7 @@ static int get_record_members_alignment(SymTab_t *symtab, ListNode_t *members,
 static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, int *align_out, int depth, int line_num);
 int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value);
+int resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value);
 
 static int parse_or_resolve_bound(SymTab_t *symtab, const char *text, long long *out)
 {
@@ -66,6 +67,17 @@ static int parse_or_resolve_bound(SymTab_t *symtab, const char *text, long long 
         if (*endptr == '\0')
         {
             *out = parsed;
+            return 0;
+        }
+    }
+    /* Fall back to full expression evaluator for compound expressions
+     * like "wordsinsigset - 1" that are not a single identifier or literal. */
+    if (symtab != NULL)
+    {
+        int tmp = 0;
+        if (resolve_array_bound_expr(symtab, text, &tmp) == 0)
+        {
+            *out = (long long)tmp;
             return 0;
         }
     }
@@ -95,6 +107,28 @@ static void resolve_record_field_array_bounds(SymTab_t *symtab,
     field->has_cached_layout = 0;
     field->cached_size = 0;
     field->cached_alignment = 0;
+}
+
+/* Re-resolve symbolic array bounds on a TypeAlias using the full symtab.
+ * This is needed when the alias was created at parse time (symtab=NULL) and
+ * the bounds string contains expressions like "wordsinsigset - 1" that could
+ * not be evaluated until constants were fully registered. */
+static void resolve_type_alias_array_bounds(SymTab_t *symtab,
+    struct TypeAlias *alias)
+{
+    if (symtab == NULL || alias == NULL || !alias->is_array ||
+        alias->array_dim_start_str == NULL || alias->array_dim_end_str == NULL)
+        return;
+
+    long long start = 0;
+    long long end = 0;
+    if (parse_or_resolve_bound(symtab, alias->array_dim_start_str, &start) != 0 ||
+        parse_or_resolve_bound(symtab, alias->array_dim_end_str, &end) != 0)
+        return;
+
+    alias->array_start = (int)start;
+    alias->array_end = (int)end;
+    alias->is_open_array = (end < start);
 }
 
 /* Helper function to check if a node is a record type */
@@ -1149,6 +1183,12 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
 
     if (alias->is_array)
     {
+        /* Re-resolve symbolic bounds (e.g. "wordsinsigset - 1") now that the
+         * full symbol table is available.  At parse time symtab was NULL so
+         * expressions referencing constants from other include files were left
+         * at their default (0) values. */
+        resolve_type_alias_array_bounds(symtab, alias);
+
         if (alias->is_open_array || alias->array_end < alias->array_start)
         {
             /* Dynamic arrays are 16-byte descriptors:

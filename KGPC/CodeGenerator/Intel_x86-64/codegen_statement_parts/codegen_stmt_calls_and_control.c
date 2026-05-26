@@ -3841,7 +3841,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
                 inst_list = add_inst(inst_list, buffer);
             }
-            int vmt_offset = vmt_index * 8;
+            int vmt_offset = VMT_VMETHOD_OFFSET(vmt_index);
             snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
@@ -6087,6 +6087,16 @@ ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, Co
     snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
     inst_list = add_inst(inst_list, buffer);
 
+    /* Belt-and-braces release: if the except body fell through without a
+     * matching `on` handler (or was a bare `except` block that returned),
+     * kgpc_current_exception may still hold the exception instance.  The
+     * per-handler release already nulls the slot on the matched path, so
+     * this call is a no-op in the common case. */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: release current exception at after_label\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_release_current_exception");
+    free_arg_regs();
+
     return inst_list;
 }
 
@@ -6145,7 +6155,8 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, 
         inst_list = add_inst(inst_list, buffer);
         /* Load typeinfo from exception instance: VMT pointer → typeinfo slot */
         inst_list = add_inst(inst_list, "\tmovq\t(%rax), %rax\n");       /* VMT pointer */
-        inst_list = add_inst(inst_list, "\tmovq\t56(%rax), %rax\n");     /* vTypeInfo slot */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rax), %%rax\n", VMT_VTYPEINFO_OFFSET);
+        inst_list = add_inst(inst_list, buffer);                         /* vTypeInfo slot */
 
         /* Call kgpc_rtti_is(exception_typeinfo, handler_typeinfo) */
         if (codegen_target_is_windows())
@@ -6191,6 +6202,17 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, 
         LeaveScope(symtab);
     }
 
+    /* Release the exception object owned by the handler.  FPC's RTL
+     * destroys the matched exception when the handler exits normally
+     * (i.e. fell through without `raise`/`raise E`); the call clears
+     * kgpc_current_exception and dispatches Free through the VMT.
+     * Re-raise paths leave via codegen_raise -> codegen_branch_through_finally
+     * before reaching this point, so they do not invoke the release. */
+    inst_list = add_inst(inst_list, "\t# ON exception handler exit: release current exception\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_release_current_exception");
+    free_arg_regs();
+
     /* After executing the handler body, jump past the remaining handlers */
     if (has_type_check && ctx->on_except_after_label != NULL)
     {
@@ -6220,16 +6242,82 @@ ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGen
 
     Register_t *value_reg = NULL;
     int stored_exception = 0;
+    char buffer[96];
+
+    /* Snapshot pending-temp count BEFORE evaluating the raised
+     * expression: if the expression is a constructor call, ownership
+     * transfers to the runtime via kgpc_current_exception, and any
+     * branch-through-finally that may run below must NOT release the
+     * fresh exception object via the end-of-statement flush.
+     *
+     * Unwrap typecast wrappers so detection is robust against
+     * `raise EClassAlias(EUnderlying.Create(...))` style expressions. */
+    int raise_ctor_snapshot = (ctx != NULL) ? ctx->pending_ctor_temp_count : 0;
+    struct Expression *raise_ctor_probe = exc_expr;
+    while (raise_ctor_probe != NULL && raise_ctor_probe->type == EXPR_TYPECAST)
+        raise_ctor_probe = raise_ctor_probe->expr_data.typecast_data.expr;
+    int raise_is_constructor =
+        (raise_ctor_probe != NULL &&
+         raise_ctor_probe->type == EXPR_FUNCTION_CALL &&
+         raise_ctor_probe->expr_data.function_call_data.is_constructor_call);
 
     if (exc_expr != NULL)
     {
         inst_list = codegen_expr_with_result(exc_expr, inst_list, ctx, &value_reg);
         if (codegen_had_error(ctx) || value_reg == NULL)
             return inst_list;
+
+        /* Spill the new exception value before releasing the previous
+         * kgpc_current_exception.  If we are raising a fresh exception
+         * from inside a handler body, the previous exception object is
+         * about to be overwritten by codegen_store_exception_value and
+         * would otherwise leak: the handler's normal-exit release
+         * point is bypassed by the longjmp / branch-through-finally
+         * triggered below.  Releasing here pairs each raise with the
+         * destruction of any exception it shadows.  For top-level
+         * raises (current_exception = nil) the helper is a no-op. */
+        StackNode_t *raise_value_spill = add_l_t("raise_new_value");
+        if (raise_value_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                value_reg->bit_64, raise_value_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), value_reg);
+            value_reg = NULL;
+
+            inst_list = add_inst(inst_list, "\t# RAISE: free previous current_exception before overwrite\n");
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_release_current_exception");
+            free_arg_regs();
+
+            value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for raise value reload.");
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                raise_value_spill->offset, value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
         inst_list = codegen_store_exception_value(inst_list, ctx, exc_expr, value_reg);
         stored_exception = 1;
         free_reg(get_reg_stack(), value_reg);
         value_reg = NULL;
+
+        /* Ownership of the exception object has been transferred to
+         * kgpc_current_exception.  Drop the entry that the constructor
+         * allocation site pushed for transient-temp cleanup so that any
+         * branch-through-finally below — which inline-expands finally
+         * bodies, each of which flushes pending temps at statement-end —
+         * does not release the live exception object. */
+        if (raise_is_constructor && ctx != NULL &&
+            ctx->pending_ctor_temp_count > raise_ctor_snapshot)
+        {
+            ctx->pending_ctor_temp_count -= 1;
+        }
     }
 
     if (except_label != NULL)
@@ -6256,12 +6344,10 @@ ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGen
         /* Unwind everything if no handler found */
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, after_label, 0);
 
-        char buffer[32];
         snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
         inst_list = add_inst(inst_list, buffer);
     }
 
-    char buffer[96];
     if (codegen_target_is_windows())
         snprintf(buffer, sizeof(buffer), "\tmovq\tkgpc_current_exception(%%rip), %%rcx\n");
     else

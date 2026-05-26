@@ -268,59 +268,76 @@ static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
  * Unit loading and merging is handled by main_cparser.c via
  * CompilationContext and build_combined_program_view(). */
 
-static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
+static bool load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
 
-static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
+static bool load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
 {
     if (unit_name == NULL || visited == NULL)
-        return;
+        return true;
 
     char *normalized = lowercase_copy(unit_name);
     if (normalized == NULL)
-        return;
+        return true;
 
     if (!unit_set_add(visited, normalized))
-        return;
+        return true;
 
     char *path = build_unit_path(unit_name);
     if (path == NULL && normalized != NULL && strcmp(unit_name, normalized) != 0)
         path = build_unit_path(normalized);
     if (path == NULL)
-        return;
+        return true;
 
     Tree_t *unit_tree = ParsePascalOnly(path);
     free(path);
     if (unit_tree == NULL)
     {
         fprintf(stderr, "ERROR: Failed to load unit '%s'.\n", unit_name);
-        exit(1);
+        return false;
     }
 
     if (unit_tree->type != TREE_UNIT)
     {
         fprintf(stderr, "ERROR: %s is not a Pascal unit.\n", unit_name);
         destroy_tree(unit_tree);
-        exit(1);
+        return false;
     }
 
-    load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
-    load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
+    bool ok = true;
+    ok = ok && load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
+    ok = ok && load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
 
     destroy_tree(unit_tree);
+    return ok;
 }
 
-static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited)
+static bool load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited)
 {
     ListNode_t *cur = uses;
     while (cur != NULL)
     {
         if (cur->type == LIST_STRING && cur->cur != NULL)
-            load_unit(program, (const char *)cur->cur, visited);
+        {
+            if (!load_unit(program, (const char *)cur->cur, visited))
+                return false;
+        }
         cur = cur->next;
     }
+    return true;
 }
 
-/* Global variable definitions */
+/* --- Global state (legacy path only) ---
+ * These globals are used by the legacy main() path (non-cparser build) and
+ * by the parser/lexer machinery shared with main_cparser.c.
+ *
+ * Reset contract: these must be reset to their initial values before starting
+ * a new compilation in the same process.  In the batch/library use-case the
+ * caller is responsible for calling the relevant reset helpers before re-entry.
+ *
+ * NOTE: parse_tree and preprocessed_source are NOT freed here — the caller
+ * owns them.  num_args_alloced is used by the legacy argument-allocation
+ * path which has been superseded by the cparser frontend.
+ */
 Tree_t *parse_tree = NULL;
 int num_args_alloced = 0;
 int line_num = 1;
@@ -332,7 +349,7 @@ char *preprocessed_path = NULL;
 #include "Parser/ParsePascal.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 
-void set_flags(char **, int);
+int set_flags(char **, int); /* returns 0 on success, 1 on error */
 
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "stacktrace.h"
@@ -369,14 +386,18 @@ int main(int argc, char **argv)
     if(argc < required_args)
     {
         fprintf(stderr, "USAGE: [exec] [INPUT_FILE] [OUTPUT_FILE] [OPTIONAL_FLAG_1] ...\n");
-        exit(1);
+        return 1;
     }
 
     /* Setting flags */
     args_left = argc - required_args;
     if(args_left > 0)
     {
-        set_flags(argv + required_args, args_left);
+        if (set_flags(argv + required_args, args_left) != 0)
+        {
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
     }
 
     unit_search_paths_init(&g_unit_paths);
@@ -451,15 +472,28 @@ int main(int argc, char **argv)
 
         {
             double t0 = kgpc_timing_start();
+            bool units_ok = true;
             if (prelude_tree->type == TREE_PROGRAM_TYPE)
-                load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
+                units_ok = load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
             else if (prelude_tree->type == TREE_UNIT)
             {
-                load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.interface_uses, &visited_units);
-                load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.implementation_uses, &visited_units);
+                units_ok = load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.interface_uses, &visited_units);
+                if (units_ok)
+                    units_ok = load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.implementation_uses, &visited_units);
             }
-            load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+            if (units_ok)
+                units_ok = load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
             kgpc_timing_log("load units", t0);
+            if (!units_ok)
+                exit_status = 1;
+        }
+        if (exit_status != 0)
+        {
+            unit_set_destroy(&visited_units);
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            unit_search_paths_destroy(&g_unit_paths);
+            return exit_status;
         }
 
         unit_set_destroy(&visited_units);
@@ -470,7 +504,10 @@ int main(int argc, char **argv)
             if (out == NULL)
             {
                 fprintf(stderr, "ERROR: Failed to open output file: %s\n", argv[2]);
-                exit(1);
+                destroy_tree(prelude_tree);
+                destroy_tree(user_tree);
+                unit_search_paths_destroy(&g_unit_paths);
+                return 1;
             }
             fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
             fprintf(out, "; parse-only mode: no code generated\n");
@@ -499,7 +536,11 @@ int main(int argc, char **argv)
             if (ctx.output_file == NULL)
             {
                 fprintf(stderr, "ERROR: Failed to open output file: %s\n", argv[2]);
-                exit(1);
+                DestroySymTab(symtab);
+                destroy_tree(prelude_tree);
+                destroy_tree(user_tree);
+                unit_search_paths_destroy(&g_unit_paths);
+                return 1;
             }
             ctx.label_counter = 1;
             ctx.write_label_counter = 1;
@@ -527,6 +568,8 @@ int main(int argc, char **argv)
 
             int codegen_failed = codegen_had_error(&ctx);
             fclose(ctx.output_file);
+            codegen_destroy_pending_ctor_temps(&ctx);
+            codegen_destroy_managed_dynarray_temps(&ctx);
             if (codegen_failed)
             {
                 fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
@@ -562,7 +605,7 @@ int main(int argc, char **argv)
     return exit_status;
 }
 
-void set_flags(char **optional_args, int count)
+int set_flags(char **optional_args, int count)
 {
     int i;
 
@@ -620,7 +663,7 @@ void set_flags(char **optional_args, int count)
             else
             {
                 fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
-                exit(1);
+                return 1;
             }
             --count;
             ++i;
@@ -641,7 +684,7 @@ void set_flags(char **optional_args, int count)
             else
             {
                 fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
-                exit(1);
+                return 1;
             }
         }
         else if(strcmp(arg, "--asm-debug") == 0 || strcmp(arg, "--asm-debug-comments") == 0)
@@ -657,10 +700,11 @@ void set_flags(char **optional_args, int count)
         else
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
-            exit(1);
+            return 1;
         }
 
         --count;
         ++i;
     }
+    return 0;
 }

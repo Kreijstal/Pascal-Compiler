@@ -102,6 +102,7 @@ kgpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/ir/ir_inst.c',
   'CodeGenerator/Intel_x86-64/ir/ir_cfg.c',
   'CodeGenerator/Intel_x86-64/ir/ir_liveness.c',
+  'CodeGenerator/Intel_x86-64/ir/ir_peephole.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_infrastructure.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_assignment.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_dispatch.c',
@@ -156,8 +157,7 @@ if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
   runtime_sources += 'runtime_fpc_abstract_stubs.S'
   runtime_sources += 'runtime_fpc_rtl_compat.S'
-  runtime_sources += 'runtime_fpc_interlocked_aliases.c'
-  runtime_sources += 'runtime_widechar_assign_olevariant.c'
+runtime_sources += 'runtime_widechar_assign_olevariant.c'
   runtime_sources += 'runtime_olevariant_assign.c'
 endif
 runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'

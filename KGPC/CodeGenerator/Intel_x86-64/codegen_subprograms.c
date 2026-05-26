@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include "register_types.h"
 #include "codegen.h"
+#include "abi_constants.h"
 #include "codegen_string_set.h"
 #include "codegen_symbol_resolution.h"
 #include "codegen_statement.h"
@@ -39,6 +40,7 @@
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_liveness.h"
+#include "ir/ir_peephole.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "graph_coloring_allocator.h"
 #endif
@@ -418,6 +420,19 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         else
 #endif /* _WIN32 */
         {
+            /* Codegen errors are per-subprogram: a failure inside one body
+             * does not invalidate later bodies (and must not be observed by
+             * downstream codegen of the next subprogram as a stale "had we
+             * already errored?" gate).  Save and restore ctx->had_error
+             * around each subprogram so the OR of all subprograms' errors is
+             * surfaced to the caller while the in-flight flag accurately
+             * reflects ONLY the current subprogram.  The cache-miss branch
+             * above does the same dance for its own reasons; mirror it here
+             * to prevent error state from leaking forward when codegen runs
+             * directly (cache hit, Windows). */
+            int had_error_before = (ctx != NULL) ? ctx->had_error : 0;
+            if (ctx != NULL)
+                ctx->had_error = 0;
             switch(sub->tree_data.subprogram_data.sub_type)
             {
                 case TREE_SUBPROGRAM_PROC:
@@ -429,6 +444,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 default:
                     assert(0 && "Unrecognized subprogram type in codegen!");
             }
+            if (ctx != NULL)
+                ctx->had_error = (ctx->had_error || had_error_before);
         }
         sub_list = sub_list->next;
     }
@@ -485,6 +502,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
     ListNode_t *prev_sub_args = ctx->current_subprogram_args;
+    ListNode_t *prev_sub_declarations = ctx->current_subprogram_declarations;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
     StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
@@ -494,6 +512,15 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_callee_r13 = ctx->callee_save_r13_offset;
     int prev_callee_r14 = ctx->callee_save_r14_offset;
     int prev_callee_r15 = ctx->callee_save_r15_offset;
+    /* Save the managed dynamic-array temp tracking and start fresh.  Each
+     * subprogram has its own frame, so rbp offsets do not survive across
+     * subprogram boundaries; tracking is per-frame. */
+    int *prev_dynarray_temp_offsets = ctx->managed_dynarray_temp_offsets;
+    int prev_dynarray_temp_count = ctx->managed_dynarray_temp_count;
+    int prev_dynarray_temp_capacity = ctx->managed_dynarray_temp_capacity;
+    ctx->managed_dynarray_temp_offsets = NULL;
+    ctx->managed_dynarray_temp_count = 0;
+    ctx->managed_dynarray_temp_capacity = 0;
     /* While emitting THIS subprogram's body, identifier resolution for
      * cross-unit references (typed-consts, file-level consts) must prefer
      * the subprogram's own owning unit before falling back to the
@@ -673,7 +700,15 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
+    ctx->current_subprogram_declarations = proc->declarations;
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
+
+    /* Release the element-data buffer behind every managed dynamic-array
+     * local before the frame is torn down.  STMT_EXIT branches out earlier
+     * also emit this cleanup so all return paths honor the same contract. */
+    inst_list = codegen_emit_managed_local_cleanup(inst_list,
+        proc->declarations, ctx, symtab);
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
     if (proc->owner_class != NULL &&
         proc->method_name != NULL &&
@@ -737,11 +772,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
             inst_list = add_inst(inst_list, buffer);
 
             /* Load VMT from (Self), then the method pointer from
-             * <slot*8>(VMT), and dispatch. */
+             * <slot*VMT_SLOT_SIZE_BYTES>(VMT), and dispatch. */
             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %%r11\n", arg_reg);
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer),
-                "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * 8);
+                "\tmovq\t%d(%%r11), %%r11\n", freeinstance_slot * VMT_SLOT_SIZE_BYTES);
             inst_list = add_inst(inst_list, buffer);
             inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
             inst_list = codegen_call_with_shadow_space(inst_list, "*%r11");
@@ -821,6 +856,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     if (dump_ir_flag())
@@ -862,6 +900,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
     ctx->current_subprogram_args = prev_sub_args;
+    ctx->current_subprogram_declarations = prev_sub_declarations;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
     ctx->current_record_return_slot = prev_record_return_slot;
@@ -872,6 +911,13 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->callee_save_r13_offset = prev_callee_r13;
     ctx->callee_save_r14_offset = prev_callee_r14;
     ctx->callee_save_r15_offset = prev_callee_r15;
+    /* Restore the outer subprogram's managed dynarray temp tracking.
+     * Free this frame's buffer since its tracked offsets reference a
+     * stack frame that no longer exists. */
+    free(ctx->managed_dynarray_temp_offsets);
+    ctx->managed_dynarray_temp_offsets = prev_dynarray_temp_offsets;
+    ctx->managed_dynarray_temp_count = prev_dynarray_temp_count;
+    ctx->managed_dynarray_temp_capacity = prev_dynarray_temp_capacity;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -931,6 +977,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
     ListNode_t *prev_sub_args = ctx->current_subprogram_args;
+    ListNode_t *prev_sub_declarations = ctx->current_subprogram_declarations;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
     StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
@@ -940,6 +987,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_callee_r13 = ctx->callee_save_r13_offset;
     int prev_callee_r14 = ctx->callee_save_r14_offset;
     int prev_callee_r15 = ctx->callee_save_r15_offset;
+    /* Save per-function managed dynamic-array temp tracking (see
+     * codegen_procedure for rationale). */
+    int *prev_dynarray_temp_offsets = ctx->managed_dynarray_temp_offsets;
+    int prev_dynarray_temp_count = ctx->managed_dynarray_temp_count;
+    int prev_dynarray_temp_capacity = ctx->managed_dynarray_temp_capacity;
+    ctx->managed_dynarray_temp_offsets = NULL;
+    ctx->managed_dynarray_temp_count = 0;
+    ctx->managed_dynarray_temp_capacity = 0;
     /* Save the caller's unit-index; we'll bind it to the function's own
      * source_unit_index below.  See codegen_procedure for rationale. */
     int prev_unit_index = symtab->current_unit_index;
@@ -1632,7 +1687,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
+    ctx->current_subprogram_declarations = func->declarations;
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
+
+    /* Release the element-data buffer behind every managed dynamic-array
+     * local before the frame is torn down.  STMT_EXIT branches out earlier
+     * also emit this cleanup so all return paths honor the same contract.
+     *
+     * Since commit 7c840d0a dynarray assignment is a deep copy, so even
+     * `Result := localvar` gives Result its own independent buffer.
+     * User-declared locals can therefore be finalized here regardless of
+     * whether the function returns a dynamic array.  The Result slot itself
+     * is NOT included in func->declarations (it is added to the stack
+     * separately via add_dynamic_array), so codegen_emit_managed_local_cleanup
+     * never touches it — the kgpc_dynarray_clone_descriptor call below
+     * transfers its buffer to the caller safely. */
+    inst_list = codegen_emit_managed_local_cleanup(inst_list,
+        func->declarations, ctx, symtab);
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
     /* For nostackframe+assembler functions, the asm block handles the return
      * value entirely.  Skip the compiler-generated return-value epilogue,
@@ -1847,6 +1919,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     if (dump_ir_flag())
@@ -1885,6 +1960,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
     ctx->current_subprogram_args = prev_sub_args;
+    ctx->current_subprogram_declarations = prev_sub_declarations;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
     ctx->current_record_return_slot = prev_record_return_slot;
@@ -1897,6 +1973,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->callee_save_r15_offset = prev_callee_r15;
     ctx->returns_dynamic_array = prev_returns_dynamic_array;
     ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;
+    /* Restore the outer subprogram's managed dynarray temp tracking. */
+    free(ctx->managed_dynarray_temp_offsets);
+    ctx->managed_dynarray_temp_offsets = prev_dynarray_temp_offsets;
+    ctx->managed_dynarray_temp_count = prev_dynarray_temp_count;
+    ctx->managed_dynarray_temp_capacity = prev_dynarray_temp_capacity;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -2411,6 +2492,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
     if (dump_ir_flag())
@@ -2654,14 +2738,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     /* Float (REAL_TYPE) parameters that are not passed by reference
                      * use SSE/XMM registers, NOT integer registers. Skip integer
                      * register allocation for them so subsequent integer params
-                     * get the correct registers. SSE regs are not clobbered by
-                     * kgpc_move calls, so no presave slot is needed. */
+                     * get the correct registers.
+                     * NOTE: SSE regs ARE clobbered by ASAN-intercepted memmove
+                     * (kgpc_move), so we must presave them to stack before any
+                     * kgpc_move call, just like GPR params. */
                     if (!scan_is_var &&
                         (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE) &&
                         scan_real_storage_size < 16)
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
+                        {
+                            const char *xmm_reg = current_arg_reg_xmm(scan_sse_index);
                             scan_sse_index++;
+                            if (xmm_reg != NULL)
+                            {
+                                char temp_name[64];
+                                snprintf(temp_name, sizeof(temp_name),
+                                    "__presaved_%s__", (char *)scan_ids->cur);
+                                StackNode_t *presaved_slot = add_q_z(temp_name);
+                                if (presaved_slot != NULL)
+                                {
+                                    if (scan_real_storage_size == 4)
+                                        snprintf(buffer, sizeof(buffer),
+                                            "\tmovss\t%s, -%d(%%rbp)\n",
+                                            xmm_reg, presaved_slot->offset);
+                                    else
+                                        snprintf(buffer, sizeof(buffer),
+                                            "\tmovsd\t%s, -%d(%%rbp)\n",
+                                            xmm_reg, presaved_slot->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                }
+                            }
+                        }
                         scan_ids = scan_ids->next;
                         continue;
                     }
@@ -3251,7 +3359,35 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
                     else if (use_sse_reg)
                     {
-                        if (next_sse_index < kgpc_max_sse_arg_regs())
+                        /* Check for a presaved slot: the pre-pass saves XMM register
+                         * params before any kgpc_move call (which can clobber XMM
+                         * registers under ASAN-intercepted memmove). */
+                        StackNode_t *sse_presaved_slot = NULL;
+                        if (has_record_or_dynarray)
+                        {
+                            char presaved_name[64];
+                            snprintf(presaved_name, sizeof(presaved_name),
+                                "__presaved_%s__", (char *)arg_ids->cur);
+                            sse_presaved_slot = find_label(presaved_name);
+                        }
+
+                        if (sse_presaved_slot != NULL)
+                        {
+                            /* Use presaved value — XMM reg may be clobbered by now */
+                            alloc_sse_arg_reg(&next_sse_index);  /* advance index only */
+                            if (real_storage_size == 4)
+                                snprintf(buffer, sizeof(buffer),
+                                    "\tmovss\t-%d(%%rbp), %%xmm0\n"
+                                    "\tmovss\t%%xmm0, -%d(%%rbp)\n",
+                                    sse_presaved_slot->offset, arg_stack->offset);
+                            else
+                                snprintf(buffer, sizeof(buffer),
+                                    "\tmovsd\t-%d(%%rbp), %%xmm0\n"
+                                    "\tmovsd\t%%xmm0, -%d(%%rbp)\n",
+                                    sse_presaved_slot->offset, arg_stack->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else if (next_sse_index < kgpc_max_sse_arg_regs())
                         {
                             const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
                             if (real_storage_size == 4)

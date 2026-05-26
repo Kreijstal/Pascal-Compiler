@@ -1843,7 +1843,13 @@ end;
 
 procedure TObject.FreeInstance;
 begin
-    { Base implementation - runtime handles actual deallocation }
+    { Release the instance storage allocated by the constructor (via
+      kgpc_allocmem in the .Create dispatch).  TObject.Free dispatches
+      through the VMT to this method after the destructor runs, so this
+      is the single point where every class instance's backing memory is
+      released, matching FPC's RTL contract. }
+    if Self <> nil then
+        FreeMemory(Pointer(Self));
 end;
 
 function TObject.ToString: String;

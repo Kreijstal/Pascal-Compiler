@@ -2693,7 +2693,12 @@ low_cleanup:
                         pascal_identifier_equals(base_name, "Pointer") ||
                         pascal_identifier_equals(base_name, "PChar") ||
                         pascal_identifier_equals(base_name, "Double") ||
-                        pascal_identifier_equals(base_name, "Real")) {
+                        pascal_identifier_equals(base_name, "Real") ||
+                        /* C interop types: on x86-64 Linux long/ulong are 64-bit */
+                        pascal_identifier_equals(base_name, "cuLong") ||
+                        pascal_identifier_equals(base_name, "cLong") ||
+                        pascal_identifier_equals(base_name, "cuLongLong") ||
+                        pascal_identifier_equals(base_name, "cLongLong")) {
                         *out_value = 8LL;
                         qualified_ident_free(type_id_ref);
                         return 0;

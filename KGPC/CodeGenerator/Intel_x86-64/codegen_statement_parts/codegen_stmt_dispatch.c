@@ -629,6 +629,47 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
      * loop's codegen reuses the cached register without emitting a reload). */
     codegen_reset_static_link_cache(ctx);
 
+    /* When the topmost expression of certain statements is a direct
+     * constructor call, the freshly allocated instance becomes the long-
+     * lived owner of the statement's target (variable, raised exception).
+     * The expr_tree.c constructor-allocation site has already pushed the
+     * spill slot onto ctx->pending_ctor_temp_offsets for transient-temp
+     * cleanup; we must pop the topmost entry after dispatch so the end-
+     * of-statement flush does not free a still-owned object.
+     *
+     * A typecast wrapper around the constructor call (e.g.
+     * `result := tcgprocinfo(cprocinfo.create(nil))`) only reinterprets
+     * the result pointer and does not change ownership semantics — the
+     * cast's inner constructor still produces the instance assigned to
+     * the target.  Unwrap typecasts so this ownership-transfer detection
+     * is robust against such wrappers; without this, pp.pas's
+     * `create_main_proc` releases the freshly built tprocinfo before
+     * `generate_code_tree` can dispatch through it. */
+    int ctor_owned_snapshot = ctx->pending_ctor_temp_count;
+    int ctor_owned_rhs_is_constructor = 0;
+    if (stmt->type == STMT_VAR_ASSIGN)
+    {
+        struct Expression *rhs_expr = stmt->stmt_data.var_assign_data.expr;
+        while (rhs_expr != NULL && rhs_expr->type == EXPR_TYPECAST)
+            rhs_expr = rhs_expr->expr_data.typecast_data.expr;
+        if (rhs_expr != NULL && rhs_expr->type == EXPR_FUNCTION_CALL &&
+            rhs_expr->expr_data.function_call_data.is_constructor_call)
+            ctor_owned_rhs_is_constructor = 1;
+    }
+    else if (stmt->type == STMT_RAISE)
+    {
+        /* `raise X.Create(...)` transfers ownership of the constructed
+         * exception object to the runtime (kgpc_current_exception), so
+         * the freshly allocated instance must not be released as a
+         * transient temp. */
+        struct Expression *raise_expr = stmt->stmt_data.raise_data.exception_expr;
+        while (raise_expr != NULL && raise_expr->type == EXPR_TYPECAST)
+            raise_expr = raise_expr->expr_data.typecast_data.expr;
+        if (raise_expr != NULL && raise_expr->type == EXPR_FUNCTION_CALL &&
+            raise_expr->expr_data.function_call_data.is_constructor_call)
+            ctor_owned_rhs_is_constructor = 1;
+    }
+
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -1362,6 +1403,20 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
                 inst_list = add_inst(inst_list, buffer);
             }
+            /* Mirror the implicit-epilogue cleanup so EXIT releases the
+             * element data buffers of managed dynamic-array locals along
+             * the early-return path.  Since 7c840d0a dynarray assignment
+             * is a deep copy, user-declared locals are independent of the
+             * Result slot and can be finalized here for all function kinds.
+             * The Result slot is not in current_subprogram_declarations so
+             * codegen_emit_managed_local_cleanup never touches it. */
+            if (ctx != NULL)
+            {
+                inst_list = codegen_emit_managed_local_cleanup(inst_list,
+                    ctx->current_subprogram_declarations, ctx, symtab);
+                inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx,
+                    inst_list);
+            }
             /* Restore callee-saved registers before leaving the frame */
             if (ctx->callee_save_rbx_offset > 0) {
                 char buf[64];
@@ -1417,6 +1472,56 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             assert(0 && "Unrecognized statement type in codegen");
             break;
     }
+
+    /* If the just-emitted statement has a direct constructor on its
+     * topmost expression (assignment RHS, raise expression), the topmost
+     * pending-temp entry corresponds to the instance that now belongs to
+     * the assignment target / raised exception object.  Drop it so the
+     * end-of-statement flush leaves it alive. */
+    if (ctor_owned_rhs_is_constructor &&
+        ctx->pending_ctor_temp_count > ctor_owned_snapshot)
+    {
+        ctx->pending_ctor_temp_count -= 1;
+    }
+
+    /* STMT_PROCEDURE_CALL has no equivalent of expr_tree.c's
+     * function-call truncation for the entries pushed by its argument
+     * evaluation: codegen_proc_call routes through
+     * codegen_pass_arguments which in turn invokes gencode_case0 for
+     * each argument expression; every nested `Foo.Create(...)` in the
+     * argument list pushes its spill slot at the constructor allocation
+     * site, but once the call has been emitted the callee may have
+     * stored the fresh instance into a long-lived structure (a tList
+     * container, the global tassemblerlistinfo / pass_typecheck
+     * registries inside FPC's pp.pas, an external proc that takes
+     * ownership), so we must NOT release those slots at the end of the
+     * statement.  Without this truncation, KGPC-built pp_bootstrap
+     * double-frees through the end-of-statement flush emitted below
+     * whenever pp.pas hands a constructor result to a retaining
+     * procedure (the helloworld.p regression).  Mirror the expr_tree.c
+     * EXPR_FUNCTION_CALL handler's keep_count truncation so call
+     * boundaries have uniform ownership-transfer semantics regardless
+     * of whether the call appears in statement position
+     * (codegen_proc_call) or expression position (gencode_case0). */
+    if (stmt->type == STMT_PROCEDURE_CALL &&
+        ctx->pending_ctor_temp_count > ctor_owned_snapshot)
+    {
+        ctx->pending_ctor_temp_count = ctor_owned_snapshot;
+    }
+
+    /* Release any class-instance temporaries produced by constructor
+     * calls whose result was consumed transiently within this statement
+     * (e.g. tested in a relational expression).  Codegen pushes entries
+     * at the constructor allocation site (expr_tree.c); enclosing
+     * function-call expressions discard entries pushed by their
+     * argument evaluation (those are now owned by the callee), and the
+     * dispatcher pops the entry corresponding to a statement-level
+     * owning operation above.  What remains here is the rare case where
+     * the constructor result was consumed by a non-call site that
+     * cannot take ownership (relational comparison, expression-
+     * statement).  Mirrors C++'s end-of-full-expression rule. */
+    inst_list = codegen_flush_pending_ctor_temps(ctx, inst_list);
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif

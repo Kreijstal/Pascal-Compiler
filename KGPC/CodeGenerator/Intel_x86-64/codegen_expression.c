@@ -17,6 +17,7 @@
 /* Forward declarations for unresolved method stubs — implementation after includes. */
 
 #include "codegen.h"
+#include "abi_constants.h"
 #include "codegen_expression.h"
 #include "codegen_expression_internal.h"
 #include "codegen_expr_arguments.h"
@@ -1299,8 +1300,9 @@ static ListNode_t *codegen_load_typeinfo_from_instance_ptr(ListNode_t *inst_list
     snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
         instance_ptr_reg->bit_64, typeinfo_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t56(%s), %s\n",
-        typeinfo_reg->bit_64, typeinfo_reg->bit_64);
+    /* Load vTypeInfo from VMT (VMT_VTYPEINFO_OFFSET = slot 7 = byte 56) */
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+        VMT_VTYPEINFO_OFFSET, typeinfo_reg->bit_64, typeinfo_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
     if (out_reg != NULL)
@@ -1325,8 +1327,9 @@ static ListNode_t *codegen_load_typeinfo_from_class_vmt_ptr(ListNode_t *inst_lis
         return inst_list;
 
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t56(%s), %s\n",
-        class_vmt_reg->bit_64, typeinfo_reg->bit_64);
+    /* Load vTypeInfo from VMT (VMT_VTYPEINFO_OFFSET = slot 7 = byte 56) */
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n",
+        VMT_VTYPEINFO_OFFSET, class_vmt_reg->bit_64, typeinfo_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
     if (out_reg != NULL)
@@ -1874,9 +1877,10 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
             if (class_ref_reg == NULL)
                 return inst_list;
             /* The field value is a class reference (VMT pointer).
-             * Extract TYPEINFO from VMT offset 56 (vTypeInfo slot). */
+             * Extract TYPEINFO from VMT slot 7 (VMT_VTYPEINFO_OFFSET). */
             char ti_buf[128];
-            snprintf(ti_buf, sizeof(ti_buf), "\tmovq\t56(%s), %s\n",
+            snprintf(ti_buf, sizeof(ti_buf), "\tmovq\t%d(%s), %s\n",
+                     VMT_VTYPEINFO_OFFSET,
                      class_ref_reg->bit_64, class_ref_reg->bit_64);
             inst_list = add_inst(inst_list, ti_buf);
             target_typeinfo_reg = class_ref_reg;

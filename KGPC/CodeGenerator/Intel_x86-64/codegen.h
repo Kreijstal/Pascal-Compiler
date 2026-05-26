@@ -307,6 +307,10 @@ typedef struct CodeGenContext {
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
     ListNode_t *current_subprogram_args;
+    /* Variable declarations of the current subprogram/program body, so
+     * STMT_EXIT and the implicit epilogue can find managed locals (e.g.
+     * dynamic arrays) needing finalization before the frame is torn down. */
+    ListNode_t *current_subprogram_declarations;
     StackNode_t *current_return_slot;
     KgpcType *current_return_type;
     ListNode_t *static_link_procs;
@@ -366,6 +370,44 @@ typedef struct CodeGenContext {
      * 0 when performing direct unit codegen (codegen_unit()).
      * Used to guard symtab-fallback passes that are only safe at link time. */
     int is_whole_program;
+
+    /* Pending releases of class instances produced by constructor calls used
+     * as transient sub-expressions.  Each entry records the rbp offset of
+     * the stack slot that holds the freshly constructed instance pointer;
+     * after the enclosing statement finishes, codegen emits a
+     * kgpc_release_class_temp(slot) for every entry, then clears the list.
+     *
+     * Ownership semantics:
+     * - The expr_tree.c constructor allocation site pushes the slot when
+     *   it allocates.  This is BEFORE the constructor's own call instruction.
+     * - After every EXPR_FUNCTION_CALL in expr_tree.c, entries pushed
+     *   during ARGUMENT evaluation (i.e. above the snapshot taken right
+     *   after this call's own push, if any) are discarded — they were
+     *   passed to the callee which may have taken ownership (e.g.
+     *   `TFoo.Create(TBar.Create(...))` stores TBar as a field).
+     * - At codegen_stmt boundaries the list is flushed via emitted
+     *   kgpc_release_class_temp calls.
+     * - When a statement's top-level expression takes ownership (var/field
+     *   assignment, raise statement), the dispatcher pops the topmost
+     *   entry that the constructor's allocation pushed for itself. */
+    int *pending_ctor_temp_offsets;
+    int pending_ctor_temp_count;
+    int pending_ctor_temp_capacity;
+
+    /* Stack-offsets of dynarray temporaries produced by argument-marshalling
+     * (kgpc_dynarray_assign_from_temp into a `dynarray_arg` slot).  These
+     * slots own their element-data buffer for the lifetime of the function
+     * call site, but are never reachable through a user-declared variable,
+     * so the regular codegen_emit_managed_local_cleanup walk over
+     * declarations would never finalize them.  The function epilogue (and
+     * STMT_EXIT) walks this array and emits kgpc_dynarray_finalize_local
+     * for each slot to release the buffer before the frame is torn down.
+     *
+     * Idempotent: the runtime helper tolerates zeroed descriptors, so
+     * slots reused across iterations clean up cleanly. */
+    int *managed_dynarray_temp_offsets;
+    int managed_dynarray_temp_count;
+    int managed_dynarray_temp_capacity;
 } CodeGenContext;
 
 /* Generates a label */
@@ -438,9 +480,37 @@ void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);
 
+/* Pending constructor-result temp tracking.  See the comment on the
+ * pending_ctor_temp_* fields in CodeGenContext. */
+void codegen_push_pending_ctor_temp(CodeGenContext *ctx, int rbp_offset);
+ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx, ListNode_t *inst_list);
+void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx);
+
+/* Track a dynamic-array temporary slot (e.g. a `dynarray_arg` produced by
+ * argument marshalling via kgpc_dynarray_assign_from_temp) so the function
+ * epilogue and STMT_EXIT can finalize its element-data buffer.  The slot
+ * is identified by its positive rbp offset (the value previously emitted
+ * via `leaq -N(%rbp), ...`).  Duplicate offsets are coalesced. */
+void codegen_track_managed_dynarray_temp(CodeGenContext *ctx, int rbp_offset);
+ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
+    ListNode_t *inst_list);
+void codegen_destroy_managed_dynarray_temps(CodeGenContext *ctx);
+
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
                        CompilationContext *comp_ctx);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
+
+/* Emit per-variable cleanup for managed dynamic-array locals/globals
+ * declared in `declarations`.  For each declaration whose type contains
+ * dynamic-array storage (whether the variable itself, a field of a record,
+ * or an element of a static array), append calls to
+ * kgpc_dynarray_finalize_local that release the data buffer reachable from
+ * each dynarray descriptor.  Safe to invoke at function epilogue and from
+ * STMT_EXIT — the helper is idempotent on already-cleared descriptors. */
+ListNode_t *codegen_emit_managed_local_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
+ListNode_t *codegen_emit_managed_global_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);

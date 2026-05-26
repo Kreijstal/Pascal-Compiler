@@ -694,10 +694,22 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     }
 
     Register_t *desc_reg = NULL;
+    int desc_is_heap_temp = 0;
     if (!use_value && codegen_expr_is_addressable(array_expr))
         inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &desc_reg);
     else
+    {
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &desc_reg);
+        /* A non-var-param, non-SRET function-call result returning a dynamic
+         * array hands us a descriptor block malloc'd by
+         * kgpc_dynarray_clone_descriptor in the callee's epilogue.  We are
+         * the sole consumer of that temp, so we must release it after
+         * reading the length to prevent the descriptor (and its orphaned
+         * data buffer) from leaking. */
+        if (!use_value && array_expr->type == EXPR_FUNCTION_CALL &&
+            !expr_returns_sret(array_expr))
+            desc_is_heap_temp = 1;
+    }
 
     if (codegen_had_error(ctx) || desc_reg == NULL)
         return inst_list;
@@ -706,6 +718,39 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
         desc_reg->bit_64, target_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
+
+    if (desc_is_heap_temp)
+    {
+        /* Spill length result before the release call clobbers caller-saved
+         * registers (including target_reg). */
+        StackNode_t *len_spill = add_l_t("dynarray_length_spill");
+        if (len_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                target_reg->bit_64, len_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        if (codegen_target_is_windows())
+        {
+            Register_t *u[] = {desc_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+        }
+        else
+        {
+            Register_t *u[] = {desc_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            "kgpc_dynarray_release_temp_descriptor");
+        free_arg_regs();
+        if (len_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                len_spill->offset, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
     free_reg(get_reg_stack(), desc_reg);
     return inst_list;
@@ -3220,6 +3265,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
         const char *func_id = expr->expr_data.function_call_data.id;
 
+        /* Snapshot the pending constructor-temp list BEFORE this call's
+         * own push (the constructor's alloc-site push happens later in
+         * this block).  After the call returns, any entries pushed by
+         * argument evaluation between (snapshot + this-call's own push)
+         * and the call site are discarded — they were passed to the
+         * callee, which may have stored them (a nested constructor's
+         * field-init argument, an external proc that takes ownership,
+         * etc.).  We cannot prove they remain transient, so we err on
+         * the side of leaving them alive to avoid use-after-free. */
+        int ctor_pending_snapshot_before_push = (ctx != NULL)
+            ? ctx->pending_ctor_temp_count : 0;
+
         if (func_id != NULL &&
             (pascal_identifier_equals(func_id, "Low") ||
              pascal_identifier_equals(func_id, "High")))
@@ -3903,6 +3960,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                             constructor_instance_reg->bit_64, constructor_instance_slot->offset);
                         inst_list = add_inst(inst_list, buffer);
+
+                        /* Track the spill slot for transient-temp cleanup.
+                         * The reaching expr_tree.c path runs only when the
+                         * constructor's result is being consumed as an
+                         * expression value (not by the assignment special
+                         * case in codegen_stmt_assignment.c, which has its
+                         * own allocator).  See codegen.h for the ownership
+                         * semantics; the statement dispatcher pops this
+                         * entry when the statement transfers ownership
+                         * (var assignment, raise), and the enclosing
+                         * function-call expression discards entries
+                         * pushed by argument evaluation. */
+                        codegen_push_pending_ctor_temp(ctx,
+                            constructor_instance_slot->offset);
                     }
                     
                     if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL)
@@ -4762,11 +4833,35 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             inst_list = add_inst(inst_list, buffer);
         }
+
+        /* Discard any constructor-temp pending entries pushed during this
+         * call's argument evaluation: the args have just been consumed by
+         * the callee (whose body we cannot analyse for ownership), so
+         * conservatively assume the callee may have stored them.  Keep
+         * this call's own push (when this call IS a constructor) so the
+         * caller can still observe ownership transfer at the statement
+         * boundary. */
+        if (ctx != NULL)
+        {
+            int keep_count = ctor_pending_snapshot_before_push;
+            if (is_constructor && constructor_instance_slot != NULL)
+                keep_count += 1;
+            if (ctx->pending_ctor_temp_count > keep_count)
+                ctx->pending_ctor_temp_count = keep_count;
+        }
         return inst_list;
-        
+
 cleanup_constructor:
         if (constructor_instance_reg != NULL)
             free_reg(get_reg_stack(), constructor_instance_reg);
+        if (ctx != NULL)
+        {
+            int keep_count = ctor_pending_snapshot_before_push;
+            if (is_constructor && constructor_instance_slot != NULL)
+                keep_count += 1;
+            if (ctx->pending_ctor_temp_count > keep_count)
+                ctx->pending_ctor_temp_count = keep_count;
+        }
         return inst_list;
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)

@@ -39,12 +39,14 @@
 #include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_liveness.h"
+#include "ir/ir_peephole.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "graph_coloring_allocator.h"
 #endif
 
 #include "codegen_subprograms_internal.h"
 #include "codegen_vmt_internal.h"
+#include "abi_constants.h"
 
 int codegen_float_native_distance(Tree_t *sub);
 int codegen_list_contains_string(ListNode_t *list, const char *value);
@@ -2223,9 +2225,9 @@ void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
             if (set_type != NULL)
             {
                 if (is_char_set)
-                    set_type->size_in_bytes = 32;
+                    set_type->size_in_bytes = KGPC_CHAR_SET_SIZE_BYTES;
                 else
-                    set_type->size_in_bytes = 4;
+                    set_type->size_in_bytes = KGPC_SMALL_SET_SIZE_BYTES;
             }
             PushSetConstOntoScope(symtab, (char *)id, set_bytes, (int)set_size, set_type);
             if (set_type != NULL)
@@ -2499,6 +2501,142 @@ void codegen_begin_expression(CodeGenContext *ctx)
 void codegen_end_expression(CodeGenContext *ctx)
 {
     codegen_reset_static_link_cache(ctx);
+}
+
+/* Record that a class instance produced by a constructor call lives in the
+ * stack slot at -<rbp_offset>(%rbp) and may need cleanup as a transient
+ * temp.  Codegen will emit a release for it at the end of the enclosing
+ * statement unless the statement dispatcher pops it (because the temp was
+ * consumed by an owning operation like assignment or raise) or the
+ * enclosing function-call expression pops it (because it was passed as an
+ * argument to a callee that may have taken ownership). */
+void codegen_push_pending_ctor_temp(CodeGenContext *ctx, int rbp_offset)
+{
+    if (ctx == NULL || rbp_offset <= 0)
+        return;
+
+    if (ctx->pending_ctor_temp_count == ctx->pending_ctor_temp_capacity)
+    {
+        int new_capacity = (ctx->pending_ctor_temp_capacity == 0) ? 4 :
+            (ctx->pending_ctor_temp_capacity * 2);
+        int *new_buf = (int *)realloc(ctx->pending_ctor_temp_offsets,
+            (size_t)new_capacity * sizeof(int));
+        if (new_buf == NULL)
+            return;
+        ctx->pending_ctor_temp_offsets = new_buf;
+        ctx->pending_ctor_temp_capacity = new_capacity;
+    }
+
+    ctx->pending_ctor_temp_offsets[ctx->pending_ctor_temp_count++] = rbp_offset;
+}
+
+/* Emit `kgpc_release_class_temp(slot)` for each pending constructor-temp
+ * entry, then clear the list.  Called at statement boundaries.
+ *
+ * The helper is tolerant of nil receivers and non-TObject classes, so it
+ * is safe to call regardless of which constructor produced the value. */
+ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx,
+    ListNode_t *inst_list)
+{
+    if (ctx == NULL || ctx->pending_ctor_temp_count == 0)
+        return inst_list;
+
+    char buffer[128];
+    const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+
+    for (int i = 0; i < ctx->pending_ctor_temp_count; ++i)
+    {
+        int rbp_offset = ctx->pending_ctor_temp_offsets[i];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            rbp_offset, arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            "kgpc_release_class_temp");
+    }
+
+    ctx->pending_ctor_temp_count = 0;
+    return inst_list;
+}
+
+void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    free(ctx->pending_ctor_temp_offsets);
+    ctx->pending_ctor_temp_offsets = NULL;
+    ctx->pending_ctor_temp_count = 0;
+    ctx->pending_ctor_temp_capacity = 0;
+}
+
+/* Record a dynamic-array temporary stack slot whose element-data buffer
+ * outlives the producing call but is not reachable through any declared
+ * variable.  The function epilogue and STMT_EXIT will emit
+ * kgpc_dynarray_finalize_local for each tracked slot.  Duplicate offsets
+ * are coalesced so the same slot reused across loop iterations does not
+ * accumulate redundant finalize calls. */
+void codegen_track_managed_dynarray_temp(CodeGenContext *ctx, int rbp_offset)
+{
+    if (ctx == NULL || rbp_offset <= 0)
+        return;
+
+    for (int i = 0; i < ctx->managed_dynarray_temp_count; ++i)
+    {
+        if (ctx->managed_dynarray_temp_offsets[i] == rbp_offset)
+            return;
+    }
+
+    if (ctx->managed_dynarray_temp_count == ctx->managed_dynarray_temp_capacity)
+    {
+        int new_capacity = (ctx->managed_dynarray_temp_capacity == 0) ? 4 :
+            (ctx->managed_dynarray_temp_capacity * 2);
+        int *new_buf = (int *)realloc(ctx->managed_dynarray_temp_offsets,
+            (size_t)new_capacity * sizeof(int));
+        if (new_buf == NULL)
+            return;
+        ctx->managed_dynarray_temp_offsets = new_buf;
+        ctx->managed_dynarray_temp_capacity = new_capacity;
+    }
+
+    ctx->managed_dynarray_temp_offsets[ctx->managed_dynarray_temp_count++] =
+        rbp_offset;
+}
+
+/* Emit kgpc_dynarray_finalize_local for every tracked dynarray temp slot.
+ * Idempotent at runtime: a slot that was never overwritten (descriptor
+ * still zero) produces no allocation, and finalize_local on a NULL data
+ * pointer is a no-op. */
+ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
+    ListNode_t *inst_list)
+{
+    if (ctx == NULL || ctx->managed_dynarray_temp_count == 0)
+        return inst_list;
+
+    char buffer[128];
+    const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+
+    for (int i = 0; i < ctx->managed_dynarray_temp_count; ++i)
+    {
+        int rbp_offset = ctx->managed_dynarray_temp_offsets[i];
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            rbp_offset, arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            "kgpc_dynarray_finalize_local");
+    }
+
+    return inst_list;
+}
+
+void codegen_destroy_managed_dynarray_temps(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    free(ctx->managed_dynarray_temp_offsets);
+    ctx->managed_dynarray_temp_offsets = NULL;
+    ctx->managed_dynarray_temp_count = 0;
+    ctx->managed_dynarray_temp_capacity = 0;
 }
 
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list,
@@ -3610,7 +3748,9 @@ ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\tmovq\t(%r11), %r11\n");
     inst_list = add_inst(inst_list, "\tmovq\t(%r11), %rax\n");
-    inst_list = add_inst(inst_list, "\taddq\t8(%r11), %rax\n");
+    /* VMT_VINSTANCESIZE2_OFFSET (slot 1): -vInstanceSize; sum with slot 0 == 0 iff VMT */
+    snprintf(buffer, sizeof(buffer), "\taddq\t%d(%%r11), %%rax\n", VMT_VINSTANCESIZE2_OFFSET);
+    inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjz\t.L%s_direct_%d\n", label_prefix, label_id);
     inst_list = add_inst(inst_list, buffer);
 
@@ -3917,7 +4057,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
         ctx->target_abi = current_target_abi();
 
     g_current_codegen_abi = ctx->target_abi;
-    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? KGPC_WINDOWS_SHADOW_SPACE_BYTES : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     ctx->comp_ctx = comp_ctx;
@@ -4054,7 +4194,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         ctx->target_abi = current_target_abi();
 
     g_current_codegen_abi = ctx->target_abi;
-    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? KGPC_WINDOWS_SHADOW_SPACE_BYTES : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
@@ -4133,6 +4273,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         ir_liveness_allocate(inst_list);
 #endif
         ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_peephole_remove_redundant_moves(&inst_list);
+#endif
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4218,6 +4361,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         ir_liveness_allocate(inst_list);
 #endif
         ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+        ir_peephole_remove_redundant_moves(&inst_list);
+#endif
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4710,7 +4856,7 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     fprintf(ctx->output_file, "\t.section\t.text\n");
     fprintf(ctx->output_file, "\t.globl\tmain\n");
     codegen_function_header("main", ctx);
-    call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
+    call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : KGPC_WINDOWS_SHADOW_SPACE_BYTES;
     if (call_space > 0)
     {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
@@ -5231,6 +5377,10 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     if (data->body_statement == NULL && getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] WARNING: program body is NULL during codegen\n");
     }
+    /* Program scope intentionally leaves current_subprogram_declarations
+     * unset: globals are not finalised at program exit (see comment block
+     * below the body), so STMT_EXIT in the program body has no cleanup to
+     * emit either. */
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
     /* Emit unit finalization blocks in reverse dependency order (LIFO).
@@ -5256,12 +5406,28 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         symtab->current_scope = saved_scope;
     }
 
+    /* Since commit 7c840d0a dynarray assignment is a deep copy: every
+     * global descriptor independently owns its data buffer.  Walk all
+     * program-scope VAR declarations and emit kgpc_dynarray_finalize_local
+     * for each dynarray-typed global so ASAN does not report leaks at
+     * program exit.  Typed-consts and external symbols are excluded. */
+    inst_list = codegen_emit_managed_global_cleanup(inst_list,
+        data->var_declaration, ctx, symtab);
+
+    /* Dynamic-array TEMPORARIES allocated for argument marshalling inside
+     * the program body are uniquely owned by their temp slot; finalize them
+     * too to release the producer-side buffer. */
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
+
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space_for_inst_list(inst_list, ctx);
 #if USE_GRAPH_COLORING_ALLOCATOR
     ir_liveness_allocate(inst_list);
 #endif
     ir_emit_function(inst_list);
+#if USE_GRAPH_COLORING_ALLOCATOR
+    ir_peephole_remove_redundant_moves(&inst_list);
+#endif
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     if (dump_ir_flag())
@@ -6228,6 +6394,661 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+}
+
+/* ============================================================
+ * Managed dynamic-array cleanup at function/program epilogue.
+ *
+ * KGPC dynamic arrays carry a heap-allocated element-data buffer that is
+ * reachable only through the descriptor sitting in the owning variable's
+ * storage (stack slot, .bss/.data label, or a record field inside one of
+ * those).  When the function returns, the descriptor's storage disappears
+ * with the frame (or persists for the program lifetime), but the data
+ * buffer it points to leaks unless explicitly released.
+ *
+ * These helpers walk the variable declarations at codegen time and emit
+ * `kgpc_dynarray_finalize_local` calls for every reachable dynarray
+ * descriptor.  The runtime helper is idempotent (NULL-data tolerant) so
+ * an already-cleared descriptor produces no double-free.
+ * ============================================================ */
+
+/* Sizeof helper defined in codegen_expr_sizeof.c / codegen_expression.c. */
+int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
+    struct RecordType *record_type, long long *size_out, int depth);
+
+/* Forward decls for mutual recursion (members <-> static-array element). */
+static int codegen_type_contains_dynarray(KgpcType *type);
+static int codegen_record_contains_dynarray(struct RecordType *record);
+static ListNode_t *codegen_emit_dynarray_cleanup_for_type(ListNode_t *inst_list,
+    CodeGenContext *ctx, KgpcType *type, const char *base_label, int base_rbp_offset,
+    long long extra_offset, int depth);
+static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(ListNode_t *inst_list,
+    CodeGenContext *ctx, struct RecordType *record, const char *base_label,
+    int base_rbp_offset, long long base_within_record, int depth);
+
+#define DYNARRAY_CLEANUP_MAX_DEPTH 32
+
+/* Returns 1 if the record (including transitively) declares any dynamic-array
+ * field whose data buffer needs releasing at scope exit.
+ *
+ * Class types are skipped: a local variable of class type is a reference
+ * (an 8-byte heap pointer), not an inline instance.  Walking the class
+ * layout as if its fields lived in the variable's stack slot would emit
+ * finalize calls at offsets that overflow the 8-byte pointer slot into
+ * adjacent locals — corrupting unrelated frame storage and, in pp.pas's
+ * tprocinfo case, nilling out class instance fields that are still in
+ * use.  Cleanup of class instances is the responsibility of explicit
+ * Destroy/Free calls and the constructor-temp tracker, not this dynarray
+ * finalize walk. */
+static int codegen_record_contains_dynarray(struct RecordType *record)
+{
+    if (record == NULL || record_type_is_class(record))
+        return 0;
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field == NULL || field->is_class_var)
+            continue;
+        if (field->is_array)
+        {
+            if (field->array_is_open)
+                return 1;
+            /* Fixed-size array — check element type. */
+            if (field->array_element_record != NULL &&
+                codegen_record_contains_dynarray(field->array_element_record))
+                return 1;
+            if (field->array_element_kgpc_type != NULL &&
+                codegen_type_contains_dynarray(field->array_element_kgpc_type))
+                return 1;
+            continue;
+        }
+        if (field->nested_record != NULL &&
+            codegen_record_contains_dynarray(field->nested_record))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_type_contains_dynarray(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (kgpc_type_is_dynamic_array(type))
+        return 1;
+    if (type->kind == TYPE_KIND_ARRAY && type->info.array_info.element_type != NULL)
+        return codegen_type_contains_dynarray(type->info.array_info.element_type);
+    if (type->kind == TYPE_KIND_RECORD)
+        return codegen_record_contains_dynarray(type->info.record_info);
+    return 0;
+}
+
+/* Emit `leaq <addr>, %rdi; call kgpc_dynarray_finalize_local`. */
+static ListNode_t *codegen_emit_finalize_call(ListNode_t *inst_list,
+    CodeGenContext *ctx, const char *base_label, int base_rbp_offset,
+    long long extra_offset)
+{
+    char buffer[128];
+    const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+    if (base_label != NULL)
+    {
+        if (extra_offset == 0)
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                base_label, arg_reg);
+        else
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s+%lld(%%rip), %s\n",
+                base_label, extra_offset, arg_reg);
+    }
+    else
+    {
+        long long effective_offset = (long long)base_rbp_offset - extra_offset;
+        if (effective_offset >= 0)
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%lld(%%rbp), %s\n",
+                effective_offset, arg_reg);
+        else
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%lld(%%rbp), %s\n",
+                -effective_offset, arg_reg);
+    }
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_finalize_local");
+    return inst_list;
+}
+
+/* Compute alignment requirement for a field type used in record layout.
+ * Mirrors codegen_get_field_alignment but accepts a KgpcType directly. */
+static int codegen_field_alignment_for_type(KgpcType *type)
+{
+    if (type == NULL)
+        return 1;
+    if (type->kind == TYPE_KIND_POINTER || kgpc_type_is_dynamic_array(type))
+        return 8;
+    long long sz = kgpc_type_sizeof(type);
+    if (sz >= 8)
+        return 8;
+    if (sz >= 4)
+        return 4;
+    if (sz >= 2)
+        return 2;
+    return 1;
+}
+
+static long long codegen_align_value(long long offset, int alignment)
+{
+    if (alignment <= 1)
+        return offset;
+    long long rem = offset % alignment;
+    if (rem == 0)
+        return offset;
+    return offset + (alignment - rem);
+}
+
+/* Walk a record's fields, emitting finalize calls for each dynarray
+ * descriptor reachable via field paths.  base_within_record is the offset
+ * (in bytes) of this record's first field from the variable's base address;
+ * for outermost records starting at base it's 0, and for nested records
+ * it's the parent field's offset.
+ *
+ * Field offsets are computed mirroring codegen_sizeof_record_members so
+ * alignment matches the layout used elsewhere in the compiler. */
+static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(ListNode_t *inst_list,
+    CodeGenContext *ctx, struct RecordType *record, const char *base_label,
+    int base_rbp_offset, long long base_within_record, int depth)
+{
+    if (record == NULL || depth >= DYNARRAY_CLEANUP_MAX_DEPTH)
+        return inst_list;
+    /* A class variable is a reference (8-byte heap pointer); its inline
+     * layout never sits in the variable's stack slot, so walking the class
+     * fields here would emit finalize calls at offsets that scribble over
+     * adjacent locals.  Class cleanup is the responsibility of explicit
+     * Destroy/Free or the constructor-temp tracker, not this walk. */
+    if (record_type_is_class(record))
+        return inst_list;
+
+    int is_packed = record->is_packed;
+    long long offset = base_within_record;
+
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field == NULL || field->is_class_var)
+            continue;
+
+        /* Field's declared type (for alignment / size). */
+        KgpcType *field_type = NULL;
+        if (field->is_array)
+        {
+            /* array_element_kgpc_type describes the element; the field's
+             * own type is an array.  For alignment/size we'd need the
+             * array's KgpcType, but we can derive what we need from
+             * field properties directly. */
+            field_type = NULL;
+        }
+        else if (field->nested_record != NULL)
+        {
+            /* Records have alignment driven by their widest member. */
+            field_type = NULL;
+        }
+
+        /* Field alignment: matches codegen_sizeof_record's layout. */
+        int field_align;
+        long long field_size = 0;
+        if (field->is_array && field->array_is_open)
+        {
+            field_align = 8;
+            field_size = 16;
+        }
+        else if (field->is_array)
+        {
+            long long element_size = 0;
+            /* Pass the in-memory record layout when the element is an
+             * anonymous record (no type_id); otherwise codegen_sizeof_type
+             * has no way to size it and bails with a spurious error. */
+            struct RecordType *elem_rec = NULL;
+            if (field->array_element_type == RECORD_TYPE)
+                elem_rec = field->array_element_record;
+            if (codegen_sizeof_type(ctx, field->array_element_type,
+                    field->array_element_type_id, elem_rec,
+                    &element_size, depth + 1) != 0)
+                element_size = 0;
+            long long count = (long long)field->array_end - (long long)field->array_start + 1;
+            if (count < 0) count = 0;
+            field_size = element_size * count;
+            if (element_size >= 8) field_align = 8;
+            else if (element_size >= 4) field_align = 4;
+            else if (element_size >= 2) field_align = 2;
+            else field_align = 1;
+        }
+        else if (field->nested_record != NULL)
+        {
+            long long sz = 0;
+            if (codegen_sizeof_record(ctx, field->nested_record, &sz, depth + 1) != 0)
+                sz = 0;
+            field_size = sz;
+            if (sz >= 8) field_align = 8;
+            else if (sz >= 4) field_align = 4;
+            else if (sz >= 2) field_align = 2;
+            else field_align = 1;
+        }
+        else if (field->is_pointer)
+        {
+            field_align = 8;
+            field_size = 8;
+        }
+        else
+        {
+            long long sz = 0;
+            if (codegen_sizeof_type(ctx, field->type, field->type_id, NULL,
+                    &sz, depth + 1) != 0)
+                sz = 0;
+            field_size = sz;
+            if (sz >= 8) field_align = 8;
+            else if (sz >= 4) field_align = 4;
+            else if (sz >= 2) field_align = 2;
+            else field_align = 1;
+        }
+
+        if (!is_packed)
+            offset = codegen_align_value(offset, field_align);
+
+        /* If this field needs cleanup, emit it. */
+        if (field->is_array && field->array_is_open)
+        {
+            /* Skip multi-level dynarrays (element is itself dynarray).
+             * See note in codegen_emit_dynarray_cleanup_for_type — the
+             * buggy nested-access codegen can leave the outer ->data
+             * field corrupted with a non-pointer value, so calling
+             * free() on it would crash. */
+            int element_has_dynarray = 0;
+            if (field->array_element_record != NULL &&
+                codegen_record_contains_dynarray(field->array_element_record))
+                element_has_dynarray = 1;
+            else if (field->array_element_kgpc_type != NULL &&
+                     codegen_type_contains_dynarray(field->array_element_kgpc_type))
+                element_has_dynarray = 1;
+            if (!element_has_dynarray)
+            {
+                inst_list = codegen_emit_finalize_call(inst_list, ctx,
+                    base_label, base_rbp_offset, offset);
+            }
+        }
+        else if (field->nested_record != NULL &&
+                 codegen_record_contains_dynarray(field->nested_record))
+        {
+            inst_list = codegen_emit_dynarray_cleanup_record_fields(
+                inst_list, ctx, field->nested_record,
+                base_label, base_rbp_offset, offset, depth + 1);
+        }
+        else if (field->is_array && !field->array_is_open)
+        {
+            /* Fixed array.  If its element type contains a dynarray, emit
+             * a finalize call per element.  We unroll because the static
+             * length is known at codegen time. */
+            long long count = (long long)field->array_end - (long long)field->array_start + 1;
+            if (count > 0)
+            {
+                long long element_size = 0;
+                struct RecordType *elem_rec = NULL;
+                if (field->array_element_type == RECORD_TYPE)
+                    elem_rec = field->array_element_record;
+                if (codegen_sizeof_type(ctx, field->array_element_type,
+                        field->array_element_type_id, elem_rec,
+                        &element_size, depth + 1) != 0)
+                    element_size = 0;
+                int element_has_dynarray = 0;
+                if (field->array_element_record != NULL &&
+                    codegen_record_contains_dynarray(field->array_element_record))
+                    element_has_dynarray = 1;
+                else if (field->array_element_kgpc_type != NULL &&
+                         codegen_type_contains_dynarray(field->array_element_kgpc_type))
+                    element_has_dynarray = 1;
+                if (element_has_dynarray && element_size > 0)
+                {
+                    /* Cap unroll at a sensible bound to avoid pathological
+                     * codegen for huge fixed arrays.  Beyond this we leave
+                     * the elements alone — typical Pascal programs don't
+                     * declare 1000-element static arrays of records with
+                     * dynarrays. */
+                    long long unroll_limit = 256;
+                    long long emit_count = count < unroll_limit ? count : unroll_limit;
+                    for (long long i = 0; i < emit_count; ++i)
+                    {
+                        long long elem_offset = offset + i * element_size;
+                        if (field->array_element_record != NULL)
+                        {
+                            inst_list = codegen_emit_dynarray_cleanup_record_fields(
+                                inst_list, ctx, field->array_element_record,
+                                base_label, base_rbp_offset, elem_offset, depth + 1);
+                        }
+                        else if (field->array_element_kgpc_type != NULL)
+                        {
+                            inst_list = codegen_emit_dynarray_cleanup_for_type(
+                                inst_list, ctx, field->array_element_kgpc_type,
+                                base_label, base_rbp_offset, elem_offset, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        offset += field_size;
+    }
+    return inst_list;
+}
+
+/* Walk a top-level variable's KgpcType, emitting finalize calls for each
+ * dynarray descriptor reachable from the variable's base address plus
+ * extra_offset. */
+static ListNode_t *codegen_emit_dynarray_cleanup_for_type(ListNode_t *inst_list,
+    CodeGenContext *ctx, KgpcType *type, const char *base_label, int base_rbp_offset,
+    long long extra_offset, int depth)
+{
+    if (type == NULL || depth >= DYNARRAY_CLEANUP_MAX_DEPTH)
+        return inst_list;
+    if (kgpc_type_is_dynamic_array(type))
+    {
+        /* Skip dynarrays whose element type itself contains dynamic-array
+         * storage.  KGPC's address-of-nested-dynarray-element codegen has
+         * a known bug (the same buggy site that corrupts the outer
+         * descriptor) that can leave the outer ->data pointer as garbage
+         * by program end.  Freeing a bogus pointer crashes the process.
+         * Once the address-computation bug is fixed elsewhere, this guard
+         * can be relaxed and the helper will start emitting cleanup for
+         * the inner descriptors too. */
+        KgpcType *element_type = type->info.array_info.element_type;
+        if (element_type != NULL && codegen_type_contains_dynarray(element_type))
+            return inst_list;
+        return codegen_emit_finalize_call(inst_list, ctx,
+            base_label, base_rbp_offset, extra_offset);
+    }
+    if (type->kind == TYPE_KIND_RECORD)
+    {
+        struct RecordType *rec = type->info.record_info;
+        if (rec != NULL && codegen_record_contains_dynarray(rec))
+        {
+            return codegen_emit_dynarray_cleanup_record_fields(inst_list, ctx,
+                rec, base_label, base_rbp_offset, extra_offset, depth + 1);
+        }
+        return inst_list;
+    }
+    if (type->kind == TYPE_KIND_ARRAY)
+    {
+        KgpcType *element_type = type->info.array_info.element_type;
+        if (element_type == NULL || !codegen_type_contains_dynarray(element_type))
+            return inst_list;
+        int start = 0, end = -1;
+        kgpc_type_get_array_bounds(type, &start, &end);
+        long long count = (long long)end - (long long)start + 1;
+        if (count <= 0) return inst_list;
+        long long element_size = kgpc_type_sizeof(element_type);
+        if (element_size <= 0) return inst_list;
+        long long unroll_limit = 256;
+        long long emit_count = count < unroll_limit ? count : unroll_limit;
+        for (long long i = 0; i < emit_count; ++i)
+        {
+            inst_list = codegen_emit_dynarray_cleanup_for_type(inst_list, ctx,
+                element_type, base_label, base_rbp_offset,
+                extra_offset + i * element_size, depth + 1);
+        }
+    }
+    return inst_list;
+}
+
+/* Locate the variable's storage descriptor (label for static-storage,
+ * rbp-relative offset for stack) and route to the appropriate type walker. */
+static ListNode_t *codegen_emit_dynarray_cleanup_for_var(ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab, Tree_t *var_decl, const char *var_name)
+{
+    if (var_decl == NULL || var_name == NULL)
+        return inst_list;
+
+    /* Skip parameters disguised as var-decls — caller owns those buffers. */
+    struct Var *vd = &var_decl->tree_data.var_decl_data;
+    if (vd->is_var_param || vd->is_const_param || vd->is_untyped_param)
+        return inst_list;
+    /* External / absolute / typed-const aliased storage isn't ours to free. */
+    if (vd->is_external || vd->absolute_target != NULL)
+        return inst_list;
+
+    /* Resolve the type. */
+    KgpcType *type = vd->cached_kgpc_type;
+    if (type == NULL && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, (char *)var_name) && node != NULL)
+            type = node->type;
+    }
+    if (type == NULL || !codegen_type_contains_dynarray(type))
+        return inst_list;
+
+    /* Find the storage descriptor. */
+    StackNode_t *slot = find_label((const char *)var_name);
+    /* If unique-key storage was used (codegen_var_storage_key), the slot may
+     * be under a different name.  Try the storage key. */
+    if (slot == NULL && symtab != NULL)
+    {
+        char *storage_key = codegen_var_storage_key(ctx, symtab, var_decl, var_name);
+        if (storage_key != NULL)
+        {
+            slot = find_label(storage_key);
+            free(storage_key);
+        }
+    }
+    if (slot == NULL)
+        return inst_list;
+
+    /* Only finalise frame-local descriptors.  Program/unit globals
+     * (.bss / .comm storage) live until process exit, can legitimately
+     * alias one another via shallow `b := a` assignment, and freeing them
+     * here would double-free.  The OS reclaims the leftover buffers when
+     * the process terminates. */
+    if (slot->is_static)
+        return inst_list;
+    int base_rbp_offset = slot->offset;
+
+    return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
+        NULL, base_rbp_offset, 0, 0);
+}
+
+/* Same as codegen_emit_dynarray_cleanup_for_var but takes only the name —
+ * used for TREE_ARR_DECL whose KgpcType reaches us only through the
+ * symbol table. */
+static ListNode_t *codegen_emit_dynarray_cleanup_for_var_by_name(
+    ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab,
+    const char *var_name)
+{
+    if (var_name == NULL || symtab == NULL)
+        return inst_list;
+    HashNode_t *node = NULL;
+    if (!FindSymbol(&node, symtab, (char *)var_name) || node == NULL)
+        return inst_list;
+    KgpcType *type = node->type;
+    if (type == NULL || !codegen_type_contains_dynarray(type))
+        return inst_list;
+    StackNode_t *slot = find_label(var_name);
+    if (slot == NULL)
+        return inst_list;
+    if (slot->is_static)
+        return inst_list;
+    return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
+        NULL, slot->offset, 0, 0);
+}
+
+/* Emit kgpc_dynarray_finalize_local for one global (static-storage) variable.
+ * Used at program exit to release the data buffers behind module-level
+ * dynarray descriptors.  Since 7c840d0a dynarray assignment is a deep copy
+ * (not a shallow alias), every global descriptor independently owns its
+ * data buffer and must be freed to avoid ASAN leak reports. */
+static ListNode_t *codegen_emit_dynarray_cleanup_for_global_var(
+    ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab,
+    Tree_t *var_decl, const char *var_name)
+{
+    if (var_decl == NULL || var_name == NULL)
+        return inst_list;
+
+    struct Var *vd = &var_decl->tree_data.var_decl_data;
+    /* Skip typed-consts — their storage is statically initialised and
+     * shared; it is not heap-allocated and must not be freed. */
+    if (vd->is_typed_const)
+        return inst_list;
+    /* External symbols belong to another translation unit; don't touch them. */
+    if (vd->is_external || vd->absolute_target != NULL)
+        return inst_list;
+
+    /* Resolve the type. */
+    KgpcType *type = vd->cached_kgpc_type;
+    if (type == NULL && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, (char *)var_name) && node != NULL)
+            type = node->type;
+    }
+    if (type == NULL || !codegen_type_contains_dynarray(type))
+        return inst_list;
+
+    /* Find the storage slot — must be static (global). */
+    StackNode_t *slot = find_label((const char *)var_name);
+    if (slot == NULL && symtab != NULL)
+    {
+        char *storage_key = codegen_var_storage_key(ctx, symtab, var_decl, var_name);
+        if (storage_key != NULL)
+        {
+            slot = find_label(storage_key);
+            free(storage_key);
+        }
+    }
+    if (slot == NULL || !slot->is_static)
+        return inst_list;
+
+    /* Use the assembler label for the global.  The static_label field holds
+     * the mangled symbol (e.g. "__kgpc_program_var_Foo_1"); fall back to the
+     * bare variable name if no mangled label was recorded. */
+    const char *asm_label = (slot->static_label != NULL) ? slot->static_label : var_name;
+
+    return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
+        asm_label, 0, 0, 0);
+}
+
+/* Same as codegen_emit_dynarray_cleanup_for_global_var but takes only the
+ * name — used for TREE_ARR_DECL whose KgpcType is reached via symtab only. */
+static ListNode_t *codegen_emit_dynarray_global_cleanup_for_arr_by_name(
+    ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab,
+    const char *var_name)
+{
+    if (var_name == NULL || symtab == NULL)
+        return inst_list;
+    HashNode_t *node = NULL;
+    if (!FindSymbol(&node, symtab, (char *)var_name) || node == NULL)
+        return inst_list;
+    KgpcType *type = node->type;
+    if (type == NULL || !codegen_type_contains_dynarray(type))
+        return inst_list;
+    StackNode_t *slot = find_label(var_name);
+    if (slot == NULL || !slot->is_static)
+        return inst_list;
+    const char *asm_label = (slot->static_label != NULL) ? slot->static_label : var_name;
+    return codegen_emit_dynarray_cleanup_for_type(inst_list, ctx, type,
+        asm_label, 0, 0, 0);
+}
+
+/* Walk program-scope (global) variable declarations and emit
+ * kgpc_dynarray_finalize_local for every dynarray-typed global.  Call this
+ * once at program exit, after all program and unit statements have run.
+ *
+ * Only genuine VAR declarations are walked.  Typed-consts, external symbols,
+ * and parameter-disguised vars are skipped — same exclusions as
+ * codegen_emit_managed_local_cleanup. */
+ListNode_t *codegen_emit_managed_global_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (declarations == NULL || ctx == NULL)
+        return inst_list;
+    for (ListNode_t *cur = declarations; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree == NULL)
+            continue;
+        if (tree->type == TREE_VAR_DECL)
+        {
+            if (tree->tree_data.var_decl_data.is_typed_const)
+                continue;
+            for (ListNode_t *id_node = tree->tree_data.var_decl_data.ids;
+                 id_node != NULL; id_node = id_node->next)
+            {
+                if (id_node->cur == NULL)
+                    continue;
+                inst_list = codegen_emit_dynarray_cleanup_for_global_var(
+                    inst_list, ctx, symtab, tree, (const char *)id_node->cur);
+            }
+        }
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            if (tree->tree_data.arr_decl_data.is_typed_const)
+                continue;
+            for (ListNode_t *id_node = tree->tree_data.arr_decl_data.ids;
+                 id_node != NULL; id_node = id_node->next)
+            {
+                if (id_node->cur == NULL)
+                    continue;
+                inst_list = codegen_emit_dynarray_global_cleanup_for_arr_by_name(
+                    inst_list, ctx, symtab, (const char *)id_node->cur);
+            }
+        }
+    }
+    return inst_list;
+}
+
+ListNode_t *codegen_emit_managed_local_cleanup(ListNode_t *inst_list,
+    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (declarations == NULL || ctx == NULL)
+        return inst_list;
+    for (ListNode_t *cur = declarations; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree == NULL)
+            continue;
+        if (tree->type == TREE_VAR_DECL)
+        {
+            /* Skip typed-const declarations whose storage outlives the
+             * function (statically initialised, never owned per-call). */
+            if (tree->tree_data.var_decl_data.is_typed_const)
+                continue;
+            for (ListNode_t *id_node = tree->tree_data.var_decl_data.ids;
+                 id_node != NULL; id_node = id_node->next)
+            {
+                if (id_node->cur == NULL)
+                    continue;
+                inst_list = codegen_emit_dynarray_cleanup_for_var(inst_list, ctx, symtab,
+                    tree, (const char *)id_node->cur);
+            }
+        }
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            /* Skip typed-const arrays. */
+            if (tree->tree_data.arr_decl_data.is_typed_const)
+                continue;
+            for (ListNode_t *id_node = tree->tree_data.arr_decl_data.ids;
+                 id_node != NULL; id_node = id_node->next)
+            {
+                if (id_node->cur == NULL)
+                    continue;
+                /* Route through the same path, but using the variable's
+                 * symbol-table type — TREE_ARR_DECL doesn't carry a
+                 * cached_kgpc_type field so we rely on symtab lookup. */
+                inst_list = codegen_emit_dynarray_cleanup_for_var_by_name(
+                    inst_list, ctx, symtab, (const char *)id_node->cur);
+            }
+        }
+    }
+    return inst_list;
 }
 
 /* Sets number of vector registers (floating points) before a function call */

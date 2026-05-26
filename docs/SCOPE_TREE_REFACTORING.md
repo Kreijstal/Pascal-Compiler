@@ -1,3 +1,6 @@
+<!-- Status: COMPLETE as of 2026-03-26 (last commit: b787b780). All 8 phases done.
+816/817 compiler tests and 220/220 FPC RTL tests pass. No open regressions. -->
+
 # Scope Tree Refactoring
 
 ## Status

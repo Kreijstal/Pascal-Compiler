@@ -169,6 +169,12 @@ long FPC_SYSCALL6(long sysnr, long p1, long p2, long p3, long p4, long p5, long 
 #endif
 
 int64_t kgpc_current_exception = 0;
+
+/* Set by codegen alongside kgpc_current_exception whenever the raised
+ * expression has a class-instance type.  Pure-integer raises (`raise 42`)
+ * leave this 0 so kgpc_release_current_exception will not dereference a
+ * non-pointer value as a VMT. */
+int kgpc_current_exception_is_object = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;
 
@@ -2727,6 +2733,122 @@ void kgpc_raise(int64_t value)
     exit(EXIT_FAILURE);
 }
 
+/* Release the exception object currently held in kgpc_current_exception
+ * and clear the slot.  Called by codegen at the exit of an exception
+ * handler block that ran to completion (matched on-handler exiting
+ * normally, or unmatched except body falling through).
+ *
+ * Re-raise paths (`raise` with no expression, or `raise E` for an outer
+ * handler) leave the handler via codegen_branch_through_finally before
+ * reaching the helper, so they do not invoke the release and the
+ * exception object continues to live with kgpc_current_exception.
+ *
+ * The actual destructor + instance free is dispatched through the VMT:
+ * we read the object's class VMT pointer (slot 0 of the instance),
+ * call Destroy through the VMT (slot 12, the first user-method slot)
+ * and then FreeInstance (slot 18 in TObject's layout — the seventh
+ * user-method slot, immediately after the six inherited
+ * Destroy/ClassName/ClassParent/ClassInfo/ClassType/InheritsFrom slots).
+ * This mirrors the inline VMT dispatch emitted by codegen for
+ * TObject.Free in codegen_subprograms.c, which is the canonical free
+ * sequence: virtual destructor, then virtual FreeInstance.
+ *
+ * The VMT layout is described in KGPC/CodeGenerator/Intel_x86-64/abi_constants.h
+ * (VMT_FIRST_VMETHOD_SLOT = 12, VMT_SLOT_SIZE_BYTES = 8).  TObject
+ * itself defines six fixed inherited methods plus FreeInstance, so
+ * FreeInstance always lands at slot 12 + 6 = 18 on every TObject
+ * descendant, and the codegen-emitted dispatch in
+ * codegen_subprograms.c uses the same slot. */
+#define KGPC_VMT_DESTROY_OFFSET       (12 * 8)
+#define KGPC_VMT_FREEINSTANCE_OFFSET  (18 * 8)
+
+void kgpc_release_current_exception(void)
+{
+    int64_t value = kgpc_current_exception;
+    int is_object = kgpc_current_exception_is_object;
+    if (value == 0 || !is_object)
+    {
+        /* Nothing to free.  Preserve kgpc_current_exception so that any
+         * downstream handler that inspects the slot can still see the
+         * raised value, and so that ASAN treats the slot as a live
+         * reference to a still-allocated integer-exception payload. */
+        return;
+    }
+    void *self = (void *)(uintptr_t)value;
+    void **vmt = *(void ***)self;
+    if (vmt == NULL)
+        return;
+
+    /* Be defensive about VMT layout: not every class in user code
+     * inherits from TObject.  Programs that hand-roll an `Exception`
+     * class with no parent emit a 12-slot VMT (the fixed header only)
+     * and never produce Destroy / FreeInstance method slots.  Detect
+     * that by checking the parent-ref slot — TObject-derived classes
+     * always have a non-null vParentRef, while a parentless class has
+     * zero.  Without a guaranteed TObject ancestor we cannot safely
+     * dereference vmt+KGPC_VMT_DESTROY_OFFSET or +FREEINSTANCE_OFFSET.
+     * Leave kgpc_current_exception untouched so the existing root
+     * keeps the instance reachable (otherwise we would turn a never-
+     * freed-but-still-rooted object into an unrooted leak under ASAN). */
+    void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
+    if (parent_ref == NULL)
+        return;
+
+    /* Now we are committed to freeing the object — clear the global
+     * slot first so that any handler the destructor calls into cannot
+     * observe a dangling exception pointer through kgpc_current_exception. */
+    kgpc_current_exception = 0;
+    kgpc_current_exception_is_object = 0;
+
+    typedef void (*kgpc_vmt_method_t)(void *);
+    kgpc_vmt_method_t destroy_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
+    kgpc_vmt_method_t freeinstance_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
+
+    if (destroy_fn != NULL)
+        destroy_fn(self);
+    if (freeinstance_fn != NULL)
+        freeinstance_fn(self);
+}
+
+extern size_t kgpc_freemem_ptr(void *p);
+
+/* Release a class instance produced by a constructor call whose result is
+ * consumed transiently and never stored in a long-lived owner.  Codegen
+ * emits a call to this helper at end-of-statement for tracked temps; see
+ * codegen_push_pending_ctor_temp / codegen_flush_pending_ctor_temps.
+ *
+ * Mirrors the dispatch logic of kgpc_release_current_exception for the
+ * TObject-derived case (Destroy slot 12, FreeInstance slot 18).  For
+ * parentless classes (declared as `class` without an explicit base in
+ * modes that do not auto-inherit TObject), the VMT carries no virtual
+ * Destroy/FreeInstance — only the fixed 12-slot header — so we pair the
+ * instance with kgpc_freemem_ptr directly. */
+void kgpc_release_class_temp(void *self)
+{
+    if (self == NULL)
+        return;
+    void **vmt = *(void ***)self;
+    if (vmt == NULL)
+        return;
+    void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
+    if (parent_ref == NULL)
+    {
+        kgpc_freemem_ptr(self);
+        return;
+    }
+    typedef void (*kgpc_vmt_method_t)(void *);
+    kgpc_vmt_method_t destroy_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
+    kgpc_vmt_method_t freeinstance_fn =
+        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
+    if (destroy_fn != NULL)
+        destroy_fn(self);
+    if (freeinstance_fn != NULL)
+        freeinstance_fn(self);
+}
+
 /* Forward declarations: New/Dispose route through MemoryManager so that
  * the allocator pair stays consistent regardless of whether the FPC RTL
  * MemoryManager initializer (heap.inc) has overridden the libc-only
@@ -3725,7 +3847,17 @@ char *kgpc_format_datetime(const char *format, double datetime)
         }
     }
 
-    return result;
+    /* Convert the bare malloc'd buffer into a KGPC-headered AnsiString so
+     * the caller's `:= kgpc_format_datetime(...)` assignment path can
+     * refcount and release it via kgpc_string_release rather than leaking
+     * the raw allocation.  kgpc_string_assign duplicates non-headered
+     * char* values into a fresh headered copy without ever freeing the
+     * source — leaving the malloc'd buffer here would leak its bytes
+     * on every DateTimeToStr / FormatDateTime call. */
+    (void)length;  /* result is already NUL-terminated by append_char/text. */
+    char *headered = kgpc_string_duplicate(result);
+    free(result);
+    return headered;
 }
 
 typedef struct

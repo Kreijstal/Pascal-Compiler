@@ -2186,6 +2186,42 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     }
     expr->expr_data.function_call_data.args_expr = NULL;
 
+    if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+    {
+        free(expr->expr_data.function_call_data.placeholder_method_name);
+        expr->expr_data.function_call_data.placeholder_method_name = NULL;
+    }
+    if (expr->expr_data.function_call_data.call_qualifier != NULL)
+    {
+        free(expr->expr_data.function_call_data.call_qualifier);
+        expr->expr_data.function_call_data.call_qualifier = NULL;
+    }
+    if (expr->expr_data.function_call_data.self_class_name != NULL)
+    {
+        free(expr->expr_data.function_call_data.self_class_name);
+        expr->expr_data.function_call_data.self_class_name = NULL;
+    }
+    if (expr->expr_data.function_call_data.cached_owner_class != NULL)
+    {
+        free(expr->expr_data.function_call_data.cached_owner_class);
+        expr->expr_data.function_call_data.cached_owner_class = NULL;
+    }
+    if (expr->expr_data.function_call_data.cached_method_name != NULL)
+    {
+        free(expr->expr_data.function_call_data.cached_method_name);
+        expr->expr_data.function_call_data.cached_method_name = NULL;
+    }
+    if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
+    {
+        destroy_expr(expr->expr_data.function_call_data.procedural_var_expr);
+        expr->expr_data.function_call_data.procedural_var_expr = NULL;
+    }
+    if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+    {
+        destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+        expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+    }
+
     /* Reinterpret as a typecast expression */
     expr->type = EXPR_TYPECAST;
     expr->expr_data.typecast_data.target_type = target_type;
