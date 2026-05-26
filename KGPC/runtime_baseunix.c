@@ -166,8 +166,22 @@ int fpchmod(const char *path, int mode)
  *
  * The layouts are binary-compatible, so we can cast the Pascal pointer
  * directly to struct sigaction * and forward to the libc call.
+ *
+ * Windows portability: there is no POSIX signal model, so the wrapper
+ * returns -1 (the POSIX convention for "syscall failed") and sets errno
+ * to ENOSYS.  Pascal callers see the same error contract as a failing
+ * sigaction(2) on Unix.  The symbol must still be defined so that test
+ * programs which mention fpsigaction link cleanly on Windows targets.
  */
-#ifndef _WIN32
+#ifdef _WIN32
+#include <errno.h>
+int fpsigaction(int signum, void *act, void *oldact)
+{
+    (void)signum; (void)act; (void)oldact;
+    errno = ENOSYS;
+    return -1;
+}
+#else
 int fpsigaction(int signum, struct sigaction *act, struct sigaction *oldact)
 {
     return sigaction(signum, act, oldact);

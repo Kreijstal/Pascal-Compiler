@@ -135,6 +135,14 @@ def _discover_and_add_auto_tests():
                     elif IS_WINE:
                         # Cross-compiling with Wine - definitely MinGW, no fork support
                         self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
+
+                # fpsigaction wraps POSIX sigaction(2); Windows has no kernel
+                # signal model, the runtime stub returns ENOSYS, and the test
+                # asserts success.  Skip on the Windows ABI so the symbol-link
+                # check (provided by the stub) is exercised without forcing
+                # the functional assertions to pass.
+                if test_base_name == "tdd_baseunix_fpsigaction" and IS_WINDOWS_ABI:
+                    self.skipTest("fpsigaction wraps POSIX sigaction(2); Windows has no signal model")
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
