@@ -2700,7 +2700,7 @@ static bool eval_const_term(PascalPreprocessor *pp, const char **cursor,
         return false;
       if (right < 0 || right >= 64)
         return false;
-      *value <<= right;
+      *value = (int64_t)((uint64_t)*value << right);
     } else if (*cursor + 3 <= end &&
                ascii_strncasecmp(*cursor, "SHR", 3) == 0 &&
                (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
@@ -2710,7 +2710,7 @@ static bool eval_const_term(PascalPreprocessor *pp, const char **cursor,
         return false;
       if (right < 0 || right >= 64)
         return false;
-      *value >>= right;
+      *value = (int64_t)((uint64_t)*value >> right);
     } else {
       break;
     }
@@ -3505,7 +3505,7 @@ static bool parse_expression(const char **cursor, int64_t *value,
       // Set membership test: element IN set
       // element is ordinal value (0-63), set is bitmask
       if (*value >= 0 && *value < 64) {
-        *value = ((1LL << *value) & rhs) != 0;
+        *value = (int64_t)(((uint64_t)1 << *value) & (uint64_t)rhs) != 0;
       } else {
         *value = 0; // out of range = not in set
       }
@@ -3718,7 +3718,7 @@ static bool parse_term(const char **cursor, int64_t *value,
     case OP_SHL:
       if (rhs < 0 || rhs >= 64)
         return set_error(error_message, "invalid shift count");
-      *value <<= rhs;
+      *value = (int64_t)((uint64_t)*value << rhs);
       break;
     case OP_SHR:
       if (rhs < 0 || rhs >= 64)

@@ -203,10 +203,6 @@ nullPointerRedundantCheck:KGPC/Parser/SemanticCheck/SemCheck_parts/SemCheck_env_
 oppositeInnerCondition:KGPC/Parser/SemanticCheck/SemChecks/SemCheck_sizeof.c:1243
 pointerSize:KGPC/runtime_string.c:1965
 seekOnAppendedFile:KGPC/runtime_string.c:1451
-shiftTooManyBitsSigned:cparser/examples/pascal_parser/pascal_preprocessor.c:2703
-shiftTooManyBitsSigned:cparser/examples/pascal_parser/pascal_preprocessor.c:2713
-shiftTooManyBitsSigned:cparser/examples/pascal_parser/pascal_preprocessor.c:3508
-shiftTooManyBitsSigned:cparser/examples/pascal_parser/pascal_preprocessor.c:3721
 varFuncNullUB:cparser/examples/calculator/calculator_logic.c:135
 varFuncNullUB:cparser/examples/pascal_parser/pascal_declaration.c:1077
 varFuncNullUB:cparser/examples/pascal_parser/pascal_declaration.c:1093
