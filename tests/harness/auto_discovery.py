@@ -15,6 +15,7 @@ from .env import (
     FPC_RTL_DIR,
     IS_WINDOWS_ABI,
     IS_WINE,
+    PLATFORM_ID,
     TEST_CASES_DIR,
     INPUT_DATA_DIR,
     TEST_OUTPUT_DIR,
@@ -118,31 +119,15 @@ def _discover_and_add_auto_tests():
                 if test_base_name in FPC_RTL_ONLY_TESTS:
                     self.skipTest("FPC RTL-only regression test")
 
-                # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
-                # Cygwin and MSYS have fork, pure MinGW does not
-                # Skip tests with hardcoded SysV ABI inline asm on Windows
-                if test_base_name == "nostackframe_asm_regsizing" and IS_WINDOWS_ABI:
-                    self.skipTest("Inline asm test uses hardcoded SysV ABI registers")
-
-                if test_base_name == "unix_wait_helpers_demo":
-                    # Check if we're targeting MinGW (not Cygwin/MSYS)
-                    # MinGW defines _WIN32 but not __CYGWIN__
-                    # We can detect this by checking if the C compiler is MinGW
-                    if IS_WINDOWS_ABI and not IS_WINE:
-                        # Running natively on Windows - could be MinGW or Cygwin
-                        # Skip for now as we can't easily detect Cygwin vs MinGW at runtime
-                        self.skipTest("Unix fork() test requires POSIX fork support (Cygwin/MSYS/Unix)")
-                    elif IS_WINE:
-                        # Cross-compiling with Wine - definitely MinGW, no fork support
-                        self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
-
-                # fpsigaction wraps POSIX sigaction(2); Windows has no kernel
-                # signal model, the runtime stub returns ENOSYS, and the test
-                # asserts success.  Skip on the Windows ABI so the symbol-link
-                # check (provided by the stub) is exercised without forcing
-                # the functional assertions to pass.
-                if test_base_name == "tdd_baseunix_fpsigaction" and IS_WINDOWS_ABI:
-                    self.skipTest("fpsigaction wraps POSIX sigaction(2); Windows has no signal model")
+                # Sets below classify tests by what platform feature they
+                # need.  Cygwin/MSYS provide a POSIX-emulation runtime; the
+                # pure-Windows ABIs (MinGW / UCRT / clang-mingw, either
+                # native or via Wine) do not.
+                if test_base_name in SYSV_ABI_ONLY_TESTS and IS_WINDOWS_ABI:
+                    self.skipTest("Test uses hardcoded SysV ABI registers / calling convention")
+                if test_base_name in POSIX_ONLY_TESTS and IS_WINDOWS_ABI \
+                        and not PLATFORM_ID.startswith(("cygwin", "msys")):
+                    self.skipTest("Test requires POSIX runtime features unavailable on this Windows ABI")
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
@@ -272,6 +257,20 @@ def _discover_and_add_auto_tests():
 # Tests that use KGPC-only extensions not available in FPC RTL mode.
 KGPC_ONLY_TESTS = {
     'random_real_function',  # Random(Real) overload is a KGPC extension
+}
+
+# Tests that depend on POSIX runtime features (fork, sigaction, signals, ...)
+# which exist on Cygwin/MSYS but not on native MinGW / UCRT / clang-mingw.
+# Skipped only on those latter ABIs.
+POSIX_ONLY_TESTS = {
+    "tdd_baseunix_fpsigaction",   # fpsigaction → POSIX sigaction(2)
+    "unix_wait_helpers_demo",     # fpFork / waitpid
+}
+
+# Tests that emit hardcoded SysV-ABI inline assembly and cannot run on any
+# Windows ABI (which uses the Microsoft x64 calling convention).
+SYSV_ABI_ONLY_TESTS = {
+    "nostackframe_asm_regsizing",
 }
 
 # Tests that target overloads or units only present in the FPC RTL suite.
