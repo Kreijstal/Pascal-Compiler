@@ -117,6 +117,13 @@ endif
 
 subdir('KGPC')
 
+# Static analysis: run cppcheck against the compile_commands.json with the
+# project baseline suppression list.  See .cppcheck-suppressions / scripts/cppcheck.sh.
+run_target('cppcheck',
+  command: [meson.project_source_root() / 'scripts/cppcheck.sh',
+            meson.project_build_root()],
+)
+
 # Standalone preprocessor tool
 kgpc_preprocess = executable('kgpc-preprocess',
   'KGPC/preprocess_main.c',
