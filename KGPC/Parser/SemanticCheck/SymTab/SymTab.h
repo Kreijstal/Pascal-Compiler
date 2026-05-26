@@ -1,8 +1,7 @@
 /*
     Symbol table: parent-pointer scope tree (primary).
-    See docs/SCOPE_TREE_REFACTORING.md.
 
-    Phase 5: All lookups and insertions use the scope tree directly.
+    All lookups and insertions go through the scope tree.
 
     WARNING: Symbol table will NOT free given identifier strings or args when destroyed
         Remember to free given identifier strings manually

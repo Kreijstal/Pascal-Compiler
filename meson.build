@@ -1,4 +1,9 @@
-project('kgpc-project', 'c')
+project('kgpc-project', 'c',
+  version : '0.0.1',
+)
+
+add_project_arguments('-DKGPC_VERSION="' + meson.project_version() + '"',
+                      language : 'c')
 
 cc = meson.get_compiler('c')
 if cc.has_function('strndup', prefix: '#include <string.h>')

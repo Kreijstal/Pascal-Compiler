@@ -1175,9 +1175,9 @@ class TestCompiler(unittest.TestCase):
 
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
-        input_file = "KGPC/TestPrograms/sign_test.p"
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "sign_test.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, f"sign_test{EXE_EXT}")
+        input_file = os.path.join(TEST_CASES_DIR, "legacy_sign_test.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "legacy_sign_test.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"legacy_sign_test{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -2229,9 +2229,9 @@ sys.exit(3)
 
     def test_for_program(self):
         """Tests the for program, including edge cases."""
-        input_file = "KGPC/TestPrograms/CodeGeneration/for.p"
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, f"for{EXE_EXT}")
+        input_file = os.path.join(TEST_CASES_DIR, "legacy_for_loop.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "legacy_for_loop.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"legacy_for_loop{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)

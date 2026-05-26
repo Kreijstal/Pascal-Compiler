@@ -7,12 +7,6 @@
 # Compiled binary
 KGPC/kgpc
 
-# Generated parser files
-KGPC/Parser/LexAndYacc/lex.yy.c
-KGPC/Parser/LexAndYacc/Grammar.tab.c
-KGPC/Parser/LexAndYacc/Grammar.tab.h
-KGPC/Parser/LexAndYacc/Grammar.output
-
 # Test output
 tests/output/
 failing-tests/
@@ -32,29 +26,34 @@ tests/test_cases/test_fpc_*
 # Root-level scratch artifacts that should live under tests/output or build/
 /*.s
 /*.p
+/*.pas
 /*.log
 /*.tmp
 /*.out
 /*.md
+/gmon.out
 /_codeql_detected_source_root
 !/README.md
-!/FPC_BOOTSTRAP_INVESTIGATION.md
-!/FPC_BOOTSTRAP_ACTUAL_TEST.md
-!/FPC_FULL_BOOTSTRAP_TEST.md
-!/FPC_BOOTSTRAP_ANALYSIS.md
-!/test-cross-compile*.sh
+!/CLAUDE.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/SECURITY.md
+!/STATUS.md
 
 # Python cache
 __pycache__/
 *.pyc
 
+# Per-machine agent state (worktrees, memory snapshots)
+.claude/
+
 # Miscellaneous scratch files
 quasi-msys2/
-/preprocessed_dump.pas
 *.ppu
 fpc_bootstrap_failing/fpc_pas_extension_test
 test_output.txt
 utf8_output.txt
+tree.log
 
 # External source trees
 FPCSource/
@@ -63,3 +62,8 @@ FPCSource/
 # but list them here too so bare "git status" stays clean before first build)
 build*/
 builddir*/
+
+# Sphinx documentation build
+docs/_build/
+docs/source_map.rst
+.docs-venv/

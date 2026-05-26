@@ -1,4 +1,0 @@
-To get target assembly:
-
-gcc -S *.c -fno-asynchronous-unwind-tables
-

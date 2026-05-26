@@ -258,6 +258,7 @@ static void print_usage(const char *prog_name)
     fprintf(out, "  Compiles Pascal source to x86-64 assembly\n");
     fprintf(out, "  Flags:\n");
     fprintf(out, "    -h, --help            Show this help text and exit\n");
+    fprintf(out, "    -v, --version         Print compiler version and exit\n");
     fprintf(out, "    -O1, -O2              Enable optimizations\n");
     fprintf(out, "    -non-local            Enable non-local variable chasing (experimental)\n");
     fprintf(out, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
@@ -2907,9 +2908,23 @@ static void emit_link_args(void)
         fprintf(stderr, "KGPC_LINK_ARGS:\n");
 }
 
+#ifndef KGPC_VERSION
+#define KGPC_VERSION "unknown"
+#endif
+
 int main(int argc, char **argv)
 {
     install_stack_trace_handler();
+
+    for (int ai = 1; ai < argc; ++ai)
+    {
+        if (strcmp(argv[ai], "--version") == 0 || strcmp(argv[ai], "-v") == 0)
+        {
+            printf("kgpc %s\n", KGPC_VERSION);
+            return 0;
+        }
+    }
+
     g_saved_argc = argc;
     g_saved_argv = argv;
 
