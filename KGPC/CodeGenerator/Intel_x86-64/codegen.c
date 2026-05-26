@@ -6,47 +6,47 @@
     See codegen.h for stack and implementation details
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <assert.h>
-#include <string.h>
-#include <limits.h>
-#include <ctype.h>
-#include "register_types.h"
 #include "codegen.h"
-#include "codegen_string_set.h"
-#include "codegen_symbol_resolution.h"
-#include "codegen_statement.h"
-#include "stackmng/stackmng.h"
-#include "expr_tree/expr_tree.h"
-#include "codegen_expression.h"
-#include "../../flags.h"
 #include "../../Parser/List/List.h"
+#include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
-#include "../../Parser/ParseTree/KgpcType.h"
-#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/NameMangling.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../flags.h"
+#include "codegen_expression.h"
+#include "codegen_statement.h"
+#include "codegen_string_set.h"
+#include "codegen_symbol_resolution.h"
+#include "expr_tree/expr_tree.h"
+#include "register_types.h"
+#include "stackmng/stackmng.h"
+#include <assert.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
-#include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
+#include "ir/ir_inst.h"
 #include "ir/ir_liveness.h"
 #include "ir/ir_peephole.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "graph_coloring_allocator.h"
 #endif
 
+#include "abi_constants.h"
 #include "codegen_subprograms_internal.h"
 #include "codegen_vmt_internal.h"
-#include "abi_constants.h"
 
 int codegen_float_native_distance(Tree_t *sub);
 int codegen_list_contains_string(ListNode_t *list, const char *value);
@@ -544,11 +544,6 @@ int node_is_file_type(HashNode_t *node) {
          kgpc_type_equals_tag(node->type, TEXT_TYPE);
 }
 
-/* Helper function to get RecordType from HashNode */
-static inline struct RecordType *get_record_type_from_node(HashNode_t *node) {
-  return hashnode_get_record_type(node);
-}
-
 HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab,
                                            const char *type_name) {
   if (symtab == NULL || type_name == NULL)
@@ -598,7 +593,7 @@ struct RecordType *codegen_lookup_record_type_for_node(SymTab_t *symtab,
         if (FindSymbol(&qualified, symtab, qualified_id) != 0 &&
             qualified != NULL) {
           struct RecordType *qualified_record =
-              get_record_type_from_node(qualified);
+              hashnode_get_record_type(qualified);
           if (qualified_record != NULL) {
             free(qualified_id);
             return qualified_record;
@@ -609,7 +604,7 @@ struct RecordType *codegen_lookup_record_type_for_node(SymTab_t *symtab,
     }
   }
 
-  return get_record_type_from_node(node);
+  return hashnode_get_record_type(node);
 }
 
 int codegen_parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2,
@@ -872,7 +867,7 @@ int node_is_class_type(HashNode_t *node) {
     return 0;
   if (!node_is_record_type(node))
     return 0;
-  struct RecordType *record = get_record_type_from_node(node);
+  struct RecordType *record = hashnode_get_record_type(node);
   return record_type_is_class(record);
 }
 
@@ -1186,7 +1181,7 @@ void codegen_add_class_vars_for_method(const char *owner_class,
   }
 
   /* Get the record type - for classes, the type is a pointer to the record */
-  struct RecordType *record_info = get_record_type_from_node(class_node);
+  struct RecordType *record_info = hashnode_get_record_type(class_node);
   if (record_info == NULL) {
     /* Try to dereference if it's a pointer type (class types are pointers to
      * records) */
@@ -5611,7 +5606,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx,
                               (char *)id_list->cur);
                 /* For records/objects, get the full struct size */
                 struct RecordType *record_desc =
-                    get_record_type_from_node(size_node);
+                    hashnode_get_record_type(size_node);
                 long long record_size = 0;
                 if (record_desc != NULL &&
                     codegen_sizeof_record_type(ctx, record_desc,
@@ -5645,7 +5640,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx,
                       FindSymbol(&base_node, ctx->symtab, base_var) != 0 &&
                       base_node != NULL) {
                     struct RecordType *record =
-                        get_record_type_from_node(base_node);
+                        hashnode_get_record_type(base_node);
                     if (record != NULL) {
                       field_offset = record_type_get_field_offset(
                           ctx->symtab, record, field_name);
@@ -5766,7 +5761,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx,
                       FindSymbol(&base_node, ctx->symtab, base_var) != 0 &&
                       base_node != NULL) {
                     struct RecordType *record =
-                        get_record_type_from_node(base_node);
+                        hashnode_get_record_type(base_node);
                     if (record != NULL) {
                       field_offset = record_type_get_field_offset(
                           ctx->symtab, record, field_name);
@@ -5840,14 +5835,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx,
 
       struct RecordType *record_desc = NULL;
       if (type_node != NULL) {
-        record_desc = get_record_type_from_node(type_node);
+        record_desc = hashnode_get_record_type(type_node);
         struct TypeAlias *alias = get_type_alias_from_node(type_node);
         if (record_desc == NULL && alias != NULL &&
             alias->target_type_id != NULL) {
           HashNode_t *target_node = NULL;
           if (FindSymbol(&target_node, symtab, alias->target_type_id) != 0 &&
               target_node != NULL)
-            record_desc = get_record_type_from_node(target_node);
+            record_desc = hashnode_get_record_type(target_node);
         }
       }
       if (record_desc == NULL && arr->inline_record_type != NULL) {

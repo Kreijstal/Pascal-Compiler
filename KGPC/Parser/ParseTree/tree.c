@@ -4,16 +4,16 @@
 */
 
 #include "tree.h"
+#include "../SemanticCheck/HashTable/HashTable.h" /* For HashType enum */
+#include "KgpcType.h"
+#include "from_cparser.h"
+#include "ident_ref.h"
 #include "tree_types.h"
 #include "type_tags.h"
-#include "KgpcType.h"
-#include "ident_ref.h"
-#include "from_cparser.h"
-#include "../SemanticCheck/HashTable/HashTable.h" /* For HashType enum */
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern const char *kgpc_getenv(const char *name);
 

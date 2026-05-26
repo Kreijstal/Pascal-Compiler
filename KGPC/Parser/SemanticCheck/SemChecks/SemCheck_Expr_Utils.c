@@ -8,8 +8,8 @@
     Part of the SemCheck module split from SemCheck_expr.c.
 */
 
-#include <limits.h>
 #include "SemCheck_Expr_Internal.h"
+#include <limits.h>
 
 static const char *semcheck_type_alias_name(KgpcType *type) {
   struct TypeAlias *alias = kgpc_type_get_type_alias(type);

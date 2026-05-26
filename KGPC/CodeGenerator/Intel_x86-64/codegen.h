@@ -98,6 +98,9 @@
 #ifndef CODE_GEN_H
 #define CODE_GEN_H
 
+#include <stddef.h>
+#include <string.h>
+
 #include "../../flags.h"
 
 extern kgpc_target_abi_t g_current_codegen_abi;
@@ -175,15 +178,15 @@ char *codegen_make_unit_qualified_key(int source_unit_index,
 #define GT_U 102
 #define GE_U 103
 
-#include <stdlib.h>
-#include <stdio.h>
-#include "stackmng/stackmng.h"
 #include "../../Parser/List/List.h"
+#include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../compilation_context.h"
+#include "stackmng/stackmng.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 void codegen_common_enum_typeinfo_label(const char *type_id, char *buffer,
                                         size_t size);

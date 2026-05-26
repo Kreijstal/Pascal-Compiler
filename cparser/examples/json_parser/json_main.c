@@ -1,11 +1,11 @@
 #define UNW_LOCAL_ONLY
+#include "json_parser.h"
+#include "parser.h"
 #include <libunwind.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "parser.h"
-#include "json_parser.h"
 
 void backtrace_handler(int sig) {
   unw_cursor_t cursor;

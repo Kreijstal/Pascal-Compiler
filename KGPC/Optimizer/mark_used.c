@@ -4,18 +4,18 @@
 */
 
 #include "mark_used.h"
+#include "Parser/ParseTree/KgpcType.h"
 #include "Parser/ParseTree/tree_types.h"
 #include "Parser/SemanticCheck/HashTable/HashTable.h"
-#include "Parser/ParseTree/KgpcType.h"
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <assert.h>
-#include <ctype.h>
-#include "identifier_utils.h"
 #include "compilation_context.h"
 #include "flags.h"
+#include "identifier_utils.h"
+#include <assert.h>
+#include <ctype.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Cached debug-trace flags — getenv() is slow and these environment
  * variables are checked on every EXPR_FUNCTION_CALL node during the

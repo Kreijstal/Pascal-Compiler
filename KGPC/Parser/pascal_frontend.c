@@ -1,8 +1,8 @@
 #include "pascal_frontend.h"
 
 #include <ctype.h>
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -13,13 +13,13 @@
 #include <malloc.h>
 #endif
 
+#include "../../common/file_time.h"
+#include "../compilation_context.h"
+#include "../string_intern.h"
 #include "ErrVars.h"
 #include "ParseTree/from_cparser.h"
 #include "SemanticCheck/SemCheck.h"
 #include "ast_cache.h"
-#include "../string_intern.h"
-#include "../compilation_context.h"
-#include "../../common/file_time.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -381,13 +381,13 @@ const char *const *pascal_frontend_get_include_paths(int *count) {
 
 const char *pascal_frontend_current_path(void) { return g_last_parse_path; }
 
-#include "ParseTree/from_cparser.h"
-#include "ParseTree/tree.h"
-#include "ParseTree/generic_types.h"
-#include "pascal_preprocessor.h"
-#include "../flags.h"
-#include "../../cparser/parser.h"
 #include "../../cparser/examples/pascal_parser/pascal_peek.h"
+#include "../../cparser/parser.h"
+#include "../flags.h"
+#include "ParseTree/from_cparser.h"
+#include "ParseTree/generic_types.h"
+#include "ParseTree/tree.h"
+#include "pascal_preprocessor.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);

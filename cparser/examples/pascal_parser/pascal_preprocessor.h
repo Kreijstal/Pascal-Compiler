@@ -1,8 +1,8 @@
 #ifndef PASCAL_PREPROCESSOR_H
 #define PASCAL_PREPROCESSOR_H
 
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct PascalPreprocessor PascalPreprocessor;
 

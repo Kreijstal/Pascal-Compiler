@@ -2,16 +2,16 @@ static void pascal_test_cleanup(void);
 #define TEST_FINI pascal_test_cleanup()
 
 #include "acutest.h"
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
+#include "pascal_keywords.h"
 #include "pascal_parser.h"
 #include "pascal_preprocessor.h"
-#include "pascal_keywords.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
 
 typedef struct parser_cleanup_entry {
   combinator_t *parser;

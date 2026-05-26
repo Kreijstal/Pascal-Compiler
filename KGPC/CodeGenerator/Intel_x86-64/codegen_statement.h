@@ -1,8 +1,8 @@
 #ifndef CODE_GEN_STATEMENT_H
 #define CODE_GEN_STATEMENT_H
 
-#include "codegen.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "codegen.h"
 
 ListNode_t *codegen_stmt(struct Statement *, ListNode_t *, CodeGenContext *ctx,
                          SymTab_t *symtab);

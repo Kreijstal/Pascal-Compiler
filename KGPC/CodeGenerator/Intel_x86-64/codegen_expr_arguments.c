@@ -3,38 +3,37 @@
     Code generation for argument-passing and nonlocal variable access
 */
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "../../Parser/List/List.h"
+#include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
+#include "../../Parser/ParseTree/tree.h"
+#include "../../Parser/ParseTree/tree_types.h"
+#include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../Parser/pascal_frontend.h"
+#include "../../flags.h"
+#include "../../format_arg.h"
+#include "../../identifier_utils.h"
+#include "../../unit_registry.h"
 #include "codegen.h"
-#include "codegen_expression.h"
 #include "codegen_expr_arguments.h"
 #include "codegen_expr_array.h"
 #include "codegen_expr_relop.h"
 #include "codegen_expr_sizeof.h"
+#include "codegen_expression.h"
+#include "expr_tree/expr_tree.h"
 #include "register_types.h"
 #include "stackmng/stackmng.h"
-#include "expr_tree/expr_tree.h"
-#include "../../flags.h"
-#include "../../Parser/List/List.h"
-#include "../../Parser/ParseTree/tree.h"
-#include "../../Parser/ParseTree/tree_types.h"
-#include "../../Parser/ParseTree/type_tags.h"
-#include "../../identifier_utils.h"
-#include "../../Parser/ParseTree/KgpcType.h"
-#include "../../Parser/ParseTree/from_cparser.h"
-#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
-#include "../../Parser/SemanticCheck/SemCheck.h"
-#include "../../Parser/pascal_frontend.h"
-#include "../../identifier_utils.h"
-#include "../../format_arg.h"
-#include "../../unit_registry.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);

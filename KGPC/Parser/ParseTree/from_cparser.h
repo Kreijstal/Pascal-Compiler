@@ -1,10 +1,10 @@
 #ifndef FROM_CPARSER_H
 #define FROM_CPARSER_H
 
+#include "KgpcType.h"
 #include "parser.h"
 #include "pascal_parser.h"
 #include "tree.h"
-#include "KgpcType.h"
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast);
 void from_cparser_cleanup(void);

@@ -1,10 +1,10 @@
 /* Benchmark parser initialization overhead */
+#include "combinators.h"
+#include "parser.h"
+#include "pascal_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/time.h>
-#include "parser.h"
-#include "combinators.h"
-#include "pascal_parser.h"
 
 static double get_wall_time() {
   struct timeval time;

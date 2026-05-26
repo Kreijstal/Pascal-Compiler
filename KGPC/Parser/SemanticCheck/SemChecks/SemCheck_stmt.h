@@ -12,8 +12,8 @@
 #ifndef SEM_CHECK_STMT_H
 #define SEM_CHECK_STMT_H
 
-#include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree_types.h"
+#include "../SymTab/SymTab.h"
 
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);

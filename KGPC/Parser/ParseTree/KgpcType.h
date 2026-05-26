@@ -10,9 +10,9 @@
 #ifndef KGPC_TYPE_H
 #define KGPC_TYPE_H
 
-#include <stddef.h>
 #include "../List/List.h" // For ListNode_t
 #include "tree.h"         // For Tree_t
+#include <stddef.h>
 
 // Forward declaration to allow recursive type definitions (e.g., pointers).
 typedef struct KgpcType KgpcType;

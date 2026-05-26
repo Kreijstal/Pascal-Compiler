@@ -3,12 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "codegen.h"
-#include "codegen_expression.h"
-#include "codegen_expr_sizeof.h"
-#include "../../identifier_utils.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../identifier_utils.h"
+#include "codegen.h"
+#include "codegen_expr_sizeof.h"
+#include "codegen_expression.h"
 
 extern const char *kgpc_getenv(const char *name);
 

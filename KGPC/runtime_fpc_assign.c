@@ -28,11 +28,11 @@
  * 568:  FullName (ptr, out of bounds, harmless BSS access)
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
-#include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -245,10 +245,10 @@ __attribute__((unused)) static void assign_f_rbs(void *filerec,
 /* directly with the AnsiString's char data.                           */
 /* ------------------------------------------------------------------ */
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 typedef struct KgpcStringHeaderShim {
   uint16_t codepage;

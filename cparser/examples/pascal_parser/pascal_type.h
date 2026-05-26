@@ -1,8 +1,8 @@
 #ifndef PASCAL_TYPE_H
 #define PASCAL_TYPE_H
 
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
 
 combinator_t *range_type(tag_t tag);
 combinator_t *array_type(tag_t tag);

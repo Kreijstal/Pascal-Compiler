@@ -1,10 +1,10 @@
 /*
  * codegen_string_set.c — Simple string hash set for O(1) label/name lookups
  */
+#include "codegen_string_set.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include "codegen_string_set.h"
 
 static unsigned codegen_hash(const char *s) {
   unsigned h = 0;

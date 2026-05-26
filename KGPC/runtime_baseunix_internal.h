@@ -10,9 +10,9 @@
 #define KGPC_RUNTIME_BASEUNIX_INTERNAL_H
 
 #ifdef _WIN32
-#include <string.h>
 #include <fcntl.h>
 #include <io.h>
+#include <string.h>
 
 /* Linux open flag constants for cross-platform translation */
 #define LINUX_O_CREAT 0x40

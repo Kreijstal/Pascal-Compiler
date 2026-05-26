@@ -1,15 +1,15 @@
 #include "pascal_type.h"
-#include "pascal_parser.h"
-#include "pascal_keywords.h"
-#include "pascal_peek.h"
-#include "pascal_expression.h"
 #include "pascal_declaration.h"
+#include "pascal_expression.h"
+#include "pascal_keywords.h"
+#include "pascal_parser.h"
+#include "pascal_peek.h"
+#include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <ctype.h>
-#include <stdbool.h>
 
 static void set_combinator_name(combinator_t *comb, const char *name) {
   if (comb == NULL)

@@ -855,9 +855,9 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls) {
                    * pointer/array/set/file. This prevents objpas
                    * PString=PAnsiString from overriding system
                    * pstring=^shortstring (which has is_pointer=1). */
-                  !old_alias->is_array &&
-                  !old_alias->is_pointer && !old_alias->is_set &&
-                  !old_alias->is_file && !old_alias->inline_record_type &&
+                  !old_alias->is_array && !old_alias->is_pointer &&
+                  !old_alias->is_set && !old_alias->is_file &&
+                  !old_alias->inline_record_type &&
                   !pascal_identifier_equals(new_alias->target_type_id,
                                             old_alias->target_type_id)) {
                 /* Only allow override for the specific case where

@@ -1,8 +1,8 @@
 #include "json_parser.h"
 #include "combinators.h"
+#include <ctype.h>
 #include <stdbool.h>
 #include <string.h>
-#include <ctype.h>
 
 // Predicate for whitespace
 static bool is_whitespace(char c) { return isspace((unsigned char)c); }

@@ -3,38 +3,38 @@
     Extracted from codegen.c — see codegen_vmt_internal.h for shared helpers.
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <assert.h>
-#include <string.h>
-#include <limits.h>
-#include <ctype.h>
-#include "register_types.h"
-#include "codegen.h"
-#include "codegen_string_set.h"
-#include "codegen_symbol_resolution.h"
-#include "codegen_statement.h"
-#include "stackmng/stackmng.h"
-#include "expr_tree/expr_tree.h"
-#include "codegen_expression.h"
-#include "../../flags.h"
 #include "../../Parser/List/List.h"
+#include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
-#include "../../Parser/ParseTree/KgpcType.h"
-#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/NameMangling.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../flags.h"
+#include "codegen.h"
+#include "codegen_expression.h"
+#include "codegen_statement.h"
+#include "codegen_string_set.h"
+#include "codegen_symbol_resolution.h"
+#include "expr_tree/expr_tree.h"
+#include "register_types.h"
+#include "stackmng/stackmng.h"
+#include <assert.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
-#include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
+#include "ir/ir_inst.h"
 #include "ir/ir_liveness.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "graph_coloring_allocator.h"
@@ -42,8 +42,8 @@
 
 #include "codegen_subprograms_internal.h"
 
-#include "codegen_vmt_internal.h"
 #include "abi_constants.h"
+#include "codegen_vmt_internal.h"
 
 /* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
  * Build a parameter TypeRef array for overload disambiguation. */
@@ -70,10 +70,6 @@ static void codegen_assert_interface_impl_resolved(const char *iface_name,
                                                    const char *class_label,
                                                    const char *iface_symbol,
                                                    const char *impl_symbol);
-
-static inline struct RecordType *get_record_type_from_node(HashNode_t *node) {
-  return hashnode_get_record_type(node);
-}
 
 static int codegen_method_uses_sret(CodeGenContext *ctx, SymTab_t *symtab,
                                     const char *owner_name,
@@ -339,7 +335,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
       if (FindSymbol(&parent_cls_node, symtab,
                      record_info->parent_class_name) != 0 &&
           parent_cls_node != NULL) {
-        parent_cls_rec = get_record_type_from_node(parent_cls_node);
+        parent_cls_rec = hashnode_get_record_type(parent_cls_node);
         if (parent_cls_rec == NULL && parent_cls_node->type != NULL &&
             parent_cls_node->type->kind == TYPE_KIND_POINTER &&
             parent_cls_node->type->info.points_to != NULL &&
@@ -525,7 +521,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     HashNode_t *parent_node = NULL;
     if (FindSymbol(&parent_node, symtab, parent_vmt_label) != 0 &&
         parent_node != NULL) {
-      struct RecordType *parent_rec = get_record_type_from_node(parent_node);
+      struct RecordType *parent_rec = hashnode_get_record_type(parent_node);
       /* Only use the resolved type_id if it's actually a class. If FindIdent
        * resolved to a plain record (e.g. TTimeZone = timezone record alias
        * instead of TTimeZone = class abstract), keep the original name which
@@ -1371,7 +1367,7 @@ codegen_record_parent(const struct RecordType *record, SymTab_t *symtab) {
         if (FindSymbol(&qualified, symtab, qualified_id) != 0 &&
             qualified != NULL) {
           const struct RecordType *qualified_record =
-              get_record_type_from_node(qualified);
+              hashnode_get_record_type(qualified);
           if (qualified_record == NULL && qualified->type != NULL &&
               qualified->type->kind == TYPE_KIND_POINTER &&
               qualified->type->info.points_to != NULL &&
@@ -1387,7 +1383,7 @@ codegen_record_parent(const struct RecordType *record, SymTab_t *symtab) {
     }
   }
 
-  const struct RecordType *best_record = get_record_type_from_node(best_node);
+  const struct RecordType *best_record = hashnode_get_record_type(best_node);
   if (best_record == NULL && best_node->type != NULL &&
       best_node->type->kind == TYPE_KIND_POINTER &&
       best_node->type->info.points_to != NULL &&
@@ -1558,7 +1554,7 @@ static void __attribute__((unused)) codegen_collect_inferred_interfaces(
         HashNode_t *hash_node = (HashNode_t *)node->cur;
         if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE)
           continue;
-        struct RecordType *iface_record = get_record_type_from_node(hash_node);
+        struct RecordType *iface_record = hashnode_get_record_type(hash_node);
         if (iface_record == NULL && hash_node->type != NULL &&
             hash_node->type->kind == TYPE_KIND_POINTER &&
             hash_node->type->info.points_to != NULL &&

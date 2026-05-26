@@ -1,10 +1,10 @@
+#include "calculator_logic.h"
+#include "combinators.h"
+#include "parser.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include "parser.h"
-#include "combinators.h"
-#include "calculator_logic.h"
 
 // --- Forward declarations for local functions ---
 static void print_error_with_partial_ast(ParseError *error);

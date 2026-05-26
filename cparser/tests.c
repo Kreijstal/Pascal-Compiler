@@ -1,6 +1,6 @@
 #include "acutest.h"
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
 #include <stdio.h>
 #include <string.h>
 

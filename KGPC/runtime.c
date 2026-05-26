@@ -1,24 +1,24 @@
-#include <stdio.h>
-#include <stdint.h>
+#include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
+#include <math.h>
+#include <setjmp.h>
 #include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <stddef.h>
-#include <math.h>
-#include <errno.h>
-#include <setjmp.h>
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
 #include <unistd.h>
 
+#include "format_arg.h"
 #include "runtime_internal.h"
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <limits.h>
-#include "format_arg.h"
 
 static const double KGPC_PI = 3.14159265358979323846264338327950288;
 
@@ -79,28 +79,28 @@ static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded,
 static void kgpc_guard_release(void *raw_ptr, size_t mapping_size);
 
 #ifdef _WIN32
-#include <windows.h>
-#include <time.h>
-#include <errno.h>
 #include <conio.h>
-#include <io.h>
-#include <fcntl.h>
 #include <direct.h>
-#else
-#include <time.h>
 #include <errno.h>
-#include <unistd.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <sys/select.h>
+#include <io.h>
+#include <time.h>
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
 #include <pthread.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <dlfcn.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
 
 /* Define W_EXITCODE and W_STOPCODE if not available */
 #ifndef W_EXITCODE

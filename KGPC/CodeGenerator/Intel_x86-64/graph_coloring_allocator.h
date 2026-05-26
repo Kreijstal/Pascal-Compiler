@@ -10,9 +10,9 @@
 #ifndef GRAPH_COLORING_ALLOCATOR_H
 #define GRAPH_COLORING_ALLOCATOR_H
 
-#include <stdlib.h>
-#include "stackmng/stackmng.h"
 #include "../../Parser/List/List.h"
+#include "stackmng/stackmng.h"
+#include <stdlib.h>
 
 /* Forward declarations */
 typedef struct LiveRange LiveRange_t;

@@ -1,5 +1,5 @@
-#include "../codegen_stmt_internal.h"
 #include "../codegen_expression_internal.h"
+#include "../codegen_stmt_internal.h"
 
 ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
                                              int *int_offsets,
@@ -258,9 +258,6 @@ extern const char *kgpc_getenv(const char *name);
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
-
-/* get_record_type_from_node is defined as static inline in
- * codegen_stmt_internal.h */
 
 HashNode_t *codegen_find_zero_arg_method_node(SymTab_t *symtab,
                                               const struct RecordType *record,
@@ -679,7 +676,7 @@ codegen_statement_expr_record_type(const struct Expression *expr,
       symtab != NULL) {
     HashNode_t *node = NULL;
     if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL) {
-      struct RecordType *record = get_record_type_from_node(node);
+      struct RecordType *record = hashnode_get_record_type(node);
       if (record != NULL)
         return record;
       if (node->type != NULL) {
@@ -711,7 +708,7 @@ codegen_statement_expr_record_type(const struct Expression *expr,
           HashNode_t *type_node = NULL;
           if (FindSymbol(&type_node, symtab, field->type_id) != 0 &&
               type_node != NULL) {
-            struct RecordType *record = get_record_type_from_node(type_node);
+            struct RecordType *record = hashnode_get_record_type(type_node);
             if (record != NULL)
               return record;
             if (type_node->type != NULL) {

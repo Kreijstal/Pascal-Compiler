@@ -12,9 +12,9 @@
     Part of the SemCheck module split from SemCheck_expr.c.
 */
 
+#include "../../ErrVars.h"
 #include "SemCheck_Expr_Internal.h"
 #include "unit_registry.h"
-#include "../../ErrVars.h"
 
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab,
                                          const char *type_name,

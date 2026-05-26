@@ -1,13 +1,13 @@
 #ifndef PARSER_H
 #define PARSER_H
 
+#include <ctype.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
-#include <ctype.h>
-#include <setjmp.h>
-#include <stdbool.h>
 
 //=============================================================================
 // Public-Facing Structs and Enums

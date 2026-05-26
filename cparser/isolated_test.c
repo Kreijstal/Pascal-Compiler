@@ -1,9 +1,9 @@
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
 #include "pascal_parser.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 int main() {
   combinator_t *p = new_combinator();

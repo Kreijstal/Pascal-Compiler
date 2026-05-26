@@ -13,20 +13,20 @@
    referenced afterwards are removed
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <assert.h>
-#include <string.h>
-#include <ctype.h>
 #include "optimizer.h"
-#include "pass_manager.h"
+#include "../Parser/ParseTree/KgpcType.h"
 #include "../Parser/ParseTree/tree.h"
 #include "../Parser/ParseTree/tree_types.h"
-#include "../Parser/ParseTree/KgpcType.h"
-#include "../Parser/SemanticCheck/SymTab/SymTab.h"
-#include "../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../Parser/ParseTree/type_tags.h"
+#include "../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../identifier_utils.h"
+#include "pass_manager.h"
+#include <assert.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define DEAD_VAR_ID_BUCKETS 64
 

@@ -1,8 +1,8 @@
 #ifndef GENERIC_TYPES_H
 #define GENERIC_TYPES_H
 
-#include "tree.h"
 #include "KgpcType.h"
+#include "tree.h"
 
 // Forward declarations
 typedef struct GenericTypeDecl GenericTypeDecl;

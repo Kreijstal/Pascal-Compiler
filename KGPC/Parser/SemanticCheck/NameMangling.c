@@ -1,18 +1,18 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <assert.h>
-#include <ctype.h>
 #include "NameMangling.h"
-#include "../ParseTree/tree.h"
 #include "../List/List.h"
-#include "../ParseTree/type_tags.h"
-#include "SemChecks/SemCheck_expr.h"
-#include "SemCheck.h"
-#include "SymTab/SymTab.h"
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/ident_ref.h"
+#include "../ParseTree/tree.h"
+#include "../ParseTree/type_tags.h"
 #include "../pascal_frontend.h"
+#include "SemCheck.h"
+#include "SemChecks/SemCheck_expr.h"
+#include "SymTab/SymTab.h"
+#include <assert.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);

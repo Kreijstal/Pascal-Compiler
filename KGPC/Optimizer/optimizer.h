@@ -12,13 +12,13 @@
 #ifndef OPTIMIZER_H
 #define OPTIMIZER_H
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <assert.h>
 #include "../Parser/ParseTree/tree.h"
 #include "../Parser/ParseTree/tree_types.h"
-#include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../Parser/SemanticCheck/SymTab/SymTab.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 typedef void (*optimizer_runner_fn)(SymTab_t *, Tree_t *);
 

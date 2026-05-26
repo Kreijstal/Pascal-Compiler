@@ -6,14 +6,14 @@
 
 #include "ir_inst.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Pull in the full Register_t and ListNode_t definitions. */
-#include "stackmng/stackmng.h"
 #include "List.h"
+#include "stackmng/stackmng.h"
 
 /* -----------------------------------------------------------------------
  * Helpers

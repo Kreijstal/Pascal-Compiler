@@ -10,36 +10,36 @@
 #ifndef SEMCHECK_INTERNAL_H
 #define SEMCHECK_INTERNAL_H
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #ifndef _WIN32
+#include <fcntl.h>
 #include <strings.h>
 #include <unistd.h>
-#include <fcntl.h>
 #else
-#include <io.h>
 #include <fcntl.h>
+#include <io.h>
 #endif
-#include <math.h>
-#include <stdarg.h>
+#include "../../Optimizer/optimizer.h"
 #include "../../common_utils.h"
-#include "SemCheck.h"
-#include "../ParseTree/ident_ref.h"
-#include "SemChecks/SemCheck_sizeof.h"
+#include "../../compilation_context.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
-#include "../../unit_registry.h"
 #include "../../string_intern.h"
-#include "../../Optimizer/optimizer.h"
-#include "../../compilation_context.h"
-#include "../pascal_frontend.h"
+#include "../../unit_registry.h"
+#include "../ParseTree/ident_ref.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
+#include "../pascal_frontend.h"
+#include "SemCheck.h"
+#include "SemChecks/SemCheck_sizeof.h"
+#include <math.h>
+#include <stdarg.h>
 
 /* From SemCheck_Expr_Constructors.c */
 int semcheck_typecheck_record_constructor(struct Expression *expr,
@@ -53,16 +53,16 @@ HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
                                                    const char *type_id,
                                                    const char *owner_full,
                                                    const char *owner_outer);
-#include "../ParseTree/from_cparser.h"
-#include "../ParseTree/operator_registry.h"
-#include "../ParseTree/generic_types.h"
-#include "../parser_error.h"
 #include "../ErrVars.h"
-#include "./SymTab/SymTab.h"
+#include "../ParseTree/from_cparser.h"
+#include "../ParseTree/generic_types.h"
+#include "../ParseTree/operator_registry.h"
+#include "../parser_error.h"
 #include "./HashTable/HashTable.h"
-#include "SemChecks/SemCheck_stmt.h"
-#include "SemChecks/SemCheck_expr.h"
+#include "./SymTab/SymTab.h"
 #include "NameMangling.h"
+#include "SemChecks/SemCheck_expr.h"
+#include "SemChecks/SemCheck_stmt.h"
 
 /* ===================================================================
  * Cross-module variable declarations

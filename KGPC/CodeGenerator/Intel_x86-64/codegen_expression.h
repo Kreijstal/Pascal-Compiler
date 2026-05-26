@@ -2,9 +2,9 @@
 #define CODEGEN_EXPRESSION_H
 
 #include "codegen.h"
+#include "codegen_expr_arguments.h"
 #include "codegen_expr_relop.h"
 #include "codegen_expr_sizeof.h"
-#include "codegen_expr_arguments.h"
 
 /* Shared helpers exposed from codegen_expression.c */
 const struct RecordType *codegen_record_class_var_owner_named(

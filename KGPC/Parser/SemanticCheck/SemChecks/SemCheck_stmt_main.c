@@ -6,13 +6,13 @@
    semcheck_varassign, semcheck_stmt, and property assignment functions.
 */
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <limits.h>
-#include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #ifndef _WIN32
 #include <strings.h>
@@ -23,16 +23,16 @@
 #include "../../../common_utils.h"
 #include "../../../identifier_utils.h"
 #include "../../../unit_registry.h"
+#include "../../ParseTree/ident_ref.h"
+#include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/type_tags.h"
+#include "../HashTable/HashTable.h"
+#include "../NameMangling.h"
+#include "../SemCheck.h"
+#include "../SymTab/SymTab.h"
 #include "SemCheck_overload.h"
 #include "SemCheck_sizeof.h"
-#include "../SemCheck.h"
-#include "../NameMangling.h"
-#include "../HashTable/HashTable.h"
-#include "../SymTab/SymTab.h"
 #include "SemCheck_stmt_internal.h"
-#include "../../ParseTree/type_tags.h"
-#include "../../ParseTree/tree_types.h"
-#include "../../ParseTree/ident_ref.h"
 #include <math.h>
 /* WithContextEntry_fwd must also be declared here */
 struct WithContextEntry_fwd {
@@ -43,9 +43,9 @@ extern struct WithContextEntry_fwd *with_context_stack;
 extern int semcheck_loop_depth;
 extern struct Statement *g_debug_watch_stmt;
 extern struct Expression *g_debug_watch_to_expr;
+#include "../../ParseTree/from_cparser.h"
 #include "../../ParseTree/generic_types.h"
 #include "../../ParseTree/tree.h"
-#include "../../ParseTree/from_cparser.h"
 
 void semcheck_debug_expr_brief(const struct Expression *expr,
                                const char *label);

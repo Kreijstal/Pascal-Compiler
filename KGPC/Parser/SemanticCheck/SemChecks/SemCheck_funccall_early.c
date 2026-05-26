@@ -1,9 +1,9 @@
 #include "SemCheck_Expr_Internal.h"
+#include "SemCheck_funccall_internal.h"
 #include "SemCheck_stmt.h"
-#include <time.h>
 #include <ctype.h>
 #include <limits.h>
-#include "SemCheck_funccall_internal.h"
+#include <time.h>
 
 /*
  * BUILTIN_FUNC_MAP — table-driven dispatch for Pascal builtin functions

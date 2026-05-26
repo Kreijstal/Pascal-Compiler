@@ -1,10 +1,10 @@
 #ifndef KGPC_RUNTIME_INTERNAL_H
 #define KGPC_RUNTIME_INTERNAL_H
 
-#include <stdio.h>
+#include "Parser/SemanticCheck/HashTable/HashTable.h"
 #include <stddef.h>
 #include <stdint.h>
-#include "Parser/SemanticCheck/HashTable/HashTable.h"
+#include <stdio.h>
 
 typedef enum {
   KGPC_BINARY_UNSPECIFIED = 0,

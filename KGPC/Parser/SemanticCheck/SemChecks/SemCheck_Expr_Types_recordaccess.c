@@ -5,9 +5,9 @@
     Extracted from SemCheck_Expr_Types.c. Contains semcheck_recordaccess.
 */
 
+#include "../../ErrVars.h"
 #include "SemCheck_Expr_Types_internal.h"
 #include "unit_registry.h"
-#include "../../ErrVars.h"
 
 static void record_access_clear_payload(struct Expression *expr,
                                         int destroy_record_expr) {

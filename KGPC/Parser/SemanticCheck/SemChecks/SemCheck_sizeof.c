@@ -5,8 +5,8 @@
     resolving record fields and their offsets.
 */
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef _WIN32
@@ -16,15 +16,15 @@
 #define strncasecmp _strnicmp
 #endif
 
-#include "SemCheck_sizeof.h"
-#include "../SemCheck.h"
-#include "../HashTable/HashTable.h"
-#include "../SymTab/SymTab.h"
+#include "../../../identifier_utils.h"
 #include "../../List/List.h"
+#include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
-#include "../../ParseTree/KgpcType.h"
-#include "../../../identifier_utils.h"
+#include "../HashTable/HashTable.h"
+#include "../SemCheck.h"
+#include "../SymTab/SymTab.h"
+#include "SemCheck_sizeof.h"
 
 /* Forward declarations for internal functions */
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,

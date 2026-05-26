@@ -1,9 +1,9 @@
+#include "Parser/ParseTree/type_tags.h"
 #include "acutest.h"
 #include "debug_deserializer.h"
-#include "Parser/ParseTree/type_tags.h"
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
 
 enum { SPACE_INSERTION_INTERVAL = 41 };

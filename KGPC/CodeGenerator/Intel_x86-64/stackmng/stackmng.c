@@ -3,16 +3,16 @@
     Stack Manager structure (see codegen.h for details)
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <assert.h>
-#include <string.h>
-#include <limits.h>
 #include "stackmng.h"
-#include "../register_types.h"
-#include "../codegen.h"
 #include "../../../Parser/List/List.h"
 #include "../../../identifier_utils.h"
+#include "../codegen.h"
+#include "../register_types.h"
+#include <assert.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #if USE_GRAPH_COLORING_ALLOCATOR
 #include "../graph_coloring_allocator.h"

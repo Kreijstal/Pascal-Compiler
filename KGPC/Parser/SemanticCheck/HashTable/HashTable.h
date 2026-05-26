@@ -11,10 +11,10 @@
 #define HASH_TABLE_H
 #define TABLE_SIZE 65537
 
-#include <stdio.h>
-#include <assert.h>
 #include "../../List/List.h"
 #include "../../ParseTree/KgpcType.h"
+#include <assert.h>
+#include <stdio.h>
 
 struct RecordType;
 struct TypeAlias;

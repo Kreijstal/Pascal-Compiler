@@ -1,11 +1,11 @@
 #ifndef PASCAL_PARSER_H
 #define PASCAL_PARSER_H
 
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
+#include "pascal_declaration.h"
 #include "pascal_expression.h"
 #include "pascal_statement.h"
-#include "pascal_declaration.h"
 #include "pascal_type.h"
 
 // --- Custom Tags for Pascal Expressions ---

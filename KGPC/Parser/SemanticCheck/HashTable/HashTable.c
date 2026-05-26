@@ -12,10 +12,10 @@
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 
 #include "../../List/List.h"
 #include "HashTable.h"

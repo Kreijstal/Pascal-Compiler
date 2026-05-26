@@ -10,40 +10,40 @@
 #ifndef CODEGEN_STMT_INTERNAL_H
 #define CODEGEN_STMT_INTERNAL_H
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #ifndef _WIN32
 #include <strings.h>
 #endif
-#include "../../common_utils.h"
-#include "register_types.h"
-#include "codegen.h"
-#include "codegen_statement.h"
-#include "stackmng/stackmng.h"
-#include "asm_emit.h"
-#include "expr_tree/expr_tree.h"
-#include "codegen_expression.h"
-#include "codegen_expr_sizeof.h"
-#include "../../flags.h"
 #include "../../Parser/List/List.h"
-#include "../../Parser/ParseTree/tree.h"
-#include "../../Parser/ParseTree/ident_ref.h"
-#include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
+#include "../../Parser/ParseTree/ident_ref.h"
+#include "../../Parser/ParseTree/tree.h"
+#include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
+#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../common_utils.h"
+#include "../../flags.h"
 #include "../../identifier_utils.h"
 #include "abi_constants.h"
-#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
-#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../Parser/SemanticCheck/SemCheck.h"
-#include "../../Parser/ParseTree/from_cparser.h"
+#include "asm_emit.h"
+#include "codegen.h"
+#include "codegen_expr_sizeof.h"
+#include "codegen_expression.h"
+#include "codegen_statement.h"
+#include "expr_tree/expr_tree.h"
+#include "register_types.h"
+#include "stackmng/stackmng.h"
 
 /* Shared macro - pointer size for x86-64 codegen */
 #ifndef CODEGEN_POINTER_SIZE_BYTES
@@ -294,15 +294,6 @@ int is_single_float_type(int type_tag, long long storage_size);
 int lookup_record_field_type(struct RecordType *record_type,
                              const char *field_name);
 const char *register_name8(const Register_t *reg);
-
-/*
- * get_record_type_from_node — extract RecordType from a HashNode.
- * Defined as static inline here because an identically-named function
- * exists in other compilation units (SemCheck_Expr_Record.c, codegen.c).
- */
-static inline struct RecordType *get_record_type_from_node(HashNode_t *node) {
-  return hashnode_get_record_type(node);
-}
 
 /* ===================================================================
  * Cross-module variable declarations

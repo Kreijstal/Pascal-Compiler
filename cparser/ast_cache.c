@@ -5,10 +5,10 @@
 #include "ast_cache.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 #include <unistd.h>
 
 static const char MAGIC[] = "KGPC_AST";

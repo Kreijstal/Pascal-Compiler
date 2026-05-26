@@ -1,8 +1,8 @@
 #ifndef EXPR_TREE_INTERNAL_H
 #define EXPR_TREE_INTERNAL_H
 
-#include "expr_tree.h"
 #include "../codegen.h"
+#include "expr_tree.h"
 
 /* Describes the semantic kind of an assembly operand, so codegen helpers can
    select the correct instruction without resorting to string pattern matching.

@@ -7,9 +7,9 @@
 
 #include "SemCheck_Expr_Internal.h"
 #include "SemCheck_stmt.h"
-#include <time.h>
 #include <ctype.h>
 #include <limits.h>
+#include <time.h>
 
 #include "SemCheck_funccall_internal.h"
 

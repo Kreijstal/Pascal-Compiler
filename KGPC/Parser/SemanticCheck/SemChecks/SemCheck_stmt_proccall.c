@@ -9,13 +9,13 @@
    this is a general way to define the maximum scope level
 */
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <limits.h>
-#include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #ifndef _WIN32
 #include <strings.h>
@@ -23,15 +23,15 @@
 #define strncasecmp _strnicmp
 #endif
 #include "../../../common_utils.h"
-#include "SemCheck_stmt.h"
+#include "../../../unit_registry.h"
+#include "../HashTable/HashTable.h"
+#include "../NameMangling.h"
+#include "../SemCheck.h"
+#include "../SymTab/SymTab.h"
 #include "SemCheck_expr.h"
 #include "SemCheck_overload.h"
-#include "../SemCheck.h"
-#include "../NameMangling.h"
-#include "../HashTable/HashTable.h"
-#include "../SymTab/SymTab.h"
-#include "../../../unit_registry.h"
 #include "SemCheck_sizeof.h"
+#include "SemCheck_stmt.h"
 /* WithContextEntry is defined in SemCheck_Expr_Internal.h.  We can't include
  * that header here because of redefinition conflicts with helpers defined
  * statically in SemCheck_stmt.c.  Instead we forward-declare the with stack
@@ -45,17 +45,17 @@ extern struct WithContextEntry_fwd *with_context_stack;
 void semcheck_debug_expr_brief(const struct Expression *expr,
                                const char *label);
 struct RecordType *get_record_type_from_node(HashNode_t *node);
+#include "../../ParseTree/from_cparser.h"
 #include "../../ParseTree/generic_types.h"
 #include "../../ParseTree/tree.h"
-#include "../../ParseTree/from_cparser.h"
 
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab,
                                                const char *type_id);
 
-#include "../../ParseTree/tree_types.h"
-#include "../../ParseTree/ident_ref.h"
-#include "../../ParseTree/type_tags.h"
 #include "../../List/List.h"
+#include "../../ParseTree/ident_ref.h"
+#include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/type_tags.h"
 
 HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab,
                                               const char *type_id);
@@ -85,8 +85,8 @@ int semcheck_class_type_ids_compatible(SymTab_t *symtab, const char *formal_id,
 #define SEMSTMT_TIMINGS_ENABLED()                                              \
   (kgpc_getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
-#include "SemCheck_stmt_internal.h"
 #include "../../../identifier_utils.h"
+#include "SemCheck_stmt_internal.h"
 
 /** PROCEDURE_CALL **/
 int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt,

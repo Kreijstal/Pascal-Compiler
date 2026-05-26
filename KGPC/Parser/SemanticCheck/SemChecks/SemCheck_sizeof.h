@@ -8,8 +8,8 @@
 #ifndef SEM_CHECK_SIZEOF_H
 #define SEM_CHECK_SIZEOF_H
 
-#include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree_types.h"
+#include "../SymTab/SymTab.h"
 
 /* Compute the size of a record type in bytes.
  * Returns 0 on success, 1 on error.

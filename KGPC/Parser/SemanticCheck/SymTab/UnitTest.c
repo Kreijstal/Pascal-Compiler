@@ -1,7 +1,7 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include "SymTab.h"
 #include "../HashTable/HashTable.h"
+#include "SymTab.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 int main() {
   SymTab_t *symtab;

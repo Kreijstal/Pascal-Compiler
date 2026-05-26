@@ -12,41 +12,41 @@
 #define FROM_CPARSER_INTERNAL_H
 
 #include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <limits.h>
-#include <errno.h>
 #ifndef _WIN32
 #include <strings.h>
 #endif
 #include "../../common_utils.h"
 
-#include "from_cparser.h"
+#include "../../compilation_context.h"
 #include "../../string_intern.h"
 #include "../../unit_registry.h"
-#include "../../compilation_context.h"
 #include "../pascal_frontend.h"
+#include "from_cparser.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 
+#include "../../identifier_utils.h"
+#include "../ErrVars.h"
 #include "../List/List.h"
-#include "tree.h"
-#include "tree_types.h"
-#include "ident_ref.h"
-#include "type_tags.h"
-#include "pascal_parser.h"
+#include "../SemanticCheck/SymTab/SymTab.h"
+#include "../pascal_frontend.h"
 #include "KgpcType.h"
 #include "generic_types.h"
-#include "../SemanticCheck/SymTab/SymTab.h"
-#include "../../identifier_utils.h"
-#include "../pascal_frontend.h"
-#include "../ErrVars.h"
+#include "ident_ref.h"
+#include "pascal_parser.h"
+#include "tree.h"
+#include "tree_types.h"
+#include "type_tags.h"
 
 /* ===================================================================
  * Cross-module type definitions (moved from implementation files)

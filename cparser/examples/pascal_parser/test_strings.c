@@ -1,6 +1,6 @@
 #include "../../acutest.h"
-#include "../../parser.h"
 #include "../../combinators.h"
+#include "../../parser.h"
 #include "pascal_parser.h"
 
 void test_pascal_string_escapes(void) {

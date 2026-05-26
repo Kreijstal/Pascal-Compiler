@@ -8,8 +8,8 @@
  * classes, and variant record types across the code generator modules.
  */
 
-#include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/tree.h"
+#include "../../Parser/ParseTree/tree_types.h"
 #include "../../identifier_utils.h"
 
 /**

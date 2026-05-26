@@ -1,12 +1,12 @@
+#include "debug_deserializer.h"
+#include "Parser/ParseTree/tree.h"
+#include "Parser/ParseTree/tree_types.h"
+#include "Parser/ParseTree/type_tags.h"
+#include "Parser/SemanticCheck/HashTable/HashTable.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include "debug_deserializer.h"
-#include "Parser/ParseTree/tree_types.h"
-#include "Parser/ParseTree/type_tags.h"
-#include "Parser/ParseTree/tree.h"
-#include "Parser/SemanticCheck/HashTable/HashTable.h"
 
 static int append_char(char **buffer, size_t *length, size_t *capacity,
                        int ch) {

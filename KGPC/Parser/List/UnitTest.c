@@ -1,6 +1,6 @@
-#include <stdlib.h>
-#include <stdio.h>
 #include "List.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 int main() {
   ListNode_t *head;

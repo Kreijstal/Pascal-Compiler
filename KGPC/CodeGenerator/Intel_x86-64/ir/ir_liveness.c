@@ -18,13 +18,13 @@
  */
 
 #include "ir_liveness.h"
-#include "ir_inst.h"
 #include "ir_cfg.h"
+#include "ir_inst.h"
 
+#include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <assert.h>
 
 /* Pull in full type definitions. */
 #include "List.h"

@@ -1,9 +1,9 @@
 #include "SemCheck_Expr_Internal.h"
+#include "SemCheck_funccall_internal.h"
 #include "SemCheck_stmt.h"
-#include <time.h>
 #include <ctype.h>
 #include <limits.h>
-#include "SemCheck_funccall_internal.h"
+#include <time.h>
 
 static int semcheck_funccall_scope_level_for_candidate(SymTab_t *symtab,
                                                        HashNode_t *candidate) {

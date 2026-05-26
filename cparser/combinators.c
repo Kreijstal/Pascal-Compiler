@@ -1,10 +1,10 @@
 #define _GNU_SOURCE
-#include "parser.h"
 #include "combinators.h"
 #include "combinator_internals.h"
-#include <stdlib.h>
+#include "parser.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Initialize ast_nil if not already initialized

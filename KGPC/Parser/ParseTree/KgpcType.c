@@ -4,13 +4,13 @@
  * Compiler
  */
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include <ctype.h>
-#include <limits.h>
 #include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #ifndef _WIN32
 #include <strings.h>
 #if defined(__GLIBC__) || (defined(__APPLE__) && defined(__MACH__))
@@ -20,14 +20,14 @@
 #else
 #define strcasecmp _stricmp
 #endif
-#include "KgpcType.h"
-#include "type_tags.h"
-#include "tree_types.h"
-#include "tree.h"
-#include "ident_ref.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
+#include "KgpcType.h"
+#include "ident_ref.h"
+#include "tree.h"
+#include "tree_types.h"
+#include "type_tags.h"
 
 /* Include symbol table headers for type resolution */
 #include "../SemanticCheck/HashTable/HashTable.h"

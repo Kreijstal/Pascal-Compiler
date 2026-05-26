@@ -1,13 +1,13 @@
 #include "pascal_parser.h"
-#include "pascal_keywords.h"
-#include "pascal_type.h"
-#include "pascal_expression.h"
-#include "pascal_statement.h"
 #include "pascal_declaration.h"
+#include "pascal_expression.h"
+#include "pascal_keywords.h"
+#include "pascal_statement.h"
+#include "pascal_type.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #ifndef _WIN32
 #include <strings.h>
 #else

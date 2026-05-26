@@ -2,20 +2,20 @@
     Overload resolution extracted from SemCheck_expr.c
 */
 
+#include <assert.h>
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <assert.h>
-#include <stdio.h>
-#include <limits.h>
 
-#include "SemCheck_overload.h"
+#include "../../../identifier_utils.h"
+#include "../../ParseTree/tree.h"
+#include "../../ParseTree/type_tags.h"
 #include "../HashTable/HashTable.h"
 #include "../SemCheck.h"
 #include "SemCheck_Expr_Internal.h"
-#include "../../ParseTree/type_tags.h"
-#include "../../ParseTree/tree.h"
-#include "../../../identifier_utils.h"
+#include "SemCheck_overload.h"
 
 int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node) {
   if (symtab == NULL || node == NULL || node->id == NULL)

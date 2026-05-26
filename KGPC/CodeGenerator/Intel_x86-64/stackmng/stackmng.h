@@ -9,9 +9,9 @@
 #ifndef STACK_MNG_H
 #define STACK_MNG_H
 
-#include <stdlib.h>
-#include <stdio.h>
 #include "../../../Parser/List/List.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifndef KGPC_ENABLE_REG_DEBUG
 #define KGPC_ENABLE_REG_DEBUG 0

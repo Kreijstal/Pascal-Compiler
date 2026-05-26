@@ -10,9 +10,9 @@
 #ifndef SYM_TAB_H
 #define SYM_TAB_H
 
-#include <stdio.h>
-#include "../HashTable/HashTable.h"
 #include "../../List/List.h"
+#include "../HashTable/HashTable.h"
+#include <stdio.h>
 
 /*enum VarType{HASHVAR_INTEGER, HASHVAR_REAL, HASHVAR_PROCEDURE,
   HASHVAR_UNTYPED}; Defined in HashTable.h */

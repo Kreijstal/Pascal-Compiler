@@ -25,9 +25,9 @@
 #include "ir_peephole.h"
 #include "ir_inst.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 #include "List.h"
 

@@ -8,11 +8,11 @@
  * with the compiler-generated symbols from system.p).
  */
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <pthread.h>
 
 /* ------------------------------------------------------------------ */
 /* MODE_OPEN: FPC constant S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH */

@@ -4,35 +4,34 @@
     TODO: Does not handle real numbers
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <assert.h>
-#include <string.h>
-#include <stdint.h>
-#include <limits.h>
-#include <ctype.h>
-#include "../codegen.h"
 #include "expr_tree.h"
-#include "../register_types.h"
-#include "../codegen_expression.h"
-#include "../codegen_stmt_internal.h"
-#include "../stackmng/stackmng.h"
-#include "../../../flags.h"
+#include "../../../../cparser/parser.h"
 #include "../../../Parser/List/List.h"
-#include "../../../identifier_utils.h"
-#include "../../../Parser/ParseTree/tree.h"
-#include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
-#include "../../../Parser/pascal_frontend.h"
+#include "../../../Parser/ParseTree/tree.h"
+#include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/SemanticCheck/SemCheck.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
-#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
-#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../../../cparser/parser.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
+#include "../../../Parser/pascal_frontend.h"
+#include "../../../flags.h"
+#include "../../../identifier_utils.h"
+#include "../codegen.h"
+#include "../codegen_expression.h"
+#include "../codegen_stmt_internal.h"
+#include "../register_types.h"
+#include "../stackmng/stackmng.h"
 #include "expr_tree_internal.h"
+#include <assert.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 int codegen_array_access_targets_shortstring(const struct Expression *expr,
                                              CodeGenContext *ctx);
@@ -359,8 +358,8 @@ static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab,
 }
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../../Parser/SemanticCheck/NameMangling.h"
+#include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../codegen_statement.h"
 
 static int expr_tree_type_is_class_vmt_value(const KgpcType *type) {

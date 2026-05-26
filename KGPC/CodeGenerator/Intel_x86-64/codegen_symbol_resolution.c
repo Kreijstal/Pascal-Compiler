@@ -1,22 +1,21 @@
 /*
  * codegen_symbol_resolution.c — Symbol/mangling resolution and label collection
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
-#include <assert.h>
-#include "codegen.h"
-#include "codegen_string_set.h"
 #include "codegen_symbol_resolution.h"
-#include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/ParseTree/ident_ref.h"
+#include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/SemanticCheck/NameMangling.h"
+#include "../../flags.h"
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
-#include "../../flags.h"
-#include "../../Parser/ParseTree/from_cparser.h"
+#include "codegen.h"
+#include "codegen_string_set.h"
+#include <assert.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Defined in Parser/SemanticCheck/SemCheck_parts/SemCheck_vmt_and_type_decls.c.
  * Build a parameter TypeRef array for overload disambiguation. */

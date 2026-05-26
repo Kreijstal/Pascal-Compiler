@@ -3,9 +3,9 @@
     Linked list for tree_t, Statement, and Expression structures
 */
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "List.h"
 

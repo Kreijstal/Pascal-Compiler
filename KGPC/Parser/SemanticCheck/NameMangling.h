@@ -2,8 +2,8 @@
 #define NAME_MANGLING_H
 
 #include "../List/List.h"
-#include "SymTab/SymTab.h"
 #include "HashTable/HashTable.h"
+#include "SymTab/SymTab.h"
 
 /*
  * KgpcBuiltinTypeInfo — the canonical metadata for a single Pascal builtin

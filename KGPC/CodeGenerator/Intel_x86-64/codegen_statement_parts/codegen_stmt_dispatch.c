@@ -113,7 +113,7 @@ codegen_resolve_with_record_type(struct Expression *context_expr,
     HashNode_t *var_node = NULL;
     if (FindSymbol(&var_node, symtab, context_expr->expr_data.id) != 0 &&
         var_node != NULL) {
-      struct RecordType *rec = get_record_type_from_node(var_node);
+      struct RecordType *rec = hashnode_get_record_type(var_node);
       if (rec != NULL)
         return rec;
       if (var_node->type != NULL) {
@@ -141,7 +141,7 @@ codegen_resolve_with_record_type(struct Expression *context_expr,
     if (target_id != NULL) {
       HashNode_t *type_node = NULL;
       if (FindSymbol(&type_node, symtab, target_id) != 0 && type_node != NULL)
-        return get_record_type_from_node(type_node);
+        return hashnode_get_record_type(type_node);
     }
   }
   if (context_expr->type == EXPR_FUNCTION_CALL) {
@@ -149,7 +149,7 @@ codegen_resolve_with_record_type(struct Expression *context_expr,
     if (call_id != NULL) {
       HashNode_t *type_node = NULL;
       if (FindSymbol(&type_node, symtab, call_id) != 0 && type_node != NULL)
-        return get_record_type_from_node(type_node);
+        return hashnode_get_record_type(type_node);
     }
   }
   if (context_expr->type == EXPR_RECORD_ACCESS) {
@@ -162,7 +162,7 @@ codegen_resolve_with_record_type(struct Expression *context_expr,
         HashNode_t *type_node = NULL;
         if (FindSymbol(&type_node, symtab, field->type_id) != 0 &&
             type_node != NULL) {
-          struct RecordType *rec = get_record_type_from_node(type_node);
+          struct RecordType *rec = hashnode_get_record_type(type_node);
           if (rec != NULL)
             return rec;
         }
@@ -171,7 +171,7 @@ codegen_resolve_with_record_type(struct Expression *context_expr,
         HashNode_t *type_node = NULL;
         if (FindSymbol(&type_node, symtab, field->pointer_type_id) != 0 &&
             type_node != NULL) {
-          struct RecordType *rec = get_record_type_from_node(type_node);
+          struct RecordType *rec = hashnode_get_record_type(type_node);
           if (rec != NULL)
             return rec;
         }
@@ -182,7 +182,7 @@ codegen_resolve_with_record_type(struct Expression *context_expr,
     HashNode_t *type_node = NULL;
     if (FindSymbol(&type_node, symtab, context_expr->pointer_subtype_id) != 0 &&
         type_node != NULL)
-      return get_record_type_from_node(type_node);
+      return hashnode_get_record_type(type_node);
   }
   return NULL;
 }

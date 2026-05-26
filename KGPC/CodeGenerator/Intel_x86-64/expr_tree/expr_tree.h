@@ -6,13 +6,16 @@
 #ifndef EXPR_TREE_H
 #define EXPR_TREE_H
 
-#include <stdlib.h>
-#include <stdio.h>
 #include "../../../Parser/List/List.h"
-#include "../stackmng/stackmng.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/type_tags.h"
+#include "../stackmng/stackmng.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+struct CodeGenContext;
+typedef struct CodeGenContext CodeGenContext;
 
 typedef struct expr_node expr_node_t;
 

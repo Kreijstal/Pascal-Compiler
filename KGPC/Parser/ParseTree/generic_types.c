@@ -1,8 +1,8 @@
 #include "generic_types.h"
+#include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <assert.h>
 
 // Global generic type registry
 static GenericRegistry g_generic_registry = {NULL, NULL};

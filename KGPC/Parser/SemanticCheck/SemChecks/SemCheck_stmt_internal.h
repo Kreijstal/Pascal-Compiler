@@ -1,12 +1,12 @@
 #ifndef SEMCHECK_STMT_INTERNAL_H
 #define SEMCHECK_STMT_INTERNAL_H
 
-#include "SemCheck_stmt.h"
-#include "SemCheck_expr.h"
-#include "../SymTab/SymTab.h"
-#include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/tree.h"
+#include "../../ParseTree/tree_types.h"
+#include "../SymTab/SymTab.h"
+#include "SemCheck_expr.h"
+#include "SemCheck_stmt.h"
 
 /* Forward declarations of shared helpers defined in SemCheck_stmt.c
  * and used by SemCheck_stmt_proccall.c. */

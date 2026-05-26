@@ -7,10 +7,10 @@
 #include "ir_cfg.h"
 #include "ir_inst.h"
 
-#include <stdlib.h>
-#include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "List.h"
 

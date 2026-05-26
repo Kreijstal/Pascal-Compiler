@@ -1,9 +1,9 @@
 #define _GNU_SOURCE
 #include "pascal_keywords.h"
 #include "pascal_parser.h"
-#include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 #ifdef _WIN32
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp

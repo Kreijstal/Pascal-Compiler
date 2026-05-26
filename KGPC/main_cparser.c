@@ -31,11 +31,11 @@ static int unsetenv(const char *name) { return _putenv_s(name, ""); }
 #endif
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <time.h>
 #include <sys/stat.h>
-#include <errno.h>
+#include <time.h>
 #ifndef _WIN32
 #include <malloc.h>
 #endif
@@ -44,31 +44,31 @@ static int unsetenv(const char *name) { return _putenv_s(name, ""); }
 #define PATH_MAX 4096
 #endif
 
-#include "parser.h"
 #include "combinators.h"
-#include "pascal_parser.h"
+#include "parser.h"
 #include "pascal_declaration.h"
+#include "pascal_parser.h"
 
-#include "flags.h"
-#include "unit_registry.h"
-#include "Parser/ParseTree/tree.h"
+#include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "Parser/ParseTree/from_cparser.h"
 #include "Parser/ParseTree/ident_ref.h"
-#include "Parser/pascal_frontend.h"
+#include "Parser/ParseTree/tree.h"
 #include "Parser/SemanticCheck/SemCheck.h"
-#include "CodeGenerator/Intel_x86-64/codegen.h"
-#include "stacktrace.h"
-#include "unit_paths.h"
+#include "Parser/pascal_frontend.h"
 #include "arena.h"
+#include "compilation_context.h"
 #include "file_lock.h"
 #include "file_time.h"
+#include "flags.h"
 #include "identifier_utils.h"
-#include "compilation_context.h"
+#include "stacktrace.h"
+#include "unit_paths.h"
+#include "unit_registry.h"
 
 #ifdef _WIN32
-#include <windows.h>
 #include <io.h>
 #include <process.h>
+#include <windows.h>
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);

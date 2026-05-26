@@ -1,37 +1,37 @@
-#include <stdio.h>
-#include <stdint.h>
+#include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
+#include <math.h>
+#include <setjmp.h>
 #include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <stddef.h>
-#include <math.h>
-#include <errno.h>
-#include <setjmp.h>
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
 #ifdef _WIN32
-#include <windows.h>
-#include <time.h>
 #include <conio.h>
-#include <io.h>
-#include <fcntl.h>
 #include <direct.h>
+#include <fcntl.h>
+#include <io.h>
+#include <time.h>
+#include <windows.h>
 #else
-#include <unistd.h>
+#include <netdb.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/ioctl.h>
-#include <sys/utsname.h>
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
+#include <sys/utsname.h>
+#include <unistd.h>
 #endif
-#include <limits.h>
-#include "runtime_internal.h"
 #include "format_arg.h"
+#include "runtime_internal.h"
+#include <limits.h>
 
 static void *const KGPC_STRING_TOMBSTONE = (void *)1;
 static void **kgpc_string_set_slots = NULL;

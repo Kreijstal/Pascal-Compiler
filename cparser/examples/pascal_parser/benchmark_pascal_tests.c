@@ -5,18 +5,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <sys/time.h>
+#include <time.h>
 
 // Define TEST_NO_MAIN to prevent acutest.h from defining main()
 #define TEST_NO_MAIN
 // Include the test functions and infrastructure
 #include "acutest.h"
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
+#include "pascal_keywords.h"
 #include "pascal_parser.h"
 #include "pascal_preprocessor.h"
-#include "pascal_keywords.h"
 
 // Test list is defined in pascal_tests.c, and declared in acutest.h
 // We just need to link against it

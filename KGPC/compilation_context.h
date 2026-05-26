@@ -15,9 +15,9 @@
 #ifndef KGPC_COMPILATION_CONTEXT_H
 #define KGPC_COMPILATION_CONTEXT_H
 
-#include <stdbool.h>
 #include "Parser/ParseTree/tree.h"
 #include "Parser/SemanticCheck/SymTab/SymTab.h"
+#include <stdbool.h>
 
 /* A single loaded-unit record. */
 typedef struct {

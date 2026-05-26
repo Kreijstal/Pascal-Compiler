@@ -1,10 +1,10 @@
+#include "calculator_logic.h"
+#include "combinators.h"
+#include "parser.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include "parser.h"
-#include "combinators.h"
-#include "calculator_logic.h"
 
 // --- Helper Functions ---
 static bool is_whitespace_char(char c) { return isspace((unsigned char)c); }

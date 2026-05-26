@@ -3,8 +3,8 @@
     For unit testing the HashTable
 */
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "../../List/List.h"
 #include "HashTable.h"

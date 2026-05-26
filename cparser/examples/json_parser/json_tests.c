@@ -1,7 +1,7 @@
 #include "acutest.h"
-#include "parser.h"
 #include "combinators.h"
 #include "json_parser.h"
+#include "parser.h"
 #include <stdio.h>
 
 // --- Test Helpers ---

@@ -19,8 +19,8 @@
 #define AST_CACHE_H
 
 #include "parser.h"
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #define AST_CACHE_VERSION 2
 

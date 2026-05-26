@@ -1,8 +1,8 @@
 #ifndef PASCAL_DECLARATION_H
 #define PASCAL_DECLARATION_H
 
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
 
 extern ast_t *ast_nil;
 

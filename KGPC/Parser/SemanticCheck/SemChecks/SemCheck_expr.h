@@ -15,9 +15,9 @@
 #define MUTATE 1
 #define NO_MUTATE 0
 
-#include "../SymTab/SymTab.h"
-#include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/KgpcType.h"
+#include "../../ParseTree/tree_types.h"
+#include "../SymTab/SymTab.h"
 
 /* Semantic check on a normal expression. */
 int semcheck_expr(SymTab_t *symtab, struct Expression *expr, int max_scope_lev,

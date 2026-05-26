@@ -1,8 +1,8 @@
 #ifndef PASCAL_EXPRESSION_H
 #define PASCAL_EXPRESSION_H
 
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
 
 typedef struct {
   tag_t tag;

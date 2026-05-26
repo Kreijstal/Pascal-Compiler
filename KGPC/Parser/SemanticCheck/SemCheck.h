@@ -6,10 +6,10 @@
 #ifndef SEM_CHECK_H
 #define SEM_CHECK_H
 
-#include <stdlib.h>
-#include <stdio.h>
 #include "../ParseTree/tree.h"
 #include "SymTab/SymTab.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 /*
  * Semantic-check invariant policy:

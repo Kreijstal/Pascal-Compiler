@@ -1,7 +1,7 @@
-#include <stdint.h>
-#include <stddef.h>
-#include <stdlib.h>
 #include <gmp.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 typedef struct kgpc_gmp_mpint {
   mpz_t value;

@@ -4,8 +4,8 @@
 
 #include "graph_coloring_allocator.h"
 #include "../../Parser/List/List.h"
-#include <stdio.h>
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Create a new live range */

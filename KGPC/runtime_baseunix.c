@@ -41,15 +41,15 @@
 #include <sys/types.h>
 
 #ifdef _WIN32
-#include <io.h>
 #include <direct.h>
+#include <io.h>
 #include <limits.h>
 typedef long long ssize_t;
 #else
 #include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 /* File opening */

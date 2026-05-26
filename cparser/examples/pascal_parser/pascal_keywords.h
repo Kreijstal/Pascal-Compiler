@@ -1,9 +1,9 @@
 #ifndef PASCAL_KEYWORDS_H
 #define PASCAL_KEYWORDS_H
 
-#include <stdbool.h>
-#include "parser.h"
 #include "combinators.h"
+#include "parser.h"
+#include <stdbool.h>
 
 typedef struct {
   char *str;

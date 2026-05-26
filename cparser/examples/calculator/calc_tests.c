@@ -1,7 +1,7 @@
 #include "acutest.h"
-#include "parser.h"
-#include "combinators.h"
 #include "calculator_logic.h"
+#include "combinators.h"
+#include "parser.h"
 #include <stdio.h>
 
 void test_calc_valid_expression(void) {

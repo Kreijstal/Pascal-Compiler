@@ -1,8 +1,8 @@
 #include "arena.h"
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <stdint.h>
 
 /*
  * Arena Block Structure

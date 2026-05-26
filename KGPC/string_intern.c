@@ -3,9 +3,9 @@
     one canonical pointer. Case-insensitive dedup, preserves first-seen case.
 */
 #include "string_intern.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 #define INTERN_TABLE_SIZE 512
 

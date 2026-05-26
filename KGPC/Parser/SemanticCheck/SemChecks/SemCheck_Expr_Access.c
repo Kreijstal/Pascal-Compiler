@@ -10,9 +10,9 @@
 
 #include "SemCheck_Expr_Internal.h"
 #include "SemCheck_stmt.h"
-#include <time.h>
 #include <ctype.h>
 #include <limits.h>
+#include <time.h>
 
 static void semcheck_clear_array_linearization(struct Expression *expr) {
   if (expr == NULL)

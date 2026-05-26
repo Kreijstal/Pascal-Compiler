@@ -1,9 +1,9 @@
 /* Operator Overload Registry Implementation */
 
 #include "operator_registry.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #ifndef _WIN32
 #include <strings.h>
 #else

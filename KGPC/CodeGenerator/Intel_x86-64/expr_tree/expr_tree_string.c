@@ -5,16 +5,16 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "../../../Parser/ParseTree/KgpcType.h"
+#include "../../../Parser/ParseTree/tree.h"
+#include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../../Parser/pascal_frontend.h"
+#include "../../../identifier_utils.h"
 #include "../codegen.h"
 #include "../codegen_expression.h"
 #include "../codegen_stmt_internal.h"
 #include "expr_tree_internal.h"
-#include "../../../identifier_utils.h"
-#include "../../../Parser/ParseTree/KgpcType.h"
-#include "../../../Parser/ParseTree/tree.h"
-#include "../../../Parser/pascal_frontend.h"
-#include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 
 int codegen_array_access_targets_shortstring(const struct Expression *expr,
                                              CodeGenContext *ctx);

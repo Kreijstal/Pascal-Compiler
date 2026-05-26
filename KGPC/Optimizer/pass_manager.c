@@ -1,7 +1,7 @@
 #include "pass_manager.h"
 
-#include "optimizer.h"
 #include "../flags.h"
+#include "optimizer.h"
 
 #include <stddef.h>
 

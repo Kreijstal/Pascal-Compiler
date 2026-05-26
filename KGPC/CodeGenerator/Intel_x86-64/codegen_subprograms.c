@@ -6,39 +6,39 @@
     See codegen.h for stack and implementation details
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <assert.h>
-#include <string.h>
-#include <limits.h>
-#include <ctype.h>
-#include "register_types.h"
-#include "codegen.h"
-#include "abi_constants.h"
-#include "codegen_string_set.h"
-#include "codegen_symbol_resolution.h"
-#include "codegen_statement.h"
-#include "stackmng/stackmng.h"
-#include "expr_tree/expr_tree.h"
-#include "codegen_expression.h"
-#include "../../flags.h"
 #include "../../Parser/List/List.h"
+#include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
-#include "../../Parser/ParseTree/KgpcType.h"
-#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/NameMangling.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../flags.h"
+#include "abi_constants.h"
+#include "codegen.h"
+#include "codegen_expression.h"
+#include "codegen_statement.h"
+#include "codegen_string_set.h"
+#include "codegen_symbol_resolution.h"
+#include "expr_tree/expr_tree.h"
+#include "register_types.h"
+#include "stackmng/stackmng.h"
+#include <assert.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
-#include "ir/ir_inst.h"
 #include "ir/ir_cfg.h"
+#include "ir/ir_inst.h"
 #include "ir/ir_liveness.h"
 #include "ir/ir_peephole.h"
 #if USE_GRAPH_COLORING_ALLOCATOR
@@ -89,10 +89,6 @@ static const char *alloc_sse_arg_reg(int *next_index) {
 
   ++(*next_index);
   return reg;
-}
-
-static inline struct RecordType *get_record_type_from_node(HashNode_t *node) {
-  return hashnode_get_record_type(node);
 }
 
 static inline struct TypeAlias *get_type_alias_from_node(HashNode_t *node) {
@@ -2517,12 +2513,12 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args,
 
           struct RecordType *rec = NULL;
           if (scan_type_node != NULL)
-            rec = get_record_type_from_node(scan_type_node);
+            rec = hashnode_get_record_type(scan_type_node);
           if (rec == NULL && scan_cached_type != NULL) {
             HashNode_t cached_node;
             memset(&cached_node, 0, sizeof(cached_node));
             cached_node.type = scan_cached_type;
-            rec = get_record_type_from_node(&cached_node);
+            rec = hashnode_get_record_type(&cached_node);
           }
 
           if (rec != NULL) {
@@ -2793,9 +2789,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args,
 
         if (!symbol_is_var_param) {
           if (resolved_type_node != NULL)
-            record_type_info = get_record_type_from_node(resolved_type_node);
+            record_type_info = hashnode_get_record_type(resolved_type_node);
           if (record_type_info == NULL && cached_arg_node_ptr != NULL)
-            record_type_info = get_record_type_from_node(cached_arg_node_ptr);
+            record_type_info = hashnode_get_record_type(cached_arg_node_ptr);
           if (record_type_info == NULL) {
             KgpcType *param_type = NULL;
             if (resolved_type_node != NULL)
@@ -4170,7 +4166,7 @@ int codegen_try_emit_typed_const_record_static_alias(
     if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) !=
             0 &&
         type_node != NULL) {
-      record = get_record_type_from_node(type_node);
+      record = hashnode_get_record_type(type_node);
     }
   }
   if (record == NULL)
@@ -4379,7 +4375,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list,
         init_stmt = NULL;
       }
       if (type_node != NULL && node_is_class_type(type_node)) {
-        struct RecordType *record_desc = get_record_type_from_node(type_node);
+        struct RecordType *record_desc = hashnode_get_record_type(type_node);
         const char *class_type_name =
             (record_desc != NULL && record_desc->type_id != NULL)
                 ? record_desc->type_id

@@ -11,12 +11,12 @@
 #ifndef SEM_CHECK_EXPR_INTERNAL_H
 #define SEM_CHECK_EXPR_INTERNAL_H
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -25,25 +25,25 @@
 #endif
 #include "../../../common_utils.h"
 
-#include "SemCheck_expr.h"
-#include "SemCheck_stmt.h"
-#include "SemCheck_overload.h"
-#include "SemCheck_sizeof.h"
-#include "../SemCheck.h"
-#include "../NameMangling.h"
-#include "../HashTable/HashTable.h"
-#include "../SymTab/SymTab.h"
+#include "../../../format_arg.h"
+#include "../../../identifier_utils.h"
+#include "../../../unit_registry.h"
 #include "../../List/List.h"
-#include "../../ParseTree/tree.h"
-#include "../../ParseTree/tree_types.h"
-#include "../../ParseTree/ident_ref.h"
-#include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/from_cparser.h"
+#include "../../ParseTree/ident_ref.h"
+#include "../../ParseTree/tree.h"
+#include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/type_tags.h"
 #include "../../pascal_frontend.h"
-#include "../../../identifier_utils.h"
-#include "../../../format_arg.h"
-#include "../../../unit_registry.h"
+#include "../HashTable/HashTable.h"
+#include "../NameMangling.h"
+#include "../SemCheck.h"
+#include "../SymTab/SymTab.h"
+#include "SemCheck_expr.h"
+#include "SemCheck_overload.h"
+#include "SemCheck_sizeof.h"
+#include "SemCheck_stmt.h"
 
 HashNode_t *semcheck_find_preferred_type_node_with_ref(
     SymTab_t *symtab, const struct TypeRef *type_ref, const char *type_id);

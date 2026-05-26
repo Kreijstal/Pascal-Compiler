@@ -1,16 +1,16 @@
 #define _GNU_SOURCE
+#include <ctype.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
-#include <ctype.h>
-#include <stdbool.h>
-#include <stdint.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
-#include "parser.h"
 #include "combinator_internals.h"
+#include "parser.h"
 
 #ifdef _WIN32
 #ifndef HAVE_STRNDUP

@@ -7,18 +7,18 @@
    destroyed Remember to free given identifier strings manually
 */
 
-#include <stdlib.h>
-#include <string.h>
-#include <limits.h>
-#include <stdio.h>
-#include <assert.h>
 #include "SymTab.h"
-#include "../HashTable/HashTable.h"
+#include "../../../identifier_utils.h"
+#include "../../../unit_registry.h"
 #include "../../List/List.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
-#include "../../../identifier_utils.h"
-#include "../../../unit_registry.h"
+#include "../HashTable/HashTable.h"
+#include <assert.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Forward declarations */
 ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab,
