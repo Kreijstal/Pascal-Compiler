@@ -11,639 +11,579 @@
 #include <limits.h>
 #include "SemCheck_Expr_Internal.h"
 
-static const char *semcheck_type_alias_name(KgpcType *type)
-{
-    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
-    if (alias == NULL)
-        return NULL;
-    if (alias->alias_name != NULL)
-        return alias->alias_name;
-    if (alias->target_type_id != NULL)
-        return alias->target_type_id;
-    if (alias->is_shortstring)
-        return "ShortString";
-    if (alias->is_wide_string)
-        return "WideString";
+static const char *semcheck_type_alias_name(KgpcType *type) {
+  struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+  if (alias == NULL)
     return NULL;
+  if (alias->alias_name != NULL)
+    return alias->alias_name;
+  if (alias->target_type_id != NULL)
+    return alias->target_type_id;
+  if (alias->is_shortstring)
+    return "ShortString";
+  if (alias->is_wide_string)
+    return "WideString";
+  return NULL;
 }
 
-int semcheck_is_currency_kgpc_type(KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
-    if (type->kind != TYPE_KIND_PRIMITIVE)
-        return 0;
-    if (type->info.primitive_type_tag != INT64_TYPE)
-        return 0;
-    /* Check if the type alias name is "Currency" */
-    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
-    if (alias != NULL && alias->alias_name != NULL &&
-        pascal_identifier_equals(alias->alias_name, "Currency"))
-        return 1;
+int semcheck_is_currency_kgpc_type(KgpcType *type) {
+  if (type == NULL)
     return 0;
+  if (type->kind != TYPE_KIND_PRIMITIVE)
+    return 0;
+  if (type->info.primitive_type_tag != INT64_TYPE)
+    return 0;
+  /* Check if the type alias name is "Currency" */
+  struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+  if (alias != NULL && alias->alias_name != NULL &&
+      pascal_identifier_equals(alias->alias_name, "Currency"))
+    return 1;
+  return 0;
 }
 
-void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
-{
-    if (expr == NULL)
-        return;
+void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag) {
+  if (expr == NULL)
+    return;
 
-    struct RecordType *resolved_record = NULL;
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        if (kgpc_type_is_record(expr->resolved_kgpc_type))
-            resolved_record = kgpc_type_get_record(expr->resolved_kgpc_type);
-        else if (kgpc_type_is_pointer(expr->resolved_kgpc_type) &&
-            expr->resolved_kgpc_type->info.points_to != NULL &&
-            kgpc_type_is_record(expr->resolved_kgpc_type->info.points_to))
-            resolved_record = kgpc_type_get_record(expr->resolved_kgpc_type->info.points_to);
-    }
+  struct RecordType *resolved_record = NULL;
+  if (expr->resolved_kgpc_type != NULL) {
+    if (kgpc_type_is_record(expr->resolved_kgpc_type))
+      resolved_record = kgpc_type_get_record(expr->resolved_kgpc_type);
+    else if (kgpc_type_is_pointer(expr->resolved_kgpc_type) &&
+             expr->resolved_kgpc_type->info.points_to != NULL &&
+             kgpc_type_is_record(expr->resolved_kgpc_type->info.points_to))
+      resolved_record =
+          kgpc_type_get_record(expr->resolved_kgpc_type->info.points_to);
+  }
 
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
+  if (expr->resolved_kgpc_type != NULL) {
+    destroy_kgpc_type(expr->resolved_kgpc_type);
+    expr->resolved_kgpc_type = NULL;
+  }
 
-    if (type_tag == RECORD_TYPE)
-    {
-        if (resolved_record != NULL)
-            expr->resolved_kgpc_type = create_record_type(resolved_record);
-        return;
-    }
+  if (type_tag == RECORD_TYPE) {
+    if (resolved_record != NULL)
+      expr->resolved_kgpc_type = create_record_type(resolved_record);
+    return;
+  }
 
-    if (type_tag == ARRAY_OF_CONST_TYPE)
-    {
-        expr->resolved_kgpc_type = create_array_of_const_type();
-        return;
-    }
+  if (type_tag == ARRAY_OF_CONST_TYPE) {
+    expr->resolved_kgpc_type = create_array_of_const_type();
+    return;
+  }
 
-    if (type_tag == POINTER_TYPE)
-    {
-        KgpcType *points_to = NULL;
-        if (expr->pointer_subtype != UNKNOWN_TYPE)
-            points_to = create_primitive_type(expr->pointer_subtype);
-        expr->resolved_kgpc_type = create_pointer_type(points_to);
-        /* Release local ref; create_pointer_type retained its own */
-        if (points_to != NULL)
-            kgpc_type_release(points_to);
-        return;
-    }
+  if (type_tag == POINTER_TYPE) {
+    KgpcType *points_to = NULL;
+    if (expr->pointer_subtype != UNKNOWN_TYPE)
+      points_to = create_primitive_type(expr->pointer_subtype);
+    expr->resolved_kgpc_type = create_pointer_type(points_to);
+    /* Release local ref; create_pointer_type retained its own */
+    if (points_to != NULL)
+      kgpc_type_release(points_to);
+    return;
+  }
 
-    expr->resolved_kgpc_type = create_primitive_type(type_tag);
+  expr->resolved_kgpc_type = create_primitive_type(type_tag);
 }
 
-void semcheck_debug_expr_brief(const struct Expression *expr, const char *label)
-{
-    if (expr == NULL)
-    {
-        fprintf(stderr, "[SemCheck]   %s: <null>\n", label);
-        return;
-    }
+void semcheck_debug_expr_brief(const struct Expression *expr,
+                               const char *label) {
+  if (expr == NULL) {
+    fprintf(stderr, "[SemCheck]   %s: <null>\n", label);
+    return;
+  }
 
-    fprintf(stderr, "[SemCheck]   %s: expr_type=%d line=%d col=%d",
-        label, expr->type, expr->line_num, expr->col_num);
+  fprintf(stderr, "[SemCheck]   %s: expr_type=%d line=%d col=%d", label,
+          expr->type, expr->line_num, expr->col_num);
 
-    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
-    {
-        fprintf(stderr, " id=%s", expr->expr_data.id);
-    }
-    else if (expr->type == EXPR_FUNCTION_CALL &&
-        expr->expr_data.function_call_data.id != NULL)
-    {
-        fprintf(stderr, " call=%s", expr->expr_data.function_call_data.id);
-    }
-    else if (expr->type == EXPR_RECORD_ACCESS &&
-        expr->expr_data.record_access_data.field_id != NULL)
-    {
-        fprintf(stderr, " field=%s", expr->expr_data.record_access_data.field_id);
-    }
-    else if (expr->type == EXPR_ARRAY_ACCESS &&
-        expr->expr_data.array_access_data.array_expr != NULL &&
-        expr->expr_data.array_access_data.array_expr->type == EXPR_VAR_ID &&
-        expr->expr_data.array_access_data.array_expr->expr_data.id != NULL)
-    {
-        fprintf(stderr, " array=%s", expr->expr_data.array_access_data.array_expr->expr_data.id);
-    }
-    fprintf(stderr, "\n");
+  if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL) {
+    fprintf(stderr, " id=%s", expr->expr_data.id);
+  } else if (expr->type == EXPR_FUNCTION_CALL &&
+             expr->expr_data.function_call_data.id != NULL) {
+    fprintf(stderr, " call=%s", expr->expr_data.function_call_data.id);
+  } else if (expr->type == EXPR_RECORD_ACCESS &&
+             expr->expr_data.record_access_data.field_id != NULL) {
+    fprintf(stderr, " field=%s", expr->expr_data.record_access_data.field_id);
+  } else if (expr->type == EXPR_ARRAY_ACCESS &&
+             expr->expr_data.array_access_data.array_expr != NULL &&
+             expr->expr_data.array_access_data.array_expr->type ==
+                 EXPR_VAR_ID &&
+             expr->expr_data.array_access_data.array_expr->expr_data.id !=
+                 NULL) {
+    fprintf(stderr, " array=%s",
+            expr->expr_data.array_access_data.array_expr->expr_data.id);
+  }
+  fprintf(stderr, "\n");
 }
 
-const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
-{
-    if (expr == NULL)
-        return NULL;
-    
-    /* Try to get from resolved_kgpc_type */
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        const char *alias_name = semcheck_type_alias_name(expr->resolved_kgpc_type);
-        if (alias_name != NULL)
-            return alias_name;
-        if (kgpc_type_is_record(expr->resolved_kgpc_type))
-        {
-            struct RecordType *rec = kgpc_type_get_record(expr->resolved_kgpc_type);
-            if (rec != NULL && rec->type_id != NULL)
-                return rec->type_id;
-        }
-    }
-    
-    /* For variable IDs, look up in symbol table */
-    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
-    {
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
-        {
-            const char *alias_name = semcheck_type_alias_name(node->type);
-            if (alias_name != NULL)
-                return alias_name;
-
-            /* Check if this is a record type */
-            if (kgpc_type_is_record(node->type))
-            {
-                struct RecordType *rec = kgpc_type_get_record(node->type);
-                
-                /* Try to get type_id from record */
-                if (rec != NULL && rec->type_id != NULL)
-                    return rec->type_id;
-            }
-        }
-    }
-    
+const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab) {
+  if (expr == NULL)
     return NULL;
+
+  /* Try to get from resolved_kgpc_type */
+  if (expr->resolved_kgpc_type != NULL) {
+    const char *alias_name = semcheck_type_alias_name(expr->resolved_kgpc_type);
+    if (alias_name != NULL)
+      return alias_name;
+    if (kgpc_type_is_record(expr->resolved_kgpc_type)) {
+      struct RecordType *rec = kgpc_type_get_record(expr->resolved_kgpc_type);
+      if (rec != NULL && rec->type_id != NULL)
+        return rec->type_id;
+    }
+  }
+
+  /* For variable IDs, look up in symbol table */
+  if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+      symtab != NULL) {
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL &&
+        node->type != NULL) {
+      const char *alias_name = semcheck_type_alias_name(node->type);
+      if (alias_name != NULL)
+        return alias_name;
+
+      /* Check if this is a record type */
+      if (kgpc_type_is_record(node->type)) {
+        struct RecordType *rec = kgpc_type_get_record(node->type);
+
+        /* Try to get type_id from record */
+        if (rec != NULL && rec->type_id != NULL)
+          return rec->type_id;
+      }
+    }
+  }
+
+  return NULL;
 }
 
-char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *field_id)
-{
-    if (helper_type_id == NULL || field_id == NULL)
-        return NULL;
-    size_t len = strlen(helper_type_id) + strlen(field_id) + 3;
-    char *result = (char *)malloc(len);
-    if (result == NULL)
-        return NULL;
-    snprintf(result, len, "%s__%s", helper_type_id, field_id);
-    return result;
+char *semcheck_mangle_helper_const_id(const char *helper_type_id,
+                                      const char *field_id) {
+  if (helper_type_id == NULL || field_id == NULL)
+    return NULL;
+  size_t len = strlen(helper_type_id) + strlen(field_id) + 3;
+  char *result = (char *)malloc(len);
+  if (result == NULL)
+    return NULL;
+  snprintf(result, len, "%s__%s", helper_type_id, field_id);
+  return result;
 }
 
-int is_type_ir(int *type)
-{
-    assert(type != NULL);
-    return (is_integer_type(*type) || *type == REAL_TYPE || *type == EXTENDED_TYPE ||
-            *type == ENUM_TYPE);
+int is_type_ir(int *type) {
+  assert(type != NULL);
+  return (is_integer_type(*type) || *type == REAL_TYPE ||
+          *type == EXTENDED_TYPE || *type == ENUM_TYPE);
 }
 
-int types_numeric_compatible(int lhs, int rhs)
-{
-    if (lhs == rhs)
-        return 1;
-    /* Treat enum as integer-compatible (Pascal enums are ordinal types) */
-    int lhs_int = (is_integer_type(lhs) || lhs == ENUM_TYPE);
-    int rhs_int = (is_integer_type(rhs) || rhs == ENUM_TYPE);
-    /* All integer/enum types are compatible with each other */
-    if (lhs_int && rhs_int)
-        return 1;
-    /* Real is compatible with any integer/enum type */
-    if (((lhs == REAL_TYPE || lhs == EXTENDED_TYPE) && rhs_int) ||
-        ((rhs == REAL_TYPE || rhs == EXTENDED_TYPE) && lhs_int))
-        return 1;
-    if ((lhs == REAL_TYPE && rhs == EXTENDED_TYPE) ||
-        (lhs == EXTENDED_TYPE && rhs == REAL_TYPE))
-        return 1;
+int types_numeric_compatible(int lhs, int rhs) {
+  if (lhs == rhs)
+    return 1;
+  /* Treat enum as integer-compatible (Pascal enums are ordinal types) */
+  int lhs_int = (is_integer_type(lhs) || lhs == ENUM_TYPE);
+  int rhs_int = (is_integer_type(rhs) || rhs == ENUM_TYPE);
+  /* All integer/enum types are compatible with each other */
+  if (lhs_int && rhs_int)
+    return 1;
+  /* Real is compatible with any integer/enum type */
+  if (((lhs == REAL_TYPE || lhs == EXTENDED_TYPE) && rhs_int) ||
+      ((rhs == REAL_TYPE || rhs == EXTENDED_TYPE) && lhs_int))
+    return 1;
+  if ((lhs == REAL_TYPE && rhs == EXTENDED_TYPE) ||
+      (lhs == EXTENDED_TYPE && rhs == REAL_TYPE))
+    return 1;
+  return 0;
+}
+
+void semcheck_coerce_char_string_operands(int *type_first,
+                                          struct Expression *expr1,
+                                          int *type_second,
+                                          struct Expression *expr2) {
+  if (type_first == NULL || type_second == NULL)
+    return;
+
+  if (expr1 != NULL && semcheck_expr_is_char_like(expr1) &&
+      *type_first != CHAR_TYPE)
+    *type_first = CHAR_TYPE;
+  if (expr2 != NULL && semcheck_expr_is_char_like(expr2) &&
+      *type_second != CHAR_TYPE)
+    *type_second = CHAR_TYPE;
+
+  int expr1_is_char_ptr = semcheck_expr_is_char_pointer(expr1);
+  int expr2_is_char_ptr = semcheck_expr_is_char_pointer(expr2);
+  if ((*type_first == STRING_TYPE && expr2_is_char_ptr) ||
+      (*type_second == STRING_TYPE && expr1_is_char_ptr)) {
+    if (*type_first == STRING_TYPE && expr2_is_char_ptr) {
+      *type_second = STRING_TYPE;
+      semcheck_promote_pointer_expr_to_string(expr2);
+    } else if (*type_second == STRING_TYPE && expr1_is_char_ptr) {
+      *type_first = STRING_TYPE;
+      semcheck_promote_pointer_expr_to_string(expr1);
+    }
+  }
+
+  /* Handle CHAR + STRING or STRING + CHAR comparisons
+   * Upgrade CHAR to STRING for comparison purposes */
+  if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
+      (*type_first == STRING_TYPE && *type_second == CHAR_TYPE)) {
+    /* Upgrade CHAR operand to STRING */
+    if (*type_first == CHAR_TYPE) {
+      *type_first = STRING_TYPE;
+      if (expr1 != NULL)
+        semcheck_expr_set_resolved_type(expr1, STRING_TYPE);
+    } else /* *type_second == CHAR_TYPE */
+    {
+      *type_second = STRING_TYPE;
+      if (expr2 != NULL)
+        semcheck_expr_set_resolved_type(expr2, STRING_TYPE);
+    }
+  }
+
+  /* Handle CHAR + CHAR comparisons where both are string literals
+   * Single-character string literals like '/' are parsed as CHAR_TYPE,
+   * but should be treated as STRING_TYPE for comparison purposes */
+  if (*type_first == CHAR_TYPE && *type_second == CHAR_TYPE) {
+    int expr1_is_string_literal = (expr1 != NULL && expr1->type == EXPR_STRING);
+    int expr2_is_string_literal = (expr2 != NULL && expr2->type == EXPR_STRING);
+
+    /* If at least one is a string literal, treat both as strings */
+    if (expr1_is_string_literal || expr2_is_string_literal) {
+      *type_first = STRING_TYPE;
+      *type_second = STRING_TYPE;
+      if (expr1 != NULL)
+        semcheck_expr_set_resolved_type(expr1, STRING_TYPE);
+      if (expr2 != NULL)
+        semcheck_expr_set_resolved_type(expr2, STRING_TYPE);
+    }
+  }
+}
+
+int semcheck_expr_is_char_like(struct Expression *expr) {
+  if (expr == NULL)
     return 0;
+  if (expr->type == EXPR_STRING && expr->expr_data.string != NULL &&
+      strlen(expr->expr_data.string) == 1)
+    return 1;
+  if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type == CHAR_TYPE)
+    return 1;
+  if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type_id != NULL) {
+    const char *normalized =
+        semcheck_normalize_char_type_id(expr->array_element_type_id);
+    if (normalized != NULL &&
+        (pascal_identifier_equals(normalized, "AnsiChar") ||
+         pascal_identifier_equals(normalized, "WideChar")))
+      return 1;
+  }
+  if (expr->resolved_kgpc_type != NULL) {
+    if (kgpc_type_is_char(expr->resolved_kgpc_type))
+      return 1;
+    struct TypeAlias *alias =
+        kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+    if (alias != NULL && alias->is_char_alias)
+      return 1;
+  }
+  return 0;
 }
 
-void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
-    int *type_second, struct Expression *expr2)
-{
-    if (type_first == NULL || type_second == NULL)
-        return;
-
-    if (expr1 != NULL && semcheck_expr_is_char_like(expr1) && *type_first != CHAR_TYPE)
-        *type_first = CHAR_TYPE;
-    if (expr2 != NULL && semcheck_expr_is_char_like(expr2) && *type_second != CHAR_TYPE)
-        *type_second = CHAR_TYPE;
-
-    int expr1_is_char_ptr = semcheck_expr_is_char_pointer(expr1);
-    int expr2_is_char_ptr = semcheck_expr_is_char_pointer(expr2);
-    if ((*type_first == STRING_TYPE && expr2_is_char_ptr) ||
-        (*type_second == STRING_TYPE && expr1_is_char_ptr))
-    {
-        if (*type_first == STRING_TYPE && expr2_is_char_ptr)
-        {
-            *type_second = STRING_TYPE;
-            semcheck_promote_pointer_expr_to_string(expr2);
-        }
-        else if (*type_second == STRING_TYPE && expr1_is_char_ptr)
-        {
-            *type_first = STRING_TYPE;
-            semcheck_promote_pointer_expr_to_string(expr1);
-        }
-    }
-
-    /* Handle CHAR + STRING or STRING + CHAR comparisons
-     * Upgrade CHAR to STRING for comparison purposes */
-    if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
-        (*type_first == STRING_TYPE && *type_second == CHAR_TYPE))
-    {
-        /* Upgrade CHAR operand to STRING */
-        if (*type_first == CHAR_TYPE)
-        {
-            *type_first = STRING_TYPE;
-            if (expr1 != NULL)
-                semcheck_expr_set_resolved_type(expr1, STRING_TYPE);
-        }
-        else /* *type_second == CHAR_TYPE */
-        {
-            *type_second = STRING_TYPE;
-            if (expr2 != NULL)
-                semcheck_expr_set_resolved_type(expr2, STRING_TYPE);
-        }
-    }
-    
-    /* Handle CHAR + CHAR comparisons where both are string literals
-     * Single-character string literals like '/' are parsed as CHAR_TYPE,
-     * but should be treated as STRING_TYPE for comparison purposes */
-    if (*type_first == CHAR_TYPE && *type_second == CHAR_TYPE)
-    {
-        int expr1_is_string_literal = (expr1 != NULL && expr1->type == EXPR_STRING);
-        int expr2_is_string_literal = (expr2 != NULL && expr2->type == EXPR_STRING);
-        
-        /* If at least one is a string literal, treat both as strings */
-        if (expr1_is_string_literal || expr2_is_string_literal)
-        {
-            *type_first = STRING_TYPE;
-            *type_second = STRING_TYPE;
-            if (expr1 != NULL)
-                semcheck_expr_set_resolved_type(expr1, STRING_TYPE);
-            if (expr2 != NULL)
-                semcheck_expr_set_resolved_type(expr2, STRING_TYPE);
-        }
-    }
-}
-
-int semcheck_expr_is_char_like(struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-    if (expr->type == EXPR_STRING && expr->expr_data.string != NULL &&
-        strlen(expr->expr_data.string) == 1)
-        return 1;
-    if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type == CHAR_TYPE)
-        return 1;
-    if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type_id != NULL)
-    {
-        const char *normalized = semcheck_normalize_char_type_id(expr->array_element_type_id);
-        if (normalized != NULL &&
-            (pascal_identifier_equals(normalized, "AnsiChar") ||
-             pascal_identifier_equals(normalized, "WideChar")))
-            return 1;
-    }
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        if (kgpc_type_is_char(expr->resolved_kgpc_type))
-            return 1;
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
-        if (alias != NULL && alias->is_char_alias)
-            return 1;
-    }
+int semcheck_expr_is_char_pointer(struct Expression *expr) {
+  if (expr == NULL)
     return 0;
-}
-
-int semcheck_expr_is_char_pointer(struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-    if (expr->resolved_kgpc_type == NULL || !kgpc_type_is_pointer(expr->resolved_kgpc_type))
-        return 0;
-    if (expr->pointer_subtype == CHAR_TYPE)
-        return 1;
-    if (expr->pointer_subtype_id != NULL)
-    {
-        const char *normalized = semcheck_normalize_char_type_id(expr->pointer_subtype_id);
-        if (normalized != NULL &&
-            (pascal_identifier_equals(normalized, "AnsiChar") ||
-             pascal_identifier_equals(normalized, "WideChar")))
-            return 1;
-    }
-    if (expr->resolved_kgpc_type != NULL && kgpc_type_is_pointer(expr->resolved_kgpc_type))
-    {
-        KgpcType *pointee = expr->resolved_kgpc_type->info.points_to;
-        if (pointee != NULL &&
-            pointee->kind == TYPE_KIND_PRIMITIVE &&
-            pointee->info.primitive_type_tag == CHAR_TYPE)
-            return 1;
-    }
+  if (expr->resolved_kgpc_type == NULL ||
+      !kgpc_type_is_pointer(expr->resolved_kgpc_type))
     return 0;
+  if (expr->pointer_subtype == CHAR_TYPE)
+    return 1;
+  if (expr->pointer_subtype_id != NULL) {
+    const char *normalized =
+        semcheck_normalize_char_type_id(expr->pointer_subtype_id);
+    if (normalized != NULL &&
+        (pascal_identifier_equals(normalized, "AnsiChar") ||
+         pascal_identifier_equals(normalized, "WideChar")))
+      return 1;
+  }
+  if (expr->resolved_kgpc_type != NULL &&
+      kgpc_type_is_pointer(expr->resolved_kgpc_type)) {
+    KgpcType *pointee = expr->resolved_kgpc_type->info.points_to;
+    if (pointee != NULL && pointee->kind == TYPE_KIND_PRIMITIVE &&
+        pointee->info.primitive_type_tag == CHAR_TYPE)
+      return 1;
+  }
+  return 0;
 }
 
-int semcheck_expr_is_wide_char_pointer(struct Expression *expr)
-{
-    if (!semcheck_expr_is_char_pointer(expr))
-        return 0;
-    if (expr->pointer_subtype_id != NULL)
-    {
-        const char *normalized = semcheck_normalize_char_type_id(expr->pointer_subtype_id);
-        if (normalized != NULL && pascal_identifier_equals(normalized, "WideChar"))
-            return 1;
-    }
-    if (expr->resolved_kgpc_type != NULL && kgpc_type_is_pointer(expr->resolved_kgpc_type))
-    {
-        KgpcType *pointee = expr->resolved_kgpc_type->info.points_to;
-        if (pointee != NULL && kgpc_type_sizeof(pointee) == 2)
-            return 1;
-    }
+int semcheck_expr_is_wide_char_pointer(struct Expression *expr) {
+  if (!semcheck_expr_is_char_pointer(expr))
     return 0;
+  if (expr->pointer_subtype_id != NULL) {
+    const char *normalized =
+        semcheck_normalize_char_type_id(expr->pointer_subtype_id);
+    if (normalized != NULL && pascal_identifier_equals(normalized, "WideChar"))
+      return 1;
+  }
+  if (expr->resolved_kgpc_type != NULL &&
+      kgpc_type_is_pointer(expr->resolved_kgpc_type)) {
+    KgpcType *pointee = expr->resolved_kgpc_type->info.points_to;
+    if (pointee != NULL && kgpc_type_sizeof(pointee) == 2)
+      return 1;
+  }
+  return 0;
 }
 
-void semcheck_promote_pointer_expr_to_string(struct Expression *expr)
-{
-    if (expr == NULL)
-        return;
-    semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+void semcheck_promote_pointer_expr_to_string(struct Expression *expr) {
+  if (expr == NULL)
+    return;
+  semcheck_expr_set_resolved_type(expr, STRING_TYPE);
 }
 
-int is_and_or(int *type)
-{
-    assert(type != NULL);
-    return (*type == AND || *type == OR);
+int is_and_or(int *type) {
+  assert(type != NULL);
+  return (*type == AND || *type == OR);
 }
 
 void semcheck_expr_set_call_kgpc_type(struct Expression *expr, KgpcType *type,
-    int owns_existing)
-{
-    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
-        return;
+                                      int owns_existing) {
+  if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+    return;
 
-    if (expr->expr_data.function_call_data.call_kgpc_type != NULL && owns_existing)
-    {
-        destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
-    }
-    expr->expr_data.function_call_data.call_kgpc_type = NULL;
+  if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+      owns_existing) {
+    destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
+  }
+  expr->expr_data.function_call_data.call_kgpc_type = NULL;
 
-    if (type != NULL)
-    {
-        kgpc_type_retain(type);
-        expr->expr_data.function_call_data.call_kgpc_type = type;
-    }
+  if (type != NULL) {
+    kgpc_type_retain(type);
+    expr->expr_data.function_call_data.call_kgpc_type = type;
+  }
 }
 
-void semcheck_expr_set_resolved_kgpc_type_shared(struct Expression *expr, KgpcType *type)
-{
-    if (expr == NULL)
-        return;
+void semcheck_expr_set_resolved_kgpc_type_shared(struct Expression *expr,
+                                                 KgpcType *type) {
+  if (expr == NULL)
+    return;
 
-    if (expr->resolved_kgpc_type == type)
-        return;
+  if (expr->resolved_kgpc_type == type)
+    return;
 
-    /* Retain new type BEFORE destroying old, in case they share sub-objects */
-    if (type != NULL)
-        kgpc_type_retain(type);
+  /* Retain new type BEFORE destroying old, in case they share sub-objects */
+  if (type != NULL)
+    kgpc_type_retain(type);
 
-    if (expr->resolved_kgpc_type != NULL)
-        destroy_kgpc_type(expr->resolved_kgpc_type);
+  if (expr->resolved_kgpc_type != NULL)
+    destroy_kgpc_type(expr->resolved_kgpc_type);
 
-    expr->resolved_kgpc_type = type;
+  expr->resolved_kgpc_type = type;
 }
 
-void semcheck_reset_function_call_cache(struct Expression *expr)
-{
-    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
-        return;
+void semcheck_reset_function_call_cache(struct Expression *expr) {
+  if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+    return;
 
-    int had_call_info = (expr->expr_data.function_call_data.is_call_info_valid == 1);
-    expr->expr_data.function_call_data.resolved_func = NULL;
-    expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
-    semcheck_expr_set_call_kgpc_type(expr, NULL, had_call_info);
-    expr->expr_data.function_call_data.is_call_info_valid = 0;
-    expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+  int had_call_info =
+      (expr->expr_data.function_call_data.is_call_info_valid == 1);
+  expr->expr_data.function_call_data.resolved_func = NULL;
+  expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
+  semcheck_expr_set_call_kgpc_type(expr, NULL, had_call_info);
+  expr->expr_data.function_call_data.is_call_info_valid = 0;
+  expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+  free(expr->expr_data.function_call_data.cached_owner_class);
+  expr->expr_data.function_call_data.cached_owner_class = NULL;
+  free(expr->expr_data.function_call_data.cached_method_name);
+  expr->expr_data.function_call_data.cached_method_name = NULL;
+}
+
+char *semcheck_dup_function_call_target_symbol(HashNode_t *target) {
+  const char *target_name = NULL;
+
+  if (target == NULL)
+    return NULL;
+
+  /* INTERNPROC targets are runtime entry points, not normal Pascal-mangled ids.
+   */
+  if (target->internproc_id != NULL && target->internproc_id[0] != '\0')
+    target_name = target->internproc_id;
+
+  if ((target_name == NULL || target_name[0] == '\0') && target->type != NULL &&
+      target->type->kind == TYPE_KIND_PROCEDURE) {
+    Tree_t *proc_def = target->type->info.proc_info.definition;
+    if (proc_def != NULL) {
+      if (proc_def->tree_data.subprogram_data.cname_override != NULL &&
+          proc_def->tree_data.subprogram_data.cname_override[0] != '\0') {
+        target_name = proc_def->tree_data.subprogram_data.cname_override;
+      } else if (proc_def->tree_data.subprogram_data.cname_flag &&
+                 proc_def->tree_data.subprogram_data.id != NULL &&
+                 proc_def->tree_data.subprogram_data.id[0] != '\0') {
+        target_name = proc_def->tree_data.subprogram_data.id;
+      } else if (proc_def->tree_data.subprogram_data.mangled_id != NULL &&
+                 proc_def->tree_data.subprogram_data.mangled_id[0] != '\0') {
+        target_name = proc_def->tree_data.subprogram_data.mangled_id;
+      }
+    }
+  }
+
+  if ((target_name == NULL || target_name[0] == '\0') &&
+      target->mangled_id != NULL && target->mangled_id[0] != '\0') {
+    target_name = target->mangled_id;
+  }
+
+  if ((target_name == NULL || target_name[0] == '\0') && target->id != NULL &&
+      target->id[0] != '\0') {
+    target_name = target->id;
+  }
+
+  return target_name != NULL ? strdup(target_name) : NULL;
+}
+
+void semcheck_set_function_call_target(struct Expression *expr,
+                                       HashNode_t *target) {
+  if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+    return;
+
+  if (target == NULL) {
+    semcheck_reset_function_call_cache(expr);
+    return;
+  }
+
+  int had_call_info =
+      (expr->expr_data.function_call_data.is_call_info_valid == 1);
+  expr->expr_data.function_call_data.resolved_func = NULL;
+  expr->expr_data.function_call_data.call_hash_type = target->hash_type;
+  char *target_symbol = semcheck_dup_function_call_target_symbol(target);
+  if (target_symbol != NULL) {
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+      free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = target_symbol;
+  }
+  semcheck_expr_set_call_kgpc_type(expr, target->type, had_call_info);
+  /* Cache method identity so codegen doesn't need to parse mangled names.
+   * Some earlier semcheck paths set this from structured record metadata
+   * before overload resolution. Do not erase that metadata when the resolved
+   * symbol is an implementation label without owner/method fields. */
+  if (target->owner_class != NULL) {
     free(expr->expr_data.function_call_data.cached_owner_class);
-    expr->expr_data.function_call_data.cached_owner_class = NULL;
+    expr->expr_data.function_call_data.cached_owner_class =
+        strdup(target->owner_class);
+  }
+  if (target->method_name != NULL) {
     free(expr->expr_data.function_call_data.cached_method_name);
-    expr->expr_data.function_call_data.cached_method_name = NULL;
-}
-
-char *semcheck_dup_function_call_target_symbol(HashNode_t *target)
-{
-    const char *target_name = NULL;
-
-    if (target == NULL)
-        return NULL;
-
-    /* INTERNPROC targets are runtime entry points, not normal Pascal-mangled ids. */
-    if (target->internproc_id != NULL && target->internproc_id[0] != '\0')
-        target_name = target->internproc_id;
-
-    if ((target_name == NULL || target_name[0] == '\0') &&
-        target->type != NULL && target->type->kind == TYPE_KIND_PROCEDURE)
-    {
-        Tree_t *proc_def = target->type->info.proc_info.definition;
-        if (proc_def != NULL)
-        {
-            if (proc_def->tree_data.subprogram_data.cname_override != NULL &&
-                proc_def->tree_data.subprogram_data.cname_override[0] != '\0')
-            {
-                target_name = proc_def->tree_data.subprogram_data.cname_override;
-            }
-            else if (proc_def->tree_data.subprogram_data.cname_flag &&
-                     proc_def->tree_data.subprogram_data.id != NULL &&
-                     proc_def->tree_data.subprogram_data.id[0] != '\0')
-            {
-                target_name = proc_def->tree_data.subprogram_data.id;
-            }
-            else if (proc_def->tree_data.subprogram_data.mangled_id != NULL &&
-                     proc_def->tree_data.subprogram_data.mangled_id[0] != '\0')
-            {
-                target_name = proc_def->tree_data.subprogram_data.mangled_id;
-            }
-        }
-    }
-
-    if ((target_name == NULL || target_name[0] == '\0') &&
-        target->mangled_id != NULL && target->mangled_id[0] != '\0')
-    {
-        target_name = target->mangled_id;
-    }
-
-    if ((target_name == NULL || target_name[0] == '\0') &&
-        target->id != NULL && target->id[0] != '\0')
-    {
-        target_name = target->id;
-    }
-
-    return target_name != NULL ? strdup(target_name) : NULL;
-}
-
-void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target)
-{
-    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
-        return;
-
-    if (target == NULL)
-    {
-        semcheck_reset_function_call_cache(expr);
-        return;
-    }
-
-    int had_call_info = (expr->expr_data.function_call_data.is_call_info_valid == 1);
-    expr->expr_data.function_call_data.resolved_func = NULL;
-    expr->expr_data.function_call_data.call_hash_type = target->hash_type;
-    char *target_symbol = semcheck_dup_function_call_target_symbol(target);
-    if (target_symbol != NULL)
-    {
-        if (expr->expr_data.function_call_data.mangled_id != NULL)
-            free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = target_symbol;
-    }
-    semcheck_expr_set_call_kgpc_type(expr, target->type, had_call_info);
-    /* Cache method identity so codegen doesn't need to parse mangled names.
-     * Some earlier semcheck paths set this from structured record metadata
-     * before overload resolution. Do not erase that metadata when the resolved
-     * symbol is an implementation label without owner/method fields. */
-    if (target->owner_class != NULL)
-    {
-        free(expr->expr_data.function_call_data.cached_owner_class);
-        expr->expr_data.function_call_data.cached_owner_class =
-            strdup(target->owner_class);
-    }
-    if (target->method_name != NULL)
-    {
-        free(expr->expr_data.function_call_data.cached_method_name);
-        expr->expr_data.function_call_data.cached_method_name =
-            strdup(target->method_name);
-    }
-    expr->expr_data.function_call_data.is_call_info_valid = 1;
+    expr->expr_data.function_call_data.cached_method_name =
+        strdup(target->method_name);
+  }
+  expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
 
 void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
-    SymTab_t *symtab)
-{
-    HashNode_t *exact_target = NULL;
-    ListNode_t *candidates = NULL;
-    int best_unit_index = INT_MAX;
-    int matching_candidate_count = 0;
-    int has_same_unit_overloads = 0;
+                                                   SymTab_t *symtab) {
+  HashNode_t *exact_target = NULL;
+  ListNode_t *candidates = NULL;
+  int best_unit_index = INT_MAX;
+  int matching_candidate_count = 0;
+  int has_same_unit_overloads = 0;
 
-    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL || symtab == NULL ||
-        expr->expr_data.function_call_data.mangled_id == NULL)
-    {
-        return;
+  if (expr == NULL || expr->type != EXPR_FUNCTION_CALL || symtab == NULL ||
+      expr->expr_data.function_call_data.mangled_id == NULL) {
+    return;
+  }
+
+  if (expr->expr_data.function_call_data.id != NULL) {
+    int first_matching_unit_index = -1;
+    candidates = FindAllIdents(symtab, expr->expr_data.function_call_data.id);
+    for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next) {
+      HashNode_t *candidate = (HashNode_t *)cur->cur;
+      const char *target_symbol = NULL;
+      char *owned_target_symbol = NULL;
+      int candidate_unit_index = 0;
+
+      if (candidate == NULL || candidate->type == NULL ||
+          candidate->type->kind != TYPE_KIND_PROCEDURE)
+        continue;
+
+      target_symbol = candidate->mangled_id;
+      if (target_symbol == NULL || target_symbol[0] == '\0') {
+        owned_target_symbol =
+            semcheck_dup_function_call_target_symbol(candidate);
+        target_symbol = owned_target_symbol;
+      }
+      if (target_symbol == NULL ||
+          strcmp(target_symbol,
+                 expr->expr_data.function_call_data.mangled_id) != 0) {
+        free(owned_target_symbol);
+        continue;
+      }
+      free(owned_target_symbol);
+
+      if (candidate->source_unit_index > 0) {
+        candidate_unit_index = candidate->source_unit_index;
+      } else if (candidate->type->info.proc_info.definition != NULL) {
+        candidate_unit_index =
+            candidate->type->info.proc_info.definition->tree_data
+                .subprogram_data.source_unit_index;
+      }
+
+      matching_candidate_count++;
+      if (matching_candidate_count == 1) {
+        first_matching_unit_index = candidate_unit_index;
+      } else if (candidate_unit_index == first_matching_unit_index) {
+        /* Multiple overloads from the same unit share this external
+         * symbol (e.g., FpReaddir var vs pdir overloads in the same
+         * include file). */
+        has_same_unit_overloads = 1;
+      }
+
+      if (exact_target == NULL || candidate_unit_index < best_unit_index) {
+        exact_target = candidate;
+        best_unit_index = candidate_unit_index;
+      }
     }
+    if (candidates != NULL)
+      DestroyList(candidates);
+  }
 
-    if (expr->expr_data.function_call_data.id != NULL)
-    {
-        int first_matching_unit_index = -1;
-        candidates = FindAllIdents(symtab, expr->expr_data.function_call_data.id);
-        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            const char *target_symbol = NULL;
-            char *owned_target_symbol = NULL;
-            int candidate_unit_index = 0;
+  if (exact_target == NULL &&
+      (FindSymbol(&exact_target, symtab,
+                  expr->expr_data.function_call_data.mangled_id) == 0 ||
+       exact_target == NULL || exact_target->type == NULL ||
+       exact_target->type->kind != TYPE_KIND_PROCEDURE)) {
+    return;
+  }
 
-            if (candidate == NULL || candidate->type == NULL ||
-                candidate->type->kind != TYPE_KIND_PROCEDURE)
-                continue;
+  if (expr->expr_data.function_call_data.call_kgpc_type == exact_target->type &&
+      expr->expr_data.function_call_data.call_hash_type ==
+          exact_target->hash_type) {
+    return;
+  }
 
-            target_symbol = candidate->mangled_id;
-            if (target_symbol == NULL || target_symbol[0] == '\0')
-            {
-                owned_target_symbol = semcheck_dup_function_call_target_symbol(candidate);
-                target_symbol = owned_target_symbol;
-            }
-            if (target_symbol == NULL ||
-                strcmp(target_symbol, expr->expr_data.function_call_data.mangled_id) != 0)
-            {
-                free(owned_target_symbol);
-                continue;
-            }
-            free(owned_target_symbol);
-
-            if (candidate->source_unit_index > 0)
-            {
-                candidate_unit_index = candidate->source_unit_index;
-            }
-            else if (candidate->type->info.proc_info.definition != NULL)
-            {
-                candidate_unit_index = candidate->type->info.proc_info.definition
-                    ->tree_data.subprogram_data.source_unit_index;
-            }
-
-            matching_candidate_count++;
-            if (matching_candidate_count == 1)
-            {
-                first_matching_unit_index = candidate_unit_index;
-            }
-            else if (candidate_unit_index == first_matching_unit_index)
-            {
-                /* Multiple overloads from the same unit share this external
-                 * symbol (e.g., FpReaddir var vs pdir overloads in the same
-                 * include file). */
-                has_same_unit_overloads = 1;
-            }
-
-            if (exact_target == NULL || candidate_unit_index < best_unit_index)
-            {
-                exact_target = candidate;
-                best_unit_index = candidate_unit_index;
-            }
-        }
-        if (candidates != NULL)
-            DestroyList(candidates);
+  /* When multiple overloads within the same unit share the same external C
+   * symbol name (e.g., FpReaddir(var dirp: Dir) and FpReaddir(dirp: pdir)
+   * both map to "readdir"), the sync must not override the call_kgpc_type
+   * that was already set by overload resolution.  Overload resolution picks
+   * the overload whose parameter list matches the call-site arguments;
+   * replacing it with a different overload loses var-parameter metadata and
+   * causes the codegen to emit record-by-value copies instead of
+   * pass-by-reference.
+   *
+   * This guard only activates when the same-unit overload pattern is
+   * detected; cross-unit re-exports (e.g., sysutils and dynlibs both
+   * defining GetProcedureAddress) must still be synced normally. */
+  if (has_same_unit_overloads) {
+    KgpcType *existing_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (existing_type != NULL && existing_type->kind == TYPE_KIND_PROCEDURE &&
+        exact_target->type != existing_type) {
+      /* Same-unit overloads map to the same external symbol but have
+       * different parameter signatures — preserve the overload-resolved
+       * type. */
+      return;
     }
+  }
 
-    if (exact_target == NULL &&
-        (FindSymbol(&exact_target, symtab,
-            expr->expr_data.function_call_data.mangled_id) == 0 ||
-         exact_target == NULL || exact_target->type == NULL ||
-         exact_target->type->kind != TYPE_KIND_PROCEDURE))
-    {
-        return;
-    }
-
-    if (expr->expr_data.function_call_data.call_kgpc_type == exact_target->type &&
-        expr->expr_data.function_call_data.call_hash_type == exact_target->hash_type)
-    {
-        return;
-    }
-
-    /* When multiple overloads within the same unit share the same external C
-     * symbol name (e.g., FpReaddir(var dirp: Dir) and FpReaddir(dirp: pdir)
-     * both map to "readdir"), the sync must not override the call_kgpc_type
-     * that was already set by overload resolution.  Overload resolution picks
-     * the overload whose parameter list matches the call-site arguments;
-     * replacing it with a different overload loses var-parameter metadata and
-     * causes the codegen to emit record-by-value copies instead of
-     * pass-by-reference.
-     *
-     * This guard only activates when the same-unit overload pattern is
-     * detected; cross-unit re-exports (e.g., sysutils and dynlibs both
-     * defining GetProcedureAddress) must still be synced normally. */
-    if (has_same_unit_overloads)
-    {
-        KgpcType *existing_type = expr->expr_data.function_call_data.call_kgpc_type;
-        if (existing_type != NULL && existing_type->kind == TYPE_KIND_PROCEDURE &&
-            exact_target->type != existing_type)
-        {
-            /* Same-unit overloads map to the same external symbol but have
-             * different parameter signatures — preserve the overload-resolved
-             * type. */
-            return;
-        }
-    }
-
-    semcheck_set_function_call_target(expr, exact_target);
+  semcheck_set_function_call_target(expr, exact_target);
 }
 
-void set_hash_meta(HashNode_t *node, int mutating)
-{
-    assert(node != NULL);
-    if(mutating == BOTH_MUTATE_REFERENCE)
-    {
-        node->referenced += 1;
-        node->mutated += 1;
-    }
-    else
-    {
-        node->referenced += 1-mutating;
-        node->mutated += mutating;
-    }
+void set_hash_meta(HashNode_t *node, int mutating) {
+  assert(node != NULL);
+  if (mutating == BOTH_MUTATE_REFERENCE) {
+    node->referenced += 1;
+    node->mutated += 1;
+  } else {
+    node->referenced += 1 - mutating;
+    node->mutated += mutating;
+  }
 }

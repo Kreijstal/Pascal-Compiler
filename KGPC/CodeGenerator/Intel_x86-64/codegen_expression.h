@@ -7,64 +7,87 @@
 #include "codegen_expr_arguments.h"
 
 /* Shared helpers exposed from codegen_expression.c */
-const struct RecordType *codegen_record_class_var_owner_named(SymTab_t *symtab,
-    struct RecordType *record, const char *field_id);
-ListNode_t *codegen_emit_classvar_base_address_named(ListNode_t *inst_list,
-    const char *addr_reg64, const struct RecordType *record, long long field_offset);
+const struct RecordType *codegen_record_class_var_owner_named(
+    SymTab_t *symtab, struct RecordType *record, const char *field_id);
+ListNode_t *codegen_emit_classvar_base_address_named(
+    ListNode_t *inst_list, const char *addr_reg64,
+    const struct RecordType *record, long long field_offset);
 int codegen_record_matches_owner_class(CodeGenContext *ctx,
-    const struct RecordType *record);
-int codegen_nonstatic_class_method_owner_field_uses_classvar(CodeGenContext *ctx,
-    const struct RecordType *record, const struct Expression *record_expr);
-int codegen_expr_is_class_vmt_value(const struct Expression *expr, CodeGenContext *ctx);
+                                       const struct RecordType *record);
+int codegen_nonstatic_class_method_owner_field_uses_classvar(
+    CodeGenContext *ctx, const struct RecordType *record,
+    const struct Expression *record_expr);
+int codegen_expr_is_class_vmt_value(const struct Expression *expr,
+                                    CodeGenContext *ctx);
 int codegen_expr_needs_class_method_vmt_self(const struct Expression *expr,
-    CodeGenContext *ctx);
-ListNode_t *codegen_expr_maybe_convert_int_like_to_real(int target_type,
-    struct Expression *arg_expr, Register_t *top_reg, ListNode_t *inst_list,
-    CodeGenContext *ctx);
+                                             CodeGenContext *ctx);
+ListNode_t *codegen_expr_maybe_convert_int_like_to_real(
+    int target_type, struct Expression *arg_expr, Register_t *top_reg,
+    ListNode_t *inst_list, CodeGenContext *ctx);
 int codegen_expr_align_to(int value, int alignment);
 StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size);
 ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
-    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+                                              ListNode_t *inst_list,
+                                              CodeGenContext *ctx,
+                                              Register_t **out_reg);
 StackNode_t *codegen_alloc_record_temp(long long size);
 int expr_is_signed_kgpctype(const struct Expression *expr);
 const char *describe_expression_kind(const struct Expression *expr);
-
 
 /*
     Expression-related code generation functions
 */
 
 HashNode_t *codegen_prefer_visible_var_over_const(CodeGenContext *ctx,
-    const char *id, HashNode_t *node);
+                                                  const char *id,
+                                                  HashNode_t *node);
 
 ListNode_t *codegen_condition_expr(struct Expression *, ListNode_t *,
-    CodeGenContext *ctx, int *);
-ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx);
+                                   CodeGenContext *ctx, int *);
+ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node,
+                                          ListNode_t *inst_list,
+                                          CodeGenContext *ctx);
 
-ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_expr_with_result(struct Expression *, ListNode_t *, CodeGenContext *ctx, Register_t **out_reg);
-ListNode_t *codegen_materialize_extended_expr(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t *dest_addr_reg);
-ListNode_t *codegen_array_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
-ListNode_t *codegen_array_element_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
-ListNode_t *codegen_record_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
-ListNode_t *codegen_record_field_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
-ListNode_t *codegen_address_for_expr(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
-ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_expr(struct Expression *, ListNode_t *,
+                         CodeGenContext *ctx);
+ListNode_t *codegen_expr_with_result(struct Expression *, ListNode_t *,
+                                     CodeGenContext *ctx, Register_t **out_reg);
+ListNode_t *codegen_materialize_extended_expr(struct Expression *expr,
+                                              ListNode_t *inst_list,
+                                              CodeGenContext *ctx,
+                                              Register_t *dest_addr_reg);
+ListNode_t *codegen_array_access(struct Expression *, ListNode_t *,
+                                 CodeGenContext *, Register_t *);
+ListNode_t *codegen_array_element_address(struct Expression *, ListNode_t *,
+                                          CodeGenContext *, Register_t **);
+ListNode_t *codegen_record_access(struct Expression *, ListNode_t *,
+                                  CodeGenContext *, Register_t *);
+ListNode_t *codegen_record_field_address(struct Expression *, ListNode_t *,
+                                         CodeGenContext *, Register_t **);
+ListNode_t *codegen_address_for_expr(struct Expression *, ListNode_t *,
+                                     CodeGenContext *, Register_t **);
+ListNode_t *codegen_args(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_emit_class_cast_check(struct Expression *expr,
-    ListNode_t *inst_list, CodeGenContext *ctx);
+                                          ListNode_t *inst_list,
+                                          CodeGenContext *ctx);
 ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
-    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *addr_reg);
+                                                       ListNode_t *inst_list,
+                                                       CodeGenContext *ctx,
+                                                       Register_t *addr_reg);
 ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t **out_reg);
+                                 CodeGenContext *ctx, Register_t **out_reg);
 
 int codegen_expr_is_addressable(const struct Expression *expr);
 int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr,
-    CodeGenContext *ctx);
+                                          CodeGenContext *ctx);
 long long codegen_expr_sret_size(const struct Expression *expr);
 
-ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64);
-ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg32);
+ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list,
+                                       const char *src_reg32,
+                                       const char *dst_reg64);
+ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list,
+                                       const char *src_reg32,
+                                       const char *dst_reg32);
 
 int codegen_type_uses_qword(int type_tag);
 int codegen_type_is_signed(int type_tag);
@@ -78,57 +101,69 @@ struct KgpcType *expr_get_kgpc_type(const struct Expression *expr);
 long long expr_effective_size_bytes(const struct Expression *expr);
 int codegen_expr_involves_extended(const struct Expression *expr);
 
-/* Check if expression type matches a specific type tag, using KgpcType when available.
- * Returns 1 if match, 0 otherwise. */
+/* Check if expression type matches a specific type tag, using KgpcType when
+ * available. Returns 1 if match, 0 otherwise. */
 int expr_has_type_tag(const struct Expression *expr, int type_tag);
 int codegen_expr_is_string_char_index(const struct Expression *expr);
 
-/* Check if expression uses qword (64-bit) operations, using KgpcType when available.
- * Returns 1 if qword, 0 otherwise. */
+/* Check if expression uses qword (64-bit) operations, using KgpcType when
+ * available. Returns 1 if qword, 0 otherwise. */
 int expr_uses_qword_kgpctype(const struct Expression *expr);
 int expr_contains_function_call(const struct Expression *expr);
 int expr_returns_sret(const struct Expression *expr);
 
-/* Helper to get array lower bound from expression, preferring resolved_kgpc_type.
- * Returns the lower bound, or 0 if not an array. */
+/* Helper to get array lower bound from expression, preferring
+ * resolved_kgpc_type. Returns the lower bound, or 0 if not an array. */
 int expr_get_array_lower_bound(const struct Expression *expr);
 
-/* Helper to get array upper bound from expression, preferring resolved_kgpc_type.
- * Returns the upper bound, or -1 if not an array. */
+/* Helper to get array upper bound from expression, preferring
+ * resolved_kgpc_type. Returns the upper bound, or -1 if not an array. */
 int expr_get_array_upper_bound(const struct Expression *expr);
 
-/* Helper to get array element size from expression, preferring resolved_kgpc_type.
- * Returns the element size in bytes, or -1 if not determinable. */
-long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx);
+/* Helper to get array element size from expression, preferring
+ * resolved_kgpc_type. Returns the element size in bytes, or -1 if not
+ * determinable. */
+long long expr_get_array_element_size(const struct Expression *expr,
+                                      CodeGenContext *ctx);
 
 /* Check if an expression represents a character set (set of char).
  * Returns 1 if it's a character set, 0 otherwise. */
 int expr_is_char_set(const struct Expression *expr);
 
-/* Check if an expression represents a character set with context for symbol lookup.
- * Returns 1 if it's a character set, 0 otherwise. */
+/* Check if an expression represents a character set with context for symbol
+ * lookup. Returns 1 if it's a character set, 0 otherwise. */
 int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx);
 ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t **out_reg, int force_char_set);
-ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t **out_reg);
+                                CodeGenContext *ctx, Register_t **out_reg,
+                                int force_char_set);
+ListNode_t *codegen_char_set_address(struct Expression *expr,
+                                     ListNode_t *inst_list, CodeGenContext *ctx,
+                                     Register_t **out_reg);
 
-int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
-    struct RecordType *record_type, long long *size_out);
+int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag,
+                                  const char *type_id,
+                                  struct RecordType *record_type,
+                                  long long *size_out);
 
 struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
-    const char *field_id, struct RecordType **out_record);
-long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx);
+                                              const char *field_id,
+                                              struct RecordType **out_record);
+long long codegen_array_elem_size_from_field(struct RecordField *field,
+                                             CodeGenContext *ctx);
 
-ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t *target_reg);
-ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t *target_reg);
+ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr,
+                                       ListNode_t *inst_list,
+                                       CodeGenContext *ctx,
+                                       Register_t *target_reg);
+ListNode_t *codegen_addressof_leaf(struct Expression *expr,
+                                   ListNode_t *inst_list, CodeGenContext *ctx,
+                                   Register_t *target_reg);
 void codegen_release_function_call_mangled_id(struct Expression *expr);
 
 /* (DEPRECATED) */
-ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, CodeGenContext *ctx);
-
+ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *,
+                               CodeGenContext *ctx);
+ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *,
+                              CodeGenContext *ctx);
 
 #endif // CODEGEN_EXPRESSION_H

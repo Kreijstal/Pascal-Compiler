@@ -9,8 +9,8 @@
     NOTE: Optimizer designed to work in unison with the parser
 
     TODO: Support arrays
-        - All local-only variables only mutated to constant values and referenced afterwards
-            are removed
+        - All local-only variables only mutated to constant values and
+   referenced afterwards are removed
 */
 
 #include <stdlib.h>
@@ -30,121 +30,115 @@
 
 #define DEAD_VAR_ID_BUCKETS 64
 
-typedef struct IdSetEntry
-{
-    char *id;
-    struct IdSetEntry *next;
+typedef struct IdSetEntry {
+  char *id;
+  struct IdSetEntry *next;
 } IdSetEntry;
 
-typedef struct IdSet
-{
-    size_t bucket_count;
-    IdSetEntry **buckets;
+typedef struct IdSet {
+  size_t bucket_count;
+  IdSetEntry **buckets;
 } IdSet;
 
-static size_t id_set_hash(const char *id, size_t bucket_count)
-{
-    size_t hash = 5381;
-    while (id != NULL && *id != '\0')
-    {
-        hash = ((hash << 5) + hash) ^ (size_t)tolower((unsigned char)*id);
-        ++id;
-    }
-    return bucket_count == 0 ? 0 : hash % bucket_count;
+static size_t id_set_hash(const char *id, size_t bucket_count) {
+  size_t hash = 5381;
+  while (id != NULL && *id != '\0') {
+    hash = ((hash << 5) + hash) ^ (size_t)tolower((unsigned char)*id);
+    ++id;
+  }
+  return bucket_count == 0 ? 0 : hash % bucket_count;
 }
 
-static IdSet *id_set_create(size_t bucket_count)
-{
-    IdSet *set = (IdSet *)calloc(1, sizeof(IdSet));
-    if (set == NULL)
-        return NULL;
+static IdSet *id_set_create(size_t bucket_count) {
+  IdSet *set = (IdSet *)calloc(1, sizeof(IdSet));
+  if (set == NULL)
+    return NULL;
 
-    set->bucket_count = bucket_count;
-    set->buckets = (IdSetEntry **)calloc(bucket_count, sizeof(IdSetEntry *));
-    if (set->buckets == NULL)
-    {
-        free(set);
-        return NULL;
-    }
-    return set;
-}
-
-static void id_set_destroy(IdSet *set)
-{
-    if (set == NULL)
-        return;
-
-    for (size_t i = 0; i < set->bucket_count; ++i)
-    {
-        IdSetEntry *cur = set->buckets[i];
-        while (cur != NULL)
-        {
-            IdSetEntry *next = cur->next;
-            free(cur->id);
-            free(cur);
-            cur = next;
-        }
-    }
-
-    free(set->buckets);
+  set->bucket_count = bucket_count;
+  set->buckets = (IdSetEntry **)calloc(bucket_count, sizeof(IdSetEntry *));
+  if (set->buckets == NULL) {
     free(set);
+    return NULL;
+  }
+  return set;
 }
 
-static void id_set_add(IdSet *set, const char *id)
-{
-    if (set == NULL || id == NULL)
-        return;
+static void id_set_destroy(IdSet *set) {
+  if (set == NULL)
+    return;
 
-    size_t index = id_set_hash(id, set->bucket_count);
-    IdSetEntry *cur = set->buckets[index];
-    while (cur != NULL)
-    {
-        if (pascal_identifier_equals(cur->id, id))
-            return;
-        cur = cur->next;
+  for (size_t i = 0; i < set->bucket_count; ++i) {
+    IdSetEntry *cur = set->buckets[i];
+    while (cur != NULL) {
+      IdSetEntry *next = cur->next;
+      free(cur->id);
+      free(cur);
+      cur = next;
     }
+  }
 
-    IdSetEntry *entry = (IdSetEntry *)malloc(sizeof(IdSetEntry));
-    if (entry == NULL)
-        return;
-
-    size_t len = strlen(id);
-    entry->id = (char *)malloc(len + 1);
-    if (entry->id == NULL)
-    {
-        free(entry);
-        return;
-    }
-
-    memcpy(entry->id, id, len + 1);
-    entry->next = set->buckets[index];
-    set->buckets[index] = entry;
+  free(set->buckets);
+  free(set);
 }
 
-static int id_set_contains(const IdSet *set, const char *id)
-{
-    if (set == NULL || id == NULL)
-        return 0;
+static void id_set_add(IdSet *set, const char *id) {
+  if (set == NULL || id == NULL)
+    return;
 
-    size_t index = id_set_hash(id, set->bucket_count);
-    IdSetEntry *cur = set->buckets[index];
-    while (cur != NULL)
-    {
-        if (pascal_identifier_equals(cur->id, id))
-            return 1;
-        cur = cur->next;
-    }
+  size_t index = id_set_hash(id, set->bucket_count);
+  IdSetEntry *cur = set->buckets[index];
+  while (cur != NULL) {
+    if (pascal_identifier_equals(cur->id, id))
+      return;
+    cur = cur->next;
+  }
+
+  IdSetEntry *entry = (IdSetEntry *)malloc(sizeof(IdSetEntry));
+  if (entry == NULL)
+    return;
+
+  size_t len = strlen(id);
+  entry->id = (char *)malloc(len + 1);
+  if (entry->id == NULL) {
+    free(entry);
+    return;
+  }
+
+  memcpy(entry->id, id, len + 1);
+  entry->next = set->buckets[index];
+  set->buckets[index] = entry;
+}
+
+static int id_set_contains(const IdSet *set, const char *id) {
+  if (set == NULL || id == NULL)
     return 0;
+
+  size_t index = id_set_hash(id, set->bucket_count);
+  IdSetEntry *cur = set->buckets[index];
+  while (cur != NULL) {
+    if (pascal_identifier_equals(cur->id, id))
+      return 1;
+    cur = cur->next;
+  }
+  return 0;
 }
 
 static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog);
 static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub);
 
-static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *stmt);
-static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids, struct Statement *var_assign);
-static int remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *compound);
-static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *var_decls);
-static int remove_dead_variables_batch(SymTab_t *symtab, ListNode_t *vars_to_remove, struct Statement *stmt_root, ListNode_t *var_decls);
+static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids,
+                                         struct Statement *stmt);
+static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids,
+                                          struct Statement *var_assign);
+static int remove_mutation_compound_statement_set(SymTab_t *symtab,
+                                                  const IdSet *ids,
+                                                  struct Statement *compound);
+static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids,
+                                ListNode_t *var_decls);
+static int remove_dead_variables_batch(SymTab_t *symtab,
+                                       ListNode_t *vars_to_remove,
+                                       struct Statement *stmt_root,
+                                       ListNode_t *var_decls);
 
 static optimizer_runner_fn g_optimizer_runner = optimizer_pass_manager_run;
 static SymTab_t *g_simplify_symtab = NULL;
@@ -153,376 +147,340 @@ static Tree_t *g_simplify_tree = NULL;
 void simplify_stmt_expr(struct Statement *);
 int simplify_expr(struct Expression **);
 static void simplify_decl_initializers(Tree_t *tree);
-static struct Expression *copy_constant_expr(const struct Expression *expr, int line_num);
+static struct Expression *copy_constant_expr(const struct Expression *expr,
+                                             int line_num);
 static Tree_t *find_typed_const_array_decl(const char *id);
-static struct Expression *find_typed_const_array_element_expr(Tree_t *arr_decl,
-    const char *array_id, long long index_value);
+static struct Expression *
+find_typed_const_array_element_expr(Tree_t *arr_decl, const char *array_id,
+                                    long long index_value);
 
 void decrement_self_references(SymTab_t *symtab, struct Statement *stmt);
 
-void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *expr);
+void decrement_reference_id_expr(SymTab_t *symtab, char *id,
+                                 struct Expression *expr);
 void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr);
 
 void set_vars_lists(SymTab_t *, ListNode_t *, ListNode_t **, ListNode_t **);
 void add_to_list(ListNode_t **, void *obj);
 
-static int expr_is_real_constant(const struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-
-    if (expr->type == EXPR_RNUM)
-        return 1;
-
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        int primitive_tag = kgpc_type_get_primitive_tag(expr->resolved_kgpc_type);
-        return primitive_tag == REAL_TYPE || primitive_tag == EXTENDED_TYPE;
-    }
-
+static int expr_is_real_constant(const struct Expression *expr) {
+  if (expr == NULL)
     return 0;
+
+  if (expr->type == EXPR_RNUM)
+    return 1;
+
+  if (expr->resolved_kgpc_type != NULL) {
+    int primitive_tag = kgpc_type_get_primitive_tag(expr->resolved_kgpc_type);
+    return primitive_tag == REAL_TYPE || primitive_tag == EXTENDED_TYPE;
+  }
+
+  return 0;
 }
 
-static int expr_constant_to_double(const struct Expression *expr, double *out_value)
-{
-    if (expr == NULL || out_value == NULL)
-        return 0;
+static int expr_constant_to_double(const struct Expression *expr,
+                                   double *out_value) {
+  if (expr == NULL || out_value == NULL)
+    return 0;
 
-    switch (expr->type)
-    {
-        case EXPR_INUM:
-            *out_value = (double)expr->expr_data.i_num;
-            return 1;
+  switch (expr->type) {
+  case EXPR_INUM:
+    *out_value = (double)expr->expr_data.i_num;
+    return 1;
 
-        case EXPR_RNUM:
-            *out_value = expr->expr_data.r_num;
-            return 1;
+  case EXPR_RNUM:
+    *out_value = expr->expr_data.r_num;
+    return 1;
 
-        default:
-            return 0;
-    }
+  default:
+    return 0;
+  }
 }
 
 /* The main entry point for the optimizer */
-void optimizer_set_runner(optimizer_runner_fn runner)
-{
-    if (runner == NULL)
-        g_optimizer_runner = optimizer_pass_manager_run;
-    else
-        g_optimizer_runner = runner;
+void optimizer_set_runner(optimizer_runner_fn runner) {
+  if (runner == NULL)
+    g_optimizer_runner = optimizer_pass_manager_run;
+  else
+    g_optimizer_runner = runner;
 }
 
-void optimize(SymTab_t *symtab, Tree_t *tree)
-{
-    assert(symtab != NULL);
-    assert(tree != NULL);
+void optimize(SymTab_t *symtab, Tree_t *tree) {
+  assert(symtab != NULL);
+  assert(tree != NULL);
 
-    g_optimizer_runner(symtab, tree);
+  g_optimizer_runner(symtab, tree);
 }
 
-static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog)
-{
-    assert(symtab != NULL);
-    assert(prog != NULL);
-    assert(prog->type == TREE_PROGRAM_TYPE);
+static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog) {
+  assert(symtab != NULL);
+  assert(prog != NULL);
+  assert(prog->type == TREE_PROGRAM_TYPE);
 
-    struct Program *prog_data = &prog->tree_data.program_data;
-    if (prog_data->body_statement == NULL)
-        return;
+  struct Program *prog_data = &prog->tree_data.program_data;
+  if (prog_data->body_statement == NULL)
+    return;
 
-    ListNode_t *vars_to_check = NULL;
-    ListNode_t *vars_to_remove = NULL;
+  ListNode_t *vars_to_check = NULL;
+  ListNode_t *vars_to_remove = NULL;
 
-    decrement_self_references(symtab, prog_data->body_statement);
-    set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
+  decrement_self_references(symtab, prog_data->body_statement);
+  set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check,
+                 &vars_to_remove);
 
-    while (vars_to_remove != NULL)
-    {
-        int removed = remove_dead_variables_batch(symtab, vars_to_remove,
-            prog_data->body_statement, prog_data->var_declaration);
-        if (removed == 0)
-            break;
-
-        DestroyList(vars_to_check);
-        DestroyList(vars_to_remove);
-        vars_to_check = NULL;
-        vars_to_remove = NULL;
-
-        set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
-    }
+  while (vars_to_remove != NULL) {
+    int removed = remove_dead_variables_batch(symtab, vars_to_remove,
+                                              prog_data->body_statement,
+                                              prog_data->var_declaration);
+    if (removed == 0)
+      break;
 
     DestroyList(vars_to_check);
     DestroyList(vars_to_remove);
+    vars_to_check = NULL;
+    vars_to_remove = NULL;
 
-    /* Fail loudly if we removed all statements - this indicates a bug in the optimizer */
-    if (prog_data->body_statement != NULL &&
-        prog_data->body_statement->type == STMT_COMPOUND_STATEMENT &&
-        prog_data->body_statement->stmt_data.compound_statement == NULL)
-    {
-        // This can happen in valid tests (e.g. dead_code.p), so just warn instead of asserting
-        if (getenv("KGPC_DEBUG_OPTIMIZER") != NULL) {
-            fprintf(stderr, "WARNING: Optimizer removed all program body statements (valid for dead code tests)\n");
-        }
+    set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check,
+                   &vars_to_remove);
+  }
+
+  DestroyList(vars_to_check);
+  DestroyList(vars_to_remove);
+
+  /* Fail loudly if we removed all statements - this indicates a bug in the
+   * optimizer */
+  if (prog_data->body_statement != NULL &&
+      prog_data->body_statement->type == STMT_COMPOUND_STATEMENT &&
+      prog_data->body_statement->stmt_data.compound_statement == NULL) {
+    // This can happen in valid tests (e.g. dead_code.p), so just warn instead
+    // of asserting
+    if (getenv("KGPC_DEBUG_OPTIMIZER") != NULL) {
+      fprintf(stderr, "WARNING: Optimizer removed all program body statements "
+                      "(valid for dead code tests)\n");
     }
+  }
 }
 
-static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub)
-{
-    assert(symtab != NULL);
-    assert(sub != NULL);
-    assert(sub->type == TREE_SUBPROGRAM);
+static void run_dead_code_elimination_subprogram(SymTab_t *symtab,
+                                                 Tree_t *sub) {
+  assert(symtab != NULL);
+  assert(sub != NULL);
+  assert(sub->type == TREE_SUBPROGRAM);
 
-    struct Subprogram *sub_data = &sub->tree_data.subprogram_data;
-    if (sub_data->statement_list == NULL)
-        return;
+  struct Subprogram *sub_data = &sub->tree_data.subprogram_data;
+  if (sub_data->statement_list == NULL)
+    return;
 
-    ListNode_t *vars_to_check = NULL;
-    ListNode_t *vars_to_remove = NULL;
+  ListNode_t *vars_to_check = NULL;
+  ListNode_t *vars_to_remove = NULL;
 
-    decrement_self_references(symtab, sub_data->statement_list);
-    set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
+  decrement_self_references(symtab, sub_data->statement_list);
+  set_vars_lists(symtab, sub_data->declarations, &vars_to_check,
+                 &vars_to_remove);
 
-    while (vars_to_remove != NULL)
-    {
-        int removed = remove_dead_variables_batch(symtab, vars_to_remove,
-            sub_data->statement_list, sub_data->declarations);
-        if (removed == 0)
-            break;
-
-        DestroyList(vars_to_check);
-        DestroyList(vars_to_remove);
-        vars_to_check = NULL;
-        vars_to_remove = NULL;
-
-        set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
-    }
+  while (vars_to_remove != NULL) {
+    int removed = remove_dead_variables_batch(symtab, vars_to_remove,
+                                              sub_data->statement_list,
+                                              sub_data->declarations);
+    if (removed == 0)
+      break;
 
     DestroyList(vars_to_check);
     DestroyList(vars_to_remove);
+    vars_to_check = NULL;
+    vars_to_remove = NULL;
+
+    set_vars_lists(symtab, sub_data->declarations, &vars_to_check,
+                   &vars_to_remove);
+  }
+
+  DestroyList(vars_to_check);
+  DestroyList(vars_to_remove);
 }
 
-static int remove_dead_variables_batch(SymTab_t *symtab, ListNode_t *vars_to_remove,
-    struct Statement *stmt_root, ListNode_t *var_decls)
-{
-    if (vars_to_remove == NULL)
-        return 0;
+static int remove_dead_variables_batch(SymTab_t *symtab,
+                                       ListNode_t *vars_to_remove,
+                                       struct Statement *stmt_root,
+                                       ListNode_t *var_decls) {
+  if (vars_to_remove == NULL)
+    return 0;
 
-    IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
-    if (ids == NULL)
-        return 0;
+  IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
+  if (ids == NULL)
+    return 0;
 
-    for (ListNode_t *cur = vars_to_remove; cur != NULL; cur = cur->next)
-        id_set_add(ids, (const char *)cur->cur);
+  for (ListNode_t *cur = vars_to_remove; cur != NULL; cur = cur->next)
+    id_set_add(ids, (const char *)cur->cur);
 
-    int removed = 0;
-    if (stmt_root != NULL)
-        removed += remove_mutation_statement_set(symtab, ids, stmt_root);
-    if (var_decls != NULL)
-        removed += remove_var_decls_set(symtab, ids, var_decls);
+  int removed = 0;
+  if (stmt_root != NULL)
+    removed += remove_mutation_statement_set(symtab, ids, stmt_root);
+  if (var_decls != NULL)
+    removed += remove_var_decls_set(symtab, ids, var_decls);
 
-    id_set_destroy(ids);
-    return removed;
+  id_set_destroy(ids);
+  return removed;
 }
 
-void optimizer_pass_dead_code_elimination(SymTab_t *symtab, Tree_t *tree)
-{
-    assert(symtab != NULL);
-    assert(tree != NULL);
+void optimizer_pass_dead_code_elimination(SymTab_t *symtab, Tree_t *tree) {
+  assert(symtab != NULL);
+  assert(tree != NULL);
 
-    switch (tree->type)
-    {
-        case TREE_PROGRAM_TYPE:
-            run_dead_code_elimination_program(symtab, tree);
-            break;
+  switch (tree->type) {
+  case TREE_PROGRAM_TYPE:
+    run_dead_code_elimination_program(symtab, tree);
+    break;
 
-        case TREE_SUBPROGRAM:
-            run_dead_code_elimination_subprogram(symtab, tree);
-            break;
+  case TREE_SUBPROGRAM:
+    run_dead_code_elimination_subprogram(symtab, tree);
+    break;
 
-        default:
-            break;
+  default:
+    break;
+  }
+}
+
+void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree) {
+  assert(symtab != NULL);
+  assert(tree != NULL);
+
+  g_simplify_symtab = symtab;
+  g_simplify_tree = tree;
+
+  simplify_decl_initializers(tree);
+
+  switch (tree->type) {
+  case TREE_PROGRAM_TYPE:
+    if (tree->tree_data.program_data.body_statement != NULL)
+      simplify_stmt_expr(tree->tree_data.program_data.body_statement);
+    break;
+
+  case TREE_SUBPROGRAM:
+    if (tree->tree_data.subprogram_data.statement_list != NULL)
+      simplify_stmt_expr(tree->tree_data.subprogram_data.statement_list);
+    break;
+
+  default:
+    break;
+  }
+
+  g_simplify_tree = NULL;
+  g_simplify_symtab = NULL;
+}
+
+static void simplify_decl_initializers(Tree_t *tree) {
+  if (tree == NULL)
+    return;
+
+  ListNode_t *decls = NULL;
+  if (tree->type == TREE_PROGRAM_TYPE)
+    decls = tree->tree_data.program_data.var_declaration;
+  else if (tree->type == TREE_SUBPROGRAM)
+    decls = tree->tree_data.subprogram_data.declarations;
+  else
+    return;
+
+  while (decls != NULL) {
+    Tree_t *decl = (Tree_t *)decls->cur;
+    if (decl != NULL) {
+      if (decl->type == TREE_VAR_DECL &&
+          decl->tree_data.var_decl_data.initializer != NULL) {
+        simplify_stmt_expr(decl->tree_data.var_decl_data.initializer);
+      } else if (decl->type == TREE_ARR_DECL &&
+                 decl->tree_data.arr_decl_data.initializer != NULL) {
+        simplify_stmt_expr(decl->tree_data.arr_decl_data.initializer);
+      }
     }
+    decls = decls->next;
+  }
 }
 
-void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree)
-{
-    assert(symtab != NULL);
-    assert(tree != NULL);
-
-    g_simplify_symtab = symtab;
-    g_simplify_tree = tree;
-
-    simplify_decl_initializers(tree);
-
-    switch (tree->type)
-    {
-        case TREE_PROGRAM_TYPE:
-            if (tree->tree_data.program_data.body_statement != NULL)
-                simplify_stmt_expr(tree->tree_data.program_data.body_statement);
-            break;
-
-        case TREE_SUBPROGRAM:
-            if (tree->tree_data.subprogram_data.statement_list != NULL)
-                simplify_stmt_expr(tree->tree_data.subprogram_data.statement_list);
-            break;
-
-        default:
-            break;
-    }
-
-    g_simplify_tree = NULL;
-    g_simplify_symtab = NULL;
-}
-
-static void simplify_decl_initializers(Tree_t *tree)
-{
-    if (tree == NULL)
-        return;
-
-    ListNode_t *decls = NULL;
-    if (tree->type == TREE_PROGRAM_TYPE)
-        decls = tree->tree_data.program_data.var_declaration;
-    else if (tree->type == TREE_SUBPROGRAM)
-        decls = tree->tree_data.subprogram_data.declarations;
-    else
-        return;
-
-    while (decls != NULL)
-    {
-        Tree_t *decl = (Tree_t *)decls->cur;
-        if (decl != NULL)
-        {
-            if (decl->type == TREE_VAR_DECL &&
-                decl->tree_data.var_decl_data.initializer != NULL)
-            {
-                simplify_stmt_expr(decl->tree_data.var_decl_data.initializer);
-            }
-            else if (decl->type == TREE_ARR_DECL &&
-                     decl->tree_data.arr_decl_data.initializer != NULL)
-            {
-                simplify_stmt_expr(decl->tree_data.arr_decl_data.initializer);
-            }
-        }
-        decls = decls->next;
-    }
-}
-
-static struct Expression *copy_constant_expr(const struct Expression *expr, int line_num)
-{
-    if (expr == NULL)
-        return NULL;
-
-    switch (expr->type)
-    {
-        case EXPR_INUM:
-            return mk_inum(line_num, expr->expr_data.i_num);
-        case EXPR_RNUM:
-            return mk_rnum(line_num, expr->expr_data.r_num);
-        case EXPR_BOOL:
-            return mk_bool(line_num, expr->expr_data.bool_value);
-        case EXPR_CHAR_CODE:
-            return mk_charcode(line_num, expr->expr_data.char_code);
-        case EXPR_NIL:
-            return mk_nil(line_num);
-        case EXPR_STRING:
-            if (expr->expr_data.string == NULL)
-                return NULL;
-        {
-            char *copy = strdup(expr->expr_data.string);
-            if (copy == NULL)
-                return NULL;
-            return mk_string(line_num, copy);
-        }
-        default:
-            break;
-    }
-
+static struct Expression *copy_constant_expr(const struct Expression *expr,
+                                             int line_num) {
+  if (expr == NULL)
     return NULL;
+
+  switch (expr->type) {
+  case EXPR_INUM:
+    return mk_inum(line_num, expr->expr_data.i_num);
+  case EXPR_RNUM:
+    return mk_rnum(line_num, expr->expr_data.r_num);
+  case EXPR_BOOL:
+    return mk_bool(line_num, expr->expr_data.bool_value);
+  case EXPR_CHAR_CODE:
+    return mk_charcode(line_num, expr->expr_data.char_code);
+  case EXPR_NIL:
+    return mk_nil(line_num);
+  case EXPR_STRING:
+    if (expr->expr_data.string == NULL)
+      return NULL;
+    {
+      char *copy = strdup(expr->expr_data.string);
+      if (copy == NULL)
+        return NULL;
+      return mk_string(line_num, copy);
+    }
+  default:
+    break;
+  }
+
+  return NULL;
 }
 
-static Tree_t *find_typed_const_array_decl(const char *id)
-{
-    if (id == NULL || g_simplify_tree == NULL)
-        return NULL;
-
-    ListNode_t *decls = NULL;
-    if (g_simplify_tree->type == TREE_PROGRAM_TYPE)
-        decls = g_simplify_tree->tree_data.program_data.var_declaration;
-    else if (g_simplify_tree->type == TREE_SUBPROGRAM)
-        decls = g_simplify_tree->tree_data.subprogram_data.declarations;
-
-    while (decls != NULL)
-    {
-        Tree_t *decl = (Tree_t *)decls->cur;
-        if (decl != NULL &&
-            decl->type == TREE_ARR_DECL &&
-            decl->tree_data.arr_decl_data.is_typed_const)
-        {
-            ListNode_t *ids = decl->tree_data.arr_decl_data.ids;
-            while (ids != NULL)
-            {
-                const char *decl_id = (const char *)ids->cur;
-                if (decl_id != NULL && pascal_identifier_equals(decl_id, id))
-                    return decl;
-                ids = ids->next;
-            }
-        }
-        decls = decls->next;
-    }
-
+static Tree_t *find_typed_const_array_decl(const char *id) {
+  if (id == NULL || g_simplify_tree == NULL)
     return NULL;
+
+  ListNode_t *decls = NULL;
+  if (g_simplify_tree->type == TREE_PROGRAM_TYPE)
+    decls = g_simplify_tree->tree_data.program_data.var_declaration;
+  else if (g_simplify_tree->type == TREE_SUBPROGRAM)
+    decls = g_simplify_tree->tree_data.subprogram_data.declarations;
+
+  while (decls != NULL) {
+    Tree_t *decl = (Tree_t *)decls->cur;
+    if (decl != NULL && decl->type == TREE_ARR_DECL &&
+        decl->tree_data.arr_decl_data.is_typed_const) {
+      ListNode_t *ids = decl->tree_data.arr_decl_data.ids;
+      while (ids != NULL) {
+        const char *decl_id = (const char *)ids->cur;
+        if (decl_id != NULL && pascal_identifier_equals(decl_id, id))
+          return decl;
+        ids = ids->next;
+      }
+    }
+    decls = decls->next;
+  }
+
+  return NULL;
 }
 
-static struct Expression *find_typed_const_array_element_expr(Tree_t *arr_decl,
-    const char *array_id, long long index_value)
-{
-    if (arr_decl == NULL || array_id == NULL || arr_decl->type != TREE_ARR_DECL)
-        return NULL;
-    if (arr_decl->tree_data.arr_decl_data.initializer == NULL)
-        return NULL;
-    if (index_value < arr_decl->tree_data.arr_decl_data.s_range ||
-        index_value > arr_decl->tree_data.arr_decl_data.e_range)
-    {
-        return NULL;
-    }
+static struct Expression *
+find_typed_const_array_element_expr(Tree_t *arr_decl, const char *array_id,
+                                    long long index_value) {
+  if (arr_decl == NULL || array_id == NULL || arr_decl->type != TREE_ARR_DECL)
+    return NULL;
+  if (arr_decl->tree_data.arr_decl_data.initializer == NULL)
+    return NULL;
+  if (index_value < arr_decl->tree_data.arr_decl_data.s_range ||
+      index_value > arr_decl->tree_data.arr_decl_data.e_range) {
+    return NULL;
+  }
 
-    struct Statement *init = arr_decl->tree_data.arr_decl_data.initializer;
-    ListNode_t *stmts = (init->type == STMT_COMPOUND_STATEMENT) ?
-        init->stmt_data.compound_statement : NULL;
+  struct Statement *init = arr_decl->tree_data.arr_decl_data.initializer;
+  ListNode_t *stmts = (init->type == STMT_COMPOUND_STATEMENT)
+                          ? init->stmt_data.compound_statement
+                          : NULL;
 
-    struct Expression *result = NULL;
-    if (stmts != NULL)
-    {
-        ListNode_t *cur = stmts;
-        while (cur != NULL)
-        {
-            struct Statement *stmt = (struct Statement *)cur->cur;
-            if (stmt != NULL && stmt->type == STMT_VAR_ASSIGN &&
-                stmt->stmt_data.var_assign_data.var != NULL &&
-                stmt->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS)
-            {
-                struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
-                struct Expression *base = lhs->expr_data.array_access_data.array_expr;
-                struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
-                if (base != NULL && base->type == EXPR_VAR_ID &&
-                    base->expr_data.id != NULL &&
-                    pascal_identifier_equals(base->expr_data.id, array_id) &&
-                    idx != NULL && idx->type == EXPR_INUM &&
-                    idx->expr_data.i_num == index_value &&
-                    lhs->expr_data.array_access_data.extra_indices == NULL)
-                {
-                    result = stmt->stmt_data.var_assign_data.expr;
-                    break;
-                }
-            }
-            cur = cur->next;
-        }
-    }
-    else if (init->type == STMT_VAR_ASSIGN &&
-             init->stmt_data.var_assign_data.var != NULL &&
-             init->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS)
-    {
-        struct Expression *lhs = init->stmt_data.var_assign_data.var;
+  struct Expression *result = NULL;
+  if (stmts != NULL) {
+    ListNode_t *cur = stmts;
+    while (cur != NULL) {
+      struct Statement *stmt = (struct Statement *)cur->cur;
+      if (stmt != NULL && stmt->type == STMT_VAR_ASSIGN &&
+          stmt->stmt_data.var_assign_data.var != NULL &&
+          stmt->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS) {
+        struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
         struct Expression *base = lhs->expr_data.array_access_data.array_expr;
         struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
         if (base != NULL && base->type == EXPR_VAR_ID &&
@@ -530,642 +488,618 @@ static struct Expression *find_typed_const_array_element_expr(Tree_t *arr_decl,
             pascal_identifier_equals(base->expr_data.id, array_id) &&
             idx != NULL && idx->type == EXPR_INUM &&
             idx->expr_data.i_num == index_value &&
-            lhs->expr_data.array_access_data.extra_indices == NULL)
-        {
-            result = init->stmt_data.var_assign_data.expr;
+            lhs->expr_data.array_access_data.extra_indices == NULL) {
+          result = stmt->stmt_data.var_assign_data.expr;
+          break;
         }
+      }
+      cur = cur->next;
     }
+  } else if (init->type == STMT_VAR_ASSIGN &&
+             init->stmt_data.var_assign_data.var != NULL &&
+             init->stmt_data.var_assign_data.var->type == EXPR_ARRAY_ACCESS) {
+    struct Expression *lhs = init->stmt_data.var_assign_data.var;
+    struct Expression *base = lhs->expr_data.array_access_data.array_expr;
+    struct Expression *idx = lhs->expr_data.array_access_data.index_expr;
+    if (base != NULL && base->type == EXPR_VAR_ID &&
+        base->expr_data.id != NULL &&
+        pascal_identifier_equals(base->expr_data.id, array_id) && idx != NULL &&
+        idx->type == EXPR_INUM && idx->expr_data.i_num == index_value &&
+        lhs->expr_data.array_access_data.extra_indices == NULL) {
+      result = init->stmt_data.var_assign_data.expr;
+    }
+  }
 
-    return result;
+  return result;
 }
 
 /* Checks variables for self-references and decrements (ex: c := c+1) */
-void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
-{
-    assert(symtab != NULL);
-    assert(stmt != NULL);
+void decrement_self_references(SymTab_t *symtab, struct Statement *stmt) {
+  assert(symtab != NULL);
+  assert(stmt != NULL);
 
-    struct Expression *expr;
-    ListNode_t *stmt_list;
-    char *id;
+  struct Expression *expr;
+  ListNode_t *stmt_list;
+  char *id;
 
-    switch(stmt->type)
-    {
-        case STMT_VAR_ASSIGN:
-            expr = stmt->stmt_data.var_assign_data.var;
-            if (expr == NULL)
-                break;
-            if (expr->type != EXPR_VAR_ID)
-                break;
-            id = expr->expr_data.id;
+  switch (stmt->type) {
+  case STMT_VAR_ASSIGN:
+    expr = stmt->stmt_data.var_assign_data.var;
+    if (expr == NULL)
+      break;
+    if (expr->type != EXPR_VAR_ID)
+      break;
+    id = expr->expr_data.id;
 
-            expr = stmt->stmt_data.var_assign_data.expr;
-            decrement_reference_id_expr(symtab, id, expr);
+    expr = stmt->stmt_data.var_assign_data.expr;
+    decrement_reference_id_expr(symtab, id, expr);
 
-            break;
+    break;
 
-        case STMT_COMPOUND_STATEMENT:
-            stmt_list = stmt->stmt_data.compound_statement;
-            while(stmt_list != NULL)
-            {
-                decrement_self_references(symtab, (struct Statement *)stmt_list->cur);
-                stmt_list = stmt_list->next;
-            }
-
-            break;
-
-        default:
-            break;
+  case STMT_COMPOUND_STATEMENT:
+    stmt_list = stmt->stmt_data.compound_statement;
+    while (stmt_list != NULL) {
+      decrement_self_references(symtab, (struct Statement *)stmt_list->cur);
+      stmt_list = stmt_list->next;
     }
+
+    break;
+
+  default:
+    break;
+  }
 }
 
 /* Removes all variable declarations matching an identifier set */
-static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *var_decls)
-{
-    int removed = 0;
+static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids,
+                                ListNode_t *var_decls) {
+  int removed = 0;
 
-    if (symtab == NULL || ids == NULL || var_decls == NULL)
-        return 0;
+  if (symtab == NULL || ids == NULL || var_decls == NULL)
+    return 0;
 
-    while (var_decls != NULL)
-    {
-        Tree_t *var_decl = (Tree_t *)var_decls->cur;
-        if (var_decl->type != TREE_VAR_DECL)
-        {
-            var_decls = var_decls->next;
-            continue;
-        }
-
-        ListNode_t *decl_ids = var_decl->tree_data.var_decl_data.ids;
-        ListNode_t *prev = NULL;
-        while (decl_ids != NULL)
-        {
-            char *candidate = (char *)decl_ids->cur;
-            if (id_set_contains(ids, candidate))
-            {
-                free(decl_ids->cur);
-                ListNode_t *next = decl_ids->next;
-                free(decl_ids);
-                decl_ids = next;
-                if (prev == NULL)
-                    var_decl->tree_data.var_decl_data.ids = decl_ids;
-                else
-                    prev->next = decl_ids;
-                ++removed;
-                continue;
-            }
-
-            prev = decl_ids;
-            decl_ids = decl_ids->next;
-        }
-
-        if (var_decl->tree_data.var_decl_data.ids == NULL &&
-            var_decl->tree_data.var_decl_data.initializer != NULL)
-        {
-            destroy_stmt(var_decl->tree_data.var_decl_data.initializer);
-            var_decl->tree_data.var_decl_data.initializer = NULL;
-        }
-
-        var_decls = var_decls->next;
+  while (var_decls != NULL) {
+    Tree_t *var_decl = (Tree_t *)var_decls->cur;
+    if (var_decl->type != TREE_VAR_DECL) {
+      var_decls = var_decls->next;
+      continue;
     }
 
-    return removed;
+    ListNode_t *decl_ids = var_decl->tree_data.var_decl_data.ids;
+    ListNode_t *prev = NULL;
+    while (decl_ids != NULL) {
+      char *candidate = (char *)decl_ids->cur;
+      if (id_set_contains(ids, candidate)) {
+        free(decl_ids->cur);
+        ListNode_t *next = decl_ids->next;
+        free(decl_ids);
+        decl_ids = next;
+        if (prev == NULL)
+          var_decl->tree_data.var_decl_data.ids = decl_ids;
+        else
+          prev->next = decl_ids;
+        ++removed;
+        continue;
+      }
+
+      prev = decl_ids;
+      decl_ids = decl_ids->next;
+    }
+
+    if (var_decl->tree_data.var_decl_data.ids == NULL &&
+        var_decl->tree_data.var_decl_data.initializer != NULL) {
+      destroy_stmt(var_decl->tree_data.var_decl_data.initializer);
+      var_decl->tree_data.var_decl_data.initializer = NULL;
+    }
+
+    var_decls = var_decls->next;
+  }
+
+  return removed;
 }
 
 /* Removes mutation statements that mutate identifiers contained in the set */
-static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *stmt)
-{
-    if (symtab == NULL || ids == NULL || stmt == NULL)
-        return 0;
+static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids,
+                                         struct Statement *stmt) {
+  if (symtab == NULL || ids == NULL || stmt == NULL)
+    return 0;
 
-    switch (stmt->type)
-    {
-        case STMT_VAR_ASSIGN:
-            return remove_mutation_var_assign_set(symtab, ids, stmt);
+  switch (stmt->type) {
+  case STMT_VAR_ASSIGN:
+    return remove_mutation_var_assign_set(symtab, ids, stmt);
 
-        case STMT_COMPOUND_STATEMENT:
-            return remove_mutation_compound_statement_set(symtab, ids, stmt);
+  case STMT_COMPOUND_STATEMENT:
+    return remove_mutation_compound_statement_set(symtab, ids, stmt);
 
-        case STMT_PROCEDURE_CALL:
-        case STMT_EXPR:
-            return 0;
+  case STMT_PROCEDURE_CALL:
+  case STMT_EXPR:
+    return 0;
 
-        default:
-            #ifdef DEBUG_OPTIMIZER
-                fprintf(stderr, "OPTIMIZER: Unsupported statement at line %d\n", stmt->line_num);
-            #endif
-            return 0;
-    }
+  default:
+#ifdef DEBUG_OPTIMIZER
+    fprintf(stderr, "OPTIMIZER: Unsupported statement at line %d\n",
+            stmt->line_num);
+#endif
+    return 0;
+  }
 }
 
 /* Removes the var assign if applicable */
 /* Decrements the reference counter for the removed expression if removed */
-static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids, struct Statement *var_assign)
-{
-    assert(var_assign != NULL);
-    assert(var_assign->type == STMT_VAR_ASSIGN);
+static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids,
+                                          struct Statement *var_assign) {
+  assert(var_assign != NULL);
+  assert(var_assign->type == STMT_VAR_ASSIGN);
 
-    struct Expression *var = var_assign->stmt_data.var_assign_data.var;
-    assert(var != NULL);
-    assert(var->type == EXPR_VAR_ID);
+  struct Expression *var = var_assign->stmt_data.var_assign_data.var;
+  assert(var != NULL);
+  assert(var->type == EXPR_VAR_ID);
 
-    if (!id_set_contains(ids, var->expr_data.id))
-        return 0;
+  if (!id_set_contains(ids, var->expr_data.id))
+    return 0;
 
-    #ifdef DEBUG_OPTIMIZER
-        fprintf(stderr, "OPTIMIZER: Removing var assign at line %d\n", var_assign->line_num);
-    #endif
+#ifdef DEBUG_OPTIMIZER
+  fprintf(stderr, "OPTIMIZER: Removing var assign at line %d\n",
+          var_assign->line_num);
+#endif
 
-    decrement_reference_expr(symtab, var_assign->stmt_data.var_assign_data.expr);
-    destroy_stmt(var_assign);
+  decrement_reference_expr(symtab, var_assign->stmt_data.var_assign_data.expr);
+  destroy_stmt(var_assign);
 
-    return 1;
+  return 1;
 }
 
 /* Removes all mutation statements from a list of statements */
-static int remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *body_statement)
-{
-    assert(body_statement != NULL);
-    assert(body_statement->type == STMT_COMPOUND_STATEMENT);
+static int
+remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet *ids,
+                                       struct Statement *body_statement) {
+  assert(body_statement != NULL);
+  assert(body_statement->type == STMT_COMPOUND_STATEMENT);
 
-    ListNode_t *statement_list = body_statement->stmt_data.compound_statement;
-    ListNode_t *prev = NULL;
-    int removed = 0;
+  ListNode_t *statement_list = body_statement->stmt_data.compound_statement;
+  ListNode_t *prev = NULL;
+  int removed = 0;
 
-    while (statement_list != NULL)
-    {
-        struct Statement *stmt = (struct Statement *)statement_list->cur;
-        if (remove_mutation_statement_set(symtab, ids, stmt) > 0)
-        {
-            ++removed;
+  while (statement_list != NULL) {
+    struct Statement *stmt = (struct Statement *)statement_list->cur;
+    if (remove_mutation_statement_set(symtab, ids, stmt) > 0) {
+      ++removed;
 
-            ListNode_t *next = statement_list->next;
-            free(statement_list);
-            statement_list = next;
+      ListNode_t *next = statement_list->next;
+      free(statement_list);
+      statement_list = next;
 
-            if (prev == NULL)
-                body_statement->stmt_data.compound_statement = statement_list;
-            else
-                prev->next = statement_list;
-        }
-        else
-        {
-            prev = statement_list;
-            statement_list = statement_list->next;
-        }
+      if (prev == NULL)
+        body_statement->stmt_data.compound_statement = statement_list;
+      else
+        prev->next = statement_list;
+    } else {
+      prev = statement_list;
+      statement_list = statement_list->next;
     }
+  }
 
-    return removed;
+  return removed;
 }
 
 /* Simplifies expressions by combining operations on constant numbers */
-void simplify_stmt_expr(struct Statement *stmt)
-{
-    assert(stmt != NULL);
+void simplify_stmt_expr(struct Statement *stmt) {
+  assert(stmt != NULL);
 
-    ListNode_t *stmt_list;
+  ListNode_t *stmt_list;
 
-    switch(stmt->type)
-    {
-        case STMT_VAR_ASSIGN:
-            simplify_expr(&stmt->stmt_data.var_assign_data.expr);
+  switch (stmt->type) {
+  case STMT_VAR_ASSIGN:
+    simplify_expr(&stmt->stmt_data.var_assign_data.expr);
 
-            break;
+    break;
 
-        case STMT_EXPR:
-            simplify_expr(&stmt->stmt_data.expr_stmt_data.expr);
-            break;
+  case STMT_EXPR:
+    simplify_expr(&stmt->stmt_data.expr_stmt_data.expr);
+    break;
 
-        case STMT_COMPOUND_STATEMENT:
-            stmt_list = stmt->stmt_data.compound_statement;
-            while(stmt_list != NULL)
-            {
-                simplify_stmt_expr((struct Statement *)stmt_list->cur);
-                stmt_list = stmt_list->next;
-            }
-
-            break;
-
-        default:
-            break;
+  case STMT_COMPOUND_STATEMENT:
+    stmt_list = stmt->stmt_data.compound_statement;
+    while (stmt_list != NULL) {
+      simplify_stmt_expr((struct Statement *)stmt_list->cur);
+      stmt_list = stmt_list->next;
     }
+
+    break;
+
+  default:
+    break;
+  }
 }
 
 /* Simplifies expressions by combining operations on constant numbers */
 /* Returns 1 if expression given is a constant */
 /* TODO: Support floats */
 /* TODO: Support modulus */
-int simplify_expr(struct Expression **expr)
-{
-    struct Expression *new_expr;
-    int return_val, return_val2;
-    long long new_val;
-    double new_real_val, left_real_val, right_real_val;
+int simplify_expr(struct Expression **expr) {
+  struct Expression *new_expr;
+  int return_val, return_val2;
+  long long new_val;
+  double new_real_val, left_real_val, right_real_val;
 
-    assert(expr != NULL);
-    assert(*expr != NULL);
+  assert(expr != NULL);
+  assert(*expr != NULL);
 
-    switch((*expr)->type)
-    {
-        case EXPR_INUM:
-        case EXPR_RNUM:
-            return 1;
+  switch ((*expr)->type) {
+  case EXPR_INUM:
+  case EXPR_RNUM:
+    return 1;
 
-        case EXPR_SIGN_TERM:
-            return_val = simplify_expr(&(*expr)->expr_data.sign_term);
-            assert((*expr)->expr_data.sign_term != NULL);
-            if(return_val == 1)
-            {
-                #ifdef DEBUG_OPTIMIZER
-                    fprintf(stderr, "OPTIMIZER: Simplying SIGN expression on line %d\n",
-                        (*expr)->line_num);
-                #endif
+  case EXPR_SIGN_TERM:
+    return_val = simplify_expr(&(*expr)->expr_data.sign_term);
+    assert((*expr)->expr_data.sign_term != NULL);
+    if (return_val == 1) {
+#ifdef DEBUG_OPTIMIZER
+      fprintf(stderr, "OPTIMIZER: Simplying SIGN expression on line %d\n",
+              (*expr)->line_num);
+#endif
 
-                if(expr_is_real_constant((*expr)->expr_data.sign_term))
-                {
-                    if(!expr_constant_to_double((*expr)->expr_data.sign_term, &new_real_val))
-                        return 0;
+      if (expr_is_real_constant((*expr)->expr_data.sign_term)) {
+        if (!expr_constant_to_double((*expr)->expr_data.sign_term,
+                                     &new_real_val))
+          return 0;
 
-                    new_expr = mk_rnum((*expr)->line_num, -new_real_val);
-                }
-                else
-                {
-                    new_val = -(*expr)->expr_data.sign_term->expr_data.i_num;
-                    new_expr = mk_inum((*expr)->line_num, new_val);
-                }
+        new_expr = mk_rnum((*expr)->line_num, -new_real_val);
+      } else {
+        new_val = -(*expr)->expr_data.sign_term->expr_data.i_num;
+        new_expr = mk_inum((*expr)->line_num, new_val);
+      }
 
-                destroy_expr(*expr);
-                *expr = new_expr;
+      destroy_expr(*expr);
+      *expr = new_expr;
 
-                return 1;
-            }
-
-            return 0;
-
-        case EXPR_ADDOP:
-            return_val = simplify_expr(&(*expr)->expr_data.addop_data.left_expr);
-            return_val2 = simplify_expr(&(*expr)->expr_data.addop_data.right_term);
-            if(return_val == 1 && return_val2 == 1)
-            {
-                #ifdef DEBUG_OPTIMIZER
-                    fprintf(stderr, "OPTIMIZER: Simplying ADDOP expression on line %d\n",
-                        (*expr)->line_num);
-                #endif
-
-                if(expr_is_real_constant((*expr)->expr_data.addop_data.left_expr) ||
-                    expr_is_real_constant((*expr)->expr_data.addop_data.right_term))
-                {
-                    if(!expr_constant_to_double((*expr)->expr_data.addop_data.left_expr, &left_real_val) ||
-                        !expr_constant_to_double((*expr)->expr_data.addop_data.right_term, &right_real_val))
-                        return 0;
-
-                    if((*expr)->expr_data.addop_data.addop_type == PLUS)
-                        new_real_val = left_real_val + right_real_val;
-                    else
-                        new_real_val = left_real_val - right_real_val;
-
-                    new_expr = mk_rnum((*expr)->line_num, new_real_val);
-                }
-                else
-                {
-                    if((*expr)->expr_data.addop_data.addop_type == PLUS)
-                    {
-                        new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num +
-                                    (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
-                    }
-                    else
-                    {
-                        new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num -
-                                    (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
-                    }
-
-                    new_expr = mk_inum((*expr)->line_num, new_val);
-                }
-
-                destroy_expr(*expr);
-                *expr = new_expr;
-
-                return 1;
-            }
-
-            return 0;
-
-        case EXPR_MULOP:
-            return_val = simplify_expr(&(*expr)->expr_data.mulop_data.left_term);
-            return_val2 = simplify_expr(&(*expr)->expr_data.mulop_data.right_factor);
-            if(return_val == 1 && return_val2 == 1)
-            {
-                #ifdef DEBUG_OPTIMIZER
-                    fprintf(stderr, "OPTIMIZER: Simplying MULOP expression on line %d\n",
-                        (*expr)->line_num);
-                #endif
-
-                if((*expr)->expr_data.mulop_data.mulop_type == MOD)
-                {
-                    if((*expr)->expr_data.mulop_data.right_factor->expr_data.i_num == 0)
-                        return 0;
-
-                    new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num %
-                                (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
-                    new_expr = mk_inum((*expr)->line_num, new_val);
-                }
-                else if((*expr)->expr_data.mulop_data.mulop_type == SLASH ||
-                    expr_is_real_constant((*expr)->expr_data.mulop_data.left_term) ||
-                    expr_is_real_constant((*expr)->expr_data.mulop_data.right_factor))
-                {
-                    if(!expr_constant_to_double((*expr)->expr_data.mulop_data.left_term, &left_real_val) ||
-                        !expr_constant_to_double((*expr)->expr_data.mulop_data.right_factor, &right_real_val))
-                        return 0;
-
-                    if((*expr)->expr_data.mulop_data.mulop_type == STAR)
-                        new_real_val = left_real_val * right_real_val;
-                    else if((*expr)->expr_data.mulop_data.mulop_type == SLASH)
-                    {
-                        if(right_real_val == 0.0)
-                            return 0;
-                        new_real_val = left_real_val / right_real_val;
-                    }
-                    else
-                        return 0;
-
-                    new_expr = mk_rnum((*expr)->line_num, new_real_val);
-                }
-                else
-                {
-                    if((*expr)->expr_data.mulop_data.mulop_type == STAR)
-                    {
-                        new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num *
-                                    (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
-                    }
-                    else
-                    {
-                        if((*expr)->expr_data.mulop_data.right_factor->expr_data.i_num == 0)
-                            return 0;
-                        new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num /
-                                    (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
-                    }
-
-                    new_expr = mk_inum((*expr)->line_num, new_val);
-                }
-
-                destroy_expr(*expr);
-                *expr = new_expr;
-
-                return 1;
-            }
-
-            return 0;
-
-        case EXPR_ARRAY_ACCESS:
-        {
-            struct Expression *array_expr = (*expr)->expr_data.array_access_data.array_expr;
-            struct Expression *index_expr = (*expr)->expr_data.array_access_data.index_expr;
-            if (array_expr != NULL)
-                simplify_expr(&(*expr)->expr_data.array_access_data.array_expr);
-            if (index_expr != NULL)
-                simplify_expr(&(*expr)->expr_data.array_access_data.index_expr);
-
-            array_expr = (*expr)->expr_data.array_access_data.array_expr;
-            index_expr = (*expr)->expr_data.array_access_data.index_expr;
-            if (array_expr == NULL || index_expr == NULL ||
-                array_expr->type != EXPR_VAR_ID || array_expr->expr_data.id == NULL ||
-                index_expr->type != EXPR_INUM ||
-                (*expr)->expr_data.array_access_data.extra_indices != NULL ||
-                g_simplify_symtab == NULL)
-            {
-                return 0;
-            }
-
-            HashNode_t *node = NULL;
-            if (FindSymbol(&node, g_simplify_symtab, array_expr->expr_data.id) == 0 ||
-                node == NULL || !node->is_typed_const || !hashnode_is_array(node) ||
-                hashnode_is_dynamic_array(node))
-            {
-                return 0;
-            }
-
-            Tree_t *arr_decl = find_typed_const_array_decl(array_expr->expr_data.id);
-            struct Expression *element_expr = find_typed_const_array_element_expr(arr_decl,
-                array_expr->expr_data.id, index_expr->expr_data.i_num);
-            struct Expression *folded = copy_constant_expr(element_expr, (*expr)->line_num);
-            if (folded == NULL)
-                return 0;
-
-            destroy_expr(*expr);
-            *expr = folded;
-            return 1;
-        }
-
-        case EXPR_FUNCTION_CALL:
-        {
-            char *id = (*expr)->expr_data.function_call_data.id;
-            ListNode_t *args = (*expr)->expr_data.function_call_data.args_expr;
-            if (id == NULL || !pascal_identifier_equals(id, "Length") ||
-                args == NULL || args->next != NULL || args->cur == NULL ||
-                g_simplify_symtab == NULL)
-            {
-                return 0;
-            }
-
-            struct Expression *arg = (struct Expression *)args->cur;
-            simplify_expr(&arg);
-            args->cur = arg;
-            if (arg->type != EXPR_VAR_ID || arg->expr_data.id == NULL)
-                return 0;
-
-            HashNode_t *node = NULL;
-            if (FindSymbol(&node, g_simplify_symtab, arg->expr_data.id) == 0 ||
-                node == NULL || !hashnode_is_array(node) || hashnode_is_dynamic_array(node))
-            {
-                return 0;
-            }
-
-            int start = 0;
-            int end = 0;
-            hashnode_get_array_bounds(node, &start, &end);
-            if (end < start)
-                return 0;
-
-            long long length = (long long)end - (long long)start + 1;
-            new_expr = mk_inum((*expr)->line_num, length);
-            destroy_expr(*expr);
-            *expr = new_expr;
-            return 1;
-        }
-
-        default:
-            return 0;
+      return 1;
     }
 
     return 0;
+
+  case EXPR_ADDOP:
+    return_val = simplify_expr(&(*expr)->expr_data.addop_data.left_expr);
+    return_val2 = simplify_expr(&(*expr)->expr_data.addop_data.right_term);
+    if (return_val == 1 && return_val2 == 1) {
+#ifdef DEBUG_OPTIMIZER
+      fprintf(stderr, "OPTIMIZER: Simplying ADDOP expression on line %d\n",
+              (*expr)->line_num);
+#endif
+
+      if (expr_is_real_constant((*expr)->expr_data.addop_data.left_expr) ||
+          expr_is_real_constant((*expr)->expr_data.addop_data.right_term)) {
+        if (!expr_constant_to_double((*expr)->expr_data.addop_data.left_expr,
+                                     &left_real_val) ||
+            !expr_constant_to_double((*expr)->expr_data.addop_data.right_term,
+                                     &right_real_val))
+          return 0;
+
+        if ((*expr)->expr_data.addop_data.addop_type == PLUS)
+          new_real_val = left_real_val + right_real_val;
+        else
+          new_real_val = left_real_val - right_real_val;
+
+        new_expr = mk_rnum((*expr)->line_num, new_real_val);
+      } else {
+        if ((*expr)->expr_data.addop_data.addop_type == PLUS) {
+          new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num +
+                    (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
+        } else {
+          new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num -
+                    (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
+        }
+
+        new_expr = mk_inum((*expr)->line_num, new_val);
+      }
+
+      destroy_expr(*expr);
+      *expr = new_expr;
+
+      return 1;
+    }
+
+    return 0;
+
+  case EXPR_MULOP:
+    return_val = simplify_expr(&(*expr)->expr_data.mulop_data.left_term);
+    return_val2 = simplify_expr(&(*expr)->expr_data.mulop_data.right_factor);
+    if (return_val == 1 && return_val2 == 1) {
+#ifdef DEBUG_OPTIMIZER
+      fprintf(stderr, "OPTIMIZER: Simplying MULOP expression on line %d\n",
+              (*expr)->line_num);
+#endif
+
+      if ((*expr)->expr_data.mulop_data.mulop_type == MOD) {
+        if ((*expr)->expr_data.mulop_data.right_factor->expr_data.i_num == 0)
+          return 0;
+
+        new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num %
+                  (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+        new_expr = mk_inum((*expr)->line_num, new_val);
+      } else if ((*expr)->expr_data.mulop_data.mulop_type == SLASH ||
+                 expr_is_real_constant(
+                     (*expr)->expr_data.mulop_data.left_term) ||
+                 expr_is_real_constant(
+                     (*expr)->expr_data.mulop_data.right_factor)) {
+        if (!expr_constant_to_double((*expr)->expr_data.mulop_data.left_term,
+                                     &left_real_val) ||
+            !expr_constant_to_double((*expr)->expr_data.mulop_data.right_factor,
+                                     &right_real_val))
+          return 0;
+
+        if ((*expr)->expr_data.mulop_data.mulop_type == STAR)
+          new_real_val = left_real_val * right_real_val;
+        else if ((*expr)->expr_data.mulop_data.mulop_type == SLASH) {
+          if (right_real_val == 0.0)
+            return 0;
+          new_real_val = left_real_val / right_real_val;
+        } else
+          return 0;
+
+        new_expr = mk_rnum((*expr)->line_num, new_real_val);
+      } else {
+        if ((*expr)->expr_data.mulop_data.mulop_type == STAR) {
+          new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num *
+                    (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+        } else {
+          if ((*expr)->expr_data.mulop_data.right_factor->expr_data.i_num == 0)
+            return 0;
+          new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num /
+                    (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+        }
+
+        new_expr = mk_inum((*expr)->line_num, new_val);
+      }
+
+      destroy_expr(*expr);
+      *expr = new_expr;
+
+      return 1;
+    }
+
+    return 0;
+
+  case EXPR_ARRAY_ACCESS: {
+    struct Expression *array_expr =
+        (*expr)->expr_data.array_access_data.array_expr;
+    struct Expression *index_expr =
+        (*expr)->expr_data.array_access_data.index_expr;
+    if (array_expr != NULL)
+      simplify_expr(&(*expr)->expr_data.array_access_data.array_expr);
+    if (index_expr != NULL)
+      simplify_expr(&(*expr)->expr_data.array_access_data.index_expr);
+
+    array_expr = (*expr)->expr_data.array_access_data.array_expr;
+    index_expr = (*expr)->expr_data.array_access_data.index_expr;
+    if (array_expr == NULL || index_expr == NULL ||
+        array_expr->type != EXPR_VAR_ID || array_expr->expr_data.id == NULL ||
+        index_expr->type != EXPR_INUM ||
+        (*expr)->expr_data.array_access_data.extra_indices != NULL ||
+        g_simplify_symtab == NULL) {
+      return 0;
+    }
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, g_simplify_symtab, array_expr->expr_data.id) == 0 ||
+        node == NULL || !node->is_typed_const || !hashnode_is_array(node) ||
+        hashnode_is_dynamic_array(node)) {
+      return 0;
+    }
+
+    Tree_t *arr_decl = find_typed_const_array_decl(array_expr->expr_data.id);
+    struct Expression *element_expr = find_typed_const_array_element_expr(
+        arr_decl, array_expr->expr_data.id, index_expr->expr_data.i_num);
+    struct Expression *folded =
+        copy_constant_expr(element_expr, (*expr)->line_num);
+    if (folded == NULL)
+      return 0;
+
+    destroy_expr(*expr);
+    *expr = folded;
+    return 1;
+  }
+
+  case EXPR_FUNCTION_CALL: {
+    char *id = (*expr)->expr_data.function_call_data.id;
+    ListNode_t *args = (*expr)->expr_data.function_call_data.args_expr;
+    if (id == NULL || !pascal_identifier_equals(id, "Length") || args == NULL ||
+        args->next != NULL || args->cur == NULL || g_simplify_symtab == NULL) {
+      return 0;
+    }
+
+    struct Expression *arg = (struct Expression *)args->cur;
+    simplify_expr(&arg);
+    args->cur = arg;
+    if (arg->type != EXPR_VAR_ID || arg->expr_data.id == NULL)
+      return 0;
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, g_simplify_symtab, arg->expr_data.id) == 0 ||
+        node == NULL || !hashnode_is_array(node) ||
+        hashnode_is_dynamic_array(node)) {
+      return 0;
+    }
+
+    int start = 0;
+    int end = 0;
+    hashnode_get_array_bounds(node, &start, &end);
+    if (end < start)
+      return 0;
+
+    long long length = (long long)end - (long long)start + 1;
+    new_expr = mk_inum((*expr)->line_num, length);
+    destroy_expr(*expr);
+    *expr = new_expr;
+    return 1;
+  }
+
+  default:
+    return 0;
+  }
+
+  return 0;
 }
 
 /* Decrements references for a specific variable */
-void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *expr)
-{
-    assert(expr != NULL);
-    assert(symtab != NULL);
+void decrement_reference_id_expr(SymTab_t *symtab, char *id,
+                                 struct Expression *expr) {
+  assert(expr != NULL);
+  assert(symtab != NULL);
 
-    HashNode_t *node;
+  HashNode_t *node;
 
-    switch(expr->type)
-    {
-        case EXPR_RELOP:
-            decrement_reference_id_expr(symtab, id, expr->expr_data.relop_data.left);
-            decrement_reference_id_expr(symtab, id, expr->expr_data.relop_data.right);
-            break;
+  switch (expr->type) {
+  case EXPR_RELOP:
+    decrement_reference_id_expr(symtab, id, expr->expr_data.relop_data.left);
+    decrement_reference_id_expr(symtab, id, expr->expr_data.relop_data.right);
+    break;
 
-        case EXPR_SIGN_TERM:
-            decrement_reference_id_expr(symtab, id, expr->expr_data.sign_term);
-            break;
+  case EXPR_SIGN_TERM:
+    decrement_reference_id_expr(symtab, id, expr->expr_data.sign_term);
+    break;
 
-        case EXPR_ADDOP:
-            decrement_reference_id_expr(symtab, id, expr->expr_data.addop_data.left_expr);
-            decrement_reference_id_expr(symtab, id, expr->expr_data.addop_data.right_term);
-            break;
+  case EXPR_ADDOP:
+    decrement_reference_id_expr(symtab, id,
+                                expr->expr_data.addop_data.left_expr);
+    decrement_reference_id_expr(symtab, id,
+                                expr->expr_data.addop_data.right_term);
+    break;
 
-        case EXPR_MULOP:
-            decrement_reference_id_expr(symtab, id, expr->expr_data.mulop_data.left_term);
-            decrement_reference_id_expr(symtab, id, expr->expr_data.mulop_data.right_factor);
-            break;
+  case EXPR_MULOP:
+    decrement_reference_id_expr(symtab, id,
+                                expr->expr_data.mulop_data.left_term);
+    decrement_reference_id_expr(symtab, id,
+                                expr->expr_data.mulop_data.right_factor);
+    break;
 
-        case EXPR_VAR_ID:
-            if(strcmp(expr->expr_data.id, id) == 0)
-            {
-                #ifdef DEBUG_OPTIMIZER
-                    fprintf(stderr, "OPTIMIZER: Decremented reference for %s at line %d\n",
-                        expr->expr_data.id, expr->line_num);
-                #endif
+  case EXPR_VAR_ID:
+    if (strcmp(expr->expr_data.id, id) == 0) {
+#ifdef DEBUG_OPTIMIZER
+      fprintf(stderr, "OPTIMIZER: Decremented reference for %s at line %d\n",
+              expr->expr_data.id, expr->line_num);
+#endif
 
-                assert(FindSymbol(&node, symtab, expr->expr_data.id) != 0);
-                assert(node != NULL);
-                --node->referenced;
+      assert(FindSymbol(&node, symtab, expr->expr_data.id) != 0);
+      assert(node != NULL);
+      --node->referenced;
 
-                break;
-            }
-            break;
-
-        case EXPR_TYPECAST:
-            if (expr->expr_data.typecast_data.expr != NULL)
-                decrement_reference_id_expr(symtab, id, expr->expr_data.typecast_data.expr);
-            break;
-
-        default:
-            break;
+      break;
     }
+    break;
 
-    return;
+  case EXPR_TYPECAST:
+    if (expr->expr_data.typecast_data.expr != NULL)
+      decrement_reference_id_expr(symtab, id,
+                                  expr->expr_data.typecast_data.expr);
+    break;
+
+  default:
+    break;
+  }
+
+  return;
 }
 
 /* Decrements reference counter for all variables in an expression */
-void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
-{
-    assert(expr != NULL);
-    assert(symtab != NULL);
+void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr) {
+  assert(expr != NULL);
+  assert(symtab != NULL);
 
-    HashNode_t *node;
+  HashNode_t *node;
 
-    switch(expr->type)
-    {
-        case EXPR_RELOP:
-            decrement_reference_expr(symtab, expr->expr_data.relop_data.left);
-            decrement_reference_expr(symtab, expr->expr_data.relop_data.right);
-            break;
+  switch (expr->type) {
+  case EXPR_RELOP:
+    decrement_reference_expr(symtab, expr->expr_data.relop_data.left);
+    decrement_reference_expr(symtab, expr->expr_data.relop_data.right);
+    break;
 
-        case EXPR_SIGN_TERM:
-            decrement_reference_expr(symtab, expr->expr_data.sign_term);
-            break;
+  case EXPR_SIGN_TERM:
+    decrement_reference_expr(symtab, expr->expr_data.sign_term);
+    break;
 
-        case EXPR_ADDOP:
-            decrement_reference_expr(symtab, expr->expr_data.addop_data.left_expr);
-            decrement_reference_expr(symtab, expr->expr_data.addop_data.right_term);
-            break;
+  case EXPR_ADDOP:
+    decrement_reference_expr(symtab, expr->expr_data.addop_data.left_expr);
+    decrement_reference_expr(symtab, expr->expr_data.addop_data.right_term);
+    break;
 
-        case EXPR_MULOP:
-            decrement_reference_expr(symtab, expr->expr_data.mulop_data.left_term);
-            decrement_reference_expr(symtab, expr->expr_data.mulop_data.right_factor);
-            break;
+  case EXPR_MULOP:
+    decrement_reference_expr(symtab, expr->expr_data.mulop_data.left_term);
+    decrement_reference_expr(symtab, expr->expr_data.mulop_data.right_factor);
+    break;
 
-        case EXPR_VAR_ID:
-            #ifdef DEBUG_OPTIMIZER
-                fprintf(stderr, "OPTIMIZER: Decremented reference for %s at line %d\n",
-                    expr->expr_data.id, expr->line_num);
-            #endif
+  case EXPR_VAR_ID:
+#ifdef DEBUG_OPTIMIZER
+    fprintf(stderr, "OPTIMIZER: Decremented reference for %s at line %d\n",
+            expr->expr_data.id, expr->line_num);
+#endif
 
-            assert(FindSymbol(&node, symtab, expr->expr_data.id) != 0);
-            assert(node != NULL);
-            --node->referenced;
+    assert(FindSymbol(&node, symtab, expr->expr_data.id) != 0);
+    assert(node != NULL);
+    --node->referenced;
 
-            break;
+    break;
 
-        case EXPR_TYPECAST:
-            if (expr->expr_data.typecast_data.expr != NULL)
-                decrement_reference_expr(symtab, expr->expr_data.typecast_data.expr);
-            break;
+  case EXPR_TYPECAST:
+    if (expr->expr_data.typecast_data.expr != NULL)
+      decrement_reference_expr(symtab, expr->expr_data.typecast_data.expr);
+    break;
 
-        default:
-            break;
-    }
+  default:
+    break;
+  }
 
-    return;
+  return;
 }
 
-/* Gets a list of variables that can be safely removed (not referenced) and ones that will need
-        to be checked
+/* Gets a list of variables that can be safely removed (not referenced) and ones
+   that will need to be checked
 */
-void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_check,
-    ListNode_t **vars_to_remove)
-{
-    ListNode_t *ids;
+void set_vars_lists(SymTab_t *symtab, ListNode_t *vars,
+                    ListNode_t **vars_to_check, ListNode_t **vars_to_remove) {
+  ListNode_t *ids;
 
-    assert(symtab != NULL);
-    assert(vars_to_check != NULL);
-    assert(vars_to_remove != NULL);
-    HashNode_t *node;
-    Tree_t *var_decl;
+  assert(symtab != NULL);
+  assert(vars_to_check != NULL);
+  assert(vars_to_remove != NULL);
+  HashNode_t *node;
+  Tree_t *var_decl;
 
-    *vars_to_check = *vars_to_remove = NULL;
-    while(vars != NULL)
-    {
-        var_decl = (Tree_t *)vars->cur;
-        if(var_decl->type != TREE_ARR_DECL)
-        {
-            assert(var_decl->type == TREE_VAR_DECL);
-            ids = var_decl->tree_data.var_decl_data.ids;
+  *vars_to_check = *vars_to_remove = NULL;
+  while (vars != NULL) {
+    var_decl = (Tree_t *)vars->cur;
+    if (var_decl->type != TREE_ARR_DECL) {
+      assert(var_decl->type == TREE_VAR_DECL);
+      ids = var_decl->tree_data.var_decl_data.ids;
 
-            while(ids != NULL)
-            {
-                assert(FindSymbol(&node, symtab, ids->cur) != 0);
-                assert(node != NULL);
-                if (node->defined_in_unit)
-                {
-                    ids = ids->next;
-                    continue;
-                }
-                if(node->referenced == 0 && node->hash_type != HASHTYPE_FUNCTION_RETURN)
-                {
-                    add_to_list(vars_to_remove, ids->cur);
-                }
-                else if(node->hash_type != HASHTYPE_FUNCTION_RETURN)
-                {
-                    add_to_list(vars_to_check, ids->cur);
-                }
-
-                ids = ids->next;
-            }
+      while (ids != NULL) {
+        assert(FindSymbol(&node, symtab, ids->cur) != 0);
+        assert(node != NULL);
+        if (node->defined_in_unit) {
+          ids = ids->next;
+          continue;
+        }
+        if (node->referenced == 0 &&
+            node->hash_type != HASHTYPE_FUNCTION_RETURN) {
+          add_to_list(vars_to_remove, ids->cur);
+        } else if (node->hash_type != HASHTYPE_FUNCTION_RETURN) {
+          add_to_list(vars_to_check, ids->cur);
         }
 
-        vars = vars->next;
+        ids = ids->next;
+      }
     }
+
+    vars = vars->next;
+  }
 }
 
 /* Adds to a list */
-void add_to_list(ListNode_t **list, void *obj)
-{
-    assert(list != NULL);
-    assert(obj != NULL);
-    if(*list == NULL)
-        *list = CreateListNode(obj, LIST_UNSPECIFIED);
-    else
-        *list = PushListNodeBack(*list, CreateListNode(obj, LIST_UNSPECIFIED));
+void add_to_list(ListNode_t **list, void *obj) {
+  assert(list != NULL);
+  assert(obj != NULL);
+  if (*list == NULL)
+    *list = CreateListNode(obj, LIST_UNSPECIFIED);
+  else
+    *list = PushListNodeBack(*list, CreateListNode(obj, LIST_UNSPECIFIED));
 }

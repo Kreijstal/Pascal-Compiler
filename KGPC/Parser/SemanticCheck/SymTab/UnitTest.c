@@ -3,44 +3,41 @@
 #include "SymTab.h"
 #include "../HashTable/HashTable.h"
 
-int main()
-{
-    SymTab_t *symtab;
-    symtab = InitSymTab();
+int main() {
+  SymTab_t *symtab;
+  symtab = InitSymTab();
 
-    EnterScope(symtab, 0);
-    PushVarOntoScope(symtab, HASHVAR_INTEGER, "scope_0_0_v");
-    PushArrayOntoScope(symtab, HASHVAR_REAL, "scope_0_1_a");
+  EnterScope(symtab, 0);
+  PushVarOntoScope(symtab, HASHVAR_INTEGER, "scope_0_0_v");
+  PushArrayOntoScope(symtab, HASHVAR_REAL, "scope_0_1_a");
 
-    EnterScope(symtab, 0);
-    PushVarOntoScope(symtab, HASHVAR_REAL, "scope_1_0_v");
-    PushArrayOntoScope(symtab, HASHVAR_REAL, "scope_1_1_a");
-    PushArrayOntoScope(symtab, HASHVAR_INTEGER, "scope_1_2_a");
+  EnterScope(symtab, 0);
+  PushVarOntoScope(symtab, HASHVAR_REAL, "scope_1_0_v");
+  PushArrayOntoScope(symtab, HASHVAR_REAL, "scope_1_1_a");
+  PushArrayOntoScope(symtab, HASHVAR_INTEGER, "scope_1_2_a");
 
-    EnterScope(symtab, 0);
-    PushArrayOntoScope(symtab, HASHVAR_INTEGER, "scope_2_0_a");
-    PushVarOntoScope(symtab, HASHVAR_REAL, "scope_2_1_v");
+  EnterScope(symtab, 0);
+  PushArrayOntoScope(symtab, HASHVAR_INTEGER, "scope_2_0_a");
+  PushVarOntoScope(symtab, HASHVAR_REAL, "scope_2_1_v");
 
-    PrintSymTab(symtab, stderr, 0);
+  PrintSymTab(symtab, stderr, 0);
 
-    fprintf(stderr, "[AFTER_POP]\n\n");
-    LeaveScope(symtab);
-    PrintSymTab(symtab, stderr, 0);
+  fprintf(stderr, "[AFTER_POP]\n\n");
+  LeaveScope(symtab);
+  PrintSymTab(symtab, stderr, 0);
 
-    PushFunctionOntoScope(symtab, "func", HASHVAR_REAL, PushListNodeBack(
-        CreateListNode("arg1", LIST_STRING),
-        CreateListNode("arg2", LIST_STRING)
-    ));
+  PushFunctionOntoScope(symtab, "func", HASHVAR_REAL,
+                        PushListNodeBack(CreateListNode("arg1", LIST_STRING),
+                                         CreateListNode("arg2", LIST_STRING)));
 
-    PushProcedureOntoScope(symtab, "proc", PushListNodeBack(
-        CreateListNode("arg1", LIST_STRING),
-        CreateListNode("arg2", LIST_STRING)
-    ));
+  PushProcedureOntoScope(symtab, "proc",
+                         PushListNodeBack(CreateListNode("arg1", LIST_STRING),
+                                          CreateListNode("arg2", LIST_STRING)));
 
-    PrintSymTab(symtab, stderr, 0);
+  PrintSymTab(symtab, stderr, 0);
 
-    DestroySymTab(symtab);
-    symtab = NULL;
+  DestroySymTab(symtab);
+  symtab = NULL;
 
-    return 0;
+  return 0;
 }

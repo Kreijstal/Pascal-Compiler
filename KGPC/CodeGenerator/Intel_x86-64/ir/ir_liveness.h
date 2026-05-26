@@ -21,16 +21,17 @@ typedef struct Cfg Cfg_t;
 
 /* Per-block set of live virtual-register IDs (integers). */
 typedef struct LiveSet {
-    int *vreg_ids;   /* array of virtual register IDs (integers) */
-    int  n_regs;     /* number of elements currently in the set  */
-    int  cap;        /* allocated capacity of vreg_ids[]         */
+  int *vreg_ids; /* array of virtual register IDs (integers) */
+  int n_regs;    /* number of elements currently in the set  */
+  int cap;       /* allocated capacity of vreg_ids[]         */
 } LiveSet_t;
 
 /* Liveness information for an entire function. */
 typedef struct LivenessInfo {
-    LiveSet_t *live_in;  /* one LiveSet_t per block, indexed same as cfg->blocks */
-    LiveSet_t *live_out; /* one LiveSet_t per block, indexed same as cfg->blocks */
-    int        n_blocks; /* must equal cfg->n_blocks                             */
+  LiveSet_t *live_in; /* one LiveSet_t per block, indexed same as cfg->blocks */
+  LiveSet_t
+      *live_out; /* one LiveSet_t per block, indexed same as cfg->blocks */
+  int n_blocks;  /* must equal cfg->n_blocks                             */
 } LivenessInfo_t;
 
 /* Compute live-in / live-out sets for every block in cfg using the standard

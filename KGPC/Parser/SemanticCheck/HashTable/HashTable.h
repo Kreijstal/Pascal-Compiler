@@ -3,13 +3,13 @@
     Hash table of identifiers
     Used for scoping (semantic checking)
 
-    WARNING: Hash table will NOT free given identifier strings or args when destroyed
-        Remember to free given identifier strings and args manually
+    WARNING: Hash table will NOT free given identifier strings or args when
+   destroyed Remember to free given identifier strings and args manually
 */
 
 #ifndef HASH_TABLE_H
 #define HASH_TABLE_H
-#define TABLE_SIZE	65537
+#define TABLE_SIZE 65537
 
 #include <stdio.h>
 #include <assert.h>
@@ -19,99 +19,114 @@
 struct RecordType;
 struct TypeAlias;
 
-enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_CONST, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
-    HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
-enum VarType{
-    HASHVAR_INTEGER,
-    HASHVAR_LONGINT,
-    HASHVAR_INT64,
-    HASHVAR_REAL,
-    HASHVAR_PROCEDURE,
-    HASHVAR_UNTYPED,
-    HASHVAR_PCHAR,
-    HASHVAR_PWIDECHAR,
-    HASHVAR_PANSICHAR,
-    HASHVAR_RECORD,
-    HASHVAR_ARRAY,
-    HASHVAR_BOOLEAN,
-    HASHVAR_CHAR,
-    HASHVAR_POINTER,
-    HASHVAR_SET,
-    HASHVAR_ENUM,
-    HASHVAR_FILE,
-    HASHVAR_TYPEDFILE,
-    HASHVAR_TEXT,
-    HASHVAR_RAWBYTESTRING,
-    HASHVAR_UNICODESTRING,
-    HASHVAR_SHORTSTRING,
-    HASHVAR_WIDECHAR,
-    HASHVAR_QWORD,
-    HASHVAR_METHODPROCEDURE
+enum HashType {
+  HASHTYPE_VAR,
+  HASHTYPE_ARRAY,
+  HASHTYPE_CONST,
+  HASHTYPE_PROCEDURE,
+  HASHTYPE_FUNCTION,
+  HASHTYPE_FUNCTION_RETURN,
+  HASHTYPE_BUILTIN_PROCEDURE,
+  HASHTYPE_TYPE
+};
+enum VarType {
+  HASHVAR_INTEGER,
+  HASHVAR_LONGINT,
+  HASHVAR_INT64,
+  HASHVAR_REAL,
+  HASHVAR_PROCEDURE,
+  HASHVAR_UNTYPED,
+  HASHVAR_PCHAR,
+  HASHVAR_PWIDECHAR,
+  HASHVAR_PANSICHAR,
+  HASHVAR_RECORD,
+  HASHVAR_ARRAY,
+  HASHVAR_BOOLEAN,
+  HASHVAR_CHAR,
+  HASHVAR_POINTER,
+  HASHVAR_SET,
+  HASHVAR_ENUM,
+  HASHVAR_FILE,
+  HASHVAR_TYPEDFILE,
+  HASHVAR_TEXT,
+  HASHVAR_RAWBYTESTRING,
+  HASHVAR_UNICODESTRING,
+  HASHVAR_SHORTSTRING,
+  HASHVAR_WIDECHAR,
+  HASHVAR_QWORD,
+  HASHVAR_METHODPROCEDURE
 };
 
 /* Items we put in the hash table */
-typedef struct HashNode
-{
-    char *id;
-    char *canonical_id;
-    unsigned hash_value;
-    char *mangled_id;
-    enum HashType hash_type;
-    
-    /* Unified type system - this one pointer replaces var_type, type_alias, 
-     * record_type, is_array, array_start, array_end, and other scattered type info.
-     * 
-     * When type != NULL: KgpcType contains all type information
-     * When type == NULL: Node is UNTYPED (untyped procedure parameters in Pascal)
-     * 
-     * ALL type information queries MUST use helper functions:
-     * - hashnode_get_record_type()
-     * - hashnode_get_type_alias()
-     * - hashnode_is_array()
-     * - hashnode_get_array_bounds()
-     * - hashnode_get_element_size()
-     * - hashnode_is_dynamic_array()
-     */
-    KgpcType *type;
+typedef struct HashNode {
+  char *id;
+  char *canonical_id;
+  unsigned hash_value;
+  char *mangled_id;
+  enum HashType hash_type;
 
-    /* Symbol table resources */
-    int referenced;
-    int mutated;
+  /* Unified type system - this one pointer replaces var_type, type_alias,
+   * record_type, is_array, array_start, array_end, and other scattered type
+   * info.
+   *
+   * When type != NULL: KgpcType contains all type information
+   * When type == NULL: Node is UNTYPED (untyped procedure parameters in Pascal)
+   *
+   * ALL type information queries MUST use helper functions:
+   * - hashnode_get_record_type()
+   * - hashnode_get_type_alias()
+   * - hashnode_is_array()
+   * - hashnode_get_array_bounds()
+   * - hashnode_get_element_size()
+   * - hashnode_is_dynamic_array()
+   */
+  KgpcType *type;
 
-    int is_constant;
-    int is_typed_const;
-    long long const_int_value;
-    double const_real_value;
-    char *const_string_value;  /* Owned by HashNode, must be freed */
-    /* Typed constant support */
-    unsigned char *const_set_value; /* Owned by HashNode, must be freed */
-    int const_set_size;             /* Bytes used in const_set_value (4 for small sets, 32 for char sets) */
-    char *const_set_label;          /* Optional emitted label for codegen reuse */
+  /* Symbol table resources */
+  int referenced;
+  int mutated;
 
-    int is_var_parameter;
-    int is_varargs;                /* 1 if declared with varargs directive (C-style variadic) */
-    int is_operator;               /* 1 if declared with operator keyword */
-    int requires_static_link;      /* 1 if this function needs to RECEIVE a static link from caller */
-    int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
-    int defined_in_unit;
-    int unit_is_public;
-    int source_unit_index; /* Unit registry index (0 = local/unknown) */
-    int is_nested_scope;   /* 1 if mangled name indicates nested/qualified scope (e.g. parent$child) */
+  int is_constant;
+  int is_typed_const;
+  long long const_int_value;
+  double const_real_value;
+  char *const_string_value; /* Owned by HashNode, must be freed */
+  /* Typed constant support */
+  unsigned char *const_set_value; /* Owned by HashNode, must be freed */
+  int const_set_size; /* Bytes used in const_set_value (4 for small sets, 32 for
+                         char sets) */
+  char *const_set_label; /* Optional emitted label for codegen reuse */
 
-    char *method_name;    /* Bare method name (NULL for non-methods) */
-    char *owner_class;    /* Owning class name (NULL for non-methods) */
-    char *owner_class_full;  /* Full dotted class path for nested classes (NULL if not nested) */
-    char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
+  int is_var_parameter;
+  int is_varargs;  /* 1 if declared with varargs directive (C-style variadic) */
+  int is_operator; /* 1 if declared with operator keyword */
+  int requires_static_link; /* 1 if this function needs to RECEIVE a static link
+                               from caller */
+  int has_nested_requiring_link; /* 1 if this function has nested children that
+                                    need static links */
+  int defined_in_unit;
+  int unit_is_public;
+  int source_unit_index; /* Unit registry index (0 = local/unknown) */
+  int is_nested_scope;   /* 1 if mangled name indicates nested/qualified scope
+                            (e.g. parent$child) */
 
-    char *internproc_id;     /* FPC [INTERNPROC: name] identifier (NULL if not an internproc) */
-    char *internconst_id;    /* FPC [INTERNCONST: name] identifier (NULL if not an internconst) */
+  char *method_name;       /* Bare method name (NULL for non-methods) */
+  char *owner_class;       /* Owning class name (NULL for non-methods) */
+  char *owner_class_full;  /* Full dotted class path for nested classes (NULL if
+                              not nested) */
+  char *owner_class_outer; /* Outer class path for nested classes (NULL if not
+                              nested) */
+
+  char *internproc_id;  /* FPC [INTERNPROC: name] identifier (NULL if not an
+                           internproc) */
+  char *internconst_id; /* FPC [INTERNCONST: name] identifier (NULL if not an
+                           internconst) */
 
 } HashNode_t;
 
 /* Our actual hash table */
-typedef struct HashTable
-{
-    ListNode_t *table[TABLE_SIZE];
+typedef struct HashTable {
+  ListNode_t *table[TABLE_SIZE];
 
 } HashTable_t;
 
@@ -121,12 +136,13 @@ HashTable_t *InitHashTable();
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
-    enum HashType hash_type, KgpcType *type);
+                    enum HashType hash_type, KgpcType *type);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
-HashNode_t *FindIdentInTableCanonical(HashTable_t *table, const char *canonical_id, unsigned hash);
+HashNode_t *FindIdentInTableCanonical(HashTable_t *table,
+                                      const char *canonical_id, unsigned hash);
 
 /* Like FindIdentInTable but skips program-local symbols (defined_in_unit==0).
  * Used for scope isolation: when unit code looks up a name at PROGRAM scope,
@@ -139,21 +155,28 @@ HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id);
 
 /* Like FindIdentInTable but prefers matches from caller_unit_index.
  * Priority: same unit > program-local (0) > any other unit. */
-HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index);
+HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id,
+                                    int caller_unit_index);
 
 /* Like FindIdentByPrefixInTable but prefers matches from caller_unit_index. */
-HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *prefix, int caller_unit_index);
+HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table,
+                                            const char *prefix,
+                                            int caller_unit_index);
 
-/* Searches for any identifier starting with the given prefix. Returns first match or NULL */
+/* Searches for any identifier starting with the given prefix. Returns first
+ * match or NULL */
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix);
 
-/* Searches for a type identifier whose name ends with ".suffix" (case-insensitive).
- * Returns the first matching HASHTYPE_TYPE node or NULL. */
+/* Searches for a type identifier whose name ends with ".suffix"
+ * (case-insensitive). Returns the first matching HASHTYPE_TYPE node or NULL. */
 HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix);
 
-/* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
+/* Searches for all instances of a given identifier in the table. Returns a list
+ * of HashNode_t* or NULL if not found */
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id);
-ListNode_t *FindAllIdentsInTableCanonical(HashTable_t *table, const char *canonical_id, unsigned hash);
+ListNode_t *FindAllIdentsInTableCanonical(HashTable_t *table,
+                                          const char *canonical_id,
+                                          unsigned hash);
 
 /* Move an existing hash node to the back of its bucket list */
 void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node);
@@ -171,118 +194,125 @@ void DestroyBuiltin(HashNode_t *);
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 
 /* Check if node represents an array */
-static inline int hashnode_is_array(const HashNode_t *node)
-{
-    if (node == NULL) return 0;
-    if (node->type != NULL) {
-        if (node->type->type_alias != NULL && node->type->type_alias->is_array)
-            return 1;
-        return kgpc_type_is_array(node->type);
-    }
-    /* UNTYPED nodes are not arrays */
+static inline int hashnode_is_array(const HashNode_t *node) {
+  if (node == NULL)
     return 0;
+  if (node->type != NULL) {
+    if (node->type->type_alias != NULL && node->type->type_alias->is_array)
+      return 1;
+    return kgpc_type_is_array(node->type);
+  }
+  /* UNTYPED nodes are not arrays */
+  return 0;
 }
 
 /* Helper functions to query HashNode type information via KgpcType */
 
 /* Check if node represents a record */
-static inline int hashnode_is_record(const HashNode_t *node)
-{
-    if (node == NULL) return 0;
-    if (node->type != NULL) {
-        return kgpc_type_is_record(node->type);
-    }
-    /* UNTYPED nodes are not records */
+static inline int hashnode_is_record(const HashNode_t *node) {
+  if (node == NULL)
     return 0;
+  if (node->type != NULL) {
+    return kgpc_type_is_record(node->type);
+  }
+  /* UNTYPED nodes are not records */
+  return 0;
 }
 
 /* Check if node represents a dynamic array */
-static inline int hashnode_is_dynamic_array(const HashNode_t *node)
-{
-    if (node == NULL) return 0;
-    if (node->type != NULL) {
-        if (kgpc_type_is_array(node->type))
-            return kgpc_type_is_dynamic_array(node->type);
-        if (node->type->type_alias != NULL && node->type->type_alias->is_array) {
-            struct TypeAlias *alias = node->type->type_alias;
-            if (alias->is_open_array)
-                return 1;
-            return (alias->array_end < alias->array_start);
-        }
-    }
-    /* No fallback needed - is_dynamic_array field has been removed */
-    /* Dynamic array info must come from KgpcType */
+static inline int hashnode_is_dynamic_array(const HashNode_t *node) {
+  if (node == NULL)
     return 0;
+  if (node->type != NULL) {
+    if (kgpc_type_is_array(node->type))
+      return kgpc_type_is_dynamic_array(node->type);
+    if (node->type->type_alias != NULL && node->type->type_alias->is_array) {
+      struct TypeAlias *alias = node->type->type_alias;
+      if (alias->is_open_array)
+        return 1;
+      return (alias->array_end < alias->array_start);
+    }
+  }
+  /* No fallback needed - is_dynamic_array field has been removed */
+  /* Dynamic array info must come from KgpcType */
+  return 0;
 }
 
 /* Get array bounds from node */
-static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start, int *end)
-{
-    if (node == NULL) {
-        if (start) *start = 0;
-        if (end) *end = 0;
-        return;
-    }
-    if (node->type != NULL && kgpc_type_is_array(node->type)) {
-        kgpc_type_get_array_bounds(node->type, start, end);
-        return;
-    }
-    if (node->type != NULL && node->type->type_alias != NULL && node->type->type_alias->is_array) {
-        if (start) *start = node->type->type_alias->array_start;
-        if (end) *end = node->type->type_alias->array_end;
-        return;
-    }
-    /* No fallback - array_start/end fields have been removed */
-    /* Array bounds must come from KgpcType */
-    if (start) *start = 0;
-    if (end) *end = 0;
+static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start,
+                                             int *end) {
+  if (node == NULL) {
+    if (start)
+      *start = 0;
+    if (end)
+      *end = 0;
+    return;
+  }
+  if (node->type != NULL && kgpc_type_is_array(node->type)) {
+    kgpc_type_get_array_bounds(node->type, start, end);
+    return;
+  }
+  if (node->type != NULL && node->type->type_alias != NULL &&
+      node->type->type_alias->is_array) {
+    if (start)
+      *start = node->type->type_alias->array_start;
+    if (end)
+      *end = node->type->type_alias->array_end;
+    return;
+  }
+  /* No fallback - array_start/end fields have been removed */
+  /* Array bounds must come from KgpcType */
+  if (start)
+    *start = 0;
+  if (end)
+    *end = 0;
 }
 
 /* Get element size from array node */
-static inline int hashnode_get_element_size(const HashNode_t *node)
-{
-    if (node == NULL) return 0;
-    if (node->type != NULL && kgpc_type_is_array(node->type)) {
-        KgpcType *element_type = kgpc_type_get_array_element_type(node->type);
-        if (element_type != NULL) {
-            return kgpc_type_sizeof(element_type);
-        }
-    }
-    /* No fallback - element_size field has been removed */
-    /* Element size must come from KgpcType */
+static inline int hashnode_get_element_size(const HashNode_t *node) {
+  if (node == NULL)
     return 0;
+  if (node->type != NULL && kgpc_type_is_array(node->type)) {
+    KgpcType *element_type = kgpc_type_get_array_element_type(node->type);
+    if (element_type != NULL) {
+      return kgpc_type_sizeof(element_type);
+    }
+  }
+  /* No fallback - element_size field has been removed */
+  /* Element size must come from KgpcType */
+  return 0;
 }
 
-static inline int hashnode_requires_static_link(const HashNode_t *node)
-{
-    return (node != NULL) ? node->requires_static_link : 0;
+static inline int hashnode_requires_static_link(const HashNode_t *node) {
+  return (node != NULL) ? node->requires_static_link : 0;
 }
 
-static inline int hashnode_has_nested_requiring_link(const HashNode_t *node)
-{
-    return (node != NULL) ? node->has_nested_requiring_link : 0;
+static inline int hashnode_has_nested_requiring_link(const HashNode_t *node) {
+  return (node != NULL) ? node->has_nested_requiring_link : 0;
 }
 
 /* Get record type from node */
-static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node)
-{
-    if (node == NULL) return NULL;
-    if (node->type != NULL && kgpc_type_is_record(node->type)) {
-        return kgpc_type_get_record(node->type);
-    }
-    /* UNTYPED nodes have no record type */
+static inline struct RecordType *
+hashnode_get_record_type(const HashNode_t *node) {
+  if (node == NULL)
     return NULL;
+  if (node->type != NULL && kgpc_type_is_record(node->type)) {
+    return kgpc_type_get_record(node->type);
+  }
+  /* UNTYPED nodes have no record type */
+  return NULL;
 }
 
 /* Get type alias from node */
-static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
-{
-    if (node == NULL) return NULL;
-    if (node->type != NULL) {
-        return kgpc_type_get_type_alias(node->type);
-    }
-    /* UNTYPED nodes have no type alias */
+static inline struct TypeAlias *
+hashnode_get_type_alias(const HashNode_t *node) {
+  if (node == NULL)
     return NULL;
+  if (node->type != NULL) {
+    return kgpc_type_get_type_alias(node->type);
+  }
+  /* UNTYPED nodes have no type alias */
+  return NULL;
 }
 
 /* The well-known symbol hash function
@@ -291,6 +321,6 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).
  */
-int hashpjw( const char *s );
+int hashpjw(const char *s);
 
 #endif

@@ -5,584 +5,605 @@
 #include <string.h>
 
 // Declare wrap_failure_with_ast function
-ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult original_result, ast_t* partial_ast);
+ParseResult wrap_failure_with_ast(input_t *in, char *message,
+                                  ParseResult original_result,
+                                  ast_t *partial_ast);
 
 // --- Custom Tags for Tests ---
 typedef enum {
-    TEST_T_NONE, TEST_T_INT, TEST_T_IDENT, TEST_T_ADD, TEST_T_SUB, TEST_T_MUL, TEST_T_DIV
+  TEST_T_NONE,
+  TEST_T_INT,
+  TEST_T_IDENT,
+  TEST_T_ADD,
+  TEST_T_SUB,
+  TEST_T_MUL,
+  TEST_T_DIV
 } test_tag_t;
 
 // Helper function to print AST with indentation
-static void print_ast_indented(ast_t* ast, int depth) {
-    if (ast == NULL) return;
-    
-    for (int i = 0; i < depth; i++) printf("  ");
-    
-    switch (ast->typ) {
-        case TEST_T_NONE: printf("NONE"); break;
-        case TEST_T_INT: printf("INT(%s)", ast->sym ? ast->sym->name : "NULL"); break;
-        case TEST_T_IDENT: printf("IDENT(%s)", ast->sym ? ast->sym->name : "NULL"); break;
-        case TEST_T_ADD: printf("ADD"); break;
-        case TEST_T_SUB: printf("SUB"); break;
-        case TEST_T_MUL: printf("MUL"); break;
-        case TEST_T_DIV: printf("DIV"); break;
-        default:
-            fprintf(stderr, "FATAL: Unknown AST node type: %d in %s at %s:%d\n", ast->typ, __func__, __FILE__, __LINE__);
-            abort();
-    }
-    printf("\n");
-    
-    if (ast->child) {
-        print_ast_indented(ast->child, depth + 1);
-    }
-    if (ast->next) {
-        print_ast_indented(ast->next, depth);
-    }
+static void print_ast_indented(ast_t *ast, int depth) {
+  if (ast == NULL)
+    return;
+
+  for (int i = 0; i < depth; i++)
+    printf("  ");
+
+  switch (ast->typ) {
+  case TEST_T_NONE:
+    printf("NONE");
+    break;
+  case TEST_T_INT:
+    printf("INT(%s)", ast->sym ? ast->sym->name : "NULL");
+    break;
+  case TEST_T_IDENT:
+    printf("IDENT(%s)", ast->sym ? ast->sym->name : "NULL");
+    break;
+  case TEST_T_ADD:
+    printf("ADD");
+    break;
+  case TEST_T_SUB:
+    printf("SUB");
+    break;
+  case TEST_T_MUL:
+    printf("MUL");
+    break;
+  case TEST_T_DIV:
+    printf("DIV");
+    break;
+  default:
+    fprintf(stderr, "FATAL: Unknown AST node type: %d in %s at %s:%d\n",
+            ast->typ, __func__, __FILE__, __LINE__);
+    abort();
+  }
+  printf("\n");
+
+  if (ast->child) {
+    print_ast_indented(ast->child, depth + 1);
+  }
+  if (ast->next) {
+    print_ast_indented(ast->next, depth);
+  }
 }
 
 // Helper function to print ParseError with partial AST
-__attribute__((unused)) static void print_error_with_partial_ast(ParseError* error, int depth) {
-    if (error == NULL) return;
-    
-    for (int i = 0; i < depth; i++) printf("  ");
-    printf("Error at line %d, col %d: %s\n", error->line, error->col, error->message);
+__attribute__((unused)) static void
+print_error_with_partial_ast(ParseError *error, int depth) {
+  if (error == NULL)
+    return;
 
-    if (error->context) {
-        for (int i = 0; i < depth; i++) printf("  ");
-        printf("Context:\n");
-        const char* ctx = error->context;
-        while (*ctx) {
-            const char* newline = strchr(ctx, '\n');
-            for (int i = 0; i < depth; i++) printf("  ");
-            printf("  ");
-            if (newline) {
-                printf("%.*s\n", (int)(newline - ctx), ctx);
-                ctx = newline + 1;
-            } else {
-                printf("%s\n", ctx);
-                break;
-            }
-        }
-    }
+  for (int i = 0; i < depth; i++)
+    printf("  ");
+  printf("Error at line %d, col %d: %s\n", error->line, error->col,
+         error->message);
 
-    if (error->partial_ast != NULL) {
-        for (int i = 0; i < depth; i++) printf("  ");
-        printf("Partial AST:\n");
-        print_ast_indented(error->partial_ast, depth + 1);
+  if (error->context) {
+    for (int i = 0; i < depth; i++)
+      printf("  ");
+    printf("Context:\n");
+    const char *ctx = error->context;
+    while (*ctx) {
+      const char *newline = strchr(ctx, '\n');
+      for (int i = 0; i < depth; i++)
+        printf("  ");
+      printf("  ");
+      if (newline) {
+        printf("%.*s\n", (int)(newline - ctx), ctx);
+        ctx = newline + 1;
+      } else {
+        printf("%s\n", ctx);
+        break;
+      }
     }
-    
-    if (error->cause != NULL) {
-        for (int i = 0; i < depth; i++) printf("  ");
-        printf("Caused by:\n");
-        print_error_with_partial_ast(error->cause, depth + 1);
-    }
+  }
+
+  if (error->partial_ast != NULL) {
+    for (int i = 0; i < depth; i++)
+      printf("  ");
+    printf("Partial AST:\n");
+    print_ast_indented(error->partial_ast, depth + 1);
+  }
+
+  if (error->cause != NULL) {
+    for (int i = 0; i < depth; i++)
+      printf("  ");
+    printf("Caused by:\n");
+    print_error_with_partial_ast(error->cause, depth + 1);
+  }
 }
 
-
-
-
-
 void test_pnot_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("hello");
-    input->length = 5;
-    combinator_t* p1 = pnot(match("world"));
-    ParseResult res1 = parse(input, p1);
-    TEST_ASSERT(res1.is_success);
-    free_combinator(p1);
-    combinator_t* p2 = pnot(match("hello"));
-    ParseResult res2 = parse(input, p2);
-    TEST_ASSERT(!res2.is_success);
-    free_error(res2.value.error);
-    free_combinator(p2);
-    free(input->buffer);
-    free_input(input);
+  input_t *input = new_input();
+  input->buffer = strdup("hello");
+  input->length = 5;
+  combinator_t *p1 = pnot(match("world"));
+  ParseResult res1 = parse(input, p1);
+  TEST_ASSERT(res1.is_success);
+  free_combinator(p1);
+  combinator_t *p2 = pnot(match("hello"));
+  ParseResult res2 = parse(input, p2);
+  TEST_ASSERT(!res2.is_success);
+  free_error(res2.value.error);
+  free_combinator(p2);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_peek_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("hello");
-    input->length = 5;
-    combinator_t* p1 = peek(match("hello"));
-    ParseResult res1 = parse(input, p1);
-    TEST_ASSERT(res1.is_success);
-    free_ast(res1.value.ast);
-    free_combinator(p1);
-    combinator_t* p2 = peek(match("world"));
-    ParseResult res2 = parse(input, p2);
-    TEST_ASSERT(!res2.is_success);
-    free_error(res2.value.error);
-    free_combinator(p2);
-    free(input->buffer);
-    free_input(input);
+  input_t *input = new_input();
+  input->buffer = strdup("hello");
+  input->length = 5;
+  combinator_t *p1 = peek(match("hello"));
+  ParseResult res1 = parse(input, p1);
+  TEST_ASSERT(res1.is_success);
+  free_ast(res1.value.ast);
+  free_combinator(p1);
+  combinator_t *p2 = peek(match("world"));
+  ParseResult res2 = parse(input, p2);
+  TEST_ASSERT(!res2.is_success);
+  free_error(res2.value.error);
+  free_combinator(p2);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_gseq_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("helloworld");
-    input->length = 10;
-    combinator_t* p1 = gseq(new_combinator(), TEST_T_NONE, match("hello"), match("world"), NULL);
-    ParseResult res1 = parse(input, p1);
-    TEST_ASSERT(res1.is_success);
-    free_ast(res1.value.ast);
-    free_combinator(p1);
-    input->start = 0;
-    combinator_t* p2 = gseq(new_combinator(), TEST_T_NONE, match("hello"), match("goodbye"), NULL);
-    ParseResult res2 = parse(input, p2);
-    TEST_ASSERT(!res2.is_success);
-    free_error(res2.value.error);
-    free_combinator(p2);
-    free(input->buffer);
-    free_input(input);
+  input_t *input = new_input();
+  input->buffer = strdup("helloworld");
+  input->length = 10;
+  combinator_t *p1 =
+      gseq(new_combinator(), TEST_T_NONE, match("hello"), match("world"), NULL);
+  ParseResult res1 = parse(input, p1);
+  TEST_ASSERT(res1.is_success);
+  free_ast(res1.value.ast);
+  free_combinator(p1);
+  input->start = 0;
+  combinator_t *p2 = gseq(new_combinator(), TEST_T_NONE, match("hello"),
+                          match("goodbye"), NULL);
+  ParseResult res2 = parse(input, p2);
+  TEST_ASSERT(!res2.is_success);
+  free_error(res2.value.error);
+  free_combinator(p2);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_between_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("(hello)");
-    input->length = 7;
-    combinator_t* p = between(match("("), match(")"), cident(TEST_T_IDENT));
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    TEST_ASSERT(strcmp(res.value.ast->sym->name, "hello") == 0);
-    free_ast(res.value.ast);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  input_t *input = new_input();
+  input->buffer = strdup("(hello)");
+  input->length = 7;
+  combinator_t *p = between(match("("), match(")"), cident(TEST_T_IDENT));
+  ParseResult res = parse(input, p);
+  TEST_ASSERT(res.is_success);
+  TEST_ASSERT(strcmp(res.value.ast->sym->name, "hello") == 0);
+  free_ast(res.value.ast);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_sep_by_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("a,b,c");
-    input->length = 5;
-    combinator_t* p = sep_by(cident(TEST_T_IDENT), match(","));
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    ast_t* ast = res.value.ast;
-    TEST_ASSERT(strcmp(ast->sym->name, "a") == 0);
-    ast = ast->next;
-    TEST_ASSERT(strcmp(ast->sym->name, "b") == 0);
-    ast = ast->next;
-    TEST_ASSERT(strcmp(ast->sym->name, "c") == 0);
-    free_ast(res.value.ast);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  input_t *input = new_input();
+  input->buffer = strdup("a,b,c");
+  input->length = 5;
+  combinator_t *p = sep_by(cident(TEST_T_IDENT), match(","));
+  ParseResult res = parse(input, p);
+  TEST_ASSERT(res.is_success);
+  ast_t *ast = res.value.ast;
+  TEST_ASSERT(strcmp(ast->sym->name, "a") == 0);
+  ast = ast->next;
+  TEST_ASSERT(strcmp(ast->sym->name, "b") == 0);
+  ast = ast->next;
+  TEST_ASSERT(strcmp(ast->sym->name, "c") == 0);
+  free_ast(res.value.ast);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_sep_by1_combinator(void) {
-    combinator_t* parser = sep_by1(cident(TEST_T_IDENT), match(","));
+  combinator_t *parser = sep_by1(cident(TEST_T_IDENT), match(","));
 
-    input_t* success_input = new_input();
-    success_input->buffer = strdup("a,b,c");
-    success_input->length = strlen(success_input->buffer);
-    ParseResult success = parse(success_input, parser);
-    TEST_ASSERT(success.is_success);
-    ast_t* node = success.value.ast;
-    TEST_ASSERT(node != NULL);
-    TEST_ASSERT(strcmp(node->sym->name, "a") == 0);
-    node = node->next;
-    TEST_ASSERT(node != NULL);
-    TEST_ASSERT(strcmp(node->sym->name, "b") == 0);
-    node = node->next;
-    TEST_ASSERT(node != NULL);
-    TEST_ASSERT(strcmp(node->sym->name, "c") == 0);
-    TEST_ASSERT(node->next == NULL);
-    free_ast(success.value.ast);
-    free(success_input->buffer);
-    free_input(success_input);
+  input_t *success_input = new_input();
+  success_input->buffer = strdup("a,b,c");
+  success_input->length = strlen(success_input->buffer);
+  ParseResult success = parse(success_input, parser);
+  TEST_ASSERT(success.is_success);
+  ast_t *node = success.value.ast;
+  TEST_ASSERT(node != NULL);
+  TEST_ASSERT(strcmp(node->sym->name, "a") == 0);
+  node = node->next;
+  TEST_ASSERT(node != NULL);
+  TEST_ASSERT(strcmp(node->sym->name, "b") == 0);
+  node = node->next;
+  TEST_ASSERT(node != NULL);
+  TEST_ASSERT(strcmp(node->sym->name, "c") == 0);
+  TEST_ASSERT(node->next == NULL);
+  free_ast(success.value.ast);
+  free(success_input->buffer);
+  free_input(success_input);
 
-    input_t* trailing_sep_input = new_input();
-    trailing_sep_input->buffer = strdup("a,");
-    trailing_sep_input->length = strlen(trailing_sep_input->buffer);
-    ParseResult trailing = parse(trailing_sep_input, parser);
-    TEST_ASSERT(trailing.is_success);
-    TEST_ASSERT(trailing.value.ast != NULL);
-    TEST_ASSERT(strcmp(trailing.value.ast->sym->name, "a") == 0);
-    TEST_ASSERT(trailing.value.ast->next == NULL);
-    free_ast(trailing.value.ast);
-    free(trailing_sep_input->buffer);
-    free_input(trailing_sep_input);
+  input_t *trailing_sep_input = new_input();
+  trailing_sep_input->buffer = strdup("a,");
+  trailing_sep_input->length = strlen(trailing_sep_input->buffer);
+  ParseResult trailing = parse(trailing_sep_input, parser);
+  TEST_ASSERT(trailing.is_success);
+  TEST_ASSERT(trailing.value.ast != NULL);
+  TEST_ASSERT(strcmp(trailing.value.ast->sym->name, "a") == 0);
+  TEST_ASSERT(trailing.value.ast->next == NULL);
+  free_ast(trailing.value.ast);
+  free(trailing_sep_input->buffer);
+  free_input(trailing_sep_input);
 
-    input_t* failure_input = new_input();
-    failure_input->buffer = strdup(",");
-    failure_input->length = strlen(failure_input->buffer);
-    ParseResult failure = parse(failure_input, parser);
-    TEST_ASSERT(!failure.is_success);
-    free_error(failure.value.error);
-    free(failure_input->buffer);
-    free_input(failure_input);
+  input_t *failure_input = new_input();
+  failure_input->buffer = strdup(",");
+  failure_input->length = strlen(failure_input->buffer);
+  ParseResult failure = parse(failure_input, parser);
+  TEST_ASSERT(!failure.is_success);
+  free_error(failure.value.error);
+  free(failure_input->buffer);
+  free_input(failure_input);
 
-    free_combinator(parser);
+  free_combinator(parser);
 }
 
 void test_sep_end_by_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("a,b,c,");
-    input->length = 6;
-    combinator_t* p = sep_end_by(cident(TEST_T_IDENT), match(","));
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    ast_t* ast = res.value.ast;
-    TEST_ASSERT(strcmp(ast->sym->name, "a") == 0);
-    ast = ast->next;
-    TEST_ASSERT(strcmp(ast->sym->name, "b") == 0);
-    ast = ast->next;
-    TEST_ASSERT(strcmp(ast->sym->name, "c") == 0);
-    free_ast(res.value.ast);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  input_t *input = new_input();
+  input->buffer = strdup("a,b,c,");
+  input->length = 6;
+  combinator_t *p = sep_end_by(cident(TEST_T_IDENT), match(","));
+  ParseResult res = parse(input, p);
+  TEST_ASSERT(res.is_success);
+  ast_t *ast = res.value.ast;
+  TEST_ASSERT(strcmp(ast->sym->name, "a") == 0);
+  ast = ast->next;
+  TEST_ASSERT(strcmp(ast->sym->name, "b") == 0);
+  ast = ast->next;
+  TEST_ASSERT(strcmp(ast->sym->name, "c") == 0);
+  free_ast(res.value.ast);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
-static combinator_t* add_op() {
-    return right(match("+"), succeed(ast1(TEST_T_ADD, ast_nil)));
+static combinator_t *add_op() {
+  return right(match("+"), succeed(ast1(TEST_T_ADD, ast_nil)));
 }
 
 void test_chainl1_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("1+2+3");
-    input->length = 5;
+  input_t *input = new_input();
+  input->buffer = strdup("1+2+3");
+  input->length = 5;
 
-    combinator_t* p = chainl1(integer(TEST_T_INT), add_op());
-    ParseResult res = parse(input, p);
+  combinator_t *p = chainl1(integer(TEST_T_INT), add_op());
+  ParseResult res = parse(input, p);
 
-    TEST_ASSERT(res.is_success);
-    ast_t* ast = res.value.ast;
-    TEST_ASSERT(ast->typ == TEST_T_ADD);
-    TEST_ASSERT(ast->child->typ == TEST_T_ADD);
-    TEST_ASSERT(strcmp(ast->child->next->sym->name, "3") == 0);
+  TEST_ASSERT(res.is_success);
+  ast_t *ast = res.value.ast;
+  TEST_ASSERT(ast->typ == TEST_T_ADD);
+  TEST_ASSERT(ast->child->typ == TEST_T_ADD);
+  TEST_ASSERT(strcmp(ast->child->next->sym->name, "3") == 0);
 
-    free_ast(res.value.ast);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  free_ast(res.value.ast);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_any_char_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("a");
-    input->length = 1;
+  input_t *input = new_input();
+  input->buffer = strdup("a");
+  input->length = 1;
 
-    combinator_t* p = any_char(TEST_T_NONE);
-    ParseResult res = parse(input, p);
+  combinator_t *p = any_char(TEST_T_NONE);
+  ParseResult res = parse(input, p);
 
-    TEST_ASSERT(res.is_success);
-    TEST_ASSERT(strcmp(res.value.ast->sym->name, "a") == 0);
+  TEST_ASSERT(res.is_success);
+  TEST_ASSERT(strcmp(res.value.ast->sym->name, "a") == 0);
 
-    free_ast(res.value.ast);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  free_ast(res.value.ast);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
-static ast_t* to_uppercase(ast_t* ast) {
-    for (int i = 0; ast->sym->name[i]; i++) {
-        ast->sym->name[i] = toupper(ast->sym->name[i]);
-    }
-    return ast;
+static ast_t *to_uppercase(ast_t *ast) {
+  for (int i = 0; ast->sym->name[i]; i++) {
+    ast->sym->name[i] = toupper(ast->sym->name[i]);
+  }
+  return ast;
 }
 
 void test_map_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("hello");
-    input->length = 5;
+  input_t *input = new_input();
+  input->buffer = strdup("hello");
+  input->length = 5;
 
-    combinator_t* p = map(cident(TEST_T_IDENT), to_uppercase);
-    ParseResult res = parse(input, p);
+  combinator_t *p = map(cident(TEST_T_IDENT), to_uppercase);
+  ParseResult res = parse(input, p);
 
-    TEST_ASSERT(res.is_success);
-    TEST_ASSERT(strcmp(res.value.ast->sym->name, "HELLO") == 0);
+  TEST_ASSERT(res.is_success);
+  TEST_ASSERT(strcmp(res.value.ast->sym->name, "HELLO") == 0);
 
-    free_ast(res.value.ast);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  free_ast(res.value.ast);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_multi_prefers_furthest_error(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("helloX");
-    input->length = strlen("helloX");
+  input_t *input = new_input();
+  input->buffer = strdup("helloX");
+  input->length = strlen("helloX");
 
-    combinator_t* deep_failure = seq(new_combinator(), TEST_T_NONE,
-        match("hello"),
-        expect(match("world"), "expected world"),
-        NULL
-    );
+  combinator_t *deep_failure =
+      seq(new_combinator(), TEST_T_NONE, match("hello"),
+          expect(match("world"), "expected world"), NULL);
 
-    combinator_t* shallow_failure = match("hi");
+  combinator_t *shallow_failure = match("hi");
 
-    combinator_t* parser = multi(new_combinator(), TEST_T_NONE,
-        deep_failure,
-        shallow_failure,
-        NULL
-    );
+  combinator_t *parser =
+      multi(new_combinator(), TEST_T_NONE, deep_failure, shallow_failure, NULL);
 
-    ParseResult res = parse(input, parser);
+  ParseResult res = parse(input, parser);
 
-    TEST_ASSERT(!res.is_success);
-    TEST_ASSERT(res.value.error != NULL);
-    
-    // Create context before asserting it exists (optimization defers context creation)
-    ensure_parse_error_contexts(res.value.error, input);
-    
-    TEST_ASSERT(res.value.error->context != NULL);
-    TEST_ASSERT(res.value.error->index >= 5);
-    TEST_ASSERT(strstr(res.value.error->message, "expected world") != NULL);
+  TEST_ASSERT(!res.is_success);
+  TEST_ASSERT(res.value.error != NULL);
 
-    free_error(res.value.error);
-    free_combinator(parser);
-    free(input->buffer);
-    free_input(input);
+  // Create context before asserting it exists (optimization defers context
+  // creation)
+  ensure_parse_error_contexts(res.value.error, input);
+
+  TEST_ASSERT(res.value.error->context != NULL);
+  TEST_ASSERT(res.value.error->index >= 5);
+  TEST_ASSERT(strstr(res.value.error->message, "expected world") != NULL);
+
+  free_error(res.value.error);
+  free_combinator(parser);
+  free(input->buffer);
+  free_input(input);
 }
 
-static ParseError* add_context_to_error(ParseError* err) {
-    ParseError* new_err = (ParseError*)safe_malloc(sizeof(ParseError));
-    memset(new_err, 0, sizeof(ParseError));  /* Initialize all fields to zero */
-    new_err->line = err->line;
-    new_err->col = err->col;
-    new_err->index = err->index;
-    new_err->message = strdup("In custom context");
-    new_err->parser_name = NULL;
-    new_err->unexpected = NULL;
-    new_err->context = err->context ? strdup(err->context) : NULL;
-    new_err->cause = err;
-    new_err->partial_ast = NULL;
-    new_err->committed = false;  /* Explicitly initialize committed field */
-    return new_err;
+static ParseError *add_context_to_error(ParseError *err) {
+  ParseError *new_err = (ParseError *)safe_malloc(sizeof(ParseError));
+  memset(new_err, 0, sizeof(ParseError)); /* Initialize all fields to zero */
+  new_err->line = err->line;
+  new_err->col = err->col;
+  new_err->index = err->index;
+  new_err->message = strdup("In custom context");
+  new_err->parser_name = NULL;
+  new_err->unexpected = NULL;
+  new_err->context = err->context ? strdup(err->context) : NULL;
+  new_err->cause = err;
+  new_err->partial_ast = NULL;
+  new_err->committed = false; /* Explicitly initialize committed field */
+  return new_err;
 }
 
 void test_errmap_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("world");
-    input->length = 5;
+  input_t *input = new_input();
+  input->buffer = strdup("world");
+  input->length = 5;
 
-    combinator_t* p = errmap(match("hello"), add_context_to_error);
-    ParseResult res = parse(input, p);
+  combinator_t *p = errmap(match("hello"), add_context_to_error);
+  ParseResult res = parse(input, p);
 
-    TEST_ASSERT(!res.is_success);
-    TEST_ASSERT(strcmp(res.value.error->message, "In custom context") == 0);
-    TEST_ASSERT(strstr(parse_error_get_message(res.value.error->cause), "Expected 'hello'") != NULL);
+  TEST_ASSERT(!res.is_success);
+  TEST_ASSERT(strcmp(res.value.error->message, "In custom context") == 0);
+  TEST_ASSERT(strstr(parse_error_get_message(res.value.error->cause),
+                     "Expected 'hello'") != NULL);
 
-    free_error(res.value.error);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  free_error(res.value.error);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
-static bool is_digit_predicate(char c) {
-    return isdigit(c);
-}
+static bool is_digit_predicate(char c) { return isdigit(c); }
 
 void test_satisfy_combinator(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("1a");
-    input->length = 2;
+  input_t *input = new_input();
+  input->buffer = strdup("1a");
+  input->length = 2;
 
-    combinator_t* p = satisfy(is_digit_predicate, TEST_T_NONE);
-    ParseResult res = parse(input, p);
+  combinator_t *p = satisfy(is_digit_predicate, TEST_T_NONE);
+  ParseResult res = parse(input, p);
 
-    TEST_ASSERT(res.is_success);
-    TEST_ASSERT(strcmp(res.value.ast->sym->name, "1") == 0);
+  TEST_ASSERT(res.is_success);
+  TEST_ASSERT(strcmp(res.value.ast->sym->name, "1") == 0);
 
-    free_ast(res.value.ast);
-    free_combinator(p);
+  free_ast(res.value.ast);
+  free_combinator(p);
 
-    // Test failure
-    p = satisfy(is_digit_predicate, TEST_T_NONE);
-    res = parse(input, p);
-    TEST_ASSERT(!res.is_success);
-    free_error(res.value.error);
-    free_combinator(p);
+  // Test failure
+  p = satisfy(is_digit_predicate, TEST_T_NONE);
+  res = parse(input, p);
+  TEST_ASSERT(!res.is_success);
+  free_error(res.value.error);
+  free_combinator(p);
 
-    free(input->buffer);
-    free_input(input);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_partial_ast_functionality(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("invalid input");
-    input->length = strlen("invalid input");
+  input_t *input = new_input();
+  input->buffer = strdup("invalid input");
+  input->length = strlen("invalid input");
 
-    // Create a parser that will definitely fail
-    combinator_t* p = match("expected_keyword");
-    
-    // Create a partial AST representing what would be successfully parsed
-    ast_t* partial_ast = new_ast();
-    partial_ast->typ = TEST_T_INT;
-    partial_ast->sym = sym_lookup("42");
-    partial_ast->child = NULL;
-    partial_ast->next = NULL;
+  // Create a parser that will definitely fail
+  combinator_t *p = match("expected_keyword");
 
-    // Parse to get a real failure
-    ParseResult original_result = parse(input, p);
-    TEST_ASSERT(!original_result.is_success);
+  // Create a partial AST representing what would be successfully parsed
+  ast_t *partial_ast = new_ast();
+  partial_ast->typ = TEST_T_INT;
+  partial_ast->sym = sym_lookup("42");
+  partial_ast->child = NULL;
+  partial_ast->next = NULL;
 
-    // Wrap the failure with partial AST
-    ParseResult wrapped_result = wrap_failure_with_ast(input, "Parsing failed with partial result", original_result, partial_ast);
-    TEST_ASSERT(!wrapped_result.is_success);
-    
-    // Verify the wrapped error contains the partial AST
-    TEST_ASSERT(wrapped_result.value.error != NULL);
-    TEST_ASSERT(wrapped_result.value.error->partial_ast != NULL);
-    TEST_ASSERT(wrapped_result.value.error->partial_ast->typ == TEST_T_INT);
-    TEST_ASSERT(strcmp(wrapped_result.value.error->partial_ast->sym->name, "42") == 0);
-    
-    // Verify the original error is preserved as cause
-    TEST_ASSERT(wrapped_result.value.error->cause != NULL);
-    TEST_ASSERT(strstr(parse_error_get_message(wrapped_result.value.error->cause), "Expected 'expected_keyword'") != NULL);
+  // Parse to get a real failure
+  ParseResult original_result = parse(input, p);
+  TEST_ASSERT(!original_result.is_success);
 
-    free_error(wrapped_result.value.error);
-    free_combinator(p);
-    free(input->buffer);
-    free_input(input);
+  // Wrap the failure with partial AST
+  ParseResult wrapped_result =
+      wrap_failure_with_ast(input, "Parsing failed with partial result",
+                            original_result, partial_ast);
+  TEST_ASSERT(!wrapped_result.is_success);
+
+  // Verify the wrapped error contains the partial AST
+  TEST_ASSERT(wrapped_result.value.error != NULL);
+  TEST_ASSERT(wrapped_result.value.error->partial_ast != NULL);
+  TEST_ASSERT(wrapped_result.value.error->partial_ast->typ == TEST_T_INT);
+  TEST_ASSERT(
+      strcmp(wrapped_result.value.error->partial_ast->sym->name, "42") == 0);
+
+  // Verify the original error is preserved as cause
+  TEST_ASSERT(wrapped_result.value.error->cause != NULL);
+  TEST_ASSERT(strstr(parse_error_get_message(wrapped_result.value.error->cause),
+                     "Expected 'expected_keyword'") != NULL);
+
+  free_error(wrapped_result.value.error);
+  free_combinator(p);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_expression_parser_partial_ast(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("1 + 2");
-    input->length = strlen("1 + 2");
+  input_t *input = new_input();
+  input->buffer = strdup("1 + 2");
+  input->length = strlen("1 + 2");
 
-    // Create a proper expression parser
-    combinator_t* expr_parser = new_combinator();
-    combinator_t* factor = multi(new_combinator(), TEST_T_NONE,
-        integer(TEST_T_INT),
-        cident(TEST_T_IDENT),
-        NULL
-    );
-    expr(expr_parser, factor);
-    expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
-    expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
+  // Create a proper expression parser
+  combinator_t *expr_parser = new_combinator();
+  combinator_t *factor = multi(new_combinator(), TEST_T_NONE,
+                               integer(TEST_T_INT), cident(TEST_T_IDENT), NULL);
+  expr(expr_parser, factor);
+  expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
+  expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
 
-    // Parse a valid expression first
-    ParseResult valid_result = parse(input, expr_parser);
-    TEST_ASSERT(valid_result.is_success);
-    TEST_ASSERT(valid_result.value.ast != NULL);
-    
-    // Save the AST for partial result testing
-    ast_t* valid_ast = valid_result.value.ast;
-    
-    // Reset input for error case
-    free(input->buffer);
-    input->buffer = strdup("invalid");
-    input->length = strlen("invalid");
-    input->start = 0;
+  // Parse a valid expression first
+  ParseResult valid_result = parse(input, expr_parser);
+  TEST_ASSERT(valid_result.is_success);
+  TEST_ASSERT(valid_result.value.ast != NULL);
 
-    // Create a parser that will definitely fail
-    combinator_t* failing_parser = match("expected_keyword");
-    ParseResult failure_result = parse(input, failing_parser);
-    TEST_ASSERT(!failure_result.is_success);
+  // Save the AST for partial result testing
+  ast_t *valid_ast = valid_result.value.ast;
 
-    // Wrap the failure with the valid AST as partial result
-    ParseResult wrapped_result = wrap_failure_with_ast(input, "Expression parsing failed", failure_result, valid_ast);
-    TEST_ASSERT(!wrapped_result.is_success);
-    
-    // Verify the wrapped error contains the partial AST
-    TEST_ASSERT(wrapped_result.value.error != NULL);
-    TEST_ASSERT(wrapped_result.value.error->partial_ast != NULL);
-    
-    // The expression parser stops at the first successful parse (the integer 1)
-    // So the partial AST should be just the integer, not the full addition
-    ast_t* partial_ast = wrapped_result.value.error->partial_ast;
-    TEST_ASSERT(partial_ast->typ == TEST_T_INT);
-    TEST_ASSERT(strcmp(partial_ast->sym->name, "1") == 0);
+  // Reset input for error case
+  free(input->buffer);
+  input->buffer = strdup("invalid");
+  input->length = strlen("invalid");
+  input->start = 0;
 
-    free_error(wrapped_result.value.error);
-    free_combinator(expr_parser);
-    free_combinator(failing_parser);
-    free(input->buffer);
-    free_input(input);
+  // Create a parser that will definitely fail
+  combinator_t *failing_parser = match("expected_keyword");
+  ParseResult failure_result = parse(input, failing_parser);
+  TEST_ASSERT(!failure_result.is_success);
+
+  // Wrap the failure with the valid AST as partial result
+  ParseResult wrapped_result = wrap_failure_with_ast(
+      input, "Expression parsing failed", failure_result, valid_ast);
+  TEST_ASSERT(!wrapped_result.is_success);
+
+  // Verify the wrapped error contains the partial AST
+  TEST_ASSERT(wrapped_result.value.error != NULL);
+  TEST_ASSERT(wrapped_result.value.error->partial_ast != NULL);
+
+  // The expression parser stops at the first successful parse (the integer 1)
+  // So the partial AST should be just the integer, not the full addition
+  ast_t *partial_ast = wrapped_result.value.error->partial_ast;
+  TEST_ASSERT(partial_ast->typ == TEST_T_INT);
+  TEST_ASSERT(strcmp(partial_ast->sym->name, "1") == 0);
+
+  free_error(wrapped_result.value.error);
+  free_combinator(expr_parser);
+  free_combinator(failing_parser);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_expression_parser_invalid_input(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("1 + * 2");  // Invalid: operator after operator
-    input->length = strlen("1 + * 2");
+  input_t *input = new_input();
+  input->buffer = strdup("1 + * 2"); // Invalid: operator after operator
+  input->length = strlen("1 + * 2");
 
-    // Create expression parser
-    combinator_t* expr_parser = new_combinator();
-    combinator_t* factor = multi(new_combinator(), TEST_T_NONE,
-        integer(TEST_T_INT),
-        cident(TEST_T_IDENT),
-        NULL
-    );
-    expr(expr_parser, factor);
-    expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
-    expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
-    expr_insert(expr_parser, 1, TEST_T_MUL, EXPR_INFIX, ASSOC_LEFT, match("*"));
-    expr_altern(expr_parser, 1, TEST_T_DIV, match("/"));
+  // Create expression parser
+  combinator_t *expr_parser = new_combinator();
+  combinator_t *factor = multi(new_combinator(), TEST_T_NONE,
+                               integer(TEST_T_INT), cident(TEST_T_IDENT), NULL);
+  expr(expr_parser, factor);
+  expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
+  expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
+  expr_insert(expr_parser, 1, TEST_T_MUL, EXPR_INFIX, ASSOC_LEFT, match("*"));
+  expr_altern(expr_parser, 1, TEST_T_DIV, match("/"));
 
-    // Parse invalid input - should succeed partially
-    ParseResult result = parse(input, expr_parser);
-    
-    // Expression parser is permissive - it parses what it can and stops
-    TEST_ASSERT(result.is_success);
-    TEST_ASSERT(result.value.ast != NULL);
-    TEST_ASSERT(result.value.ast->typ == TEST_T_INT);
-    TEST_ASSERT(strcmp(result.value.ast->sym->name, "1") == 0);
-    
-    // Only part of input should be consumed
-    TEST_ASSERT(input->start < input->length);
+  // Parse invalid input - should succeed partially
+  ParseResult result = parse(input, expr_parser);
 
-    free_ast(result.value.ast);
-    free_combinator(expr_parser);
-    free(input->buffer);
-    free_input(input);
+  // Expression parser is permissive - it parses what it can and stops
+  TEST_ASSERT(result.is_success);
+  TEST_ASSERT(result.value.ast != NULL);
+  TEST_ASSERT(result.value.ast->typ == TEST_T_INT);
+  TEST_ASSERT(strcmp(result.value.ast->sym->name, "1") == 0);
+
+  // Only part of input should be consumed
+  TEST_ASSERT(input->start < input->length);
+
+  free_ast(result.value.ast);
+  free_combinator(expr_parser);
+  free(input->buffer);
+  free_input(input);
 }
 
 void test_expression_parser_behavior(void) {
-    input_t* input = new_input();
-    input->buffer = strdup("1 + * 2");  // Invalid: operator after operator
-    input->length = strlen("1 + * 2");
+  input_t *input = new_input();
+  input->buffer = strdup("1 + * 2"); // Invalid: operator after operator
+  input->length = strlen("1 + * 2");
 
-    // Create expression parser
-    combinator_t* expr_parser = new_combinator();
-    combinator_t* factor = multi(new_combinator(), TEST_T_NONE,
-        integer(TEST_T_INT),
-        cident(TEST_T_IDENT),
-        NULL
-    );
-    expr(expr_parser, factor);
-    expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
-    expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
-    expr_insert(expr_parser, 1, TEST_T_MUL, EXPR_INFIX, ASSOC_LEFT, match("*"));
-    expr_altern(expr_parser, 1, TEST_T_DIV, match("/"));
+  // Create expression parser
+  combinator_t *expr_parser = new_combinator();
+  combinator_t *factor = multi(new_combinator(), TEST_T_NONE,
+                               integer(TEST_T_INT), cident(TEST_T_IDENT), NULL);
+  expr(expr_parser, factor);
+  expr_insert(expr_parser, 0, TEST_T_ADD, EXPR_INFIX, ASSOC_LEFT, match("+"));
+  expr_altern(expr_parser, 0, TEST_T_SUB, match("-"));
+  expr_insert(expr_parser, 1, TEST_T_MUL, EXPR_INFIX, ASSOC_LEFT, match("*"));
+  expr_altern(expr_parser, 1, TEST_T_DIV, match("/"));
 
-    // Parse invalid input - should succeed partially
-    ParseResult result = parse(input, expr_parser);
-    
-    // Expression parser is permissive - it parses what it can and stops
-    TEST_ASSERT(result.is_success);
-    TEST_ASSERT(result.value.ast != NULL);
-    TEST_ASSERT(result.value.ast->typ == TEST_T_INT);
-    TEST_ASSERT(strcmp(result.value.ast->sym->name, "1") == 0);
-    
-    // Only part of input should be consumed
-    TEST_ASSERT(input->start < input->length);
+  // Parse invalid input - should succeed partially
+  ParseResult result = parse(input, expr_parser);
 
-    free_ast(result.value.ast);
-    free_combinator(expr_parser);
-    free(input->buffer);
-    free_input(input);
+  // Expression parser is permissive - it parses what it can and stops
+  TEST_ASSERT(result.is_success);
+  TEST_ASSERT(result.value.ast != NULL);
+  TEST_ASSERT(result.value.ast->typ == TEST_T_INT);
+  TEST_ASSERT(strcmp(result.value.ast->sym->name, "1") == 0);
+
+  // Only part of input should be consumed
+  TEST_ASSERT(input->start < input->length);
+
+  free_ast(result.value.ast);
+  free_combinator(expr_parser);
+  free(input->buffer);
+  free_input(input);
 }
 
 TEST_LIST = {
-    { "pnot_combinator", test_pnot_combinator },
-    { "peek_combinator", test_peek_combinator },
-    { "gseq_combinator", test_gseq_combinator },
-    { "between_combinator", test_between_combinator },
-    { "sep_by_combinator", test_sep_by_combinator },
-    { "sep_by1_combinator", test_sep_by1_combinator },
-    { "sep_end_by_combinator", test_sep_end_by_combinator },
-    { "chainl1_combinator", test_chainl1_combinator },
-    { "any_char_combinator", test_any_char_combinator },
-    { "map_combinator", test_map_combinator },
-    { "multi_prefers_furthest_error", test_multi_prefers_furthest_error },
-    { "errmap_combinator", test_errmap_combinator },
-    { "satisfy_combinator", test_satisfy_combinator },
-    { "partial_ast_functionality", test_partial_ast_functionality },
-    { "expression_parser_partial_ast", test_expression_parser_partial_ast },
-    { "expression_parser_invalid_input", test_expression_parser_invalid_input },
-    { "expression_parser_behavior", test_expression_parser_behavior },
-    { NULL, NULL }
-};
+    {"pnot_combinator", test_pnot_combinator},
+    {"peek_combinator", test_peek_combinator},
+    {"gseq_combinator", test_gseq_combinator},
+    {"between_combinator", test_between_combinator},
+    {"sep_by_combinator", test_sep_by_combinator},
+    {"sep_by1_combinator", test_sep_by1_combinator},
+    {"sep_end_by_combinator", test_sep_end_by_combinator},
+    {"chainl1_combinator", test_chainl1_combinator},
+    {"any_char_combinator", test_any_char_combinator},
+    {"map_combinator", test_map_combinator},
+    {"multi_prefers_furthest_error", test_multi_prefers_furthest_error},
+    {"errmap_combinator", test_errmap_combinator},
+    {"satisfy_combinator", test_satisfy_combinator},
+    {"partial_ast_functionality", test_partial_ast_functionality},
+    {"expression_parser_partial_ast", test_expression_parser_partial_ast},
+    {"expression_parser_invalid_input", test_expression_parser_invalid_input},
+    {"expression_parser_behavior", test_expression_parser_behavior},
+    {NULL, NULL}};

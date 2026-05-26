@@ -9,67 +9,68 @@
  * here.
  */
 
-#define UNKNOWN_TYPE        0
-#define INT_TYPE            1
-#define REAL_TYPE           2
-#define LONGINT_TYPE        3   /* 32-bit signed integer (FPC-compatible LongInt) */
-#define STRING_TYPE         4
-#define BUILTIN_ANY_TYPE    5
-#define INT64_TYPE          38  /* 64-bit signed integer (Int64, TDateTime) */
-#define RECORD_TYPE         34
+#define UNKNOWN_TYPE 0
+#define INT_TYPE 1
+#define REAL_TYPE 2
+#define LONGINT_TYPE 3 /* 32-bit signed integer (FPC-compatible LongInt) */
+#define STRING_TYPE 4
+#define BUILTIN_ANY_TYPE 5
+#define INT64_TYPE 38 /* 64-bit signed integer (Int64, TDateTime) */
+#define RECORD_TYPE 34
 #define ARRAY_OF_CONST_TYPE 35
-#define TEXT_TYPE           36
-#define CHAR_TYPE           28
-#define POINTER_TYPE        29
-#define SET_TYPE            30
-#define ENUM_TYPE           31
-#define FILE_TYPE           32
-#define SHORTSTRING_TYPE    37
+#define TEXT_TYPE 36
+#define CHAR_TYPE 28
+#define POINTER_TYPE 29
+#define SET_TYPE 30
+#define ENUM_TYPE 31
+#define FILE_TYPE 32
+#define SHORTSTRING_TYPE 37
 
 /* Additional integer types for FPC compatibility */
-#define BYTE_TYPE           39  /* 8-bit unsigned integer (Byte) */
-#define WORD_TYPE           40  /* 16-bit unsigned integer (Word) */
-#define LONGWORD_TYPE       41  /* 32-bit unsigned integer (LongWord/DWord/Cardinal) */
-#define QWORD_TYPE          42  /* 64-bit unsigned integer (QWord) */
+#define BYTE_TYPE 39     /* 8-bit unsigned integer (Byte) */
+#define WORD_TYPE 40     /* 16-bit unsigned integer (Word) */
+#define LONGWORD_TYPE 41 /* 32-bit unsigned integer (LongWord/DWord/Cardinal)  \
+                          */
+#define QWORD_TYPE 42    /* 64-bit unsigned integer (QWord) */
 
 /* Legacy token constants reused by the semantic analyser and code generator */
-#define BOOL                6
-#define PROCEDURE           7
+#define BOOL 6
+#define PROCEDURE 7
 
-#define EQ                  8
-#define NE                  9
-#define LT                  10
-#define LE                  11
-#define GT                  12
-#define GE                  13
+#define EQ 8
+#define NE 9
+#define LT 10
+#define LE 11
+#define GT 12
+#define GE 13
 
-#define AND                 14
-#define OR                  15
-#define NOT                 16
+#define AND 14
+#define OR 15
+#define NOT 16
 
-#define PLUS                17
-#define MINUS               18
-#define STAR                19
-#define SLASH               20
-#define DIV                 21
-#define MOD                 22
+#define PLUS 17
+#define MINUS 18
+#define STAR 19
+#define SLASH 20
+#define DIV 21
+#define MOD 22
 
 /* Bitwise operators */
-#define XOR                 23
-#define SHL                 24
-#define SHR                 25
-#define ROL                 26
-#define ROR                 27
+#define XOR 23
+#define SHL 24
+#define SHR 25
+#define ROL 26
+#define ROR 27
 
 /* Set membership */
-#define IN                  33
+#define IN 33
 
 /* Arithmetic operators (extended) */
-#define POWER               43  /* ** operator (overloadable; e.g. scalar product) */
+#define POWER 43 /* ** operator (overloadable; e.g. scalar product) */
 
 /* Variant type – auto-coerces to/from any value type at runtime */
-#define VARIANT_TYPE        44
-#define EXTENDED_TYPE       45
+#define VARIANT_TYPE 44
+#define EXTENDED_TYPE 45
 
 /*
  * Type classification utilities
@@ -82,7 +83,7 @@
  * - Enumerated types (ENUM_TYPE)
  * - Character type (CHAR_TYPE)
  * - Boolean type (BOOL)
- * 
+ *
  * Ordinal types can be used as:
  * - Array index types
  * - Array bound types
@@ -90,11 +91,12 @@
  * - Case statement selectors
  * - Set base types
  */
-static inline int is_ordinal_type(int type_tag)
-{
-    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE ||
-            type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
-            type_tag == QWORD_TYPE || type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
+static inline int is_ordinal_type(int type_tag) {
+  return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
+          type_tag == INT64_TYPE || type_tag == BYTE_TYPE ||
+          type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
+          type_tag == QWORD_TYPE || type_tag == ENUM_TYPE ||
+          type_tag == CHAR_TYPE || type_tag == BOOL);
 }
 
 /**
@@ -104,25 +106,23 @@ static inline int is_ordinal_type(int type_tag)
  * - LONGINT_TYPE (32-bit LongInt for FPC compatibility)
  * - INT64_TYPE (64-bit Int64)
  */
-static inline int is_integer_type(int type_tag)
-{
-    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE ||
-            type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
-            type_tag == QWORD_TYPE);
+static inline int is_integer_type(int type_tag) {
+  return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
+          type_tag == INT64_TYPE || type_tag == BYTE_TYPE ||
+          type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
+          type_tag == QWORD_TYPE);
 }
 
 /**
  * Check if a type tag represents an unsigned integer type.
  */
-static inline int is_unsigned_integer_type(int type_tag)
-{
-    return (type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
-            type_tag == QWORD_TYPE);
+static inline int is_unsigned_integer_type(int type_tag) {
+  return (type_tag == BYTE_TYPE || type_tag == WORD_TYPE ||
+          type_tag == LONGWORD_TYPE || type_tag == QWORD_TYPE);
 }
 
-static inline int is_real_family_type(int type_tag)
-{
-    return (type_tag == REAL_TYPE || type_tag == EXTENDED_TYPE);
+static inline int is_real_family_type(int type_tag) {
+  return (type_tag == REAL_TYPE || type_tag == EXTENDED_TYPE);
 }
 
 /**
@@ -131,23 +131,22 @@ static inline int is_real_family_type(int type_tag)
  * - STRING_TYPE (dynamic string/AnsiString)
  * - SHORTSTRING_TYPE (fixed-length short strings)
  */
-static inline int is_string_type(int type_tag)
-{
-    return (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE);
+static inline int is_string_type(int type_tag) {
+  return (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE);
 }
 
 /**
  * Check if an expression represents a shortstring (array of char).
  * ShortString variables are stored as array[0..255] of char internally,
  * and resolve to CHAR_TYPE as the element type.
- * 
+ *
  * @param type_tag The resolved type tag of the expression
  * @param is_array_expr Whether the expression is marked as an array expression
  * @return 1 if this represents a shortstring/char array, 0 otherwise
  */
-static inline int is_shortstring_array(int type_tag, int is_array_expr)
-{
-    return is_array_expr && (type_tag == CHAR_TYPE || type_tag == SHORTSTRING_TYPE);
+static inline int is_shortstring_array(int type_tag, int is_array_expr) {
+  return is_array_expr &&
+         (type_tag == CHAR_TYPE || type_tag == SHORTSTRING_TYPE);
 }
 
 /**
@@ -157,9 +156,8 @@ static inline int is_shortstring_array(int type_tag, int is_array_expr)
  * - INT64_TYPE (64-bit signed integer)
  * - QWORD_TYPE (64-bit unsigned integer)
  */
-static inline int is_64bit_integer_type(int type_tag)
-{
-    return (type_tag == INT64_TYPE || type_tag == QWORD_TYPE);
+static inline int is_64bit_integer_type(int type_tag) {
+  return (type_tag == INT64_TYPE || type_tag == QWORD_TYPE);
 }
 
 /**
@@ -168,38 +166,37 @@ static inline int is_64bit_integer_type(int type_tag)
  * consolidating logic previously duplicated across multiple modules.
  *
  * @param type_tag The type tag to get the size for
- * @return Size in bytes, or -1 if the type tag is not a fixed-size primitive type
+ * @return Size in bytes, or -1 if the type tag is not a fixed-size primitive
+ * type
  */
-static inline int get_type_tag_size(int type_tag)
-{
-    switch (type_tag)
-    {
-        case BOOL:
-        case CHAR_TYPE:
-        case BYTE_TYPE:
-            return 1;
-        case WORD_TYPE:
-            return 2;
-        case LONGINT_TYPE:
-        case INT_TYPE:
-        case LONGWORD_TYPE:
-        case ENUM_TYPE:
-        case SET_TYPE:
-            return 4;
-        case INT64_TYPE:
-        case QWORD_TYPE:
-        case POINTER_TYPE:
-        case PROCEDURE:
-        case FILE_TYPE:
-        case REAL_TYPE:
-        case STRING_TYPE:  /* AnsiString is a pointer-sized reference */
-        case TEXT_TYPE:    /* Text file handle is a pointer-sized reference */
-            return 8;
-        case SHORTSTRING_TYPE:
-            return 256;  /* ShortString is 256 bytes (length byte + 255 chars) */
-        default:
-            return -1;  /* Unknown or composite types need special handling */
-    }
+static inline int get_type_tag_size(int type_tag) {
+  switch (type_tag) {
+  case BOOL:
+  case CHAR_TYPE:
+  case BYTE_TYPE:
+    return 1;
+  case WORD_TYPE:
+    return 2;
+  case LONGINT_TYPE:
+  case INT_TYPE:
+  case LONGWORD_TYPE:
+  case ENUM_TYPE:
+  case SET_TYPE:
+    return 4;
+  case INT64_TYPE:
+  case QWORD_TYPE:
+  case POINTER_TYPE:
+  case PROCEDURE:
+  case FILE_TYPE:
+  case REAL_TYPE:
+  case STRING_TYPE: /* AnsiString is a pointer-sized reference */
+  case TEXT_TYPE:   /* Text file handle is a pointer-sized reference */
+    return 8;
+  case SHORTSTRING_TYPE:
+    return 256; /* ShortString is 256 bytes (length byte + 255 chars) */
+  default:
+    return -1; /* Unknown or composite types need special handling */
+  }
 }
 
 #endif /* TYPE_TAGS_H */

@@ -8,7 +8,8 @@
  *
  * Branch classification:
  *   - jmp <target>              → ends block, 1 successor (target)
- *   - jcc <target>              → ends block, 2 successors (fall-through + target)
+ *   - jcc <target>              → ends block, 2 successors (fall-through +
+ * target)
  *   - ret                       → ends block, 0 successors
  *   - call / everything else    → fall-through only (not a block terminator)
  *
@@ -23,25 +24,25 @@
 /* Forward declaration — full definition lives in List.h */
 typedef struct List ListNode_t;
 
-#define CFG_MAX_SUCCS  2
+#define CFG_MAX_SUCCS 2
 /* Predecessors are tracked in a heap-allocated array that grows on demand,
  * so there is no fixed upper limit. */
 
 typedef struct BasicBlock {
-    char              *label;              /* block label (no colon), NULL for entry */
-    ListNode_t        *first_inst;         /* first ListNode_t of this block (borrowed) */
-    ListNode_t        *last_inst;          /* last  ListNode_t of this block (borrowed) */
-    struct BasicBlock *succs[CFG_MAX_SUCCS];
-    int                n_succs;
-    struct BasicBlock **preds;             /* heap-allocated, grown on demand */
-    int                n_preds;
-    int                preds_cap;
-    int                index;             /* position in cfg->blocks[] array */
+  char *label;            /* block label (no colon), NULL for entry */
+  ListNode_t *first_inst; /* first ListNode_t of this block (borrowed) */
+  ListNode_t *last_inst;  /* last  ListNode_t of this block (borrowed) */
+  struct BasicBlock *succs[CFG_MAX_SUCCS];
+  int n_succs;
+  struct BasicBlock **preds; /* heap-allocated, grown on demand */
+  int n_preds;
+  int preds_cap;
+  int index; /* position in cfg->blocks[] array */
 } BasicBlock_t;
 
 typedef struct Cfg {
-    BasicBlock_t **blocks;
-    int            n_blocks;
+  BasicBlock_t **blocks;
+  int n_blocks;
 } Cfg_t;
 
 /* Build a CFG from the instruction list produced by a single function's

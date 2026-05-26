@@ -25,12 +25,13 @@ static const double KGPC_PI = 3.14159265358979323846264338327950288;
 /* FPC RTL compatibility symbols for float-to-ASCII conversion (flt_core.inc) */
 const unsigned int C_1_SHL_31 = 0x80000000u;
 const unsigned long long C_MANT2_INTEGER = (1ULL << 52);
-const int C_EXP2_SPECIAL = 2047;  /* C_EXP2_BIAS * 2 + 1 for double */
-const int RT_NATIVE = 2;  /* RT_S64REAL for double */
+const int C_EXP2_SPECIAL = 2047; /* C_EXP2_BIAS * 2 + 1 for double */
+const int RT_NATIVE = 2;         /* RT_S64REAL for double */
 
 /* FPC Grisu lookup table for float-to-string conversion.
- * This is a simplified placeholder - the full table is in FPC's flt_core.inc. */
-static const char lookup_placeholder[1] = { 0 };
+ * This is a simplified placeholder - the full table is in FPC's flt_core.inc.
+ */
+static const char lookup_placeholder[1] = {0};
 const char *lookup = lookup_placeholder;
 
 /* FPC dynamic library handle placeholder */
@@ -52,23 +53,18 @@ static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
 int32_t System = 0;
 
 /* Xoshiro128** state (matching FPC rtl/inc/system.inc). */
-static uint32_t kgpc_xsr_state[4] = {
-    0xAFF181C0u,
-    0x73B13BA2u,
-    0x1340D3B4u,
-    0x61204305u
-};
+static uint32_t kgpc_xsr_state[4] = {0xAFF181C0u, 0x73B13BA2u, 0x1340D3B4u,
+                                     0x61204305u};
 
 /* Forward decl for optional debug flag helper */
 char *kgpc_float_to_string(double value, int precision);
 static char *kgpc_apply_field_width(char *value, int64_t width);
-typedef struct KgpcGuardedAlloc
-{
-    void *user_ptr;
-    void *raw_ptr;
-    size_t size;
-    size_t mapping_size;
-    struct KgpcGuardedAlloc *next;
+typedef struct KgpcGuardedAlloc {
+  void *user_ptr;
+  void *raw_ptr;
+  size_t size;
+  size_t mapping_size;
+  struct KgpcGuardedAlloc *next;
 } KgpcGuardedAlloc;
 
 static KgpcGuardedAlloc *kgpc_guarded_allocs = NULL;
@@ -78,7 +74,8 @@ static int kgpc_guard_new_enabled = 0;
 static int kgpc_guard_new_is_enabled(void);
 static void kgpc_guard_validate_all(const char *site);
 static size_t kgpc_guard_page_size(void);
-static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded, size_t page_size);
+static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded,
+                                         size_t page_size);
 static void kgpc_guard_release(void *raw_ptr, size_t mapping_size);
 
 #ifdef _WIN32
@@ -118,52 +115,93 @@ static void kgpc_guard_release(void *raw_ptr, size_t mapping_size);
 #ifdef __linux__
 #ifdef __x86_64__
 long FPC_SYSCALL0(long sysnr) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+  long ret;
+  __asm__ volatile("syscall" : "=a"(ret) : "a"(sysnr) : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
 long FPC_SYSCALL1(long sysnr, long p1) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+  long ret;
+  __asm__ volatile("syscall"
+                   : "=a"(ret)
+                   : "a"(sysnr), "D"(p1)
+                   : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
 long FPC_SYSCALL2(long sysnr, long p1, long p2) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+  long ret;
+  __asm__ volatile("syscall"
+                   : "=a"(ret)
+                   : "a"(sysnr), "D"(p1), "S"(p2)
+                   : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
 long FPC_SYSCALL3(long sysnr, long p1, long p2, long p3) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+  long ret;
+  __asm__ volatile("syscall"
+                   : "=a"(ret)
+                   : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3)
+                   : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
 long FPC_SYSCALL4(long sysnr, long p1, long p2, long p3, long p4) {
-    long ret;
-    register long r10 __asm__("r10") = p4;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+  long ret;
+  register long r10 __asm__("r10") = p4;
+  __asm__ volatile("syscall"
+                   : "=a"(ret)
+                   : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10)
+                   : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
 long FPC_SYSCALL5(long sysnr, long p1, long p2, long p3, long p4, long p5) {
-    long ret;
-    register long r10 __asm__("r10") = p4;
-    register long r8 __asm__("r8") = p5;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+  long ret;
+  register long r10 __asm__("r10") = p4;
+  register long r8 __asm__("r8") = p5;
+  __asm__ volatile("syscall"
+                   : "=a"(ret)
+                   : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8)
+                   : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
-long FPC_SYSCALL6(long sysnr, long p1, long p2, long p3, long p4, long p5, long p6) {
-    long ret;
-    register long r10 __asm__("r10") = p4;
-    register long r8 __asm__("r8") = p5;
-    register long r9 __asm__("r9") = p6;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
+long FPC_SYSCALL6(long sysnr, long p1, long p2, long p3, long p4, long p5,
+                  long p6) {
+  long ret;
+  register long r10 __asm__("r10") = p4;
+  register long r8 __asm__("r8") = p5;
+  register long r9 __asm__("r9") = p6;
+  __asm__ volatile("syscall"
+                   : "=a"(ret)
+                   : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8),
+                     "r"(r9)
+                   : "rcx", "r11", "memory");
+  if (ret < 0 && ret >= -4095) {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
 }
 #endif
 #endif
@@ -181,7 +219,7 @@ static int kgpc_threading_used = 0;
 /* ────────── setjmp/longjmp exception frame stack ────────── */
 
 typedef struct kgpc_except_frame {
-    jmp_buf buf;
+  jmp_buf buf;
 } kgpc_except_frame;
 
 #define KGPC_EXCEPT_STACK_INIT 8
@@ -190,229 +228,298 @@ static kgpc_except_frame *kgpc_except_stack = NULL;
 static int kgpc_except_stack_depth = 0;
 static int kgpc_except_stack_capacity = 0;
 
-jmp_buf *kgpc_push_except_frame(void)
-{
-    if (kgpc_except_stack_depth >= kgpc_except_stack_capacity) {
-        int new_cap = (kgpc_except_stack_capacity > 0)
+jmp_buf *kgpc_push_except_frame(void) {
+  if (kgpc_except_stack_depth >= kgpc_except_stack_capacity) {
+    int new_cap = (kgpc_except_stack_capacity > 0)
                       ? kgpc_except_stack_capacity * 2
                       : KGPC_EXCEPT_STACK_INIT;
-        kgpc_except_frame *new_stack =
-            (kgpc_except_frame *)realloc(kgpc_except_stack,
-                                         sizeof(kgpc_except_frame) * (size_t)new_cap);
-        if (new_stack == NULL) {
-            fprintf(stderr, "KGPC runtime: except frame stack allocation failed\n");
-            exit(EXIT_FAILURE);
-        }
-        kgpc_except_stack = new_stack;
-        kgpc_except_stack_capacity = new_cap;
+    kgpc_except_frame *new_stack = (kgpc_except_frame *)realloc(
+        kgpc_except_stack, sizeof(kgpc_except_frame) * (size_t)new_cap);
+    if (new_stack == NULL) {
+      fprintf(stderr, "KGPC runtime: except frame stack allocation failed\n");
+      exit(EXIT_FAILURE);
     }
-    return &kgpc_except_stack[kgpc_except_stack_depth++].buf;
+    kgpc_except_stack = new_stack;
+    kgpc_except_stack_capacity = new_cap;
+  }
+  return &kgpc_except_stack[kgpc_except_stack_depth++].buf;
 }
 
-void kgpc_pop_except_frame(void)
-{
-    if (kgpc_except_stack_depth > 0)
-        kgpc_except_stack_depth--;
+void kgpc_pop_except_frame(void) {
+  if (kgpc_except_stack_depth > 0)
+    kgpc_except_stack_depth--;
 }
 
 /* ────────── end exception frame stack ────────── */
 
-int kgpc_ioresult_get_and_clear(void)
-{
-    int value = kgpc_ioresult;
-    kgpc_ioresult = 0;
-    return value;
+int kgpc_ioresult_get_and_clear(void) {
+  int value = kgpc_ioresult;
+  kgpc_ioresult = 0;
+  return value;
 }
 
-void kgpc_ioresult_set(int value)
-{
-    kgpc_ioresult = value;
-}
+void kgpc_ioresult_set(int value) { kgpc_ioresult = value; }
 
-int kgpc_ioresult_peek(void)
-{
-    return kgpc_ioresult;
-}
+int kgpc_ioresult_peek(void) { return kgpc_ioresult; }
 
-void kgpc_cthreads_init(void)
-{
+void kgpc_cthreads_init(void) {
 #ifndef _WIN32
-    (void)pthread_self();
+  (void)pthread_self();
 #endif
 }
 
-int kgpc_threading_already_used(void)
-{
-    return kgpc_threading_used;
-}
+int kgpc_threading_already_used(void) { return kgpc_threading_used; }
 
-int threadingalreadyused_void(void)
-{
-    return kgpc_threading_already_used();
-}
+int threadingalreadyused_void(void) { return kgpc_threading_already_used(); }
 
 #if defined(__GNUC__) || defined(__clang__)
-static int32_t kgpc_atomic_add_i32(int32_t *target, int32_t value) { return __sync_add_and_fetch(target, value); }
-static uint32_t kgpc_atomic_add_u32(uint32_t *target, uint32_t value) { return (uint32_t)__sync_add_and_fetch(target, value); }
-static long kgpc_atomic_add_long(long *target, long value) { return __sync_add_and_fetch(target, value); }
-static long long kgpc_atomic_add_i64(long long *target, long long value) { return __sync_add_and_fetch(target, value); }
-static uint64_t kgpc_atomic_add_u64(uint64_t *target, uint64_t value) { return (uint64_t)__sync_add_and_fetch(target, value); }
-static int32_t kgpc_atomic_exchange_i32(int32_t *target, int32_t value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
-static uint32_t kgpc_atomic_exchange_u32(uint32_t *target, uint32_t value) { return (uint32_t)__atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
-static long kgpc_atomic_exchange_long(long *target, long value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
-static long long kgpc_atomic_exchange_i64(long long *target, long long value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
-static uint64_t kgpc_atomic_exchange_u64(uint64_t *target, uint64_t value) { return (uint64_t)__atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
-static void *kgpc_atomic_exchange_ptr(void **target, void *value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
-static int32_t kgpc_atomic_cmp_exchange_i32(int32_t *target, int32_t value, int32_t comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
-static uint32_t kgpc_atomic_cmp_exchange_u32(uint32_t *target, uint32_t value, uint32_t comparand) { return (uint32_t)__sync_val_compare_and_swap(target, comparand, value); }
-static int kgpc_atomic_cmp_exchange_int(int *target, int value, int comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
-static long long kgpc_atomic_cmp_exchange_i64(long long *target, long long value, long long comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
-static uint64_t kgpc_atomic_cmp_exchange_u64(uint64_t *target, uint64_t value, uint64_t comparand) { return (uint64_t)__sync_val_compare_and_swap(target, comparand, value); }
-static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value, void *comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
+static int32_t kgpc_atomic_add_i32(int32_t *target, int32_t value) {
+  return __sync_add_and_fetch(target, value);
+}
+static uint32_t kgpc_atomic_add_u32(uint32_t *target, uint32_t value) {
+  return (uint32_t)__sync_add_and_fetch(target, value);
+}
+static long kgpc_atomic_add_long(long *target, long value) {
+  return __sync_add_and_fetch(target, value);
+}
+static long long kgpc_atomic_add_i64(long long *target, long long value) {
+  return __sync_add_and_fetch(target, value);
+}
+static uint64_t kgpc_atomic_add_u64(uint64_t *target, uint64_t value) {
+  return (uint64_t)__sync_add_and_fetch(target, value);
+}
+static int32_t kgpc_atomic_exchange_i32(int32_t *target, int32_t value) {
+  return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
+static uint32_t kgpc_atomic_exchange_u32(uint32_t *target, uint32_t value) {
+  return (uint32_t)__atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
+static long kgpc_atomic_exchange_long(long *target, long value) {
+  return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
+static long long kgpc_atomic_exchange_i64(long long *target, long long value) {
+  return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
+static uint64_t kgpc_atomic_exchange_u64(uint64_t *target, uint64_t value) {
+  return (uint64_t)__atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
+static void *kgpc_atomic_exchange_ptr(void **target, void *value) {
+  return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
+static int32_t kgpc_atomic_cmp_exchange_i32(int32_t *target, int32_t value,
+                                            int32_t comparand) {
+  return __sync_val_compare_and_swap(target, comparand, value);
+}
+static uint32_t kgpc_atomic_cmp_exchange_u32(uint32_t *target, uint32_t value,
+                                             uint32_t comparand) {
+  return (uint32_t)__sync_val_compare_and_swap(target, comparand, value);
+}
+static int kgpc_atomic_cmp_exchange_int(int *target, int value, int comparand) {
+  return __sync_val_compare_and_swap(target, comparand, value);
+}
+static long long kgpc_atomic_cmp_exchange_i64(long long *target,
+                                              long long value,
+                                              long long comparand) {
+  return __sync_val_compare_and_swap(target, comparand, value);
+}
+static uint64_t kgpc_atomic_cmp_exchange_u64(uint64_t *target, uint64_t value,
+                                             uint64_t comparand) {
+  return (uint64_t)__sync_val_compare_and_swap(target, comparand, value);
+}
+static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value,
+                                          void *comparand) {
+  return __sync_val_compare_and_swap(target, comparand, value);
+}
 #elif defined(_MSC_VER)
 #include <intrin.h>
-static int32_t kgpc_atomic_add_i32(int32_t *target, int32_t value) { return (int32_t)_InterlockedAdd((volatile long *)target, (long)value); }
-static uint32_t kgpc_atomic_add_u32(uint32_t *target, uint32_t value) { return (uint32_t)_InterlockedAdd((volatile long *)target, (long)value); }
-static long kgpc_atomic_add_long(long *target, long value) { return _InterlockedAdd((volatile long *)target, value); }
-static long long kgpc_atomic_add_i64(long long *target, long long value) { return (long long)_InterlockedAdd64((volatile __int64 *)target, (__int64)value); }
-static uint64_t kgpc_atomic_add_u64(uint64_t *target, uint64_t value) { return (uint64_t)_InterlockedAdd64((volatile __int64 *)target, (__int64)value); }
-static int32_t kgpc_atomic_exchange_i32(int32_t *target, int32_t value) { return (int32_t)_InterlockedExchange((volatile long *)target, (long)value); }
-static uint32_t kgpc_atomic_exchange_u32(uint32_t *target, uint32_t value) { return (uint32_t)_InterlockedExchange((volatile long *)target, (long)value); }
-static long kgpc_atomic_exchange_long(long *target, long value) { return _InterlockedExchange((volatile long *)target, value); }
-static long long kgpc_atomic_exchange_i64(long long *target, long long value) { return (long long)_InterlockedExchange64((volatile __int64 *)target, (__int64)value); }
-static uint64_t kgpc_atomic_exchange_u64(uint64_t *target, uint64_t value) { return (uint64_t)_InterlockedExchange64((volatile __int64 *)target, (__int64)value); }
-static void *kgpc_atomic_exchange_ptr(void **target, void *value) { return _InterlockedExchangePointer((void *volatile *)target, value); }
-static int32_t kgpc_atomic_cmp_exchange_i32(int32_t *target, int32_t value, int32_t comparand) { return (int32_t)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)comparand); }
-static uint32_t kgpc_atomic_cmp_exchange_u32(uint32_t *target, uint32_t value, uint32_t comparand) { return (uint32_t)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)comparand); }
-static int kgpc_atomic_cmp_exchange_int(int *target, int value, int comparand) { return (int)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)comparand); }
-static long long kgpc_atomic_cmp_exchange_i64(long long *target, long long value, long long comparand) { return (long long)_InterlockedCompareExchange64((volatile __int64 *)target, (__int64)value, (__int64)comparand); }
-static uint64_t kgpc_atomic_cmp_exchange_u64(uint64_t *target, uint64_t value, uint64_t comparand) { return (uint64_t)_InterlockedCompareExchange64((volatile __int64 *)target, (__int64)value, (__int64)comparand); }
-static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value, void *comparand) { return _InterlockedCompareExchangePointer((void *volatile *)target, value, comparand); }
+static int32_t kgpc_atomic_add_i32(int32_t *target, int32_t value) {
+  return (int32_t)_InterlockedAdd((volatile long *)target, (long)value);
+}
+static uint32_t kgpc_atomic_add_u32(uint32_t *target, uint32_t value) {
+  return (uint32_t)_InterlockedAdd((volatile long *)target, (long)value);
+}
+static long kgpc_atomic_add_long(long *target, long value) {
+  return _InterlockedAdd((volatile long *)target, value);
+}
+static long long kgpc_atomic_add_i64(long long *target, long long value) {
+  return (long long)_InterlockedAdd64((volatile __int64 *)target,
+                                      (__int64)value);
+}
+static uint64_t kgpc_atomic_add_u64(uint64_t *target, uint64_t value) {
+  return (uint64_t)_InterlockedAdd64((volatile __int64 *)target,
+                                     (__int64)value);
+}
+static int32_t kgpc_atomic_exchange_i32(int32_t *target, int32_t value) {
+  return (int32_t)_InterlockedExchange((volatile long *)target, (long)value);
+}
+static uint32_t kgpc_atomic_exchange_u32(uint32_t *target, uint32_t value) {
+  return (uint32_t)_InterlockedExchange((volatile long *)target, (long)value);
+}
+static long kgpc_atomic_exchange_long(long *target, long value) {
+  return _InterlockedExchange((volatile long *)target, value);
+}
+static long long kgpc_atomic_exchange_i64(long long *target, long long value) {
+  return (long long)_InterlockedExchange64((volatile __int64 *)target,
+                                           (__int64)value);
+}
+static uint64_t kgpc_atomic_exchange_u64(uint64_t *target, uint64_t value) {
+  return (uint64_t)_InterlockedExchange64((volatile __int64 *)target,
+                                          (__int64)value);
+}
+static void *kgpc_atomic_exchange_ptr(void **target, void *value) {
+  return _InterlockedExchangePointer((void *volatile *)target, value);
+}
+static int32_t kgpc_atomic_cmp_exchange_i32(int32_t *target, int32_t value,
+                                            int32_t comparand) {
+  return (int32_t)_InterlockedCompareExchange((volatile long *)target,
+                                              (long)value, (long)comparand);
+}
+static uint32_t kgpc_atomic_cmp_exchange_u32(uint32_t *target, uint32_t value,
+                                             uint32_t comparand) {
+  return (uint32_t)_InterlockedCompareExchange((volatile long *)target,
+                                               (long)value, (long)comparand);
+}
+static int kgpc_atomic_cmp_exchange_int(int *target, int value, int comparand) {
+  return (int)_InterlockedCompareExchange((volatile long *)target, (long)value,
+                                          (long)comparand);
+}
+static long long kgpc_atomic_cmp_exchange_i64(long long *target,
+                                              long long value,
+                                              long long comparand) {
+  return (long long)_InterlockedCompareExchange64(
+      (volatile __int64 *)target, (__int64)value, (__int64)comparand);
+}
+static uint64_t kgpc_atomic_cmp_exchange_u64(uint64_t *target, uint64_t value,
+                                             uint64_t comparand) {
+  return (uint64_t)_InterlockedCompareExchange64(
+      (volatile __int64 *)target, (__int64)value, (__int64)comparand);
+}
+static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value,
+                                          void *comparand) {
+  return _InterlockedCompareExchangePointer((void *volatile *)target, value,
+                                            comparand);
+}
 #else
 #error "Atomic operations require GCC, Clang, or MSVC"
 #endif
 
-int32_t kgpc_interlockedincrement(int32_t *target)
-{
-    return kgpc_atomic_add_i32(target, 1);
+int32_t kgpc_interlockedincrement(int32_t *target) {
+  return kgpc_atomic_add_i32(target, 1);
 }
 
-int32_t kgpc_interlockeddecrement(int32_t *target)
-{
-    return kgpc_atomic_add_i32(target, -1);
+int32_t kgpc_interlockeddecrement(int32_t *target) {
+  return kgpc_atomic_add_i32(target, -1);
 }
 
-int64_t kgpc_interlockedincrement64(int64_t *target)
-{
-    return (int64_t)kgpc_atomic_add_i64((long long *)target, 1);
+int64_t kgpc_interlockedincrement64(int64_t *target) {
+  return (int64_t)kgpc_atomic_add_i64((long long *)target, 1);
 }
 
-int64_t kgpc_interlockeddecrement64(int64_t *target)
-{
-    return (int64_t)kgpc_atomic_add_i64((long long *)target, -1);
+int64_t kgpc_interlockeddecrement64(int64_t *target) {
+  return (int64_t)kgpc_atomic_add_i64((long long *)target, -1);
 }
 
-void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
-{
+void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value,
+                                       int32_t *result) {
 #if defined(__GNUC__) || defined(__clang__)
-    int32_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+  int32_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
 #elif defined(_WIN32)
-    int32_t old = (int32_t)InterlockedExchangeAdd((volatile LONG *)target, (LONG)value);
+  int32_t old =
+      (int32_t)InterlockedExchangeAdd((volatile LONG *)target, (LONG)value);
 #else
-    int32_t old = *target;
-    *target += value;
+  int32_t old = *target;
+  *target += value;
 #endif
-    if (result != NULL)
-        *result = old;
+  if (result != NULL)
+    *result = old;
 }
 
-void kgpc_interlocked_exchange_add_i64(int64_t *target, int64_t value, int64_t *result)
-{
+void kgpc_interlocked_exchange_add_i64(int64_t *target, int64_t value,
+                                       int64_t *result) {
 #if defined(__GNUC__) || defined(__clang__)
-    int64_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+  int64_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
 #elif defined(_WIN32) && defined(_WIN64)
-    int64_t old = (int64_t)InterlockedExchangeAdd64((volatile LONGLONG *)target, (LONGLONG)value);
+  int64_t old = (int64_t)InterlockedExchangeAdd64((volatile LONGLONG *)target,
+                                                  (LONGLONG)value);
 #else
-    int64_t old = *target;
-    *target += value;
+  int64_t old = *target;
+  *target += value;
 #endif
-    if (result != NULL)
-        *result = old;
+  if (result != NULL)
+    *result = old;
 }
 
-void kgpc_interlocked_exchange_add_ptr(intptr_t *target, intptr_t value, intptr_t *result)
-{
+void kgpc_interlocked_exchange_add_ptr(intptr_t *target, intptr_t value,
+                                       intptr_t *result) {
 #if defined(__GNUC__) || defined(__clang__)
-    intptr_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+  intptr_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
 #elif defined(_WIN32) && defined(_WIN64)
-    intptr_t old = (intptr_t)InterlockedExchangeAdd64((volatile LONGLONG *)target, (LONGLONG)value);
+  intptr_t old = (intptr_t)InterlockedExchangeAdd64((volatile LONGLONG *)target,
+                                                    (LONGLONG)value);
 #else
-    intptr_t old = *target;
-    *target += value;
+  intptr_t old = *target;
+  *target += value;
 #endif
-    if (result != NULL)
-        *result = old;
+  if (result != NULL)
+    *result = old;
 }
-
-
 
 #define KGPC_FILE_PRIVATE_MAGIC 0x4B475046u
 #define KGPC_FILE_PRIVATE_MAGIC_INV (~KGPC_FILE_PRIVATE_MAGIC)
 
-static int kgpc_file_private_magic_valid(const KGPCFileRec *file)
-{
-    if (file == NULL)
-        return 0;
-    uint32_t magic = 0;
-    uint32_t inv = 0;
-    size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
-    memcpy(&magic, file->private_data + base, sizeof(magic));
-    memcpy(&inv, file->private_data + base + sizeof(magic), sizeof(inv));
-    return (magic == KGPC_FILE_PRIVATE_MAGIC && inv == KGPC_FILE_PRIVATE_MAGIC_INV);
+static int kgpc_file_private_magic_valid(const KGPCFileRec *file) {
+  if (file == NULL)
+    return 0;
+  uint32_t magic = 0;
+  uint32_t inv = 0;
+  size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
+  memcpy(&magic, file->private_data + base, sizeof(magic));
+  memcpy(&inv, file->private_data + base + sizeof(magic), sizeof(inv));
+  return (magic == KGPC_FILE_PRIVATE_MAGIC &&
+          inv == KGPC_FILE_PRIVATE_MAGIC_INV);
 }
 
 /* Global standard I/O file variables for Pascal programs */
 /* These are initialized lazily in the output/input stream functions */
-static KGPCTextRec kgpc_stdin_file = { 0 };
-static KGPCTextRec kgpc_stdout_file = { 0 };
-static KGPCTextRec kgpc_stderr_file = { 0 };
+static KGPCTextRec kgpc_stdin_file = {0};
+static KGPCTextRec kgpc_stdout_file = {0};
+static KGPCTextRec kgpc_stderr_file = {0};
 
 /* Global pointers exported for Pascal programs to reference */
 KGPCTextRec *stdin_ptr = NULL;
 KGPCTextRec *stdout_ptr = NULL;
 KGPCTextRec *stderr_ptr = NULL;
-KGPCTextRec *Input_ptr = NULL;   /* Standard Pascal Input */
-KGPCTextRec *Output_ptr = NULL;  /* Standard Pascal Output */
+KGPCTextRec *Input_ptr = NULL;  /* Standard Pascal Input */
+KGPCTextRec *Output_ptr = NULL; /* Standard Pascal Output */
 
 /* Initialize standard I/O file handles (called once) */
-static void kgpc_init_stdio(void)
-{
-    static int initialized = 0;
-    if (initialized)
-        return;
-    initialized = 1;
-    
-    kgpc_stdin_file.handle = fileno(stdin);
-    kgpc_stdout_file.handle = fileno(stdout);
-    kgpc_stderr_file.handle = fileno(stderr);
-    kgpc_stdin_file.mode = KGPC_FM_INPUT;
-    kgpc_stdout_file.mode = KGPC_FM_OUTPUT;
-    kgpc_stderr_file.mode = KGPC_FM_OUTPUT;
-    kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
-    kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
-    kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
-    kgpc_stdin_file.bufptr = kgpc_stdin_file.buffer;
-    kgpc_stdout_file.bufptr = kgpc_stdout_file.buffer;
-    kgpc_stderr_file.bufptr = kgpc_stderr_file.buffer;
-    kgpc_stdin_file.bufsize = (int64_t)sizeof(kgpc_stdin_file.buffer);
-    kgpc_stdout_file.bufsize = (int64_t)sizeof(kgpc_stdout_file.buffer);
-    kgpc_stderr_file.bufsize = (int64_t)sizeof(kgpc_stderr_file.buffer);
-    
-    stdin_ptr = &kgpc_stdin_file;
-    stdout_ptr = &kgpc_stdout_file;
-    stderr_ptr = &kgpc_stderr_file;
-    Input_ptr = &kgpc_stdin_file;   /* Input = stdin */
-    Output_ptr = &kgpc_stdout_file; /* Output = stdout */
+static void kgpc_init_stdio(void) {
+  static int initialized = 0;
+  if (initialized)
+    return;
+  initialized = 1;
+
+  kgpc_stdin_file.handle = fileno(stdin);
+  kgpc_stdout_file.handle = fileno(stdout);
+  kgpc_stderr_file.handle = fileno(stderr);
+  kgpc_stdin_file.mode = KGPC_FM_INPUT;
+  kgpc_stdout_file.mode = KGPC_FM_OUTPUT;
+  kgpc_stderr_file.mode = KGPC_FM_OUTPUT;
+  kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
+  kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
+  kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
+  kgpc_stdin_file.bufptr = kgpc_stdin_file.buffer;
+  kgpc_stdout_file.bufptr = kgpc_stdout_file.buffer;
+  kgpc_stderr_file.bufptr = kgpc_stderr_file.buffer;
+  kgpc_stdin_file.bufsize = (int64_t)sizeof(kgpc_stdin_file.buffer);
+  kgpc_stdout_file.bufsize = (int64_t)sizeof(kgpc_stdout_file.buffer);
+  kgpc_stderr_file.bufsize = (int64_t)sizeof(kgpc_stderr_file.buffer);
+
+  stdin_ptr = &kgpc_stdin_file;
+  stdout_ptr = &kgpc_stdout_file;
+  stderr_ptr = &kgpc_stderr_file;
+  Input_ptr = &kgpc_stdin_file;   /* Input = stdin */
+  Output_ptr = &kgpc_stdout_file; /* Output = stdout */
 }
 
 /* Re-initialize stdio FILE* pointers unconditionally.
@@ -421,38 +528,34 @@ static void kgpc_init_stdio(void)
  * set up stdin/stdout/stderr, causing stale FILE* values in the
  * KGPCTextRec records.  This function refreshes them and is called from
  * kgpc_init_args() (i.e. from main()) where stdio is guaranteed valid. */
-void kgpc_reinit_stdio(void)
-{
-    kgpc_stdin_file.handle = fileno(stdin);
-    kgpc_stdout_file.handle = fileno(stdout);
-    kgpc_stderr_file.handle = fileno(stderr);
-    kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
-    kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
-    kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
+void kgpc_reinit_stdio(void) {
+  kgpc_stdin_file.handle = fileno(stdin);
+  kgpc_stdout_file.handle = fileno(stdout);
+  kgpc_stderr_file.handle = fileno(stderr);
+  kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
+  kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
+  kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
 
-    stdin_ptr = &kgpc_stdin_file;
-    stdout_ptr = &kgpc_stdout_file;
-    stderr_ptr = &kgpc_stderr_file;
-    Input_ptr = &kgpc_stdin_file;
-    Output_ptr = &kgpc_stdout_file;
+  stdin_ptr = &kgpc_stdin_file;
+  stdout_ptr = &kgpc_stdout_file;
+  stderr_ptr = &kgpc_stderr_file;
+  Input_ptr = &kgpc_stdin_file;
+  Output_ptr = &kgpc_stdout_file;
 }
 
-__attribute__((constructor))
-static void kgpc_init_stdio_constructor(void)
-{
-    kgpc_init_stdio();
+__attribute__((constructor)) static void kgpc_init_stdio_constructor(void) {
+  kgpc_init_stdio();
 }
 
-void kgpc_textrec_init_defaults(KGPCTextRec *file)
-{
-    if (file == NULL)
-        return;
-    if (file->bufptr == NULL)
-        file->bufptr = file->buffer;
-    if (file->bufsize == 0)
-        file->bufsize = (int64_t)sizeof(file->buffer);
-    if (file->mode == 0)
-        file->mode = KGPC_FM_CLOSED;
+void kgpc_textrec_init_defaults(KGPCTextRec *file) {
+  if (file == NULL)
+    return;
+  if (file->bufptr == NULL)
+    file->bufptr = file->buffer;
+  if (file->bufsize == 0)
+    file->bufsize = (int64_t)sizeof(file->buffer);
+  if (file->mode == 0)
+    file->mode = KGPC_FM_CLOSED;
 }
 
 /* Side-table tracking which handle+mode each cached FILE* was created for.
@@ -461,389 +564,367 @@ void kgpc_textrec_init_defaults(KGPCTextRec *file)
  * (same fd number reused for a different file). */
 #define KGPC_STREAM_CACHE_SLOTS 16
 static struct {
-    KGPCTextRec *textrec;
-    int32_t original_handle;
-    int32_t original_mode;
-    dev_t original_dev;
-    ino_t original_ino;
-    int has_stat;  /* 1 if original_dev/ino are valid */
+  KGPCTextRec *textrec;
+  int32_t original_handle;
+  int32_t original_mode;
+  dev_t original_dev;
+  ino_t original_ino;
+  int has_stat; /* 1 if original_dev/ino are valid */
 } kgpc_stream_cache[KGPC_STREAM_CACHE_SLOTS];
 
-static int kgpc_stream_cache_find(KGPCTextRec *file)
-{
+static int kgpc_stream_cache_find(KGPCTextRec *file) {
+  for (int i = 0; i < KGPC_STREAM_CACHE_SLOTS; i++)
+    if (kgpc_stream_cache[i].textrec == file)
+      return i;
+  return -1;
+}
+
+static void kgpc_stream_cache_set(KGPCTextRec *file, int32_t handle,
+                                  int32_t mode) {
+  int idx = kgpc_stream_cache_find(file);
+  if (idx < 0) {
+    /* Find empty slot */
     for (int i = 0; i < KGPC_STREAM_CACHE_SLOTS; i++)
-        if (kgpc_stream_cache[i].textrec == file)
-            return i;
-    return -1;
+      if (kgpc_stream_cache[i].textrec == NULL) {
+        idx = i;
+        break;
+      }
+  }
+  if (idx >= 0) {
+    kgpc_stream_cache[idx].textrec = file;
+    kgpc_stream_cache[idx].original_handle = handle;
+    kgpc_stream_cache[idx].original_mode = mode;
+    /* Record device+inode so we can detect fd recycling later. */
+    struct stat st;
+    if (handle >= 0 && fstat(handle, &st) == 0) {
+      kgpc_stream_cache[idx].original_dev = st.st_dev;
+      kgpc_stream_cache[idx].original_ino = st.st_ino;
+      kgpc_stream_cache[idx].has_stat = 1;
+    } else {
+      kgpc_stream_cache[idx].original_dev = 0;
+      kgpc_stream_cache[idx].original_ino = 0;
+      kgpc_stream_cache[idx].has_stat = 0;
+    }
+  }
 }
 
-static void kgpc_stream_cache_set(KGPCTextRec *file, int32_t handle, int32_t mode)
-{
-    int idx = kgpc_stream_cache_find(file);
-    if (idx < 0)
-    {
-        /* Find empty slot */
-        for (int i = 0; i < KGPC_STREAM_CACHE_SLOTS; i++)
-            if (kgpc_stream_cache[i].textrec == NULL)
-            {
-                idx = i;
-                break;
-            }
-    }
-    if (idx >= 0)
-    {
-        kgpc_stream_cache[idx].textrec = file;
-        kgpc_stream_cache[idx].original_handle = handle;
-        kgpc_stream_cache[idx].original_mode = mode;
-        /* Record device+inode so we can detect fd recycling later. */
-        struct stat st;
-        if (handle >= 0 && fstat(handle, &st) == 0)
-        {
-            kgpc_stream_cache[idx].original_dev = st.st_dev;
-            kgpc_stream_cache[idx].original_ino = st.st_ino;
-            kgpc_stream_cache[idx].has_stat = 1;
-        }
-        else
-        {
-            kgpc_stream_cache[idx].original_dev = 0;
-            kgpc_stream_cache[idx].original_ino = 0;
-            kgpc_stream_cache[idx].has_stat = 0;
-        }
-    }
+static void kgpc_stream_cache_clear(KGPCTextRec *file) {
+  int idx = kgpc_stream_cache_find(file);
+  if (idx >= 0) {
+    kgpc_stream_cache[idx].textrec = NULL;
+    kgpc_stream_cache[idx].original_handle = -1;
+    kgpc_stream_cache[idx].original_mode = 0;
+    kgpc_stream_cache[idx].original_dev = 0;
+    kgpc_stream_cache[idx].original_ino = 0;
+    kgpc_stream_cache[idx].has_stat = 0;
+  }
 }
 
-static void kgpc_stream_cache_clear(KGPCTextRec *file)
-{
-    int idx = kgpc_stream_cache_find(file);
-    if (idx >= 0)
-    {
-        kgpc_stream_cache[idx].textrec = NULL;
-        kgpc_stream_cache[idx].original_handle = -1;
-        kgpc_stream_cache[idx].original_mode = 0;
-        kgpc_stream_cache[idx].original_dev = 0;
-        kgpc_stream_cache[idx].original_ino = 0;
-        kgpc_stream_cache[idx].has_stat = 0;
-    }
-}
-
-FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *default_stream)
-{
-    kgpc_init_stdio();
-    if (file == NULL)
-        return default_stream;
-    /* When FPC RTL opens a file, it sets TextRec.Handle but not
-     * private_data.  Use the handle to create a FILE* stream.
-     * FPC mode constants: fmClosed=0xD7B0, fmInput=0xD7B1,
-     * fmOutput=0xD7B2, fmInOut=0xD7B3, fmAppend=0xD7B4 */
-    int32_t h = file->handle;
-    if (file->private_data != 0)
-    {
-        FILE *cached = (FILE *)(uintptr_t)file->private_data;
-        int cached_fd = fileno(cached);
-        if (cached_fd >= 0 && cached_fd == h)
-            return cached;  /* KGPC RTL: direct ownership, always valid */
-        /* FPC RTL path: the FILE* was created via fdopen(dup(h)), so
-         * cached_fd != h.  Validate via the side-table: check that the
-         * original handle and mode haven't changed (which would indicate
-         * the FPC RTL closed and reopened the file).
-         *
-         * Critical invariant: when h and cached_fd share the same kernel
-         * file description (dup'd from the same open), lseek on both
-         * returns the same position.  After FPC RTL close+reopen, h is
-         * a NEW file description (position 0) while cached_fd still
-         * references the OLD one (at whatever position reading left it).
-         * Comparing the two kernel positions detects this stale case. */
-        int is_closed = (file->mode == (int32_t)0xD7B0 || file->mode == 0);
-        int idx = kgpc_stream_cache_find(file);
-        int cache_valid = 0;
-        if (!is_closed && h >= 0 && idx >= 0 &&
-            h == kgpc_stream_cache[idx].original_handle &&
-            file->mode == kgpc_stream_cache[idx].original_mode)
-        {
-            /* Handle and mode match, but the fd could have been recycled
-             * (closed and reopened to a different file).  Use fstat to
-             * compare device+inode with the originals when available. */
-            if (kgpc_stream_cache[idx].has_stat)
-            {
-                struct stat st;
-                if (fstat(h, &st) == 0 &&
-                    st.st_dev == kgpc_stream_cache[idx].original_dev &&
-                    st.st_ino == kgpc_stream_cache[idx].original_ino)
-                {
-                    /* Same file on disk.  But h might be a freshly-opened
-                     * fd (after FPC RTL close+reopen) while cached_fd
-                     * still refers to the old file description.  When h
-                     * and cached_fd share the same kernel file description
-                     * (normal case), lseek returns the same position for
-                     * both because offset is per-description, not per-fd.
-                     * After close+reopen, they are different descriptions
-                     * with independent positions — detect via divergence. */
-                    int saved_errno = errno;
-                    off_t h_pos = lseek(h, 0, SEEK_CUR);
-                    off_t c_pos = lseek(cached_fd, 0, SEEK_CUR);
-                    errno = saved_errno;
-                    if (h_pos == (off_t)-1 || c_pos == (off_t)-1)
-                    {
-                        /* Non-seekable fd (pipe, socket, tty, etc.).
-                         * Position comparison is impossible, but for
-                         * non-seekable descriptors the close+reopen
-                         * staleness problem doesn't apply: FPC RTL
-                         * won't reopen these via reset(), and even if
-                         * it did the fd number would change since the
-                         * kernel doesn't recycle pipe/socket fds the
-                         * same way.  Accept the cached stream. */
-                        cache_valid = 1;
-                    }
-                    else if (h_pos != c_pos)
-                    {
-                        /* Positions differ: h and cached_fd are different
-                         * file descriptions.  Cache is stale. */
-                        cache_valid = 0;
-                    }
-                    else
-                    {
-                        cache_valid = 1;
-                    }
-                }
-            }
-            else
-            {
-                /* fstat was unavailable when the cache was created (e.g.
-                 * special fd); fall back to handle+mode validation only. */
-                cache_valid = 1;
-            }
-        }
-        if (cache_valid)
-            return cached;
-        /* Stale cache: close the old stream and clear */
-        fclose(cached);
-        file->private_data = 0;
-        kgpc_stream_cache_clear(file);
-    }
-    if (h >= 0 && file->mode != 0 && file->mode != (int32_t)0xD7B0)
-    {
-        if (h == STDOUT_FILENO)
-            return stdout;
-        if (h == STDERR_FILENO)
-            return stderr;
-        if (h == STDIN_FILENO)
-            return stdin;
-        /* Valid fd opened by FPC — wrap in FILE* and cache */
-        const char *fmode = "w";
-        if (file->mode == (int32_t)0xD7B1) /* fmInput */
-            fmode = "r";
-        else if (file->mode == (int32_t)0xD7B4) /* fmAppend */
-            fmode = "a";
-        FILE *stream = fdopen(dup(h), fmode);
-        if (stream != NULL)
-        {
-            file->private_data = (int64_t)(uintptr_t)stream;
-            kgpc_stream_cache_set(file, h, file->mode);
-            return stream;
-        }
-    }
+FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *default_stream) {
+  kgpc_init_stdio();
+  if (file == NULL)
     return default_stream;
-}
-
-void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream)
-{
-    if (file == NULL)
-        return;
-    file->private_data = (int64_t)(uintptr_t)stream;
-    if (stream != NULL)
-    {
-        file->handle = fileno(stream);
-        kgpc_stream_cache_set(file, file->handle, file->mode);
+  /* When FPC RTL opens a file, it sets TextRec.Handle but not
+   * private_data.  Use the handle to create a FILE* stream.
+   * FPC mode constants: fmClosed=0xD7B0, fmInput=0xD7B1,
+   * fmOutput=0xD7B2, fmInOut=0xD7B3, fmAppend=0xD7B4 */
+  int32_t h = file->handle;
+  if (file->private_data != 0) {
+    FILE *cached = (FILE *)(uintptr_t)file->private_data;
+    int cached_fd = fileno(cached);
+    if (cached_fd >= 0 && cached_fd == h)
+      return cached; /* KGPC RTL: direct ownership, always valid */
+    /* FPC RTL path: the FILE* was created via fdopen(dup(h)), so
+     * cached_fd != h.  Validate via the side-table: check that the
+     * original handle and mode haven't changed (which would indicate
+     * the FPC RTL closed and reopened the file).
+     *
+     * Critical invariant: when h and cached_fd share the same kernel
+     * file description (dup'd from the same open), lseek on both
+     * returns the same position.  After FPC RTL close+reopen, h is
+     * a NEW file description (position 0) while cached_fd still
+     * references the OLD one (at whatever position reading left it).
+     * Comparing the two kernel positions detects this stale case. */
+    int is_closed = (file->mode == (int32_t)0xD7B0 || file->mode == 0);
+    int idx = kgpc_stream_cache_find(file);
+    int cache_valid = 0;
+    if (!is_closed && h >= 0 && idx >= 0 &&
+        h == kgpc_stream_cache[idx].original_handle &&
+        file->mode == kgpc_stream_cache[idx].original_mode) {
+      /* Handle and mode match, but the fd could have been recycled
+       * (closed and reopened to a different file).  Use fstat to
+       * compare device+inode with the originals when available. */
+      if (kgpc_stream_cache[idx].has_stat) {
+        struct stat st;
+        if (fstat(h, &st) == 0 &&
+            st.st_dev == kgpc_stream_cache[idx].original_dev &&
+            st.st_ino == kgpc_stream_cache[idx].original_ino) {
+          /* Same file on disk.  But h might be a freshly-opened
+           * fd (after FPC RTL close+reopen) while cached_fd
+           * still refers to the old file description.  When h
+           * and cached_fd share the same kernel file description
+           * (normal case), lseek returns the same position for
+           * both because offset is per-description, not per-fd.
+           * After close+reopen, they are different descriptions
+           * with independent positions — detect via divergence. */
+          int saved_errno = errno;
+          off_t h_pos = lseek(h, 0, SEEK_CUR);
+          off_t c_pos = lseek(cached_fd, 0, SEEK_CUR);
+          errno = saved_errno;
+          if (h_pos == (off_t)-1 || c_pos == (off_t)-1) {
+            /* Non-seekable fd (pipe, socket, tty, etc.).
+             * Position comparison is impossible, but for
+             * non-seekable descriptors the close+reopen
+             * staleness problem doesn't apply: FPC RTL
+             * won't reopen these via reset(), and even if
+             * it did the fd number would change since the
+             * kernel doesn't recycle pipe/socket fds the
+             * same way.  Accept the cached stream. */
+            cache_valid = 1;
+          } else if (h_pos != c_pos) {
+            /* Positions differ: h and cached_fd are different
+             * file descriptions.  Cache is stale. */
+            cache_valid = 0;
+          } else {
+            cache_valid = 1;
+          }
+        }
+      } else {
+        /* fstat was unavailable when the cache was created (e.g.
+         * special fd); fall back to handle+mode validation only. */
+        cache_valid = 1;
+      }
     }
-    else
-        kgpc_stream_cache_clear(file);
+    if (cache_valid)
+      return cached;
+    /* Stale cache: close the old stream and clear */
+    fclose(cached);
+    file->private_data = 0;
+    kgpc_stream_cache_clear(file);
+  }
+  if (h >= 0 && file->mode != 0 && file->mode != (int32_t)0xD7B0) {
+    if (h == STDOUT_FILENO)
+      return stdout;
+    if (h == STDERR_FILENO)
+      return stderr;
+    if (h == STDIN_FILENO)
+      return stdin;
+    /* Valid fd opened by FPC — wrap in FILE* and cache */
+    const char *fmode = "w";
+    if (file->mode == (int32_t)0xD7B1) /* fmInput */
+      fmode = "r";
+    else if (file->mode == (int32_t)0xD7B4) /* fmAppend */
+      fmode = "a";
+    FILE *stream = fdopen(dup(h), fmode);
+    if (stream != NULL) {
+      file->private_data = (int64_t)(uintptr_t)stream;
+      kgpc_stream_cache_set(file, h, file->mode);
+      return stream;
+    }
+  }
+  return default_stream;
 }
 
-void kgpc_text_setbuf(KGPCTextRec *file, void *buffer, int32_t size)
-{
-    if (file == NULL)
-        return;
-    file->bufptr = (char *)buffer;
-    file->bufsize = size > 0 ? (int64_t)size : 0;
+void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream) {
+  if (file == NULL)
+    return;
+  file->private_data = (int64_t)(uintptr_t)stream;
+  if (stream != NULL) {
+    file->handle = fileno(stream);
+    kgpc_stream_cache_set(file, file->handle, file->mode);
+  } else
+    kgpc_stream_cache_clear(file);
 }
 
-static KGPCFilePrivate kgpc_file_private_get(const KGPCFileRec *file)
-{
-    KGPCFilePrivate priv;
-    memset(&priv, 0, sizeof(priv));
-    if (file == NULL)
-        return priv;
-    if (!kgpc_file_private_magic_valid(file))
-        return priv;
-    memcpy(&priv, file->private_data, sizeof(priv));
+void kgpc_text_setbuf(KGPCTextRec *file, void *buffer, int32_t size) {
+  if (file == NULL)
+    return;
+  file->bufptr = (char *)buffer;
+  file->bufsize = size > 0 ? (int64_t)size : 0;
+}
+
+static KGPCFilePrivate kgpc_file_private_get(const KGPCFileRec *file) {
+  KGPCFilePrivate priv;
+  memset(&priv, 0, sizeof(priv));
+  if (file == NULL)
     return priv;
+  if (!kgpc_file_private_magic_valid(file))
+    return priv;
+  memcpy(&priv, file->private_data, sizeof(priv));
+  return priv;
 }
 
-static void kgpc_file_private_set(KGPCFileRec *file, const KGPCFilePrivate *priv)
-{
-    if (file == NULL || priv == NULL)
-        return;
-    memset(file->private_data, 0, sizeof(file->private_data));
-    memcpy(file->private_data, priv, sizeof(*priv));
-    uint32_t magic = KGPC_FILE_PRIVATE_MAGIC;
-    uint32_t inv = KGPC_FILE_PRIVATE_MAGIC_INV;
-    size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
-    memcpy(file->private_data + base, &magic, sizeof(magic));
-    memcpy(file->private_data + base + sizeof(magic), &inv, sizeof(inv));
+static void kgpc_file_private_set(KGPCFileRec *file,
+                                  const KGPCFilePrivate *priv) {
+  if (file == NULL || priv == NULL)
+    return;
+  memset(file->private_data, 0, sizeof(file->private_data));
+  memcpy(file->private_data, priv, sizeof(*priv));
+  uint32_t magic = KGPC_FILE_PRIVATE_MAGIC;
+  uint32_t inv = KGPC_FILE_PRIVATE_MAGIC_INV;
+  size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
+  memcpy(file->private_data + base, &magic, sizeof(magic));
+  memcpy(file->private_data + base + sizeof(magic), &inv, sizeof(inv));
 }
 
-
-int kgpc_file_is_text(void *slot)
-{
-    if (slot == NULL)
-        return 1;
+int kgpc_file_is_text(void *slot) {
+  if (slot == NULL)
     return 1;
+  return 1;
 }
 
-static FILE *kgpc_text_output_stream(KGPCTextRec *file)
-{
-    kgpc_init_stdio();  /* Ensure stdio is initialized */
-    if (file != NULL)
-    {
-        FILE *stream = kgpc_textrec_get_stream(file, stdout);
-        if (stream != NULL)
-            return stream;
-    }
+static FILE *kgpc_text_output_stream(KGPCTextRec *file) {
+  kgpc_init_stdio(); /* Ensure stdio is initialized */
+  if (file != NULL) {
+    FILE *stream = kgpc_textrec_get_stream(file, stdout);
+    if (stream != NULL)
+      return stream;
+  }
 #ifdef _WIN32
-    static int kgpc_stdout_binary_set = 0;
-    if (!kgpc_stdout_binary_set)
-    {
-        /* Avoid CRLF translation doubling when strings contain CRLF */
-        _setmode(_fileno(stdout), _O_BINARY);
-        kgpc_stdout_binary_set = 1;
-    }
+  static int kgpc_stdout_binary_set = 0;
+  if (!kgpc_stdout_binary_set) {
+    /* Avoid CRLF translation doubling when strings contain CRLF */
+    _setmode(_fileno(stdout), _O_BINARY);
+    kgpc_stdout_binary_set = 1;
+  }
 #endif
-    return stdout;
+  return stdout;
 }
 
-static void kgpc_flush_text_output_stream(FILE *dest)
-{
-    if (dest == NULL)
-        return;
+static void kgpc_flush_text_output_stream(FILE *dest) {
+  if (dest == NULL)
+    return;
 #ifdef _WIN32
-    if (_isatty(_fileno(dest)))
-        fflush(dest);
+  if (_isatty(_fileno(dest)))
+    fflush(dest);
 #else
-    if (isatty(fileno(dest)))
-        fflush(dest);
+  if (isatty(fileno(dest)))
+    fflush(dest);
 #endif
 }
 
 /* Flush a Text file — Pascal's Flush(var f: Text) */
-void kgpc_flush(KGPCTextRec *file)
-{
-    if (file == NULL)
-        return;
-    FILE *fp = kgpc_textrec_get_stream(file, stdout);
-    if (fp != NULL)
-        fflush(fp);
+void kgpc_flush(KGPCTextRec *file) {
+  if (file == NULL)
+    return;
+  FILE *fp = kgpc_textrec_get_stream(file, stdout);
+  if (fp != NULL)
+    fflush(fp);
 }
 
 /* GetFPCHeapStatus — returns a TFPCHeapStatus record with heap usage info.
-   Fields: MaxHeapSize, MaxHeapUsed, CurrHeapSize, CurrHeapUsed, CurrHeapFree (all PtrUInt). */
+   Fields: MaxHeapSize, MaxHeapUsed, CurrHeapSize, CurrHeapUsed, CurrHeapFree
+   (all PtrUInt). */
 typedef struct {
-    uint64_t MaxHeapSize;
-    uint64_t MaxHeapUsed;
-    uint64_t CurrHeapSize;
-    uint64_t CurrHeapUsed;
-    uint64_t CurrHeapFree;
+  uint64_t MaxHeapSize;
+  uint64_t MaxHeapUsed;
+  uint64_t CurrHeapSize;
+  uint64_t CurrHeapUsed;
+  uint64_t CurrHeapFree;
 } KGPCFPCHeapStatus;
 
-KGPCFPCHeapStatus kgpc_get_fpc_heap_status(void)
-{
-    KGPCFPCHeapStatus status = {0};
-    /* Provide approximate values — exact tracking would require wrapping malloc */
-    status.MaxHeapSize = 0;
-    status.MaxHeapUsed = 0;
-    status.CurrHeapSize = 0;
-    status.CurrHeapUsed = 0;
-    status.CurrHeapFree = 0;
-    return status;
+KGPCFPCHeapStatus kgpc_get_fpc_heap_status(void) {
+  KGPCFPCHeapStatus status = {0};
+  /* Provide approximate values — exact tracking would require wrapping malloc
+   */
+  status.MaxHeapSize = 0;
+  status.MaxHeapUsed = 0;
+  status.CurrHeapSize = 0;
+  status.CurrHeapUsed = 0;
+  status.CurrHeapFree = 0;
+  return status;
 }
 
 /* GetLocalTime — fills a TSystemTime record with the current local time.
-   TSystemTime layout: Year, Month, Day, DayOfWeek, Hour, Minute, Second, Millisecond (all uint16). */
+   TSystemTime layout: Year, Month, Day, DayOfWeek, Hour, Minute, Second,
+   Millisecond (all uint16). */
 typedef struct {
-    uint16_t Year, Month, Day, DayOfWeek;
-    uint16_t Hour, Minute, Second, Millisecond;
+  uint16_t Year, Month, Day, DayOfWeek;
+  uint16_t Hour, Minute, Second, Millisecond;
 } KGPCSystemTime;
 
-void kgpc_getlocaltime(KGPCSystemTime *st)
-{
+void kgpc_getlocaltime(KGPCSystemTime *st) {
 #ifdef _WIN32
-    SYSTEMTIME sys_time;
-    if (st == NULL)
-        return;
-    GetLocalTime(&sys_time);
-    st->Year = (uint16_t)sys_time.wYear;
-    st->Month = (uint16_t)sys_time.wMonth;
-    st->Day = (uint16_t)sys_time.wDay;
-    st->DayOfWeek = (uint16_t)sys_time.wDayOfWeek;
-    st->Hour = (uint16_t)sys_time.wHour;
-    st->Minute = (uint16_t)sys_time.wMinute;
-    st->Second = (uint16_t)sys_time.wSecond;
-    st->Millisecond = (uint16_t)sys_time.wMilliseconds;
+  SYSTEMTIME sys_time;
+  if (st == NULL)
+    return;
+  GetLocalTime(&sys_time);
+  st->Year = (uint16_t)sys_time.wYear;
+  st->Month = (uint16_t)sys_time.wMonth;
+  st->Day = (uint16_t)sys_time.wDay;
+  st->DayOfWeek = (uint16_t)sys_time.wDayOfWeek;
+  st->Hour = (uint16_t)sys_time.wHour;
+  st->Minute = (uint16_t)sys_time.wMinute;
+  st->Second = (uint16_t)sys_time.wSecond;
+  st->Millisecond = (uint16_t)sys_time.wMilliseconds;
 #else
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    struct tm *tm = localtime(&tv.tv_sec);
-    if (tm == NULL || st == NULL) return;
-    st->Year = (uint16_t)(tm->tm_year + 1900);
-    st->Month = (uint16_t)(tm->tm_mon + 1);
-    st->Day = (uint16_t)tm->tm_mday;
-    st->DayOfWeek = (uint16_t)tm->tm_wday;
-    st->Hour = (uint16_t)tm->tm_hour;
-    st->Minute = (uint16_t)tm->tm_min;
-    st->Second = (uint16_t)tm->tm_sec;
-    st->Millisecond = (uint16_t)(tv.tv_usec / 1000);
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  struct tm *tm = localtime(&tv.tv_sec);
+  if (tm == NULL || st == NULL)
+    return;
+  st->Year = (uint16_t)(tm->tm_year + 1900);
+  st->Month = (uint16_t)(tm->tm_mon + 1);
+  st->Day = (uint16_t)tm->tm_mday;
+  st->DayOfWeek = (uint16_t)tm->tm_wday;
+  st->Hour = (uint16_t)tm->tm_hour;
+  st->Minute = (uint16_t)tm->tm_min;
+  st->Second = (uint16_t)tm->tm_sec;
+  st->Millisecond = (uint16_t)(tv.tv_usec / 1000);
 #endif
 }
 
 /* DecodeTime — extracts time components from a TDateTime value.
-   TDateTime is a double: integer part = days since 1899-12-30, fractional = time of day. */
-void kgpc_decodetime(double dt, uint16_t *hour, uint16_t *min, uint16_t *sec, uint16_t *msec)
-{
-    double frac = dt - (int64_t)dt;
-    if (frac < 0) frac = -frac;
-    double total_ms = frac * 86400000.0;
-    int64_t ms = (int64_t)(total_ms + 0.5);
-    if (hour) *hour = (uint16_t)((ms / 3600000) % 24);
-    if (min) *min = (uint16_t)((ms / 60000) % 60);
-    if (sec) *sec = (uint16_t)((ms / 1000) % 60);
-    if (msec) *msec = (uint16_t)(ms % 1000);
+   TDateTime is a double: integer part = days since 1899-12-30, fractional =
+   time of day. */
+void kgpc_decodetime(double dt, uint16_t *hour, uint16_t *min, uint16_t *sec,
+                     uint16_t *msec) {
+  double frac = dt - (int64_t)dt;
+  if (frac < 0)
+    frac = -frac;
+  double total_ms = frac * 86400000.0;
+  int64_t ms = (int64_t)(total_ms + 0.5);
+  if (hour)
+    *hour = (uint16_t)((ms / 3600000) % 24);
+  if (min)
+    *min = (uint16_t)((ms / 60000) % 60);
+  if (sec)
+    *sec = (uint16_t)((ms / 1000) % 60);
+  if (msec)
+    *msec = (uint16_t)(ms % 1000);
 }
 
 /* DecodeDate — extracts date components from a TDateTime value. */
-void kgpc_decodedate(double dt, uint16_t *year, uint16_t *month, uint16_t *day)
-{
-    /* Convert TDateTime to Unix-like: TDateTime epoch is 1899-12-30 */
-    int64_t days = (int64_t)dt;
-    /* Use a simple algorithm: convert to calendar date */
-    /* TDateTime day 1 = 1899-12-31, day 2 = 1900-01-01 */
-    /* We use the time.h approach: convert to seconds since epoch */
-    /* TDateTime 25569 = 1970-01-01 (Unix epoch) */
-    time_t t = (time_t)((days - 25569) * 86400);
-    struct tm *tm = gmtime(&t);
-    if (tm == NULL) {
-        if (year) *year = 0;
-        if (month) *month = 0;
-        if (day) *day = 0;
-        return;
-    }
-    if (year) *year = (uint16_t)(tm->tm_year + 1900);
-    if (month) *month = (uint16_t)(tm->tm_mon + 1);
-    if (day) *day = (uint16_t)tm->tm_mday;
+void kgpc_decodedate(double dt, uint16_t *year, uint16_t *month,
+                     uint16_t *day) {
+  /* Convert TDateTime to Unix-like: TDateTime epoch is 1899-12-30 */
+  int64_t days = (int64_t)dt;
+  /* Use a simple algorithm: convert to calendar date */
+  /* TDateTime day 1 = 1899-12-31, day 2 = 1900-01-01 */
+  /* We use the time.h approach: convert to seconds since epoch */
+  /* TDateTime 25569 = 1970-01-01 (Unix epoch) */
+  time_t t = (time_t)((days - 25569) * 86400);
+  struct tm *tm = gmtime(&t);
+  if (tm == NULL) {
+    if (year)
+      *year = 0;
+    if (month)
+      *month = 0;
+    if (day)
+      *day = 0;
+    return;
+  }
+  if (year)
+    *year = (uint16_t)(tm->tm_year + 1900);
+  if (month)
+    *month = (uint16_t)(tm->tm_mon + 1);
+  if (day)
+    *day = (uint16_t)tm->tm_mday;
 }
 
-FILE *kgpc_text_input_stream(KGPCTextRec *file)
-{
-    kgpc_init_stdio();  /* Ensure stdio is initialized */
-    return kgpc_textrec_get_stream(file, stdin);
+FILE *kgpc_text_input_stream(KGPCTextRec *file) {
+  kgpc_init_stdio(); /* Ensure stdio is initialized */
+  return kgpc_textrec_get_stream(file, stdin);
 }
 
 /* ------------------------------------------------------------------
@@ -853,1304 +934,1185 @@ FILE *kgpc_text_input_stream(KGPCTextRec *file)
  * FILE* pointer in the record's private data buffer.
  * ------------------------------------------------------------------ */
 
-void kgpc_copy_name(char *dest, size_t dest_size, const char *src)
-{
-    if (dest == NULL || dest_size == 0)
-        return;
-    if (src == NULL)
-    {
-        dest[0] = '\0';
-        return;
-    }
-    strncpy(dest, src, dest_size - 1);
-    dest[dest_size - 1] = '\0';
+void kgpc_copy_name(char *dest, size_t dest_size, const char *src) {
+  if (dest == NULL || dest_size == 0)
+    return;
+  if (src == NULL) {
+    dest[0] = '\0';
+    return;
+  }
+  strncpy(dest, src, dest_size - 1);
+  dest[dest_size - 1] = '\0';
 }
 
-void kgpc_tfile_assign(KGPCFileRec *file, const char *path)
-{
-    if (file == NULL)
-        return;
+void kgpc_tfile_assign(KGPCFileRec *file, const char *path) {
+  if (file == NULL)
+    return;
 
-    KGPCFilePrivate priv;
-    memset(&priv, 0, sizeof(priv));
-    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
-        file->mode == KGPC_FM_INOUT)
-    {
-        priv = kgpc_file_private_get(file);
-        if (priv.handle != NULL)
-        {
-            fclose(priv.handle);
-            priv.handle = NULL;
-        }
+  KGPCFilePrivate priv;
+  memset(&priv, 0, sizeof(priv));
+  if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+      file->mode == KGPC_FM_INOUT) {
+    priv = kgpc_file_private_get(file);
+    if (priv.handle != NULL) {
+      fclose(priv.handle);
+      priv.handle = NULL;
     }
-    priv.element_type = KGPC_BINARY_UNSPECIFIED;
-    priv.element_size = 0;
-    kgpc_file_private_set(file, &priv);
+  }
+  priv.element_type = KGPC_BINARY_UNSPECIFIED;
+  priv.element_size = 0;
+  kgpc_file_private_set(file, &priv);
 
+  file->handle = -1;
+  file->mode = KGPC_FM_CLOSED;
+  file->fullname = NULL;
+  kgpc_copy_name(file->name, sizeof(file->name), path);
+}
+
+void kgpc_tfile_configure(KGPCFileRec *file, size_t element_size,
+                          int element_tag) {
+  if (file == NULL)
+    return;
+
+  KGPCFilePrivate priv;
+  memset(&priv, 0, sizeof(priv));
+  if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+      file->mode == KGPC_FM_INOUT)
+    priv = kgpc_file_private_get(file);
+  if (element_size > 0) {
+    priv.element_size = element_size;
+    file->recsize = (int64_t)element_size;
+  }
+
+  switch (element_tag) {
+  case HASHVAR_CHAR:
+    priv.element_type = KGPC_BINARY_CHAR;
+    break;
+  case HASHVAR_REAL:
+    priv.element_type = KGPC_BINARY_DOUBLE;
+    break;
+  case HASHVAR_INTEGER:
+  case HASHVAR_LONGINT:
+  default:
+    priv.element_type = KGPC_BINARY_INT32;
+    break;
+  }
+
+  kgpc_file_private_set(file, &priv);
+}
+
+void kgpc_tfile_rewrite(KGPCFileRec *file) {
+  if (file == NULL || file->name[0] == '\0')
+    return;
+
+  KGPCFilePrivate priv;
+  memset(&priv, 0, sizeof(priv));
+  if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+      file->mode == KGPC_FM_INOUT) {
+    priv = kgpc_file_private_get(file);
+    if (priv.handle != NULL) {
+      fclose(priv.handle);
+      priv.handle = NULL;
+    }
+  }
+
+  priv.handle = fopen(file->name, "wb");
+  if (priv.handle != NULL) {
+    file->handle = fileno(priv.handle);
+    file->mode = KGPC_FM_INOUT;
+    kgpc_ioresult_set(0);
+  } else {
     file->handle = -1;
     file->mode = KGPC_FM_CLOSED;
-    file->fullname = NULL;
-    kgpc_copy_name(file->name, sizeof(file->name), path);
+    kgpc_ioresult_set(errno);
+  }
+
+  kgpc_file_private_set(file, &priv);
 }
 
-void kgpc_tfile_configure(KGPCFileRec *file, size_t element_size, int element_tag)
-{
-    if (file == NULL)
-        return;
+void kgpc_tfile_reset(KGPCFileRec *file) {
+  if (file == NULL || file->name[0] == '\0')
+    return;
 
-    KGPCFilePrivate priv;
-    memset(&priv, 0, sizeof(priv));
-    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
-        file->mode == KGPC_FM_INOUT)
-        priv = kgpc_file_private_get(file);
-    if (element_size > 0)
-    {
-        priv.element_size = element_size;
-        file->recsize = (int64_t)element_size;
+  KGPCFilePrivate priv;
+  memset(&priv, 0, sizeof(priv));
+  if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+      file->mode == KGPC_FM_INOUT) {
+    priv = kgpc_file_private_get(file);
+    if (priv.handle != NULL) {
+      fclose(priv.handle);
+      priv.handle = NULL;
     }
+  }
 
-    switch (element_tag)
-    {
-        case HASHVAR_CHAR:
-            priv.element_type = KGPC_BINARY_CHAR;
-            break;
-        case HASHVAR_REAL:
-            priv.element_type = KGPC_BINARY_DOUBLE;
-            break;
-        case HASHVAR_INTEGER:
-        case HASHVAR_LONGINT:
-        default:
-            priv.element_type = KGPC_BINARY_INT32;
-            break;
-    }
-
-    kgpc_file_private_set(file, &priv);
-}
-
-void kgpc_tfile_rewrite(KGPCFileRec *file)
-{
-    if (file == NULL || file->name[0] == '\0')
-        return;
-
-    KGPCFilePrivate priv;
-    memset(&priv, 0, sizeof(priv));
-    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
-        file->mode == KGPC_FM_INOUT)
-    {
-        priv = kgpc_file_private_get(file);
-        if (priv.handle != NULL)
-        {
-            fclose(priv.handle);
-            priv.handle = NULL;
-        }
-    }
-
-    priv.handle = fopen(file->name, "wb");
-    if (priv.handle != NULL)
-    {
-        file->handle = fileno(priv.handle);
-        file->mode = KGPC_FM_INOUT;
-        kgpc_ioresult_set(0);
-    }
-    else
-    {
-        file->handle = -1;
-        file->mode = KGPC_FM_CLOSED;
-        kgpc_ioresult_set(errno);
-    }
-
-    kgpc_file_private_set(file, &priv);
-}
-
-void kgpc_tfile_reset(KGPCFileRec *file)
-{
-    if (file == NULL || file->name[0] == '\0')
-        return;
-
-    KGPCFilePrivate priv;
-    memset(&priv, 0, sizeof(priv));
-    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
-        file->mode == KGPC_FM_INOUT)
-    {
-        priv = kgpc_file_private_get(file);
-        if (priv.handle != NULL)
-        {
-            fclose(priv.handle);
-            priv.handle = NULL;
-        }
-    }
-
-    priv.handle = fopen(file->name, "r+b");
-    if (priv.handle != NULL)
-    {
-        file->handle = fileno(priv.handle);
-        file->mode = KGPC_FM_INOUT;
-        kgpc_ioresult_set(0);
-    }
-    else
-    {
-        file->handle = -1;
-        file->mode = KGPC_FM_CLOSED;
-        kgpc_ioresult_set(errno);
-    }
-
-    kgpc_file_private_set(file, &priv);
-}
-
-void kgpc_tfile_close(KGPCFileRec *file)
-{
-    if (file == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return;
-    }
-
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        file->handle = -1;
-        file->mode = KGPC_FM_CLOSED;
-        kgpc_ioresult_set(0);
-        return;
-    }
-
-    if (fclose(priv.handle) == 0)
-    {
-        kgpc_ioresult_set(0);
-    }
-    else
-    {
-        kgpc_ioresult_set(errno);
-    }
-
-    priv.handle = NULL;
+  priv.handle = fopen(file->name, "r+b");
+  if (priv.handle != NULL) {
+    file->handle = fileno(priv.handle);
+    file->mode = KGPC_FM_INOUT;
+    kgpc_ioresult_set(0);
+  } else {
     file->handle = -1;
     file->mode = KGPC_FM_CLOSED;
-    kgpc_file_private_set(file, &priv);
+    kgpc_ioresult_set(errno);
+  }
+
+  kgpc_file_private_set(file, &priv);
 }
 
-static size_t kgpc_tfile_element_size(KGPCFileRec *file, KGPCFilePrivate *priv)
-{
-    size_t elem_size = 0;
-    if (priv->element_size > 0)
-        elem_size = priv->element_size;
-    else if (file != NULL && file->recsize > 0)
-        elem_size = (size_t)file->recsize;
+void kgpc_tfile_close(KGPCFileRec *file) {
+  if (file == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return;
+  }
 
-    if (elem_size == 0)
-    {
-        switch (priv->element_type)
-        {
-            case KGPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
-            case KGPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
-            case KGPC_BINARY_INT32:
-            case KGPC_BINARY_UNSPECIFIED:
-            default:
-                elem_size = sizeof(int32_t);
-                break;
-        }
-    }
-    return elem_size;
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    file->handle = -1;
+    file->mode = KGPC_FM_CLOSED;
+    kgpc_ioresult_set(0);
+    return;
+  }
+
+  if (fclose(priv.handle) == 0) {
+    kgpc_ioresult_set(0);
+  } else {
+    kgpc_ioresult_set(errno);
+  }
+
+  priv.handle = NULL;
+  file->handle = -1;
+  file->mode = KGPC_FM_CLOSED;
+  kgpc_file_private_set(file, &priv);
 }
 
-int kgpc_tfile_read_int(KGPCFileRec *file, int32_t *ptr)
-{
-    if (file == NULL || ptr == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
+static size_t kgpc_tfile_element_size(KGPCFileRec *file,
+                                      KGPCFilePrivate *priv) {
+  size_t elem_size = 0;
+  if (priv->element_size > 0)
+    elem_size = priv->element_size;
+  else if (file != NULL && file->recsize > 0)
+    elem_size = (size_t)file->recsize;
+
+  if (elem_size == 0) {
+    switch (priv->element_type) {
+    case KGPC_BINARY_CHAR:
+      elem_size = sizeof(unsigned char);
+      break;
+    case KGPC_BINARY_DOUBLE:
+      elem_size = sizeof(double);
+      break;
+    case KGPC_BINARY_INT32:
+    case KGPC_BINARY_UNSPECIFIED:
+    default:
+      elem_size = sizeof(int32_t);
+      break;
     }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    priv.element_type = KGPC_BINARY_INT32;
-    priv.element_size = sizeof(int32_t);
-    size_t n = fread(ptr, sizeof(int32_t), 1, priv.handle);
-    kgpc_file_private_set(file, &priv);
-    if (n == 1 || feof(priv.handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
-    return ferror(priv.handle) ? 1 : 0;
+  }
+  return elem_size;
 }
 
-int kgpc_tfile_read_char(KGPCFileRec *file, char *ptr)
-{
-    if (file == NULL || ptr == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    unsigned char ch = 0;
-    priv.element_type = KGPC_BINARY_CHAR;
-    priv.element_size = sizeof(unsigned char);
-    size_t n = fread(&ch, sizeof(unsigned char), 1, priv.handle);
-    kgpc_file_private_set(file, &priv);
-    if (n == 1)
-    {
-        *ptr = (char)ch;
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    if (feof(priv.handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
-    return ferror(priv.handle) ? 1 : 0;
-}
-
-int kgpc_tfile_read_real(KGPCFileRec *file, double *ptr)
-{
-    if (file == NULL || ptr == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    priv.element_type = KGPC_BINARY_DOUBLE;
-    priv.element_size = sizeof(double);
-    size_t n = fread(ptr, sizeof(double), 1, priv.handle);
-    kgpc_file_private_set(file, &priv);
-    if (n == 1 || feof(priv.handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
-    return ferror(priv.handle) ? 1 : 0;
-}
-
-int kgpc_tfile_write_int(KGPCFileRec *file, int32_t value)
-{
-    if (file == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    priv.element_type = KGPC_BINARY_INT32;
-    priv.element_size = sizeof(int32_t);
-    size_t n = fwrite(&value, sizeof(int32_t), 1, priv.handle);
-    kgpc_file_private_set(file, &priv);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+int kgpc_tfile_read_int(KGPCFileRec *file, int32_t *ptr) {
+  if (file == NULL || ptr == NULL) {
+    kgpc_ioresult_set(EINVAL);
     return 1;
-}
-
-int kgpc_tfile_write_char(KGPCFileRec *file, char value)
-{
-    if (file == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    unsigned char ch = (unsigned char)value;
-    priv.element_type = KGPC_BINARY_CHAR;
-    priv.element_size = sizeof(unsigned char);
-    size_t n = fwrite(&ch, sizeof(unsigned char), 1, priv.handle);
-    kgpc_file_private_set(file, &priv);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
     return 1;
+  }
+  priv.element_type = KGPC_BINARY_INT32;
+  priv.element_size = sizeof(int32_t);
+  size_t n = fread(ptr, sizeof(int32_t), 1, priv.handle);
+  kgpc_file_private_set(file, &priv);
+  if (n == 1 || feof(priv.handle)) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
+  return ferror(priv.handle) ? 1 : 0;
 }
 
-int kgpc_tfile_write_real(KGPCFileRec *file, double value)
-{
-    if (file == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    priv.element_type = KGPC_BINARY_DOUBLE;
-    priv.element_size = sizeof(double);
-    size_t n = fwrite(&value, sizeof(double), 1, priv.handle);
-    kgpc_file_private_set(file, &priv);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+int kgpc_tfile_read_char(KGPCFileRec *file, char *ptr) {
+  if (file == NULL || ptr == NULL) {
+    kgpc_ioresult_set(EINVAL);
     return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+  unsigned char ch = 0;
+  priv.element_type = KGPC_BINARY_CHAR;
+  priv.element_size = sizeof(unsigned char);
+  size_t n = fread(&ch, sizeof(unsigned char), 1, priv.handle);
+  kgpc_file_private_set(file, &priv);
+  if (n == 1) {
+    *ptr = (char)ch;
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  if (feof(priv.handle)) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
+  return ferror(priv.handle) ? 1 : 0;
 }
 
-int kgpc_tfile_blockread(KGPCFileRec *file, void *buffer, size_t count, long long *actual_read)
-{
-    if (file == NULL || buffer == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
+int kgpc_tfile_read_real(KGPCFileRec *file, double *ptr) {
+  if (file == NULL || ptr == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+  priv.element_type = KGPC_BINARY_DOUBLE;
+  priv.element_size = sizeof(double);
+  size_t n = fread(ptr, sizeof(double), 1, priv.handle);
+  kgpc_file_private_set(file, &priv);
+  if (n == 1 || feof(priv.handle)) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
+  return ferror(priv.handle) ? 1 : 0;
+}
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
+int kgpc_tfile_write_int(KGPCFileRec *file, int32_t value) {
+  if (file == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+  priv.element_type = KGPC_BINARY_INT32;
+  priv.element_size = sizeof(int32_t);
+  size_t n = fwrite(&value, sizeof(int32_t), 1, priv.handle);
+  kgpc_file_private_set(file, &priv);
+  if (n == 1) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  return 1;
+}
 
-    size_t elem_size = kgpc_tfile_element_size(file, &priv);
-    if (count == 0)
-    {
-        if (actual_read != NULL)
-            *actual_read = 0;
-        kgpc_ioresult_set(0);
-        return 0;
-    }
+int kgpc_tfile_write_char(KGPCFileRec *file, char value) {
+  if (file == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+  unsigned char ch = (unsigned char)value;
+  priv.element_type = KGPC_BINARY_CHAR;
+  priv.element_size = sizeof(unsigned char);
+  size_t n = fwrite(&ch, sizeof(unsigned char), 1, priv.handle);
+  kgpc_file_private_set(file, &priv);
+  if (n == 1) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  return 1;
+}
 
-    size_t read_elems = fread(buffer, elem_size, count, priv.handle);
+int kgpc_tfile_write_real(KGPCFileRec *file, double value) {
+  if (file == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+  priv.element_type = KGPC_BINARY_DOUBLE;
+  priv.element_size = sizeof(double);
+  size_t n = fwrite(&value, sizeof(double), 1, priv.handle);
+  kgpc_file_private_set(file, &priv);
+  if (n == 1) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  return 1;
+}
+
+int kgpc_tfile_blockread(KGPCFileRec *file, void *buffer, size_t count,
+                         long long *actual_read) {
+  if (file == NULL || buffer == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+
+  size_t elem_size = kgpc_tfile_element_size(file, &priv);
+  if (count == 0) {
     if (actual_read != NULL)
-        *actual_read = (long long)read_elems;
+      *actual_read = 0;
+    kgpc_ioresult_set(0);
+    return 0;
+  }
 
-    kgpc_file_private_set(file, &priv);
-    if (read_elems == count || feof(priv.handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
-    return 1;
+  size_t read_elems = fread(buffer, elem_size, count, priv.handle);
+  if (actual_read != NULL)
+    *actual_read = (long long)read_elems;
+
+  kgpc_file_private_set(file, &priv);
+  if (read_elems == count || feof(priv.handle)) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  return 1;
 }
 
-int kgpc_tfile_blockwrite(KGPCFileRec *file, const void *buffer, size_t count, long long *actual_written)
-{
-    if (file == NULL || buffer == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
+int kgpc_tfile_blockwrite(KGPCFileRec *file, const void *buffer, size_t count,
+                          long long *actual_written) {
+  if (file == NULL || buffer == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
 
-    size_t elem_size = kgpc_tfile_element_size(file, &priv);
-    if (count == 0)
-    {
-        if (actual_written != NULL)
-            *actual_written = 0;
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-
-    size_t written = fwrite(buffer, elem_size, count, priv.handle);
+  size_t elem_size = kgpc_tfile_element_size(file, &priv);
+  if (count == 0) {
     if (actual_written != NULL)
-        *actual_written = (long long)written;
+      *actual_written = 0;
+    kgpc_ioresult_set(0);
+    return 0;
+  }
 
-    kgpc_file_private_set(file, &priv);
-    if (written == count)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  size_t written = fwrite(buffer, elem_size, count, priv.handle);
+  if (actual_written != NULL)
+    *actual_written = (long long)written;
+
+  kgpc_file_private_set(file, &priv);
+  if (written == count) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+  return 1;
+}
+
+int kgpc_tfile_seek(KGPCFileRec *file, long long index) {
+  if (file == NULL) {
+    kgpc_ioresult_set(EINVAL);
     return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+
+  size_t elem_size = kgpc_tfile_element_size(file, &priv);
+  if (fseeko(priv.handle, (off_t)(elem_size * index), SEEK_SET) != 0) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+  kgpc_ioresult_set(0);
+  return 0;
 }
 
-int kgpc_tfile_seek(KGPCFileRec *file, long long index)
-{
-    if (file == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
+int kgpc_tfile_filepos(KGPCFileRec *file, long long *position) {
+  if (file == NULL || position == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
 
-    size_t elem_size = kgpc_tfile_element_size(file, &priv);
-    if (fseeko(priv.handle, (off_t)(elem_size * index), SEEK_SET) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    kgpc_ioresult_set(0);
-    return 0;
+  size_t elem_size = kgpc_tfile_element_size(file, &priv);
+  off_t offset = ftello(priv.handle);
+  if (offset == (off_t)-1) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+  *position = (long long)(offset / (off_t)elem_size);
+  kgpc_ioresult_set(0);
+  return 0;
 }
 
-int kgpc_tfile_filepos(KGPCFileRec *file, long long *position)
-{
-    if (file == NULL || position == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
+int kgpc_tfile_filesize(KGPCFileRec *file, long long *size_out) {
+  if (file == NULL || size_out == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
 
-    size_t elem_size = kgpc_tfile_element_size(file, &priv);
-    off_t offset = ftello(priv.handle);
-    if (offset == (off_t)-1)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    *position = (long long)(offset / (off_t)elem_size);
-    kgpc_ioresult_set(0);
-    return 0;
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
+
+  size_t elem_size = kgpc_tfile_element_size(file, &priv);
+  off_t current = ftello(priv.handle);
+  if (current == (off_t)-1) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+  if (fseeko(priv.handle, 0, SEEK_END) != 0) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+
+  off_t end_offset = ftello(priv.handle);
+  if (end_offset == (off_t)-1) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+  if (fseeko(priv.handle, current, SEEK_SET) != 0) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+
+  *size_out = (long long)(end_offset / (off_t)elem_size);
+  kgpc_ioresult_set(0);
+  return 0;
 }
 
-int kgpc_tfile_filesize(KGPCFileRec *file, long long *size_out)
-{
-    if (file == NULL || size_out == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
+int kgpc_tfile_truncate(KGPCFileRec *file, long long length) {
+  if (file == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return 1;
+  }
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL) {
+    kgpc_ioresult_set(EBADF);
+    return 1;
+  }
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-
-    size_t elem_size = kgpc_tfile_element_size(file, &priv);
-    off_t current = ftello(priv.handle);
-    if (current == (off_t)-1)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    if (fseeko(priv.handle, 0, SEEK_END) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-
-    off_t end_offset = ftello(priv.handle);
-    if (end_offset == (off_t)-1)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    if (fseeko(priv.handle, current, SEEK_SET) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-
-    *size_out = (long long)(end_offset / (off_t)elem_size);
-    kgpc_ioresult_set(0);
-    return 0;
-}
-
-int kgpc_tfile_truncate(KGPCFileRec *file, long long length)
-{
-    if (file == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-
-    size_t elem_size = kgpc_tfile_element_size(file, &priv);
-    off_t target = (off_t)(elem_size * length);
-    if (fflush(priv.handle) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
+  size_t elem_size = kgpc_tfile_element_size(file, &priv);
+  off_t target = (off_t)(elem_size * length);
+  if (fflush(priv.handle) != 0) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
 
 #ifdef _WIN32
-    {
-        int fd = _fileno(priv.handle);
-        if (fd == -1)
-        {
-            kgpc_ioresult_set(errno);
-            return 1;
-        }
-        if (_chsize_s(fd, target) != 0)
-        {
-            kgpc_ioresult_set(errno);
-            return 1;
-        }
+  {
+    int fd = _fileno(priv.handle);
+    if (fd == -1) {
+      kgpc_ioresult_set(errno);
+      return 1;
     }
+    if (_chsize_s(fd, target) != 0) {
+      kgpc_ioresult_set(errno);
+      return 1;
+    }
+  }
 #else
-    {
-        int fd = fileno(priv.handle);
-        if (fd == -1)
-        {
-            kgpc_ioresult_set(errno);
-            return 1;
-        }
-        if (ftruncate(fd, target) != 0)
-        {
-            kgpc_ioresult_set(errno);
-            return 1;
-        }
+  {
+    int fd = fileno(priv.handle);
+    if (fd == -1) {
+      kgpc_ioresult_set(errno);
+      return 1;
     }
+    if (ftruncate(fd, target) != 0) {
+      kgpc_ioresult_set(errno);
+      return 1;
+    }
+  }
 #endif
 
-    if (fseeko(priv.handle, target, SEEK_SET) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    kgpc_ioresult_set(0);
-    return 0;
+  if (fseeko(priv.handle, target, SEEK_SET) != 0) {
+    kgpc_ioresult_set(errno);
+    return 1;
+  }
+  kgpc_ioresult_set(0);
+  return 0;
 }
 
-int kgpc_tfile_truncate_current(KGPCFileRec *file)
-{
-    long long position = 0;
-    if (kgpc_tfile_filepos(file, &position) != 0)
-        return 1;
-    return kgpc_tfile_truncate(file, position);
+int kgpc_tfile_truncate_current(KGPCFileRec *file) {
+  long long position = 0;
+  if (kgpc_tfile_filepos(file, &position) != 0)
+    return 1;
+  return kgpc_tfile_truncate(file, position);
 }
 static int kgpc_vprintf_impl(const char *format, va_list args) {
-    return vprintf(format, args);
+  return vprintf(format, args);
 }
 
-static inline double kgpc_bits_to_double(int64_t bits)
-{
-    double value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
+static inline double kgpc_bits_to_double(int64_t bits) {
+  double value;
+  memcpy(&value, &bits, sizeof(value));
+  return value;
 }
 
-static inline int64_t kgpc_double_to_bits(double value)
-{
-    int64_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    return bits;
+static inline int64_t kgpc_double_to_bits(double value) {
+  int64_t bits;
+  memcpy(&bits, &value, sizeof(bits));
+  return bits;
 }
 
-void kgpc_store_extended_from_bits(void *dest, int64_t bits)
-{
-    if (dest == NULL)
-        return;
+void kgpc_store_extended_from_bits(void *dest, int64_t bits) {
+  if (dest == NULL)
+    return;
 
-    double value = kgpc_bits_to_double(bits);
-    long double ext = (long double)value;
-    memcpy(dest, &ext, 10);
+  double value = kgpc_bits_to_double(bits);
+  long double ext = (long double)value;
+  memcpy(dest, &ext, 10);
 }
 
-int64_t kgpc_load_extended_to_bits(const void *src)
-{
-    if (src == NULL)
-        return kgpc_double_to_bits(0.0);
+int64_t kgpc_load_extended_to_bits(const void *src) {
+  if (src == NULL)
+    return kgpc_double_to_bits(0.0);
 
-    long double ext = 0.0L;
-    memcpy(&ext, src, 10);
-    return kgpc_double_to_bits((double)ext);
+  long double ext = 0.0L;
+  memcpy(&ext, src, 10);
+  return kgpc_double_to_bits((double)ext);
 }
 
-void kgpc_store_extended_from_int64(void *dest, int64_t value)
-{
-    if (dest == NULL)
-        return;
+void kgpc_store_extended_from_int64(void *dest, int64_t value) {
+  if (dest == NULL)
+    return;
 
-    long double ext = (long double)value;
-    memcpy(dest, &ext, 10);
+  long double ext = (long double)value;
+  memcpy(dest, &ext, 10);
 }
 
-void kgpc_extended_neg(void *dest, const void *src)
-{
-    if (dest == NULL || src == NULL)
-        return;
+void kgpc_extended_neg(void *dest, const void *src) {
+  if (dest == NULL || src == NULL)
+    return;
 
-    long double value = 0.0L;
-    memcpy(&value, src, 10);
-    value = -value;
-    memcpy(dest, &value, 10);
+  long double value = 0.0L;
+  memcpy(&value, src, 10);
+  value = -value;
+  memcpy(dest, &value, 10);
 }
 
-void kgpc_extended_add(void *dest, const void *lhs, const void *rhs)
-{
-    if (dest == NULL || lhs == NULL || rhs == NULL)
-        return;
+void kgpc_extended_add(void *dest, const void *lhs, const void *rhs) {
+  if (dest == NULL || lhs == NULL || rhs == NULL)
+    return;
 
-    long double left = 0.0L, right = 0.0L;
-    memcpy(&left, lhs, 10);
-    memcpy(&right, rhs, 10);
-    left += right;
-    memcpy(dest, &left, 10);
+  long double left = 0.0L, right = 0.0L;
+  memcpy(&left, lhs, 10);
+  memcpy(&right, rhs, 10);
+  left += right;
+  memcpy(dest, &left, 10);
 }
 
-void kgpc_extended_sub(void *dest, const void *lhs, const void *rhs)
-{
-    if (dest == NULL || lhs == NULL || rhs == NULL)
-        return;
+void kgpc_extended_sub(void *dest, const void *lhs, const void *rhs) {
+  if (dest == NULL || lhs == NULL || rhs == NULL)
+    return;
 
-    long double left = 0.0L, right = 0.0L;
-    memcpy(&left, lhs, 10);
-    memcpy(&right, rhs, 10);
-    left -= right;
-    memcpy(dest, &left, 10);
+  long double left = 0.0L, right = 0.0L;
+  memcpy(&left, lhs, 10);
+  memcpy(&right, rhs, 10);
+  left -= right;
+  memcpy(dest, &left, 10);
 }
 
-void kgpc_extended_mul(void *dest, const void *lhs, const void *rhs)
-{
-    if (dest == NULL || lhs == NULL || rhs == NULL)
-        return;
+void kgpc_extended_mul(void *dest, const void *lhs, const void *rhs) {
+  if (dest == NULL || lhs == NULL || rhs == NULL)
+    return;
 
-    long double left = 0.0L, right = 0.0L;
-    memcpy(&left, lhs, 10);
-    memcpy(&right, rhs, 10);
-    left *= right;
-    memcpy(dest, &left, 10);
+  long double left = 0.0L, right = 0.0L;
+  memcpy(&left, lhs, 10);
+  memcpy(&right, rhs, 10);
+  left *= right;
+  memcpy(dest, &left, 10);
 }
 
-void kgpc_extended_div(void *dest, const void *lhs, const void *rhs)
-{
-    if (dest == NULL || lhs == NULL || rhs == NULL)
-        return;
+void kgpc_extended_div(void *dest, const void *lhs, const void *rhs) {
+  if (dest == NULL || lhs == NULL || rhs == NULL)
+    return;
 
-    long double left = 0.0L, right = 0.0L;
-    memcpy(&left, lhs, 10);
-    memcpy(&right, rhs, 10);
-    left /= right;
-    memcpy(dest, &left, 10);
+  long double left = 0.0L, right = 0.0L;
+  memcpy(&left, lhs, 10);
+  memcpy(&right, rhs, 10);
+  left /= right;
+  memcpy(dest, &left, 10);
 }
 
-/* Cache extended-precision parses so default Write can preserve StrToFloat precision.
- * This mirrors FPC's behavior where StrToFloat returns Extended on x86_64. */
+/* Cache extended-precision parses so default Write can preserve StrToFloat
+ * precision. This mirrors FPC's behavior where StrToFloat returns Extended on
+ * x86_64. */
 #define KGPC_REAL_CACHE_SIZE 64
-typedef struct
-{
-    int valid;
-    int64_t bits;
-    long double ext_value;
+typedef struct {
+  int valid;
+  int64_t bits;
+  long double ext_value;
 } kgpc_real_cache_entry;
 
 static kgpc_real_cache_entry kgpc_real_cache[KGPC_REAL_CACHE_SIZE];
 static unsigned kgpc_real_cache_pos = 0;
 
-static void kgpc_real_cache_put(int64_t bits, long double ext_value)
-{
-    kgpc_real_cache[kgpc_real_cache_pos].valid = 1;
-    kgpc_real_cache[kgpc_real_cache_pos].bits = bits;
-    kgpc_real_cache[kgpc_real_cache_pos].ext_value = ext_value;
-    kgpc_real_cache_pos = (kgpc_real_cache_pos + 1) % KGPC_REAL_CACHE_SIZE;
+static void kgpc_real_cache_put(int64_t bits, long double ext_value) {
+  kgpc_real_cache[kgpc_real_cache_pos].valid = 1;
+  kgpc_real_cache[kgpc_real_cache_pos].bits = bits;
+  kgpc_real_cache[kgpc_real_cache_pos].ext_value = ext_value;
+  kgpc_real_cache_pos = (kgpc_real_cache_pos + 1) % KGPC_REAL_CACHE_SIZE;
 }
 
-static const char *kgpc_rtti_type_name(const kgpc_class_typeinfo *info)
-{
-    if (info != NULL && info->class_name != NULL)
-        return info->class_name;
-    return "<unknown>";
+static const char *kgpc_rtti_type_name(const kgpc_class_typeinfo *info) {
+  if (info != NULL && info->class_name != NULL)
+    return info->class_name;
+  return "<unknown>";
 }
 
 int kgpc_rtti_is(const kgpc_class_typeinfo *value_type,
-    const kgpc_class_typeinfo *target_type)
-{
-    if (value_type == NULL || target_type == NULL)
-        return 0;
-
-    const kgpc_class_typeinfo *current = value_type;
-    while (current != NULL)
-    {
-        if (current == target_type)
-            return 1;
-        current = current->parent;
-    }
+                 const kgpc_class_typeinfo *target_type) {
+  if (value_type == NULL || target_type == NULL)
     return 0;
+
+  const kgpc_class_typeinfo *current = value_type;
+  while (current != NULL) {
+    if (current == target_type)
+      return 1;
+    current = current->parent;
+  }
+  return 0;
 }
 
 void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
-    const kgpc_class_typeinfo *target_type)
-{
-    if (value_type == NULL)
-    {
-        fprintf(stderr, "Runtime error: invalid class reference in \"as\" operator.\n");
-        abort();
-    }
-    if (target_type == NULL)
-    {
-        fprintf(stderr, "Runtime error: missing target class metadata in \"as\" operator.\n");
-        abort();
-    }
-    if (kgpc_rtti_is(value_type, target_type))
-        return;
-
-    fprintf(stderr, "Runtime error: cannot cast class %s to %s.\n",
-        kgpc_rtti_type_name(value_type), kgpc_rtti_type_name(target_type));
+                          const kgpc_class_typeinfo *target_type) {
+  if (value_type == NULL) {
+    fprintf(stderr,
+            "Runtime error: invalid class reference in \"as\" operator.\n");
     abort();
+  }
+  if (target_type == NULL) {
+    fprintf(
+        stderr,
+        "Runtime error: missing target class metadata in \"as\" operator.\n");
+    abort();
+  }
+  if (kgpc_rtti_is(value_type, target_type))
+    return;
+
+  fprintf(stderr, "Runtime error: cannot cast class %s to %s.\n",
+          kgpc_rtti_type_name(value_type), kgpc_rtti_type_name(target_type));
+  abort();
 }
 
 /* Resolve an interface method for dispatch.  Handles both raw object pointers
  * and adjusted interface pointers (from kgpc_get_interface/Supports).
  * - If self points to an object (first qword is VMT), navigates VMT → interface
  *   table → vtable → method.
- * - If self is already adjusted (first qword is an interface vtable), uses it directly.
- * Returns the method function pointer, or __kgpc_abstract_method_error if not found. */
+ * - If self is already adjusted (first qword is an interface vtable), uses it
+ * directly. Returns the method function pointer, or
+ * __kgpc_abstract_method_error if not found. */
 typedef void (*kgpc_method_ptr)(void);
 extern void __kgpc_abstract_method_error(void);
 kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
-    const void *interface_guid, int method_index)
-{
-    if (self == NULL)
-        return (kgpc_method_ptr)__kgpc_abstract_method_error;
-
-    /* self could be either:
-     * a) Raw object pointer: *(void**)self = VMT, VMT[10] = interface table
-     * b) Adjusted interface pointer: *(void**)self = interface vtable (flat array)
-     * Distinguish by checking VMT signature: VMT has vInstanceSize at offset 0
-     * (small positive int) and vInstanceSize2 = -vInstanceSize at offset 8. */
-    const void *first_qword = *(const void **)self;
-    if (first_qword == NULL)
-        return (kgpc_method_ptr)__kgpc_abstract_method_error;
-
-    /* Check if first_qword looks like a VMT (vInstanceSize / vInstanceSize2 pattern) */
-    int64_t slot0 = *(const int64_t *)first_qword;
-    int64_t slot1 = *((const int64_t *)first_qword + 1);
-    int is_vmt = (slot0 > 0 && slot0 < 10000000 && slot1 == -slot0);
-
-    if (is_vmt) {
-        /* Case (a): raw object pointer — walk VMT chain looking for matching interface */
-        const void *cur_vmt = first_qword;
-        while (cur_vmt != NULL) {
-            /* vIntfTable at VMT offset 80 */
-            const kgpc_interface_table *intf_table =
-                *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
-            if (intf_table != NULL && intf_table->entry_count > 0) {
-                for (uint64_t i = 0; i < intf_table->entry_count; i++) {
-                    const kgpc_interface_entry *entry = &intf_table->entries[i];
-                    if (entry->iid_ref != NULL && interface_guid != NULL) {
-                        const void *iid = *(entry->iid_ref);
-                        if (iid != NULL && memcmp(iid, interface_guid, 16) == 0) {
-                            if (entry->vtable != NULL) {
-                                const void **vtable = (const void **)entry->vtable;
-                                if (method_index >= 0)
-                                    return (kgpc_method_ptr)vtable[method_index];
-                            }
-                            return (kgpc_method_ptr)__kgpc_abstract_method_error;
-                        }
-                    }
-                }
-            }
-            /* Walk to parent via vParentRef (offset 16) */
-            const void * const *parent_ref =
-                *(const void * const * const *)((const char *)cur_vmt + 16);
-            if (parent_ref != NULL)
-                cur_vmt = *parent_ref;
-            else
-                cur_vmt = NULL;
-        }
-    } else {
-        /* Case (b): adjusted interface pointer — first_qword is the vtable directly */
-        const void **vtable = (const void **)first_qword;
-        if (method_index >= 0)
-            return (kgpc_method_ptr)vtable[method_index];
-    }
-
+                                           const void *interface_guid,
+                                           int method_index) {
+  if (self == NULL)
     return (kgpc_method_ptr)__kgpc_abstract_method_error;
-}
 
-int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
-{
-    if (self == NULL || guid == NULL || out_intf == NULL)
-        return 0;
+  /* self could be either:
+   * a) Raw object pointer: *(void**)self = VMT, VMT[10] = interface table
+   * b) Adjusted interface pointer: *(void**)self = interface vtable (flat
+   * array) Distinguish by checking VMT signature: VMT has vInstanceSize at
+   * offset 0 (small positive int) and vInstanceSize2 = -vInstanceSize at
+   * offset 8. */
+  const void *first_qword = *(const void **)self;
+  if (first_qword == NULL)
+    return (kgpc_method_ptr)__kgpc_abstract_method_error;
 
-    /* Walk the VMT chain via vIntfTable (offset 80) and vParentRef (offset 16).
-     * This reads the FPC-compatible tinterfacetable layout:
-     *   uint64_t EntryCount, then EntryCount * tinterfaceentry (40 bytes each).
-     * Each entry's IIDRef is ^pguid: double-deref to get the 16-byte GUID. */
-    const void *vmt = *(const void * const *)self;
-    if (vmt == NULL)
-        return 0;
+  /* Check if first_qword looks like a VMT (vInstanceSize / vInstanceSize2
+   * pattern) */
+  int64_t slot0 = *(const int64_t *)first_qword;
+  int64_t slot1 = *((const int64_t *)first_qword + 1);
+  int is_vmt = (slot0 > 0 && slot0 < 10000000 && slot1 == -slot0);
 
-    const void *cur_vmt = vmt;
+  if (is_vmt) {
+    /* Case (a): raw object pointer — walk VMT chain looking for matching
+     * interface */
+    const void *cur_vmt = first_qword;
     while (cur_vmt != NULL) {
-        /* vIntfTable at VMT offset 80 */
-        const kgpc_interface_table *intf_table =
-            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
-        if (intf_table != NULL && intf_table->entry_count > 0) {
-            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
-                const kgpc_interface_entry *entry = &intf_table->entries[i];
-                if (entry->iid_ref != NULL) {
-                    const void *iid = *(entry->iid_ref);  /* deref ^pguid to pguid */
-                    if (iid != NULL && memcmp(iid, guid, 16) == 0) {
-                        *out_intf = (void *)((const char *)self + entry->ioffset);
-                        return 1;
-                    }
-                }
+      /* vIntfTable at VMT offset 80 */
+      const kgpc_interface_table *intf_table =
+          *(const kgpc_interface_table *const *)((const char *)cur_vmt + 80);
+      if (intf_table != NULL && intf_table->entry_count > 0) {
+        for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+          const kgpc_interface_entry *entry = &intf_table->entries[i];
+          if (entry->iid_ref != NULL && interface_guid != NULL) {
+            const void *iid = *(entry->iid_ref);
+            if (iid != NULL && memcmp(iid, interface_guid, 16) == 0) {
+              if (entry->vtable != NULL) {
+                const void **vtable = (const void **)entry->vtable;
+                if (method_index >= 0)
+                  return (kgpc_method_ptr)vtable[method_index];
+              }
+              return (kgpc_method_ptr)__kgpc_abstract_method_error;
             }
+          }
         }
-        /* Walk to parent via vParentRef (offset 16): PPVmt, deref to get parent VMT */
-        const void * const *parent_ref =
-            *(const void * const * const *)((const char *)cur_vmt + 16);
-        if (parent_ref != NULL)
-            cur_vmt = *parent_ref;
-        else
-            cur_vmt = NULL;
+      }
+      /* Walk to parent via vParentRef (offset 16) */
+      const void *const *parent_ref =
+          *(const void *const *const *)((const char *)cur_vmt + 16);
+      if (parent_ref != NULL)
+        cur_vmt = *parent_ref;
+      else
+        cur_vmt = NULL;
     }
+  } else {
+    /* Case (b): adjusted interface pointer — first_qword is the vtable directly
+     */
+    const void **vtable = (const void **)first_qword;
+    if (method_index >= 0)
+      return (kgpc_method_ptr)vtable[method_index];
+  }
+
+  return (kgpc_method_ptr)__kgpc_abstract_method_error;
+}
+
+int kgpc_get_interface(const void *self, const void *guid, void **out_intf) {
+  if (self == NULL || guid == NULL || out_intf == NULL)
     return 0;
+
+  /* Walk the VMT chain via vIntfTable (offset 80) and vParentRef (offset 16).
+   * This reads the FPC-compatible tinterfacetable layout:
+   *   uint64_t EntryCount, then EntryCount * tinterfaceentry (40 bytes each).
+   * Each entry's IIDRef is ^pguid: double-deref to get the 16-byte GUID. */
+  const void *vmt = *(const void *const *)self;
+  if (vmt == NULL)
+    return 0;
+
+  const void *cur_vmt = vmt;
+  while (cur_vmt != NULL) {
+    /* vIntfTable at VMT offset 80 */
+    const kgpc_interface_table *intf_table =
+        *(const kgpc_interface_table *const *)((const char *)cur_vmt + 80);
+    if (intf_table != NULL && intf_table->entry_count > 0) {
+      for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+        const kgpc_interface_entry *entry = &intf_table->entries[i];
+        if (entry->iid_ref != NULL) {
+          const void *iid = *(entry->iid_ref); /* deref ^pguid to pguid */
+          if (iid != NULL && memcmp(iid, guid, 16) == 0) {
+            *out_intf = (void *)((const char *)self + entry->ioffset);
+            return 1;
+          }
+        }
+      }
+    }
+    /* Walk to parent via vParentRef (offset 16): PPVmt, deref to get parent VMT
+     */
+    const void *const *parent_ref =
+        *(const void *const *const *)((const char *)cur_vmt + 16);
+    if (parent_ref != NULL)
+      cur_vmt = *parent_ref;
+    else
+      cur_vmt = NULL;
+  }
+  return 0;
 }
 
-const void *kgpc_class_parent(const void *self)
-{
-    if (self == NULL)
-        return NULL;
-
-    /* self may be a VMT pointer or an instance pointer.
-     * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
-    const kgpc_class_typeinfo *typeinfo = NULL;
-
-    /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
-    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)((const char *)self + 56);
-    if (candidate != NULL && candidate->vmt == self)
-    {
-        typeinfo = candidate;
-    }
-    else
-    {
-        /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] = TypeInfo */
-        const void *vmt = *(const void *const *)self;
-        if (vmt != NULL)
-        {
-            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
-            if (candidate2 != NULL && candidate2->vmt == vmt)
-                typeinfo = candidate2;
-        }
-    }
-
-    if (typeinfo != NULL && typeinfo->parent != NULL)
-        return typeinfo->parent->vmt;
+const void *kgpc_class_parent(const void *self) {
+  if (self == NULL)
     return NULL;
+
+  /* self may be a VMT pointer or an instance pointer.
+   * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
+  const kgpc_class_typeinfo *typeinfo = NULL;
+
+  /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
+  const kgpc_class_typeinfo *candidate =
+      *(const kgpc_class_typeinfo *const *)((const char *)self + 56);
+  if (candidate != NULL && candidate->vmt == self) {
+    typeinfo = candidate;
+  } else {
+    /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] =
+     * TypeInfo */
+    const void *vmt = *(const void *const *)self;
+    if (vmt != NULL) {
+      const kgpc_class_typeinfo *candidate2 =
+          *(const kgpc_class_typeinfo *const *)((const char *)vmt + 56);
+      if (candidate2 != NULL && candidate2->vmt == vmt)
+        typeinfo = candidate2;
+    }
+  }
+
+  if (typeinfo != NULL && typeinfo->parent != NULL)
+    return typeinfo->parent->vmt;
+  return NULL;
 }
 
-const char *kgpc_class_name(const void *self)
-{
-    if (self == NULL)
-        return "";
-
-    /* self may be a VMT pointer or an instance pointer.
-     * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
-    const kgpc_class_typeinfo *typeinfo = NULL;
-
-    /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
-    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)((const char *)self + 56);
-    if (candidate != NULL && candidate->vmt == self)
-    {
-        typeinfo = candidate;
-    }
-    else
-    {
-        /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] = TypeInfo */
-        const void *vmt = *(const void *const *)self;
-        if (vmt != NULL)
-        {
-            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
-            if (candidate2 != NULL && candidate2->vmt == vmt)
-                typeinfo = candidate2;
-        }
-    }
-
-    if (typeinfo != NULL && typeinfo->class_name != NULL)
-        return typeinfo->class_name;
+const char *kgpc_class_name(const void *self) {
+  if (self == NULL)
     return "";
+
+  /* self may be a VMT pointer or an instance pointer.
+   * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
+  const kgpc_class_typeinfo *typeinfo = NULL;
+
+  /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
+  const kgpc_class_typeinfo *candidate =
+      *(const kgpc_class_typeinfo *const *)((const char *)self + 56);
+  if (candidate != NULL && candidate->vmt == self) {
+    typeinfo = candidate;
+  } else {
+    /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] =
+     * TypeInfo */
+    const void *vmt = *(const void *const *)self;
+    if (vmt != NULL) {
+      const kgpc_class_typeinfo *candidate2 =
+          *(const kgpc_class_typeinfo *const *)((const char *)vmt + 56);
+      if (candidate2 != NULL && candidate2->vmt == vmt)
+        typeinfo = candidate2;
+    }
+  }
+
+  if (typeinfo != NULL && typeinfo->class_name != NULL)
+    return typeinfo->class_name;
+  return "";
 }
 
-void kgpc_assert_failed(const char *msg, const char *filename, int line)
-{
-    if (msg != NULL && msg[0] != '\0')
-        fprintf(stderr, "Assertion failed: %s", msg);
-    else
-        fprintf(stderr, "Assertion failed");
-    if (filename != NULL && filename[0] != '\0')
-        fprintf(stderr, " (%s, line %d)", filename, line);
-    fprintf(stderr, "\n");
-    fflush(stderr);
-    exit(227);
+void kgpc_assert_failed(const char *msg, const char *filename, int line) {
+  if (msg != NULL && msg[0] != '\0')
+    fprintf(stderr, "Assertion failed: %s", msg);
+  else
+    fprintf(stderr, "Assertion failed");
+  if (filename != NULL && filename[0] != '\0')
+    fprintf(stderr, " (%s, line %d)", filename, line);
+  fprintf(stderr, "\n");
+  fflush(stderr);
+  exit(227);
 }
 
 int kgpc_printf(const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    int result = kgpc_vprintf_impl(format, args);
-    va_end(args);
-    return result;
+  va_list args;
+  va_start(args, format);
+  int result = kgpc_vprintf_impl(format, args);
+  va_end(args);
+  return result;
 }
 
 static int kgpc_vscanf_impl(const char *format, va_list args) {
 #ifdef _WIN32
-    return vscanf(format, args);
+  return vscanf(format, args);
 #else
-    return vscanf(format, args);
+  return vscanf(format, args);
 #endif
 }
 
 int kgpc_scanf(const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    int result = kgpc_vscanf_impl(format, args);
-    va_end(args);
-    return result;
+  va_list args;
+  va_start(args, format);
+  int result = kgpc_vscanf_impl(format, args);
+  va_end(args);
+  return result;
 }
 
 #ifdef _WIN32
 int __isoc99_scanf(const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    int result = kgpc_vscanf_impl(format, args);
-    va_end(args);
-    return result;
+  va_list args;
+  va_start(args, format);
+  int result = kgpc_vscanf_impl(format, args);
+  va_end(args);
+  return result;
 }
 #endif
 
 /* Non-variadic read functions for proper Windows x64 calling convention */
 /* These avoid the issue where variadic arguments must be on stack on Windows */
 
-static inline int kgpc_scanf_result_to_ioresult(int scan_res)
-{
-    if (scan_res == EOF)
-    {
-        kgpc_ioresult_set(errno != 0 ? errno : EOF);
-    }
-    else
-    {
-        kgpc_ioresult_set(0);
-    }
-    return scan_res;
+static inline int kgpc_scanf_result_to_ioresult(int scan_res) {
+  if (scan_res == EOF) {
+    kgpc_ioresult_set(errno != 0 ? errno : EOF);
+  } else {
+    kgpc_ioresult_set(0);
+  }
+  return scan_res;
 }
 
 int kgpc_read_integer(KGPCTextRec *file, int32_t *ptr) {
-    FILE *stream = kgpc_text_input_stream(file);
-    int res = fscanf(stream, "%d", ptr);
-    return kgpc_scanf_result_to_ioresult(res);
+  FILE *stream = kgpc_text_input_stream(file);
+  int res = fscanf(stream, "%d", ptr);
+  return kgpc_scanf_result_to_ioresult(res);
 }
 
 int kgpc_read_longint(KGPCTextRec *file, int32_t *ptr) {
-    FILE *stream = kgpc_text_input_stream(file);
-    int res = fscanf(stream, "%" PRId32, ptr);
-    return kgpc_scanf_result_to_ioresult(res);
+  FILE *stream = kgpc_text_input_stream(file);
+  int res = fscanf(stream, "%" PRId32, ptr);
+  return kgpc_scanf_result_to_ioresult(res);
 }
 
 int kgpc_read_char(KGPCTextRec *file, char *ptr) {
-    FILE *stream = kgpc_text_input_stream(file);
-    int res = fscanf(stream, " %c", ptr);
-    return kgpc_scanf_result_to_ioresult(res);
+  FILE *stream = kgpc_text_input_stream(file);
+  int res = fscanf(stream, " %c", ptr);
+  return kgpc_scanf_result_to_ioresult(res);
 }
 
 int kgpc_read_real(KGPCTextRec *file, double *ptr) {
-    FILE *stream = kgpc_text_input_stream(file);
-    int res = fscanf(stream, "%lf", ptr);
-    return kgpc_scanf_result_to_ioresult(res);
+  FILE *stream = kgpc_text_input_stream(file);
+  int res = fscanf(stream, "%lf", ptr);
+  return kgpc_scanf_result_to_ioresult(res);
 }
 
-void print_integer(int n) {
-    printf("%d\n", n);
+void print_integer(int n) { printf("%d\n", n); }
+
+int64_t kgpc_real_add(int64_t a_bits, int64_t b_bits) {
+  double a = kgpc_bits_to_double(a_bits);
+  double b = kgpc_bits_to_double(b_bits);
+  double result = a + b;
+  return kgpc_double_to_bits(result);
 }
 
-int64_t kgpc_real_add(int64_t a_bits, int64_t b_bits)
-{
-    double a = kgpc_bits_to_double(a_bits);
-    double b = kgpc_bits_to_double(b_bits);
-    double result = a + b;
-    return kgpc_double_to_bits(result);
+int64_t kgpc_real_sub(int64_t a_bits, int64_t b_bits) {
+  double a = kgpc_bits_to_double(a_bits);
+  double b = kgpc_bits_to_double(b_bits);
+  double result = a - b;
+  return kgpc_double_to_bits(result);
 }
 
-int64_t kgpc_real_sub(int64_t a_bits, int64_t b_bits)
-{
-    double a = kgpc_bits_to_double(a_bits);
-    double b = kgpc_bits_to_double(b_bits);
-    double result = a - b;
-    return kgpc_double_to_bits(result);
+int64_t kgpc_real_mul(int64_t a_bits, int64_t b_bits) {
+  double a = kgpc_bits_to_double(a_bits);
+  double b = kgpc_bits_to_double(b_bits);
+  double result = a * b;
+  return kgpc_double_to_bits(result);
 }
 
-int64_t kgpc_real_mul(int64_t a_bits, int64_t b_bits)
-{
-    double a = kgpc_bits_to_double(a_bits);
-    double b = kgpc_bits_to_double(b_bits);
-    double result = a * b;
-    return kgpc_double_to_bits(result);
+int64_t kgpc_real_div(int64_t a_bits, int64_t b_bits) {
+  double a = kgpc_bits_to_double(a_bits);
+  double b = kgpc_bits_to_double(b_bits);
+  double result = a / b;
+  return kgpc_double_to_bits(result);
 }
 
-int64_t kgpc_real_div(int64_t a_bits, int64_t b_bits)
-{
-    double a = kgpc_bits_to_double(a_bits);
-    double b = kgpc_bits_to_double(b_bits);
-    double result = a / b;
-    return kgpc_double_to_bits(result);
+int64_t kgpc_real_neg(int64_t value_bits) {
+  double value = kgpc_bits_to_double(value_bits);
+  return kgpc_double_to_bits(-value);
 }
 
-int64_t kgpc_real_neg(int64_t value_bits)
-{
-    double value = kgpc_bits_to_double(value_bits);
-    return kgpc_double_to_bits(-value);
-}
-
-int kgpc_real_compare(int64_t a_bits, int64_t b_bits)
-{
-    double a = kgpc_bits_to_double(a_bits);
-    double b = kgpc_bits_to_double(b_bits);
-    if (a != a || b != b)
-        return 0;
-    if (a < b)
-        return -1;
-    if (a > b)
-        return 1;
-    if (a == b)
-        return 0;
+int kgpc_real_compare(int64_t a_bits, int64_t b_bits) {
+  double a = kgpc_bits_to_double(a_bits);
+  double b = kgpc_bits_to_double(b_bits);
+  if (a != a || b != b)
+    return 0;
+  if (a < b)
+    return -1;
+  if (a > b)
     return 1;
+  if (a == b)
+    return 0;
+  return 1;
 }
 
 uint64_t kgpc_get_tick_count64(void) {
 #ifdef _WIN32
-    return (uint64_t) GetTickCount64();
+  return (uint64_t)GetTickCount64();
 #else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
-    }
-    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    return 0;
+  }
+  return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 #endif
 }
-
-
 
 void kgpc_sleep_ms(int milliseconds) {
-    if (milliseconds <= 0)
-        return;
+  if (milliseconds <= 0)
+    return;
 
 #ifdef _WIN32
-    Sleep((DWORD)milliseconds);
+  Sleep((DWORD)milliseconds);
 #else
-    struct timespec req;
-    req.tv_sec = milliseconds / 1000;
-    req.tv_nsec = (long)(milliseconds % 1000) * 1000000L;
+  struct timespec req;
+  req.tv_sec = milliseconds / 1000;
+  req.tv_nsec = (long)(milliseconds % 1000) * 1000000L;
 
-    while (nanosleep(&req, &req) == -1 && errno == EINTR) {
-        /* Retry until sleep completes */
-    }
+  while (nanosleep(&req, &req) == -1 && errno == EINTR) {
+    /* Retry until sleep completes */
+  }
 #endif
 }
 
-void kgpc_sleep_ms_i(int milliseconds) {
-    kgpc_sleep_ms(milliseconds);
-}
+void kgpc_sleep_ms_i(int milliseconds) { kgpc_sleep_ms(milliseconds); }
 
 /* High-resolution performance counter wrappers */
 uint64_t kgpc_query_performance_counter(void) {
 #ifdef _WIN32
-    LARGE_INTEGER val;
-    if (QueryPerformanceCounter(&val)) {
-        return (uint64_t)val.QuadPart;
-    }
-    return 0ULL;
+  LARGE_INTEGER val;
+  if (QueryPerformanceCounter(&val)) {
+    return (uint64_t)val.QuadPart;
+  }
+  return 0ULL;
 #else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0ULL;
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0ULL;
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 #endif
 }
 
 uint64_t kgpc_query_performance_frequency(void) {
 #ifdef _WIN32
-    LARGE_INTEGER freq;
-    if (QueryPerformanceFrequency(&freq)) {
-        return (uint64_t)freq.QuadPart;
-    }
-    return 0ULL;
+  LARGE_INTEGER freq;
+  if (QueryPerformanceFrequency(&freq)) {
+    return (uint64_t)freq.QuadPart;
+  }
+  return 0ULL;
 #else
-    /* CLOCK_MONOTONIC is in nanoseconds on POSIX (alternative path) */
-    return 1000000000ULL;
+  /* CLOCK_MONOTONIC is in nanoseconds on POSIX (alternative path) */
+  return 1000000000ULL;
 #endif
 }
 
 int kgpc_is_debugger_present(void) {
 #ifdef _WIN32
-    return IsDebuggerPresent() ? 1 : 0;
+  return IsDebuggerPresent() ? 1 : 0;
 #else
-    return 0;
+  return 0;
 #endif
 }
 
 uint32_t kgpc_getpid(void) {
 #ifdef _WIN32
-    return (uint32_t)GetCurrentProcessId();
+  return (uint32_t)GetCurrentProcessId();
 #else
-    return (uint32_t)getpid();
+  return (uint32_t)getpid();
 #endif
 }
 
 int32_t kgpc_setenv(const char *name, const char *value) {
-    if (name == NULL) return -1;
+  if (name == NULL)
+    return -1;
 #ifdef _WIN32
-    if (value == NULL)
-        return _putenv_s(name, "") == 0 ? 0 : -1;
-    return _putenv_s(name, value) == 0 ? 0 : -1;
+  if (value == NULL)
+    return _putenv_s(name, "") == 0 ? 0 : -1;
+  return _putenv_s(name, value) == 0 ? 0 : -1;
 #else
-    if (value == NULL)
-        return unsetenv(name);
-    return setenv(name, value, 1);
+  if (value == NULL)
+    return unsetenv(name);
+  return setenv(name, value, 1);
 #endif
 }
 
-static int kgpc_normalize_crt_color(int color)
-{
-    int normalized = color % 16;
-    if (normalized < 0)
-        normalized += 16;
-    return normalized;
+static int kgpc_normalize_crt_color(int color) {
+  int normalized = color % 16;
+  if (normalized < 0)
+    normalized += 16;
+  return normalized;
 }
 
 static const int kgpc_crt_ansi_fg[8] = {30, 34, 32, 36, 31, 35, 33, 37};
-void kgpc_clrscr(void)
-{
+void kgpc_clrscr(void) {
 #ifdef _WIN32
-    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (handle != INVALID_HANDLE_VALUE)
-    {
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (GetConsoleScreenBufferInfo(handle, &csbi))
-        {
-            DWORD cell_count = (DWORD)csbi.dwSize.X * (DWORD)csbi.dwSize.Y;
-            DWORD written = 0;
-            COORD origin = {0, 0};
+  HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (handle != INVALID_HANDLE_VALUE) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(handle, &csbi)) {
+      DWORD cell_count = (DWORD)csbi.dwSize.X * (DWORD)csbi.dwSize.Y;
+      DWORD written = 0;
+      COORD origin = {0, 0};
 
-            FillConsoleOutputCharacterA(handle, ' ', cell_count, origin, &written);
-            FillConsoleOutputAttribute(handle, csbi.wAttributes, cell_count, origin, &written);
-            SetConsoleCursorPosition(handle, origin);
-            return;
-        }
+      FillConsoleOutputCharacterA(handle, ' ', cell_count, origin, &written);
+      FillConsoleOutputAttribute(handle, csbi.wAttributes, cell_count, origin,
+                                 &written);
+      SetConsoleCursorPosition(handle, origin);
+      return;
     }
+  }
 #endif
-    fputs("\033[H\033[m\033[H\033[2J", stdout);
-    fflush(stdout);
+  fputs("\033[H\033[m\033[H\033[2J", stdout);
+  fflush(stdout);
 }
 
-void kgpc_textcolor(int color)
-{
-    int normalized = kgpc_normalize_crt_color(color);
-    const int base_code = kgpc_crt_ansi_fg[normalized % 8];
-    char buf[32];
+void kgpc_textcolor(int color) {
+  int normalized = kgpc_normalize_crt_color(color);
+  const int base_code = kgpc_crt_ansi_fg[normalized % 8];
+  char buf[32];
 
 #ifdef _WIN32
-    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (handle != INVALID_HANDLE_VALUE)
-    {
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        WORD attributes = (WORD)normalized;
-        if (GetConsoleScreenBufferInfo(handle, &csbi))
-            attributes = (csbi.wAttributes & ~(WORD)0x000F) | (WORD)normalized;
+  HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (handle != INVALID_HANDLE_VALUE) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    WORD attributes = (WORD)normalized;
+    if (GetConsoleScreenBufferInfo(handle, &csbi))
+      attributes = (csbi.wAttributes & ~(WORD)0x000F) | (WORD)normalized;
 
-        if (SetConsoleTextAttribute(handle, attributes))
-            return;
-    }
+    if (SetConsoleTextAttribute(handle, attributes))
+      return;
+  }
 #endif
 
-    if (normalized == 0)
-        snprintf(buf, sizeof(buf), "\033[%dm", base_code);
-    else if (normalized == 7)
-        snprintf(buf, sizeof(buf), "\033[m");
-    else if (normalized == 8)
-        snprintf(buf, sizeof(buf), "\033[1;%dm", base_code);
-    else if (normalized == 15)
-        snprintf(buf, sizeof(buf), "\033[0;1m");
-    else if (normalized >= 9 && normalized <= 14)
-        snprintf(buf, sizeof(buf), "\033[0;1;%dm", base_code);
-    else
-        snprintf(buf, sizeof(buf), "\033[0;%dm", base_code);
+  if (normalized == 0)
+    snprintf(buf, sizeof(buf), "\033[%dm", base_code);
+  else if (normalized == 7)
+    snprintf(buf, sizeof(buf), "\033[m");
+  else if (normalized == 8)
+    snprintf(buf, sizeof(buf), "\033[1;%dm", base_code);
+  else if (normalized == 15)
+    snprintf(buf, sizeof(buf), "\033[0;1m");
+  else if (normalized >= 9 && normalized <= 14)
+    snprintf(buf, sizeof(buf), "\033[0;1;%dm", base_code);
+  else
+    snprintf(buf, sizeof(buf), "\033[0;%dm", base_code);
 
-    fputs(buf, stdout);
-    fflush(stdout);
+  fputs(buf, stdout);
+  fflush(stdout);
 }
 
-int kgpc_crt_screen_width(void)
-{
+int kgpc_crt_screen_width(void) {
 #ifdef _WIN32
-    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (handle != INVALID_HANDLE_VALUE)
-    {
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (GetConsoleScreenBufferInfo(handle, &csbi))
-            return (int)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
-    }
-    return 80;
+  HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (handle != INVALID_HANDLE_VALUE) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(handle, &csbi))
+      return (int)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+  }
+  return 80;
 #else
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
-        return (int)ws.ws_col;
-    return 80;
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+    return (int)ws.ws_col;
+  return 80;
 #endif
 }
 
-int kgpc_crt_screen_height(void)
-{
+int kgpc_crt_screen_height(void) {
 #ifdef _WIN32
-    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (handle != INVALID_HANDLE_VALUE)
-    {
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (GetConsoleScreenBufferInfo(handle, &csbi))
-            return (int)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
-    }
-    return 25;
+  HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (handle != INVALID_HANDLE_VALUE) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(handle, &csbi))
+      return (int)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+  }
+  return 25;
 #else
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)
-        return (int)ws.ws_row;
-    return 25;
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)
+    return (int)ws.ws_row;
+  return 25;
 #endif
 }
 
-int kgpc_crt_stdout_is_tty(void)
-{
+int kgpc_crt_stdout_is_tty(void) {
 #ifdef _WIN32
-    return _isatty(_fileno(stdout)) ? 1 : 0;
+  return _isatty(_fileno(stdout)) ? 1 : 0;
 #else
-    return isatty(STDOUT_FILENO) ? 1 : 0;
+  return isatty(STDOUT_FILENO) ? 1 : 0;
 #endif
 }
 
@@ -2158,33 +2120,31 @@ int kgpc_crt_stdout_is_tty(void)
 static int kgpc_keyboard_initialized = 0;
 static struct termios kgpc_keyboard_saved_termios;
 
-static void kgpc_keyboard_restore_terminal(void)
-{
-    if (!kgpc_keyboard_initialized)
-        return;
-    tcsetattr(STDIN_FILENO, TCSANOW, &kgpc_keyboard_saved_termios);
+static void kgpc_keyboard_restore_terminal(void) {
+  if (!kgpc_keyboard_initialized)
+    return;
+  tcsetattr(STDIN_FILENO, TCSANOW, &kgpc_keyboard_saved_termios);
 }
 
-static void kgpc_keyboard_init_once(void)
-{
-    if (kgpc_keyboard_initialized)
-        return;
-    if (tcgetattr(STDIN_FILENO, &kgpc_keyboard_saved_termios) != 0)
-        return;
+static void kgpc_keyboard_init_once(void) {
+  if (kgpc_keyboard_initialized)
+    return;
+  if (tcgetattr(STDIN_FILENO, &kgpc_keyboard_saved_termios) != 0)
+    return;
 
-    struct termios raw = kgpc_keyboard_saved_termios;
-    /* Crt.ReadKey must receive control characters like Ctrl+C as input bytes
-     * instead of letting the terminal driver turn them into signals. */
-    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO | ISIG);
-    raw.c_iflag &= (tcflag_t) ~(IXON | ICRNL);
-    raw.c_cc[VMIN] = 1;
-    raw.c_cc[VTIME] = 0;
+  struct termios raw = kgpc_keyboard_saved_termios;
+  /* Crt.ReadKey must receive control characters like Ctrl+C as input bytes
+   * instead of letting the terminal driver turn them into signals. */
+  raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO | ISIG);
+  raw.c_iflag &= (tcflag_t) ~(IXON | ICRNL);
+  raw.c_cc[VMIN] = 1;
+  raw.c_cc[VTIME] = 0;
 
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
-        return;
+  if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+    return;
 
-    kgpc_keyboard_initialized = 1;
-    atexit(kgpc_keyboard_restore_terminal);
+  kgpc_keyboard_initialized = 1;
+  atexit(kgpc_keyboard_restore_terminal);
 }
 #endif
 
@@ -2192,261 +2152,246 @@ static unsigned char kgpc_keybuf[64];
 static int kgpc_keybuf_head = 0;
 static int kgpc_keybuf_tail = 0;
 
-static int kgpc_keybuf_is_empty(void)
-{
-    return kgpc_keybuf_head == kgpc_keybuf_tail;
+static int kgpc_keybuf_is_empty(void) {
+  return kgpc_keybuf_head == kgpc_keybuf_tail;
 }
 
-static int kgpc_keybuf_is_full(void)
-{
-    return ((kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf)) == kgpc_keybuf_head;
+static int kgpc_keybuf_is_full(void) {
+  return ((kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf)) ==
+         kgpc_keybuf_head;
 }
 
-static int kgpc_keybuf_count(void)
-{
-    if (kgpc_keybuf_tail >= kgpc_keybuf_head)
-        return kgpc_keybuf_tail - kgpc_keybuf_head;
-    return (int)sizeof(kgpc_keybuf) - kgpc_keybuf_head + kgpc_keybuf_tail;
+static int kgpc_keybuf_count(void) {
+  if (kgpc_keybuf_tail >= kgpc_keybuf_head)
+    return kgpc_keybuf_tail - kgpc_keybuf_head;
+  return (int)sizeof(kgpc_keybuf) - kgpc_keybuf_head + kgpc_keybuf_tail;
 }
 
-static int kgpc_keybuf_peek_at(int offset)
-{
-    if (kgpc_keybuf_is_empty())
-        return 0;
-    int count = kgpc_keybuf_count();
-    if (offset < 0 || offset >= count)
-        return 0;
-    int idx = (kgpc_keybuf_head + offset) % (int)sizeof(kgpc_keybuf);
-    return (int)kgpc_keybuf[idx];
+static int kgpc_keybuf_peek_at(int offset) {
+  if (kgpc_keybuf_is_empty())
+    return 0;
+  int count = kgpc_keybuf_count();
+  if (offset < 0 || offset >= count)
+    return 0;
+  int idx = (kgpc_keybuf_head + offset) % (int)sizeof(kgpc_keybuf);
+  return (int)kgpc_keybuf[idx];
 }
 
-static void kgpc_keybuf_push(unsigned char value)
-{
-    if (kgpc_keybuf_is_full())
-        return;
-    kgpc_keybuf[kgpc_keybuf_tail] = value;
-    kgpc_keybuf_tail = (kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf);
+static void kgpc_keybuf_push(unsigned char value) {
+  if (kgpc_keybuf_is_full())
+    return;
+  kgpc_keybuf[kgpc_keybuf_tail] = value;
+  kgpc_keybuf_tail = (kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf);
 }
 
-static int kgpc_keybuf_peek(void)
-{
-    if (kgpc_keybuf_is_empty())
-        return 0;
-    return (int)kgpc_keybuf[kgpc_keybuf_head];
+static int kgpc_keybuf_peek(void) {
+  if (kgpc_keybuf_is_empty())
+    return 0;
+  return (int)kgpc_keybuf[kgpc_keybuf_head];
 }
 
-static int kgpc_keybuf_pop(void)
-{
-    if (kgpc_keybuf_is_empty())
-        return 0;
-    int value = (int)kgpc_keybuf[kgpc_keybuf_head];
-    kgpc_keybuf_head = (kgpc_keybuf_head + 1) % (int)sizeof(kgpc_keybuf);
-    return value;
+static int kgpc_keybuf_pop(void) {
+  if (kgpc_keybuf_is_empty())
+    return 0;
+  int value = (int)kgpc_keybuf[kgpc_keybuf_head];
+  kgpc_keybuf_head = (kgpc_keybuf_head + 1) % (int)sizeof(kgpc_keybuf);
+  return value;
 }
 
-static void kgpc_keyboard_decode_escape_sequences(void)
-{
-    for (;;)
-    {
-        if (kgpc_keybuf_count() < 3)
-            return;
-        int a = kgpc_keybuf_peek_at(0);
-        int b = kgpc_keybuf_peek_at(1);
-        int c = kgpc_keybuf_peek_at(2);
-        if (a != 27 || b != '[')
-            return;
+static void kgpc_keyboard_decode_escape_sequences(void) {
+  for (;;) {
+    if (kgpc_keybuf_count() < 3)
+      return;
+    int a = kgpc_keybuf_peek_at(0);
+    int b = kgpc_keybuf_peek_at(1);
+    int c = kgpc_keybuf_peek_at(2);
+    if (a != 27 || b != '[')
+      return;
 
-        int mapped = -1;
-        switch (c)
-        {
-            case 'A': mapped = 72; break; /* Up */
-            case 'B': mapped = 80; break; /* Down */
-            case 'C': mapped = 77; break; /* Right */
-            case 'D': mapped = 75; break; /* Left */
-            default: break;
-        }
-
-        if (mapped == -1)
-            /* Leave the raw ESC sequence intact when we don't recognize it. */
-            return;
-
-        /* Consume the escape sequence */
-        (void)kgpc_keybuf_pop();
-        (void)kgpc_keybuf_pop();
-        (void)kgpc_keybuf_pop();
-
-        /* Preserve original ordering: inject 0,<mapped> ahead of remaining bytes. */
-        unsigned char remainder[sizeof(kgpc_keybuf)];
-        int remainder_len = 0;
-        while (!kgpc_keybuf_is_empty() && remainder_len < (int)sizeof(remainder))
-        {
-            remainder[remainder_len++] = (unsigned char)kgpc_keybuf_pop();
-        }
-
-        kgpc_keybuf_push(0);
-        kgpc_keybuf_push((unsigned char)mapped);
-        for (int i = 0; i < remainder_len; ++i)
-            kgpc_keybuf_push(remainder[i]);
+    int mapped = -1;
+    switch (c) {
+    case 'A':
+      mapped = 72;
+      break; /* Up */
+    case 'B':
+      mapped = 80;
+      break; /* Down */
+    case 'C':
+      mapped = 77;
+      break; /* Right */
+    case 'D':
+      mapped = 75;
+      break; /* Left */
+    default:
+      break;
     }
+
+    if (mapped == -1)
+      /* Leave the raw ESC sequence intact when we don't recognize it. */
+      return;
+
+    /* Consume the escape sequence */
+    (void)kgpc_keybuf_pop();
+    (void)kgpc_keybuf_pop();
+    (void)kgpc_keybuf_pop();
+
+    /* Preserve original ordering: inject 0,<mapped> ahead of remaining bytes.
+     */
+    unsigned char remainder[sizeof(kgpc_keybuf)];
+    int remainder_len = 0;
+    while (!kgpc_keybuf_is_empty() && remainder_len < (int)sizeof(remainder)) {
+      remainder[remainder_len++] = (unsigned char)kgpc_keybuf_pop();
+    }
+
+    kgpc_keybuf_push(0);
+    kgpc_keybuf_push((unsigned char)mapped);
+    for (int i = 0; i < remainder_len; ++i)
+      kgpc_keybuf_push(remainder[i]);
+  }
 }
 
-static void kgpc_keyboard_fill_nonblocking(void)
-{
+static void kgpc_keyboard_fill_nonblocking(void) {
 #ifdef _WIN32
-    while (!_kbhit())
-        break;
-    while (_kbhit())
-    {
-        int ch = _getch();
-        if (ch >= 0 && ch <= 255)
-            kgpc_keybuf_push((unsigned char)ch);
-        else
-            break;
-    }
+  while (!_kbhit())
+    break;
+  while (_kbhit()) {
+    int ch = _getch();
+    if (ch >= 0 && ch <= 255)
+      kgpc_keybuf_push((unsigned char)ch);
+    else
+      break;
+  }
 #else
-    kgpc_keyboard_init_once();
+  kgpc_keyboard_init_once();
+  fd_set rfds;
+  FD_ZERO(&rfds);
+  FD_SET(STDIN_FILENO, &rfds);
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  int ready = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+  if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &rfds))
+    return;
+
+  int available = 0;
+  if (ioctl(STDIN_FILENO, FIONREAD, &available) == 0 && available > 0) {
+    while (available > 0 && !kgpc_keybuf_is_full()) {
+      unsigned char c = 0;
+      ssize_t got = read(STDIN_FILENO, &c, 1);
+      if (got == 1)
+        kgpc_keybuf_push(c);
+      else
+        break;
+      --available;
+    }
+    return;
+  }
+
+  int saved_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+  if (saved_flags != -1)
+    (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags | O_NONBLOCK);
+
+  while (!kgpc_keybuf_is_full()) {
+    unsigned char c = 0;
+    ssize_t got = read(STDIN_FILENO, &c, 1);
+    if (got == 1) {
+      kgpc_keybuf_push(c);
+      continue;
+    }
+    if (got == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+      break;
+    break;
+  }
+
+  if (saved_flags != -1)
+    (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags);
+#endif
+  kgpc_keyboard_decode_escape_sequences();
+}
+
+static void kgpc_keyboard_try_extend_escape(int allow_blocking) {
+#ifndef _WIN32
+  if (kgpc_keybuf_count() == 1 && kgpc_keybuf_peek_at(0) == 27) {
     fd_set rfds;
     FD_ZERO(&rfds);
     FD_SET(STDIN_FILENO, &rfds);
     struct timeval tv;
     tv.tv_sec = 0;
-    tv.tv_usec = 0;
+    tv.tv_usec = allow_blocking ? 10000 : 0;
     int ready = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
-    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &rfds))
-        return;
-
-    int available = 0;
-    if (ioctl(STDIN_FILENO, FIONREAD, &available) == 0 && available > 0)
-    {
-        while (available > 0 && !kgpc_keybuf_is_full())
-        {
-            unsigned char c = 0;
-            ssize_t got = read(STDIN_FILENO, &c, 1);
-            if (got == 1)
-                kgpc_keybuf_push(c);
-            else
-                break;
-            --available;
-        }
-        return;
+    if (ready > 0 && FD_ISSET(STDIN_FILENO, &rfds)) {
+      unsigned char extra[2];
+      ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
+      if (got > 0) {
+        for (ssize_t i = 0; i < got; ++i)
+          kgpc_keybuf_push(extra[i]);
+      }
     }
-
-    int saved_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-    if (saved_flags != -1)
-        (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags | O_NONBLOCK);
-
-    while (!kgpc_keybuf_is_full())
-    {
-        unsigned char c = 0;
-        ssize_t got = read(STDIN_FILENO, &c, 1);
-        if (got == 1)
-        {
-            kgpc_keybuf_push(c);
-            continue;
-        }
-        if (got == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            break;
-        break;
-    }
-
-    if (saved_flags != -1)
-        (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags);
-#endif
-    kgpc_keyboard_decode_escape_sequences();
-}
-
-static void kgpc_keyboard_try_extend_escape(int allow_blocking)
-{
-#ifndef _WIN32
-    if (kgpc_keybuf_count() == 1 && kgpc_keybuf_peek_at(0) == 27)
-    {
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(STDIN_FILENO, &rfds);
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = allow_blocking ? 10000 : 0;
-        int ready = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
-        if (ready > 0 && FD_ISSET(STDIN_FILENO, &rfds))
-        {
-            unsigned char extra[2];
-            ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
-            if (got > 0)
-            {
-                for (ssize_t i = 0; i < got; ++i)
-                    kgpc_keybuf_push(extra[i]);
-            }
-        }
-    }
+  }
 #endif
 }
 
-int kgpc_keyboard_poll(void)
-{
-    kgpc_keyboard_fill_nonblocking();
-    kgpc_keyboard_try_extend_escape(0);
-    kgpc_keyboard_decode_escape_sequences();
-    return kgpc_keybuf_peek();
+int kgpc_keyboard_poll(void) {
+  kgpc_keyboard_fill_nonblocking();
+  kgpc_keyboard_try_extend_escape(0);
+  kgpc_keyboard_decode_escape_sequences();
+  return kgpc_keybuf_peek();
 }
 
-int kgpc_keyboard_get(void)
-{
-    kgpc_keyboard_fill_nonblocking();
-    kgpc_keyboard_try_extend_escape(0);
-    kgpc_keyboard_decode_escape_sequences();
-    return kgpc_keybuf_pop();
+int kgpc_keyboard_get(void) {
+  kgpc_keyboard_fill_nonblocking();
+  kgpc_keyboard_try_extend_escape(0);
+  kgpc_keyboard_decode_escape_sequences();
+  return kgpc_keybuf_pop();
 }
 
-int kgpc_keyboard_read_char(void)
-{
+int kgpc_keyboard_read_char(void) {
 #ifdef _WIN32
-    int ch = kgpc_keyboard_get();
-    if (ch != 0)
-        return ch;
-    return _getch();
+  int ch = kgpc_keyboard_get();
+  if (ch != 0)
+    return ch;
+  return _getch();
 #else
-    kgpc_keyboard_init_once();
+  kgpc_keyboard_init_once();
 
-    for (;;)
-    {
-        kgpc_keyboard_fill_nonblocking();
-        kgpc_keyboard_try_extend_escape(1);
-        kgpc_keyboard_decode_escape_sequences();
+  for (;;) {
+    kgpc_keyboard_fill_nonblocking();
+    kgpc_keyboard_try_extend_escape(1);
+    kgpc_keyboard_decode_escape_sequences();
 
-        int buffered = kgpc_keybuf_count();
-        if (buffered == 0 || (kgpc_keybuf_peek_at(0) == 27 && buffered < 3))
-        {
-            unsigned char c = 0;
-            ssize_t got = read(STDIN_FILENO, &c, 1);
-            if (got == 1)
-            {
-                kgpc_keybuf_push(c);
-                continue;
-            }
-            return -1;
-        }
-
-        int ch = kgpc_keybuf_pop();
-        return ch;
+    int buffered = kgpc_keybuf_count();
+    if (buffered == 0 || (kgpc_keybuf_peek_at(0) == 27 && buffered < 3)) {
+      unsigned char c = 0;
+      ssize_t got = read(STDIN_FILENO, &c, 1);
+      if (got == 1) {
+        kgpc_keybuf_push(c);
+        continue;
+      }
+      return -1;
     }
+
+    int ch = kgpc_keybuf_pop();
+    return ch;
+  }
 #endif
 }
 
-/* 
+/*
  * Dynamic Array ABI Design (Model A - Embedded Descriptor)
  * =========================================================
  * A dynarray variable (or field) stores a kgpc_dynarray_descriptor_t BY VALUE.
  * The descriptor contains:
  *   - data: pointer to the element buffer (allocated with malloc/realloc)
  *   - length: logical length/capacity of the array
- * 
+ *
  * The descriptor itself lives:
  *   - in .bss (global/static variables)
  *   - on the stack (local variables)
  *   - inside a record/class (fields)
- * 
- * Runtime functions receive a POINTER to the descriptor (not the descriptor itself).
- * 
+ *
+ * Runtime functions receive a POINTER to the descriptor (not the descriptor
+ * itself).
+ *
  * TFPGList Layout:
  *   Offset 0-7:   TypeInfo pointer (class RTTI)
  *   Offset 8-23:  FItems (kgpc_dynarray_descriptor_t - data + length)
@@ -2460,13 +2405,13 @@ int kgpc_keyboard_read_char(void)
  * descriptor_ptr: pointer to a kgpc_dynarray_descriptor_t
  * Returns: length field, or 0 if descriptor is NULL
  */
-int64_t __kgpc_dynarray_length(void *descriptor_ptr)
-{
-    if (descriptor_ptr == NULL)
-        return 0;
-    
-    kgpc_dynarray_descriptor_t *desc = (kgpc_dynarray_descriptor_t *)descriptor_ptr;
-    return desc->length;
+int64_t __kgpc_dynarray_length(void *descriptor_ptr) {
+  if (descriptor_ptr == NULL)
+    return 0;
+
+  kgpc_dynarray_descriptor_t *desc =
+      (kgpc_dynarray_descriptor_t *)descriptor_ptr;
+  return desc->length;
 }
 
 /*
@@ -2475,262 +2420,242 @@ int64_t __kgpc_dynarray_length(void *descriptor_ptr)
  * new_length: desired new length
  * element_size: size of each element in bytes
  */
-void kgpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t element_size)
-{
-    if (descriptor_ptr == NULL || element_size <= 0)
-        return;
+void kgpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length,
+                             int64_t element_size) {
+  if (descriptor_ptr == NULL || element_size <= 0)
+    return;
 
-    if (new_length < 0)
-        new_length = 0;
+  if (new_length < 0)
+    new_length = 0;
 
-    kgpc_dynarray_descriptor_t *descriptor = (kgpc_dynarray_descriptor_t *)descriptor_ptr;
-    size_t old_length = descriptor->length > 0 ? (size_t)descriptor->length : 0;
-    size_t target_length = (size_t)new_length;
+  kgpc_dynarray_descriptor_t *descriptor =
+      (kgpc_dynarray_descriptor_t *)descriptor_ptr;
+  size_t old_length = descriptor->length > 0 ? (size_t)descriptor->length : 0;
+  size_t target_length = (size_t)new_length;
 
-    if (target_length == 0)
-    {
-        free(descriptor->data);
-        descriptor->data = NULL;
-        descriptor->length = 0;
-        return;
-    }
+  if (target_length == 0) {
+    free(descriptor->data);
+    descriptor->data = NULL;
+    descriptor->length = 0;
+    return;
+  }
 
-    size_t alloc_length = target_length;
-    if (alloc_length < SIZE_MAX)
-        alloc_length += 1; /* Provide a spare slot to tolerate off-by-one accesses. */
+  size_t alloc_length = target_length;
+  if (alloc_length < SIZE_MAX)
+    alloc_length +=
+        1; /* Provide a spare slot to tolerate off-by-one accesses. */
 
-    size_t new_size = alloc_length * (size_t)element_size;
-    if (new_size == 0)
-    {
-        free(descriptor->data);
-        descriptor->data = NULL;
-        descriptor->length = 0;
-        return;
-    }
+  size_t new_size = alloc_length * (size_t)element_size;
+  if (new_size == 0) {
+    free(descriptor->data);
+    descriptor->data = NULL;
+    descriptor->length = 0;
+    return;
+  }
 
-    void *new_data = realloc(descriptor->data, new_size);
-    if (new_data == NULL)
-    {
-        /* Allocation failure leaves the array unchanged. */
-        return;
-    }
+  void *new_data = realloc(descriptor->data, new_size);
+  if (new_data == NULL) {
+    /* Allocation failure leaves the array unchanged. */
+    return;
+  }
 
-    if (target_length > old_length)
-    {
-        size_t old_bytes = old_length * (size_t)element_size;
-        size_t new_bytes = target_length * (size_t)element_size;
-        if (new_bytes > old_bytes)
-            memset((char *)new_data + old_bytes, 0, new_bytes - old_bytes);
-    }
+  if (target_length > old_length) {
+    size_t old_bytes = old_length * (size_t)element_size;
+    size_t new_bytes = target_length * (size_t)element_size;
+    if (new_bytes > old_bytes)
+      memset((char *)new_data + old_bytes, 0, new_bytes - old_bytes);
+  }
 
-    descriptor->data = new_data;
-    descriptor->length = new_length;
+  descriptor->data = new_data;
+  descriptor->length = new_length;
 }
 
-FILE *kgpc_get_write_stream(KGPCTextRec *file, int *width)
-{
-    FILE *dest = kgpc_text_output_stream(file);
-    if (dest == NULL)
-        return NULL;
+FILE *kgpc_get_write_stream(KGPCTextRec *file, int *width) {
+  FILE *dest = kgpc_text_output_stream(file);
+  if (dest == NULL)
+    return NULL;
 
-    if (*width > 1024 || *width < -1024)
-        *width = 0;
-    if (*width == -1)
-        *width = 0;
-    return dest;
+  if (*width > 1024 || *width < -1024)
+    *width = 0;
+  if (*width == -1)
+    *width = 0;
+  return dest;
 }
 
-static void kgpc_write_padded_buf(FILE *dest, const char *buf, size_t len, int width)
-{
-    if (width > 0)
-    {
-        size_t pad = ((size_t)width > len) ? (size_t)width - len : 0;
-        for (size_t i = 0; i < pad; ++i)
-            fputc(' ', dest);
-        if (len > 0)
-            fwrite(buf, 1, len, dest);
-    }
-    else if (width < 0)
-    {
-        size_t target = (size_t)(-width);
-        if (len > 0)
-            fwrite(buf, 1, len, dest);
-        size_t pad = (target > len) ? target - len : 0;
-        for (size_t i = 0; i < pad; ++i)
-            fputc(' ', dest);
-    }
-    else if (len > 0)
-    {
-        fwrite(buf, 1, len, dest);
-    }
+static void kgpc_write_padded_buf(FILE *dest, const char *buf, size_t len,
+                                  int width) {
+  if (width > 0) {
+    size_t pad = ((size_t)width > len) ? (size_t)width - len : 0;
+    for (size_t i = 0; i < pad; ++i)
+      fputc(' ', dest);
+    if (len > 0)
+      fwrite(buf, 1, len, dest);
+  } else if (width < 0) {
+    size_t target = (size_t)(-width);
+    if (len > 0)
+      fwrite(buf, 1, len, dest);
+    size_t pad = (target > len) ? target - len : 0;
+    for (size_t i = 0; i < pad; ++i)
+      fputc(' ', dest);
+  } else if (len > 0) {
+    fwrite(buf, 1, len, dest);
+  }
 }
 
-void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL)
-        return;
+void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL)
+    return;
 
-    if (width > 0)
-        fprintf(dest, "%*lld", width, (long long)value);
-    else if (width < 0)
-        fprintf(dest, "%-*lld", -width, (long long)value);
-    else
-        fprintf(dest, "%lld", (long long)value);
-    kgpc_flush_text_output_stream(dest);
+  if (width > 0)
+    fprintf(dest, "%*lld", width, (long long)value);
+  else if (width < 0)
+    fprintf(dest, "%-*lld", -width, (long long)value);
+  else
+    fprintf(dest, "%lld", (long long)value);
+  kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_write_unsigned(KGPCTextRec *file, int width, uint64_t value)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL)
-        return;
+void kgpc_write_unsigned(KGPCTextRec *file, int width, uint64_t value) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL)
+    return;
 
-    if (width > 0)
-        fprintf(dest, "%*llu", width, (unsigned long long)value);
-    else if (width < 0)
-        fprintf(dest, "%-*llu", -width, (unsigned long long)value);
-    else
-        fprintf(dest, "%llu", (unsigned long long)value);
-    kgpc_flush_text_output_stream(dest);
+  if (width > 0)
+    fprintf(dest, "%*llu", width, (unsigned long long)value);
+  else if (width < 0)
+    fprintf(dest, "%-*llu", -width, (unsigned long long)value);
+  else
+    fprintf(dest, "%llu", (unsigned long long)value);
+  kgpc_flush_text_output_stream(dest);
 }
 
 extern void *widestringmanager[25];
 extern int32_t DefaultSystemCodePage;
 int64_t kgpc_widechar_length(const uint16_t *value);
 
-void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL)
-        return;
+void kgpc_write_string(KGPCTextRec *file, int width, const char *value) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL)
+    return;
 
-    size_t len = kgpc_string_known_length(value ? value : "");
-    kgpc_write_padded_buf(dest, value ? value : "", len, width);
-    kgpc_flush_text_output_stream(dest);
+  size_t len = kgpc_string_known_length(value ? value : "");
+  kgpc_write_padded_buf(dest, value ? value : "", len, width);
+  kgpc_flush_text_output_stream(dest);
 }
 
 /* Write a char array with specified maximum length (for Pascal char arrays) */
-void kgpc_write_char_array(KGPCTextRec *file, int width, const char *value, size_t max_len)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL || value == NULL)
-        return;
+void kgpc_write_char_array(KGPCTextRec *file, int width, const char *value,
+                           size_t max_len) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL || value == NULL)
+    return;
 
-    /* Find the actual length: either max_len or until first null, whichever comes first */
-    size_t actual_len = 0;
-    while (actual_len < max_len && value[actual_len] != '\0')
-        actual_len++;
+  /* Find the actual length: either max_len or until first null, whichever comes
+   * first */
+  size_t actual_len = 0;
+  while (actual_len < max_len && value[actual_len] != '\0')
+    actual_len++;
 
-    kgpc_write_padded_buf(dest, value, actual_len, width);
-    kgpc_flush_text_output_stream(dest);
+  kgpc_write_padded_buf(dest, value, actual_len, width);
+  kgpc_flush_text_output_stream(dest);
 }
 
 /* Write ShortString (Pascal string with length byte at index 0) */
-void kgpc_write_shortstring(KGPCTextRec *file, int width, const char *value)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL || value == NULL)
-        return;
+void kgpc_write_shortstring(KGPCTextRec *file, int width, const char *value) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL || value == NULL)
+    return;
 
-    /* Read length from index 0 */
-    unsigned char len = (unsigned char)value[0];
-    /* String data starts at index 1 */
-    kgpc_write_padded_buf(dest, value + 1, (size_t)len, width);
-    kgpc_flush_text_output_stream(dest);
+  /* Read length from index 0 */
+  unsigned char len = (unsigned char)value[0];
+  /* String data starts at index 1 */
+  kgpc_write_padded_buf(dest, value + 1, (size_t)len, width);
+  kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_write_newline(KGPCTextRec *file)
-{
-    FILE *dest = kgpc_text_output_stream(file);
-    if (dest == NULL)
-        return;
+void kgpc_write_newline(KGPCTextRec *file) {
+  FILE *dest = kgpc_text_output_stream(file);
+  if (dest == NULL)
+    return;
 
-    int fd = fileno(dest);
-    if (fd >= 0 && isatty(fd))
-    {
-        fputc('\r', dest);
-        fputc('\n', dest);
-    }
+  int fd = fileno(dest);
+  if (fd >= 0 && isatty(fd)) {
+    fputc('\r', dest);
+    fputc('\n', dest);
+  } else {
+    fputc('\n', dest);
+  }
+  fflush(dest);
+}
+
+void kgpc_write_char(KGPCTextRec *file, int width, int value) {
+  unsigned char ch = (unsigned char)value;
+  char buffer[2];
+  buffer[0] = (char)ch;
+  buffer[1] = '\0';
+  kgpc_write_string(file, width, buffer);
+}
+
+void kgpc_write_boolean(KGPCTextRec *file, int width, int value) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL)
+    return;
+
+  const char *text = value ? "TRUE" : "FALSE";
+  kgpc_write_padded_buf(dest, text, strlen(text), width);
+  kgpc_flush_text_output_stream(dest);
+}
+
+void kgpc_write_real(KGPCTextRec *file, int width, int precision,
+                     int64_t value_bits) {
+  FILE *dest = kgpc_get_write_stream(file, &width);
+  if (dest == NULL)
+    return;
+
+  if (precision < -1)
+    precision = -1;
+  if (precision > 18)
+    precision = 18;
+
+  double value = kgpc_bits_to_double(value_bits);
+
+  if (precision < 0) {
+    const int default_precision = 6;
+    if (width > 0)
+      fprintf(dest, "%*.*g", width, default_precision, value);
+    else if (width < 0)
+      fprintf(dest, "%-*.*g", -width, default_precision, value);
     else
-    {
-        fputc('\n', dest);
-    }
-    fflush(dest);
-}
-
-void kgpc_write_char(KGPCTextRec *file, int width, int value)
-{
-    unsigned char ch = (unsigned char)value;
-    char buffer[2];
-    buffer[0] = (char)ch;
-    buffer[1] = '\0';
-    kgpc_write_string(file, width, buffer);
-}
-
-void kgpc_write_boolean(KGPCTextRec *file, int width, int value)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL)
-        return;
-
-    const char *text = value ? "TRUE" : "FALSE";
-    kgpc_write_padded_buf(dest, text, strlen(text), width);
-    kgpc_flush_text_output_stream(dest);
-}
-
-void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_bits)
-{
-    FILE *dest = kgpc_get_write_stream(file, &width);
-    if (dest == NULL)
-        return;
-
-    if (precision < -1)
-        precision = -1;
-    if (precision > 18)
-        precision = 18;
-
-    double value = kgpc_bits_to_double(value_bits);
-
-    if (precision < 0)
-    {
-        const int default_precision = 6;
-        if (width > 0)
-            fprintf(dest, "%*.*g", width, default_precision, value);
-        else if (width < 0)
-            fprintf(dest, "%-*.*g", -width, default_precision, value);
-        else
-            fprintf(dest, "%.*g", default_precision, value);
-    }
+      fprintf(dest, "%.*g", default_precision, value);
+  } else {
+    if (width > 0)
+      fprintf(dest, "%*.*f", width, precision, value);
+    else if (width < 0)
+      fprintf(dest, "%-*.*f", -width, precision, value);
     else
-    {
-        if (width > 0)
-            fprintf(dest, "%*.*f", width, precision, value);
-        else if (width < 0)
-            fprintf(dest, "%-*.*f", -width, precision, value);
-        else
-            fprintf(dest, "%.*f", precision, value);
-    }
-    kgpc_flush_text_output_stream(dest);
+      fprintf(dest, "%.*f", precision, value);
+  }
+  kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_raise(int64_t value)
-{
-    kgpc_current_exception = value;
+void kgpc_raise(int64_t value) {
+  kgpc_current_exception = value;
 
-    /* If there is an active except frame, longjmp to it */
-    if (kgpc_except_stack_depth > 0) {
-        kgpc_except_stack_depth--;
-        longjmp(kgpc_except_stack[kgpc_except_stack_depth].buf, 1);
-    }
+  /* If there is an active except frame, longjmp to it */
+  if (kgpc_except_stack_depth > 0) {
+    kgpc_except_stack_depth--;
+    longjmp(kgpc_except_stack[kgpc_except_stack_depth].buf, 1);
+  }
 
-    /* No except frame — truly unhandled */
-    if (value == 0)
-        fprintf(stderr, "Unhandled exception raised.\n");
-    else
-        fprintf(stderr, "Unhandled exception raised with code %lld.\n", (long long)value);
-    fflush(stderr);
-    exit(EXIT_FAILURE);
+  /* No except frame — truly unhandled */
+  if (value == 0)
+    fprintf(stderr, "Unhandled exception raised.\n");
+  else
+    fprintf(stderr, "Unhandled exception raised with code %lld.\n",
+            (long long)value);
+  fflush(stderr);
+  exit(EXIT_FAILURE);
 }
 
 /* Release the exception object currently held in kgpc_current_exception
@@ -2753,63 +2678,62 @@ void kgpc_raise(int64_t value)
  * TObject.Free in codegen_subprograms.c, which is the canonical free
  * sequence: virtual destructor, then virtual FreeInstance.
  *
- * The VMT layout is described in KGPC/CodeGenerator/Intel_x86-64/abi_constants.h
- * (VMT_FIRST_VMETHOD_SLOT = 12, VMT_SLOT_SIZE_BYTES = 8).  TObject
- * itself defines six fixed inherited methods plus FreeInstance, so
- * FreeInstance always lands at slot 12 + 6 = 18 on every TObject
- * descendant, and the codegen-emitted dispatch in
- * codegen_subprograms.c uses the same slot. */
-#define KGPC_VMT_DESTROY_OFFSET       (12 * 8)
-#define KGPC_VMT_FREEINSTANCE_OFFSET  (18 * 8)
+ * The VMT layout is described in
+ * KGPC/CodeGenerator/Intel_x86-64/abi_constants.h (VMT_FIRST_VMETHOD_SLOT = 12,
+ * VMT_SLOT_SIZE_BYTES = 8).  TObject itself defines six fixed inherited methods
+ * plus FreeInstance, so FreeInstance always lands at slot 12 + 6 = 18 on every
+ * TObject descendant, and the codegen-emitted dispatch in codegen_subprograms.c
+ * uses the same slot. */
+#define KGPC_VMT_DESTROY_OFFSET (12 * 8)
+#define KGPC_VMT_FREEINSTANCE_OFFSET (18 * 8)
 
-void kgpc_release_current_exception(void)
-{
-    int64_t value = kgpc_current_exception;
-    int is_object = kgpc_current_exception_is_object;
-    if (value == 0 || !is_object)
-    {
-        /* Nothing to free.  Preserve kgpc_current_exception so that any
-         * downstream handler that inspects the slot can still see the
-         * raised value, and so that ASAN treats the slot as a live
-         * reference to a still-allocated integer-exception payload. */
-        return;
-    }
-    void *self = (void *)(uintptr_t)value;
-    void **vmt = *(void ***)self;
-    if (vmt == NULL)
-        return;
+void kgpc_release_current_exception(void) {
+  int64_t value = kgpc_current_exception;
+  int is_object = kgpc_current_exception_is_object;
+  if (value == 0 || !is_object) {
+    /* Nothing to free.  Preserve kgpc_current_exception so that any
+     * downstream handler that inspects the slot can still see the
+     * raised value, and so that ASAN treats the slot as a live
+     * reference to a still-allocated integer-exception payload. */
+    return;
+  }
+  void *self = (void *)(uintptr_t)value;
+  void **vmt = *(void ***)self;
+  if (vmt == NULL)
+    return;
 
-    /* Be defensive about VMT layout: not every class in user code
-     * inherits from TObject.  Programs that hand-roll an `Exception`
-     * class with no parent emit a 12-slot VMT (the fixed header only)
-     * and never produce Destroy / FreeInstance method slots.  Detect
-     * that by checking the parent-ref slot — TObject-derived classes
-     * always have a non-null vParentRef, while a parentless class has
-     * zero.  Without a guaranteed TObject ancestor we cannot safely
-     * dereference vmt+KGPC_VMT_DESTROY_OFFSET or +FREEINSTANCE_OFFSET.
-     * Leave kgpc_current_exception untouched so the existing root
-     * keeps the instance reachable (otherwise we would turn a never-
-     * freed-but-still-rooted object into an unrooted leak under ASAN). */
-    void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
-    if (parent_ref == NULL)
-        return;
+  /* Be defensive about VMT layout: not every class in user code
+   * inherits from TObject.  Programs that hand-roll an `Exception`
+   * class with no parent emit a 12-slot VMT (the fixed header only)
+   * and never produce Destroy / FreeInstance method slots.  Detect
+   * that by checking the parent-ref slot — TObject-derived classes
+   * always have a non-null vParentRef, while a parentless class has
+   * zero.  Without a guaranteed TObject ancestor we cannot safely
+   * dereference vmt+KGPC_VMT_DESTROY_OFFSET or +FREEINSTANCE_OFFSET.
+   * Leave kgpc_current_exception untouched so the existing root
+   * keeps the instance reachable (otherwise we would turn a never-
+   * freed-but-still-rooted object into an unrooted leak under ASAN). */
+  void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
+  if (parent_ref == NULL)
+    return;
 
-    /* Now we are committed to freeing the object — clear the global
-     * slot first so that any handler the destructor calls into cannot
-     * observe a dangling exception pointer through kgpc_current_exception. */
-    kgpc_current_exception = 0;
-    kgpc_current_exception_is_object = 0;
+  /* Now we are committed to freeing the object — clear the global
+   * slot first so that any handler the destructor calls into cannot
+   * observe a dangling exception pointer through kgpc_current_exception. */
+  kgpc_current_exception = 0;
+  kgpc_current_exception_is_object = 0;
 
-    typedef void (*kgpc_vmt_method_t)(void *);
-    kgpc_vmt_method_t destroy_fn =
-        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
-    kgpc_vmt_method_t freeinstance_fn =
-        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
+  typedef void (*kgpc_vmt_method_t)(void *);
+  kgpc_vmt_method_t destroy_fn =
+      (kgpc_vmt_method_t) * (void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
+  kgpc_vmt_method_t freeinstance_fn =
+      (kgpc_vmt_method_t) *
+      (void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
 
-    if (destroy_fn != NULL)
-        destroy_fn(self);
-    if (freeinstance_fn != NULL)
-        freeinstance_fn(self);
+  if (destroy_fn != NULL)
+    destroy_fn(self);
+  if (freeinstance_fn != NULL)
+    freeinstance_fn(self);
 }
 
 extern size_t kgpc_freemem_ptr(void *p);
@@ -2825,28 +2749,27 @@ extern size_t kgpc_freemem_ptr(void *p);
  * modes that do not auto-inherit TObject), the VMT carries no virtual
  * Destroy/FreeInstance — only the fixed 12-slot header — so we pair the
  * instance with kgpc_freemem_ptr directly. */
-void kgpc_release_class_temp(void *self)
-{
-    if (self == NULL)
-        return;
-    void **vmt = *(void ***)self;
-    if (vmt == NULL)
-        return;
-    void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
-    if (parent_ref == NULL)
-    {
-        kgpc_freemem_ptr(self);
-        return;
-    }
-    typedef void (*kgpc_vmt_method_t)(void *);
-    kgpc_vmt_method_t destroy_fn =
-        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
-    kgpc_vmt_method_t freeinstance_fn =
-        (kgpc_vmt_method_t)*(void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
-    if (destroy_fn != NULL)
-        destroy_fn(self);
-    if (freeinstance_fn != NULL)
-        freeinstance_fn(self);
+void kgpc_release_class_temp(void *self) {
+  if (self == NULL)
+    return;
+  void **vmt = *(void ***)self;
+  if (vmt == NULL)
+    return;
+  void *parent_ref = *(void **)((char *)vmt + 16 /* VMT_VPARENTREF_OFFSET */);
+  if (parent_ref == NULL) {
+    kgpc_freemem_ptr(self);
+    return;
+  }
+  typedef void (*kgpc_vmt_method_t)(void *);
+  kgpc_vmt_method_t destroy_fn =
+      (kgpc_vmt_method_t) * (void **)((char *)vmt + KGPC_VMT_DESTROY_OFFSET);
+  kgpc_vmt_method_t freeinstance_fn =
+      (kgpc_vmt_method_t) *
+      (void **)((char *)vmt + KGPC_VMT_FREEINSTANCE_OFFSET);
+  if (destroy_fn != NULL)
+    destroy_fn(self);
+  if (freeinstance_fn != NULL)
+    freeinstance_fn(self);
 }
 
 /* Forward declarations: New/Dispose route through MemoryManager so that
@@ -2858,193 +2781,164 @@ void kgpc_release_class_temp(void *self)
  * routes New/Dispose through FPC's heap manager so they pair with
  * GetMem/FreeMem (which also go through MemoryManager via heap.inc). */
 
-void kgpc_new(void **target, size_t size)
-{
-    if (target == NULL)
-        return;
+void kgpc_new(void **target, size_t size) {
+  if (target == NULL)
+    return;
 
-    kgpc_guard_validate_all("kgpc_new:before");
+  kgpc_guard_validate_all("kgpc_new:before");
 
-    void *memory = NULL;
-    if (kgpc_guard_new_is_enabled())
-    {
-        size_t page_size = kgpc_guard_page_size();
-        if (size > SIZE_MAX - (page_size - 1))
-        {
-            fprintf(stderr, "KGPC runtime: requested allocation is too large.\n");
-            exit(EXIT_FAILURE);
+  void *memory = NULL;
+  if (kgpc_guard_new_is_enabled()) {
+    size_t page_size = kgpc_guard_page_size();
+    if (size > SIZE_MAX - (page_size - 1)) {
+      fprintf(stderr, "KGPC runtime: requested allocation is too large.\n");
+      exit(EXIT_FAILURE);
+    }
+    size_t rounded = ((size + page_size - 1) / page_size) * page_size;
+    if (rounded > SIZE_MAX - page_size) {
+      fprintf(stderr, "KGPC runtime: requested allocation is too large.\n");
+      exit(EXIT_FAILURE);
+    }
+    size_t total = rounded + page_size;
+    unsigned char *raw = kgpc_guard_reserve(total, rounded, page_size);
+    unsigned char *user = raw + rounded - size;
+    memset(user, 0, size);
+
+    KgpcGuardedAlloc *meta = (KgpcGuardedAlloc *)malloc(sizeof(*meta));
+    if (meta == NULL) {
+      fprintf(stderr, "KGPC runtime: failed to allocate guard metadata.\n");
+      exit(EXIT_FAILURE);
+    }
+    meta->user_ptr = user;
+    meta->raw_ptr = raw;
+    meta->size = size;
+    meta->mapping_size = total;
+    meta->next = kgpc_guarded_allocs;
+    kgpc_guarded_allocs = meta;
+    memory = user;
+  } else {
+    memory = kgpc_memory_manager_getmem((uintptr_t)size);
+    /* Pascal's New zero-initialises the allocated record so that
+     * later reads of unset fields are deterministic; mirror calloc
+     * semantics here regardless of which heap manager is active. */
+    if (memory != NULL && size > 0)
+      memset(memory, 0, size);
+  }
+
+  if (memory == NULL) {
+    fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes.\n", size);
+    exit(EXIT_FAILURE);
+  }
+
+  *target = memory;
+  kgpc_guard_validate_all("kgpc_new:after");
+}
+
+void kgpc_dispose(void **target) {
+  if (target == NULL)
+    return;
+
+  if (*target != NULL) {
+    kgpc_guard_validate_all("kgpc_dispose:before");
+    if (kgpc_guard_new_is_enabled()) {
+      KgpcGuardedAlloc **link = &kgpc_guarded_allocs;
+      while (*link != NULL) {
+        if ((*link)->user_ptr == *target) {
+          KgpcGuardedAlloc *found = *link;
+          *link = found->next;
+          kgpc_guard_release(found->raw_ptr, found->mapping_size);
+          free(found);
+          *target = NULL;
+          kgpc_guard_validate_all("kgpc_dispose:after");
+          return;
         }
-        size_t rounded = ((size + page_size - 1) / page_size) * page_size;
-        if (rounded > SIZE_MAX - page_size)
-        {
-            fprintf(stderr, "KGPC runtime: requested allocation is too large.\n");
-            exit(EXIT_FAILURE);
-        }
-        size_t total = rounded + page_size;
-        unsigned char *raw = kgpc_guard_reserve(total, rounded, page_size);
-        unsigned char *user = raw + rounded - size;
-        memset(user, 0, size);
-
-        KgpcGuardedAlloc *meta = (KgpcGuardedAlloc *)malloc(sizeof(*meta));
-        if (meta == NULL)
-        {
-            fprintf(stderr, "KGPC runtime: failed to allocate guard metadata.\n");
-            exit(EXIT_FAILURE);
-        }
-        meta->user_ptr = user;
-        meta->raw_ptr = raw;
-        meta->size = size;
-        meta->mapping_size = total;
-        meta->next = kgpc_guarded_allocs;
-        kgpc_guarded_allocs = meta;
-        memory = user;
+        link = &(*link)->next;
+      }
     }
-    else
-    {
-        memory = kgpc_memory_manager_getmem((uintptr_t)size);
-        /* Pascal's New zero-initialises the allocated record so that
-         * later reads of unset fields are deterministic; mirror calloc
-         * semantics here regardless of which heap manager is active. */
-        if (memory != NULL && size > 0)
-            memset(memory, 0, size);
-    }
-
-    if (memory == NULL)
-    {
-        fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes.\n", size);
-        exit(EXIT_FAILURE);
-    }
-
-    *target = memory;
-    kgpc_guard_validate_all("kgpc_new:after");
+    kgpc_memory_manager_freemem(*target);
+    *target = NULL;
+  }
 }
 
-void kgpc_dispose(void **target)
-{
-    if (target == NULL)
-        return;
+void Finalize(void *value) { (void)value; }
 
-    if (*target != NULL)
-    {
-        kgpc_guard_validate_all("kgpc_dispose:before");
-        if (kgpc_guard_new_is_enabled())
-        {
-            KgpcGuardedAlloc **link = &kgpc_guarded_allocs;
-            while (*link != NULL)
-            {
-                if ((*link)->user_ptr == *target)
-                {
-                    KgpcGuardedAlloc *found = *link;
-                    *link = found->next;
-                    kgpc_guard_release(found->raw_ptr, found->mapping_size);
-                    free(found);
-                    *target = NULL;
-                    kgpc_guard_validate_all("kgpc_dispose:after");
-                    return;
-                }
-                link = &(*link)->next;
-            }
-        }
-        kgpc_memory_manager_freemem(*target);
-        *target = NULL;
-    }
+void Initialize(void *value) { (void)value; }
+
+static int kgpc_guard_new_is_enabled(void) {
+  if (!kgpc_guard_new_checked) {
+    kgpc_guard_new_enabled = (getenv("KGPC_GUARD_NEW") != NULL);
+    kgpc_guard_new_checked = 1;
+  }
+  return kgpc_guard_new_enabled;
 }
 
-void Finalize(void *value)
-{
-    (void)value;
-}
-
-void Initialize(void *value)
-{
-    (void)value;
-}
-
-
-static int kgpc_guard_new_is_enabled(void)
-{
-    if (!kgpc_guard_new_checked)
-    {
-        kgpc_guard_new_enabled = (getenv("KGPC_GUARD_NEW") != NULL);
-        kgpc_guard_new_checked = 1;
-    }
-    return kgpc_guard_new_enabled;
-}
-
-static size_t kgpc_guard_page_size(void)
-{
+static size_t kgpc_guard_page_size(void) {
 #ifdef _WIN32
-    SYSTEM_INFO system_info;
-    GetSystemInfo(&system_info);
-    if (system_info.dwPageSize == 0)
-        return 4096u;
-    return (size_t)system_info.dwPageSize;
+  SYSTEM_INFO system_info;
+  GetSystemInfo(&system_info);
+  if (system_info.dwPageSize == 0)
+    return 4096u;
+  return (size_t)system_info.dwPageSize;
 #else
-    long page_size_long = sysconf(_SC_PAGESIZE);
-    if (page_size_long <= 0)
-        return 4096u;
-    return (size_t)page_size_long;
+  long page_size_long = sysconf(_SC_PAGESIZE);
+  if (page_size_long <= 0)
+    return 4096u;
+  return (size_t)page_size_long;
 #endif
 }
 
-static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded, size_t page_size)
-{
+static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded,
+                                         size_t page_size) {
 #ifdef _WIN32
-    unsigned char *raw = (unsigned char *)VirtualAlloc(NULL, total,
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (raw == NULL)
-    {
-        fprintf(stderr, "KGPC runtime: VirtualAlloc failed for %zu bytes.\n", total);
-        exit(EXIT_FAILURE);
-    }
+  unsigned char *raw = (unsigned char *)VirtualAlloc(
+      NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  if (raw == NULL) {
+    fprintf(stderr, "KGPC runtime: VirtualAlloc failed for %zu bytes.\n",
+            total);
+    exit(EXIT_FAILURE);
+  }
 
-    DWORD old_protect = 0;
-    if (!VirtualProtect(raw + rounded, page_size, PAGE_NOACCESS, &old_protect))
-    {
-        fprintf(stderr, "KGPC runtime: VirtualProtect failed for guard page.\n");
-        exit(EXIT_FAILURE);
-    }
-    return raw;
+  DWORD old_protect = 0;
+  if (!VirtualProtect(raw + rounded, page_size, PAGE_NOACCESS, &old_protect)) {
+    fprintf(stderr, "KGPC runtime: VirtualProtect failed for guard page.\n");
+    exit(EXIT_FAILURE);
+  }
+  return raw;
 #else
-    unsigned char *raw = mmap(NULL, total, PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (raw == MAP_FAILED)
-    {
-        fprintf(stderr, "KGPC runtime: mmap failed for %zu bytes.\n", total);
-        exit(EXIT_FAILURE);
-    }
-    if (mprotect(raw + rounded, page_size, PROT_NONE) != 0)
-    {
-        fprintf(stderr, "KGPC runtime: mprotect failed for guard page.\n");
-        exit(EXIT_FAILURE);
-    }
-    return raw;
+  unsigned char *raw = mmap(NULL, total, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (raw == MAP_FAILED) {
+    fprintf(stderr, "KGPC runtime: mmap failed for %zu bytes.\n", total);
+    exit(EXIT_FAILURE);
+  }
+  if (mprotect(raw + rounded, page_size, PROT_NONE) != 0) {
+    fprintf(stderr, "KGPC runtime: mprotect failed for guard page.\n");
+    exit(EXIT_FAILURE);
+  }
+  return raw;
 #endif
 }
 
-static void kgpc_guard_release(void *raw_ptr, size_t mapping_size)
-{
+static void kgpc_guard_release(void *raw_ptr, size_t mapping_size) {
 #ifdef _WIN32
-    (void)mapping_size;
-    if (!VirtualFree(raw_ptr, 0, MEM_RELEASE))
-    {
-        fprintf(stderr, "KGPC runtime: VirtualFree failed for guarded allocation.\n");
-        exit(EXIT_FAILURE);
-    }
+  (void)mapping_size;
+  if (!VirtualFree(raw_ptr, 0, MEM_RELEASE)) {
+    fprintf(stderr,
+            "KGPC runtime: VirtualFree failed for guarded allocation.\n");
+    exit(EXIT_FAILURE);
+  }
 #else
-    if (munmap(raw_ptr, mapping_size) != 0)
-    {
-        fprintf(stderr, "KGPC runtime: munmap failed for guarded allocation.\n");
-        exit(EXIT_FAILURE);
-    }
+  if (munmap(raw_ptr, mapping_size) != 0) {
+    fprintf(stderr, "KGPC runtime: munmap failed for guarded allocation.\n");
+    exit(EXIT_FAILURE);
+  }
 #endif
 }
 
-static void kgpc_guard_validate_all(const char *site)
-{
-    (void)site;
-    if (!kgpc_guard_new_is_enabled())
-        return;
+static void kgpc_guard_validate_all(const char *site) {
+  (void)site;
+  if (!kgpc_guard_new_is_enabled())
+    return;
 }
 
 /* Generic default constructor for classes without explicit constructors */
@@ -3052,103 +2946,95 @@ static void kgpc_guard_validate_all(const char *site)
  * For each interface the class implements, the instance has a slot at
  * (instance + ioffset) that must point to the interface vtable.
  * This is called after the VMT pointer is set at offset 0. */
-void __kgpc_init_interface_vtables(void *instance)
-{
-    if (instance == NULL)
-        return;
-    const void *vmt = *(const void * const *)instance;
-    if (vmt == NULL)
-        return;
-    /* Walk the VMT chain (including parent classes) to init all interface slots */
-    const void *cur_vmt = vmt;
-    while (cur_vmt != NULL) {
-        /* vIntfTable at VMT offset 80 */
-        const kgpc_interface_table *intf_table =
-            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
-        if (intf_table != NULL && intf_table->entry_count > 0) {
-            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
-                const kgpc_interface_entry *entry = &intf_table->entries[i];
-                if (entry->ioffset > 0 && entry->vtable != NULL) {
-                    *(const void **)((char *)instance + entry->ioffset) = entry->vtable;
-                }
-            }
+void __kgpc_init_interface_vtables(void *instance) {
+  if (instance == NULL)
+    return;
+  const void *vmt = *(const void *const *)instance;
+  if (vmt == NULL)
+    return;
+  /* Walk the VMT chain (including parent classes) to init all interface slots
+   */
+  const void *cur_vmt = vmt;
+  while (cur_vmt != NULL) {
+    /* vIntfTable at VMT offset 80 */
+    const kgpc_interface_table *intf_table =
+        *(const kgpc_interface_table *const *)((const char *)cur_vmt + 80);
+    if (intf_table != NULL && intf_table->entry_count > 0) {
+      for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+        const kgpc_interface_entry *entry = &intf_table->entries[i];
+        if (entry->ioffset > 0 && entry->vtable != NULL) {
+          *(const void **)((char *)instance + entry->ioffset) = entry->vtable;
         }
-        /* Walk to parent via vParentRef (offset 16) */
-        const void * const *parent_ref =
-            *(const void * const * const *)((const char *)cur_vmt + 16);
-        if (parent_ref != NULL)
-            cur_vmt = *parent_ref;
-        else
-            cur_vmt = NULL;
+      }
     }
+    /* Walk to parent via vParentRef (offset 16) */
+    const void *const *parent_ref =
+        *(const void *const *const *)((const char *)cur_vmt + 16);
+    if (parent_ref != NULL)
+      cur_vmt = *parent_ref;
+    else
+      cur_vmt = NULL;
+  }
 }
 
-void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
-{
-    /* Allocate and zero-initialize the class instance */
-    void *instance = kgpc_memory_manager_allocmem((uintptr_t)class_size);
-    if (instance == NULL)
-    {
-        fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes for class instance.\\n", class_size);
-        exit(EXIT_FAILURE);
-    }
+void *__kgpc_default_create(size_t class_size, const void *vmt_ptr) {
+  /* Allocate and zero-initialize the class instance */
+  void *instance = kgpc_memory_manager_allocmem((uintptr_t)class_size);
+  if (instance == NULL) {
+    fprintf(stderr,
+            "KGPC runtime: failed to allocate %zu bytes for class instance.\\n",
+            class_size);
+    exit(EXIT_FAILURE);
+  }
 
-    /* Set the VMT pointer (first field of the instance) */
-    if (vmt_ptr != NULL)
-    {
-        *(const void **)instance = vmt_ptr;
-    }
+  /* Set the VMT pointer (first field of the instance) */
+  if (vmt_ptr != NULL) {
+    *(const void **)instance = vmt_ptr;
+  }
 
-    /* Initialize interface vtable pointer slots */
-    __kgpc_init_interface_vtables(instance);
+  /* Initialize interface vtable pointer slots */
+  __kgpc_init_interface_vtables(instance);
 
-    return instance;
+  return instance;
 }
 
-int64_t bsrqword_i64(uint64_t value)
-{
-    if (value == 0)
-        return -1;
-    return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
+int64_t bsrqword_i64(uint64_t value) {
+  if (value == 0)
+    return -1;
+  return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
 }
 
 /* bsrdword_li and bsfdword_li: FPC's system.pp provides Pascal
  * implementations compiled by KGPC.  These C versions are kept as
  * alternatives with kgpc_ prefix to avoid duplicate symbol conflicts. */
-int64_t kgpc_bsrdword_li(uint32_t value)
-{
-    if (value == 0)
-        return -1;
-    return (int64_t)(31u - (uint32_t)__builtin_clz(value));
+int64_t kgpc_bsrdword_li(uint32_t value) {
+  if (value == 0)
+    return -1;
+  return (int64_t)(31u - (uint32_t)__builtin_clz(value));
 }
 
-int64_t bsfqword_i64(uint64_t value)
-{
-    if (value == 0)
-        return -1;
-    return (int64_t)__builtin_ctzll(value);
+int64_t bsfqword_i64(uint64_t value) {
+  if (value == 0)
+    return -1;
+  return (int64_t)__builtin_ctzll(value);
 }
 
-int64_t kgpc_bsfdword_li(uint32_t value)
-{
-    if (value == 0)
-        return -1;
-    return (int64_t)__builtin_ctz(value);
+int64_t kgpc_bsfdword_li(uint32_t value) {
+  if (value == 0)
+    return -1;
+  return (int64_t)__builtin_ctz(value);
 }
 
-int64_t fpc_in_popcnt_x(uint64_t value)
-{
-    return (int64_t)__builtin_popcountll(value);
+int64_t fpc_in_popcnt_x(uint64_t value) {
+  return (int64_t)__builtin_popcountll(value);
 }
 
-int32_t popcnt_i(int32_t value)
-{
-    return (int32_t)__builtin_popcount((uint32_t)value);
+int32_t popcnt_i(int32_t value) {
+  return (int32_t)__builtin_popcount((uint32_t)value);
 }
 
-int32_t popcnt_li(int32_t value)
-{
-    return (int32_t)__builtin_popcount((uint32_t)value);
+int32_t popcnt_li(int32_t value) {
+  return (int32_t)__builtin_popcount((uint32_t)value);
 }
 
 /* fpc_finalize: FPC runtime procedure for finalizing managed types
@@ -3156,10 +3042,9 @@ int32_t popcnt_li(int32_t value)
  * finalization logic depends on TypeInfo, but the current compiler
  * doesn't emit full RTTI.  Provide a no-op stub so that generated
  * cleanup code links successfully. */
-void fpc_finalize(void *data, void *typeinfo)
-{
-    (void)data;
-    (void)typeinfo;
+void fpc_finalize(void *data, void *typeinfo) {
+  (void)data;
+  (void)typeinfo;
 }
 
 /* filecreate_rbs: FPC FileCreate(Filename: string): THandle
@@ -3168,2182 +3053,1922 @@ void fpc_finalize(void *data, void *typeinfo)
  * here via runtime_fpc_rtl_compat.S; extra parameters are ignored. */
 #include <fcntl.h>
 #include <sys/stat.h>
-int64_t kgpc_filecreate_rbs(const char *filename)
-{
+int64_t kgpc_filecreate_rbs(const char *filename) {
 #ifdef _WIN32
-    #include <io.h>
-    return (int64_t)_open(filename, _O_CREAT | _O_TRUNC | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+#include <io.h>
+  return (int64_t)_open(filename, _O_CREAT | _O_TRUNC | _O_RDWR | _O_BINARY,
+                        _S_IREAD | _S_IWRITE);
 #else
-    return (int64_t)open(filename, O_CREAT | O_TRUNC | O_RDWR, 0666);
+  return (int64_t)open(filename, O_CREAT | O_TRUNC | O_RDWR, 0666);
 #endif
 }
 
 /* Chr function - returns a character value as an integer */
-int64_t fpc_in_chr_byte(int64_t value)
-{
-    if (value < 0)
-        return 0;
-    if (value > 255)
-        return 255;
-    
-    return value;
+int64_t fpc_in_chr_byte(int64_t value) {
+  if (value < 0)
+    return 0;
+  if (value > 255)
+    return 255;
+
+  return value;
 }
 
-int64_t kgpc_chr(int64_t value)
-{
-    return fpc_in_chr_byte(value);
-}
+int64_t kgpc_chr(int64_t value) { return fpc_in_chr_byte(value); }
 
 /* Convert a character value to a single-character string */
-char *kgpc_char_to_string(int64_t value)
-{
-    /* Clamp value to valid character range [0, 255] */
-    if (value < 0)
-        value = 0;
-    else if (value > 255)
-        value = 255;
+char *kgpc_char_to_string(int64_t value) {
+  /* Clamp value to valid character range [0, 255] */
+  if (value < 0)
+    value = 0;
+  else if (value > 255)
+    value = 255;
 
-    char *result = kgpc_string_alloc_with_length(1);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
+  char *result = kgpc_string_alloc_with_length(1);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
 
-    result[0] = (char)value;
-    return result;
+  result[0] = (char)value;
+  return result;
 }
 
 /* Alias for WriteStr compatibility */
-char *kgpc_char_to_str(int64_t value)
-{
-    return kgpc_char_to_string(value);
+char *kgpc_char_to_str(int64_t value) { return kgpc_char_to_string(value); }
+
+char *kgpc_bool_to_str(int64_t value) {
+  return kgpc_string_duplicate(value ? "TRUE" : "FALSE");
 }
 
-char *kgpc_bool_to_str(int64_t value)
-{
-    return kgpc_string_duplicate(value ? "TRUE" : "FALSE");
+char *kgpc_real_to_str(double value) {
+  char buffer[64];
+  int written = snprintf(buffer, sizeof(buffer), "%g", value);
+  if (written < 0 || written >= (int)sizeof(buffer))
+    return kgpc_alloc_empty_string();
+
+  char *result = kgpc_string_alloc_with_length((size_t)written);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+
+  memcpy(result, buffer, (size_t)written + 1);
+  return result;
 }
 
-char *kgpc_real_to_str(double value)
-{
-    char buffer[64];
-    int written = snprintf(buffer, sizeof(buffer), "%g", value);
-    if (written < 0 || written >= (int)sizeof(buffer))
-        return kgpc_alloc_empty_string();
-
-    char *result = kgpc_string_alloc_with_length((size_t)written);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
-
-    memcpy(result, buffer, (size_t)written + 1);
-    return result;
+int64_t kgpc_upcase_char(int64_t value) {
+  unsigned char ch = (unsigned char)(value & 0xFF);
+  if (ch >= 'a' && ch <= 'z')
+    ch = (unsigned char)(ch - ('a' - 'A'));
+  return (int64_t)ch;
 }
 
-int64_t kgpc_upcase_char(int64_t value)
-{
-    unsigned char ch = (unsigned char)(value & 0xFF);
-    if (ch >= 'a' && ch <= 'z')
-        ch = (unsigned char)(ch - ('a' - 'A'));
-    return (int64_t)ch;
+int64_t kgpc_lowercase_char(int64_t value) {
+  unsigned char ch = (unsigned char)(value & 0xFF);
+  if (ch >= 'A' && ch <= 'Z')
+    ch = (unsigned char)(ch + ('a' - 'A'));
+  return (int64_t)ch;
 }
 
-int64_t kgpc_lowercase_char(int64_t value)
-{
-    unsigned char ch = (unsigned char)(value & 0xFF);
-    if (ch >= 'A' && ch <= 'Z')
-        ch = (unsigned char)(ch + ('a' - 'A'));
-    return (int64_t)ch;
+int64_t kgpc_is_odd(int64_t value) { return (value & 1) ? 1 : 0; }
+
+int64_t fpc_in_const_odd(int64_t value) { return (value & 1) ? 1 : 0; }
+
+void *fpc_in_const_ptr(void *value) { return value; }
+
+int32_t kgpc_sqr_int32(int32_t value) { return value * value; }
+
+int64_t kgpc_sqr_int64(int64_t value) { return value * value; }
+
+int64_t fpc_in_const_sqr(int64_t value) { return value * value; }
+
+double fpc_in_sqr_real(double value) { return value * value; }
+
+int64_t kgpc_ord_string(const char *value) {
+  if (value == NULL || value[0] == '\0')
+    return 0;
+
+  return (unsigned char)value[0];
 }
 
-int64_t kgpc_is_odd(int64_t value)
-{
-    return (value & 1) ? 1 : 0;
+int64_t kgpc_ord_longint(int64_t value) { return value; }
+
+char *kgpc_int_to_str(int64_t value) {
+  char buffer[32];
+  int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+  if (written < 0)
+    return kgpc_alloc_empty_string();
+
+  char *result = kgpc_string_alloc_with_length((size_t)written);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+
+  memcpy(result, buffer, (size_t)written + 1);
+  return result;
 }
 
-int64_t fpc_in_const_odd(int64_t value)
-{
-    return (value & 1) ? 1 : 0;
+char *kgpc_octstr(int64_t value, int64_t digits) {
+  if (digits < 1)
+    digits = 1;
+  if (digits > 22)
+    digits = 22;
+  char buffer[32];
+  int written = snprintf(buffer, sizeof(buffer), "%0*llo", (int)digits,
+                         (unsigned long long)value);
+  if (written < 0)
+    return kgpc_alloc_empty_string();
+
+  char *result = kgpc_string_alloc_with_length((size_t)written);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+
+  memcpy(result, buffer, (size_t)written + 1);
+  return result;
 }
 
-void *fpc_in_const_ptr(void *value)
-{
+char *kgpc_binstr(int64_t value, int64_t digits) {
+  if (digits < 1)
+    digits = 1;
+  if (digits > 64)
+    digits = 64;
+  char buffer[72];
+  uint64_t uval = (uint64_t)value;
+  int len = (int)digits;
+  buffer[len] = '\0';
+  for (int i = len - 1; i >= 0; i--) {
+    buffer[i] = '0' + (char)(uval & 1);
+    uval >>= 1;
+  }
+
+  char *result = kgpc_string_alloc_with_length((size_t)len);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+
+  memcpy(result, buffer, (size_t)len + 1);
+  return result;
+}
+
+char *kgpc_hexstr(int64_t value, int64_t digits) {
+  if (digits < 1)
+    digits = 1;
+  if (digits > 16)
+    digits = 16;
+  char buffer[32];
+  int written = snprintf(buffer, sizeof(buffer), "%0*llX", (int)digits,
+                         (unsigned long long)value);
+  if (written < 0)
+    return kgpc_alloc_empty_string();
+
+  char *result = kgpc_string_alloc_with_length((size_t)written);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+
+  memcpy(result, buffer, (size_t)written + 1);
+  return result;
+}
+
+static char *kgpc_apply_field_width(char *value, int64_t width) {
+  if (value == NULL)
+    return NULL;
+
+  if (width == -1 || width == 0)
     return value;
-}
 
-int32_t kgpc_sqr_int32(int32_t value)
-{
-    return value * value;
-}
-
-int64_t kgpc_sqr_int64(int64_t value)
-{
-    return value * value;
-}
-
-int64_t fpc_in_const_sqr(int64_t value)
-{
-    return value * value;
-}
-
-double fpc_in_sqr_real(double value)
-{
-    return value * value;
-}
-
-int64_t kgpc_ord_string(const char *value)
-{
-    if (value == NULL || value[0] == '\0')
-        return 0;
-
-    return (unsigned char)value[0];
-}
-
-int64_t kgpc_ord_longint(int64_t value)
-{
+  int left_align = (width < 0);
+  uint64_t abs_width = (width < 0) ? (uint64_t)(-width) : (uint64_t)width;
+  size_t len = kgpc_string_known_length(value);
+  if (abs_width <= len)
     return value;
+
+  size_t pad = abs_width - len;
+  char *result = kgpc_string_alloc_with_length(abs_width);
+  if (result == NULL)
+    return value;
+
+  if (left_align) {
+    memcpy(result, value, len);
+    memset(result + len, ' ', pad);
+  } else {
+    memset(result, ' ', pad);
+    memcpy(result + pad, value, len);
+  }
+  if (value != NULL)
+    kgpc_string_release(value);
+  return result;
 }
 
-char *kgpc_int_to_str(int64_t value)
-{
-    char buffer[32];
-    int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
-    if (written < 0)
-        return kgpc_alloc_empty_string();
+void kgpc_str_int64(int64_t value, char **target) {
+  if (target == NULL)
+    return;
 
-    char *result = kgpc_string_alloc_with_length((size_t)written);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
+  char *result = kgpc_int_to_str(value);
+  if (result == NULL)
+    return;
 
-    memcpy(result, buffer, (size_t)written + 1);
-    return result;
+  char *existing = *target;
+  if (existing != NULL)
+    kgpc_string_release(existing);
+  *target = result;
 }
 
-char *kgpc_octstr(int64_t value, int64_t digits)
-{
-    if (digits < 1)
-        digits = 1;
-    if (digits > 22)
-        digits = 22;
-    char buffer[32];
-    int written = snprintf(buffer, sizeof(buffer), "%0*llo", (int)digits,
-                           (unsigned long long)value);
-    if (written < 0)
-        return kgpc_alloc_empty_string();
+void kgpc_str_int64_fmt(int64_t value, int64_t width, char **target) {
+  if (target == NULL)
+    return;
 
-    char *result = kgpc_string_alloc_with_length((size_t)written);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
+  char *result = kgpc_int_to_str(value);
+  if (result == NULL)
+    return;
 
-    memcpy(result, buffer, (size_t)written + 1);
-    return result;
+  result = kgpc_apply_field_width(result, width);
+
+  char *existing = *target;
+  if (existing != NULL)
+    kgpc_string_release(existing);
+  *target = result;
 }
 
-char *kgpc_binstr(int64_t value, int64_t digits)
-{
-    if (digits < 1)
-        digits = 1;
-    if (digits > 64)
-        digits = 64;
-    char buffer[72];
-    uint64_t uval = (uint64_t)value;
-    int len = (int)digits;
-    buffer[len] = '\0';
-    for (int i = len - 1; i >= 0; i--)
-    {
-        buffer[i] = '0' + (char)(uval & 1);
-        uval >>= 1;
-    }
+void kgpc_str_real(double value, char **target) {
+  if (target == NULL)
+    return;
 
-    char *result = kgpc_string_alloc_with_length((size_t)len);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
+  char *result = kgpc_float_to_string(value, -1);
+  if (result == NULL)
+    return;
 
-    memcpy(result, buffer, (size_t)len + 1);
-    return result;
+  char *existing = *target;
+  if (existing != NULL)
+    kgpc_string_release(existing);
+  *target = result;
 }
 
-char *kgpc_hexstr(int64_t value, int64_t digits)
-{
-    if (digits < 1)
-        digits = 1;
-    if (digits > 16)
-        digits = 16;
-    char buffer[32];
-    int written = snprintf(buffer, sizeof(buffer), "%0*llX", (int)digits,
-                           (unsigned long long)value);
-    if (written < 0)
-        return kgpc_alloc_empty_string();
+void kgpc_str_real_fmt(double value, int64_t width, int64_t precision,
+                       char **target) {
+  if (target == NULL)
+    return;
 
-    char *result = kgpc_string_alloc_with_length((size_t)written);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
+  char *result = kgpc_float_to_string(value, (int)precision);
+  if (result == NULL)
+    return;
 
-    memcpy(result, buffer, (size_t)written + 1);
-    return result;
+  result = kgpc_apply_field_width(result, width);
+
+  char *existing = *target;
+  if (existing != NULL)
+    kgpc_string_release(existing);
+  *target = result;
 }
 
-static char *kgpc_apply_field_width(char *value, int64_t width)
-{
-    if (value == NULL)
-        return NULL;
-
-    if (width == -1 || width == 0)
-        return value;
-
-    int left_align = (width < 0);
-    uint64_t abs_width = (width < 0) ? (uint64_t)(-width) : (uint64_t)width;
-    size_t len = kgpc_string_known_length(value);
-    if (abs_width <= len)
-        return value;
-
-    size_t pad = abs_width - len;
-    char *result = kgpc_string_alloc_with_length(abs_width);
-    if (result == NULL)
-        return value;
-
-    if (left_align)
-    {
-        memcpy(result, value, len);
-        memset(result + len, ' ', pad);
-    }
-    else
-    {
-        memset(result, ' ', pad);
-        memcpy(result + pad, value, len);
-    }
-    if (value != NULL)
-        kgpc_string_release(value);
-    return result;
-}
-
-void kgpc_str_int64(int64_t value, char **target)
-{
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_int_to_str(value);
-    if (result == NULL)
-        return;
-
-    char *existing = *target;
-    if (existing != NULL)
-        kgpc_string_release(existing);
-    *target = result;
-}
-
-void kgpc_str_int64_fmt(int64_t value, int64_t width, char **target)
-{
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_int_to_str(value);
-    if (result == NULL)
-        return;
-
-    result = kgpc_apply_field_width(result, width);
-
-    char *existing = *target;
-    if (existing != NULL)
-        kgpc_string_release(existing);
-    *target = result;
-}
-
-void kgpc_str_real(double value, char **target)
-{
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_float_to_string(value, -1);
-    if (result == NULL)
-        return;
-
-    char *existing = *target;
-    if (existing != NULL)
-        kgpc_string_release(existing);
-    *target = result;
-}
-
-void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **target)
-{
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_float_to_string(value, (int)precision);
-    if (result == NULL)
-        return;
-
-    result = kgpc_apply_field_width(result, width);
-
-    char *existing = *target;
-    if (existing != NULL)
-        kgpc_string_release(existing);
-    *target = result;
-}
-
-/* Str for ShortString targets - copies result to a fixed-size Pascal ShortString array.
- * ShortString has format: first byte = length, followed by up to 255 characters. */
-static void kgpc_str_to_shortstring_final(char *target, char *result, int64_t max_length)
-{
-    if (result == NULL)
-        return;
-    if (target == NULL) {
-        kgpc_string_release(result);
-        return;
-    }
-    if (max_length < 1) max_length = 1;
-    if (max_length > 256) max_length = 256;
-    kgpc_string_to_shortstring(target, result, (size_t)max_length);
+/* Str for ShortString targets - copies result to a fixed-size Pascal
+ * ShortString array. ShortString has format: first byte = length, followed by
+ * up to 255 characters. */
+static void kgpc_str_to_shortstring_final(char *target, char *result,
+                                          int64_t max_length) {
+  if (result == NULL)
+    return;
+  if (target == NULL) {
     kgpc_string_release(result);
+    return;
+  }
+  if (max_length < 1)
+    max_length = 1;
+  if (max_length > 256)
+    max_length = 256;
+  kgpc_string_to_shortstring(target, result, (size_t)max_length);
+  kgpc_string_release(result);
 }
 
-void kgpc_str_int64_shortstring(int64_t value, char *target)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_int_to_str(value), 256);
+void kgpc_str_int64_shortstring(int64_t value, char *target) {
+  kgpc_str_to_shortstring_final(target, kgpc_int_to_str(value), 256);
 }
 
-void kgpc_str_int64_bounded_shortstring(int64_t value, char *target, int64_t max_length)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_int_to_str(value), max_length);
+void kgpc_str_int64_bounded_shortstring(int64_t value, char *target,
+                                        int64_t max_length) {
+  kgpc_str_to_shortstring_final(target, kgpc_int_to_str(value), max_length);
 }
 
-void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_int_to_str(value), width), 256);
+void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width,
+                                    char *target) {
+  kgpc_str_to_shortstring_final(
+      target, kgpc_apply_field_width(kgpc_int_to_str(value), width), 256);
 }
 
-void kgpc_str_int64_fmt_bounded_shortstring(int64_t value, int64_t width, char *target, int64_t max_length)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_int_to_str(value), width), max_length);
+void kgpc_str_int64_fmt_bounded_shortstring(int64_t value, int64_t width,
+                                            char *target, int64_t max_length) {
+  kgpc_str_to_shortstring_final(
+      target, kgpc_apply_field_width(kgpc_int_to_str(value), width),
+      max_length);
 }
 
-void kgpc_str_real_shortstring(double value, char *target)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_float_to_string(value, -1), 256);
+void kgpc_str_real_shortstring(double value, char *target) {
+  kgpc_str_to_shortstring_final(target, kgpc_float_to_string(value, -1), 256);
 }
 
-void kgpc_str_real_bounded_shortstring(double value, char *target, int64_t max_length)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_float_to_string(value, -1), max_length);
+void kgpc_str_real_bounded_shortstring(double value, char *target,
+                                       int64_t max_length) {
+  kgpc_str_to_shortstring_final(target, kgpc_float_to_string(value, -1),
+                                max_length);
 }
 
-void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precision, char *target)
-{
-    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_float_to_string(value, (int)precision), width), 256);
+void kgpc_str_real_fmt_shortstring(double value, int64_t width,
+                                   int64_t precision, char *target) {
+  kgpc_str_to_shortstring_final(
+      target,
+      kgpc_apply_field_width(kgpc_float_to_string(value, (int)precision),
+                             width),
+      256);
 }
 
-void kgpc_str_real_fmt_bounded_shortstring(double value, int64_t width, char *target, int64_t precision_and_max)
-{
-    int64_t precision = (int32_t)(precision_and_max & 0xffffffffu);
-    int64_t max_length = (uint32_t)((uint64_t)precision_and_max >> 32);
-    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_float_to_string(value, (int)precision), width), max_length);
+void kgpc_str_real_fmt_bounded_shortstring(double value, int64_t width,
+                                           char *target,
+                                           int64_t precision_and_max) {
+  int64_t precision = (int32_t)(precision_and_max & 0xffffffffu);
+  int64_t max_length = (uint32_t)((uint64_t)precision_and_max >> 32);
+  kgpc_str_to_shortstring_final(
+      target,
+      kgpc_apply_field_width(kgpc_float_to_string(value, (int)precision),
+                             width),
+      max_length);
 }
 
-double kgpc_now(void)
-{
+double kgpc_now(void) {
 #ifdef _WIN32
-    FILETIME ft;
-    ULARGE_INTEGER uli;
-    GetSystemTimeAsFileTime(&ft);
-    uli.LowPart = ft.dwLowDateTime;
-    uli.HighPart = ft.dwHighDateTime;
-    if (uli.QuadPart == 0)
-    {
-        time_t unix_time = time(NULL);
-        if (unix_time < 0)
-            return 0;
-        double unix_seconds = (double)unix_time;
-        return (unix_seconds / 86400.0) + 25569.0;
-    }
-    if (uli.QuadPart <= 116444736000000000ULL)
-    {
-        time_t unix_time = time(NULL);
-        if (unix_time < 0)
-            return 0;
-        double unix_seconds = (double)unix_time;
-        return (unix_seconds / 86400.0) + 25569.0;
-    }
-    /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
-    uint64_t ticks = uli.QuadPart - 116444736000000000ULL;
-    double unix_seconds = (double)ticks / 10000000.0;
+  FILETIME ft;
+  ULARGE_INTEGER uli;
+  GetSystemTimeAsFileTime(&ft);
+  uli.LowPart = ft.dwLowDateTime;
+  uli.HighPart = ft.dwHighDateTime;
+  if (uli.QuadPart == 0) {
+    time_t unix_time = time(NULL);
+    if (unix_time < 0)
+      return 0;
+    double unix_seconds = (double)unix_time;
     return (unix_seconds / 86400.0) + 25569.0;
+  }
+  if (uli.QuadPart <= 116444736000000000ULL) {
+    time_t unix_time = time(NULL);
+    if (unix_time < 0)
+      return 0;
+    double unix_seconds = (double)unix_time;
+    return (unix_seconds / 86400.0) + 25569.0;
+  }
+  /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
+  uint64_t ticks = uli.QuadPart - 116444736000000000ULL;
+  double unix_seconds = (double)ticks / 10000000.0;
+  return (unix_seconds / 86400.0) + 25569.0;
 #else
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
-        return 0;
-    double unix_seconds = (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
-    return (unix_seconds / 86400.0) + 25569.0;
+  struct timespec ts;
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+    return 0;
+  double unix_seconds = (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
+  return (unix_seconds / 86400.0) + 25569.0;
 #endif
 }
 
-static int append_char(char **buffer, size_t *length, size_t *capacity, char ch)
-{
-    if (*length + 1 >= *capacity)
-    {
-        size_t new_capacity = (*capacity == 0) ? 32 : (*capacity * 2);
-        char *new_buf = (char *)realloc(*buffer, new_capacity);
-        if (new_buf == NULL)
-            return 0;
-        *buffer = new_buf;
-        *capacity = new_capacity;
-    }
-    (*buffer)[(*length)++] = ch;
-    (*buffer)[*length] = '\0';
-    return 1;
+static int append_char(char **buffer, size_t *length, size_t *capacity,
+                       char ch) {
+  if (*length + 1 >= *capacity) {
+    size_t new_capacity = (*capacity == 0) ? 32 : (*capacity * 2);
+    char *new_buf = (char *)realloc(*buffer, new_capacity);
+    if (new_buf == NULL)
+      return 0;
+    *buffer = new_buf;
+    *capacity = new_capacity;
+  }
+  (*buffer)[(*length)++] = ch;
+  (*buffer)[*length] = '\0';
+  return 1;
 }
 
-static int append_text(char **buffer, size_t *length, size_t *capacity, const char *text)
-{
-    while (text != NULL && *text != '\0')
-    {
-        if (!append_char(buffer, length, capacity, *text++))
-            return 0;
-    }
-    return 1;
+static int append_text(char **buffer, size_t *length, size_t *capacity,
+                       const char *text) {
+  while (text != NULL && *text != '\0') {
+    if (!append_char(buffer, length, capacity, *text++))
+      return 0;
+  }
+  return 1;
 }
 
-static int match_token_ci(const char *cursor, const char *token)
-{
-    size_t len = strlen(token);
-    for (size_t i = 0; i < len; ++i)
-    {
-        if (cursor[i] == '\0' || tolower((unsigned char)cursor[i]) != tolower((unsigned char)token[i]))
-            return 0;
-    }
-    return 1;
+static int match_token_ci(const char *cursor, const char *token) {
+  size_t len = strlen(token);
+  for (size_t i = 0; i < len; ++i) {
+    if (cursor[i] == '\0' ||
+        tolower((unsigned char)cursor[i]) != tolower((unsigned char)token[i]))
+      return 0;
+  }
+  return 1;
 }
 
-static void kgpc_fill_tm_from_unix_seconds(struct tm *out, int64_t seconds)
-{
-    if (out == NULL)
-        return;
+static void kgpc_fill_tm_from_unix_seconds(struct tm *out, int64_t seconds) {
+  if (out == NULL)
+    return;
 
-    int64_t days = seconds / 86400;
-    int64_t rem = seconds % 86400;
-    if (rem < 0)
-    {
-        rem += 86400;
-        days -= 1;
-    }
+  int64_t days = seconds / 86400;
+  int64_t rem = seconds % 86400;
+  if (rem < 0) {
+    rem += 86400;
+    days -= 1;
+  }
 
-    int hour = (int)(rem / 3600);
-    rem %= 3600;
-    int minute = (int)(rem / 60);
-    int second = (int)(rem % 60);
+  int hour = (int)(rem / 3600);
+  rem %= 3600;
+  int minute = (int)(rem / 60);
+  int second = (int)(rem % 60);
 
-    int64_t z = days + 719468;
-    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    unsigned doe = (unsigned)(z - era * 146097);
-    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int year = (int)(yoe) + (int)era * 400;
-    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    unsigned mp = (5 * doy + 2) / 153;
-    unsigned day = doy - (153 * mp + 2) / 5 + 1;
-    unsigned month = mp + (mp < 10 ? 3 : -9);
-    year += (month <= 2);
+  int64_t z = days + 719468;
+  int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  unsigned doe = (unsigned)(z - era * 146097);
+  unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  int year = (int)(yoe) + (int)era * 400;
+  unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  unsigned mp = (5 * doy + 2) / 153;
+  unsigned day = doy - (153 * mp + 2) / 5 + 1;
+  unsigned month = mp + (mp < 10 ? 3 : -9);
+  year += (month <= 2);
 
-    memset(out, 0, sizeof(*out));
-    out->tm_year = year - 1900;
-    out->tm_mon = (int)month - 1;
-    out->tm_mday = (int)day;
-    out->tm_hour = hour;
-    out->tm_min = minute;
-    out->tm_sec = second;
-    out->tm_isdst = -1;
+  memset(out, 0, sizeof(*out));
+  out->tm_year = year - 1900;
+  out->tm_mon = (int)month - 1;
+  out->tm_mday = (int)day;
+  out->tm_hour = hour;
+  out->tm_min = minute;
+  out->tm_sec = second;
+  out->tm_isdst = -1;
 }
 
-char *kgpc_format_datetime(const char *format, double datetime)
-{
-    if (format == NULL)
-        format = "";
+char *kgpc_format_datetime(const char *format, double datetime) {
+  if (format == NULL)
+    format = "";
 
-    double unix_seconds = (datetime - 25569.0) * 86400.0;
-    double whole_seconds = floor(unix_seconds);
-    double frac = unix_seconds - whole_seconds;
-    if (frac < 0.0)
-    {
-        frac += 1.0;
-        whole_seconds -= 1.0;
-    }
-    time_t seconds = (time_t)whole_seconds;
-    int millis = (int)floor((frac * 1000.0) + 0.5);
-    if (millis >= 1000)
-    {
-        millis = 0;
-        seconds += 1;
-    }
+  double unix_seconds = (datetime - 25569.0) * 86400.0;
+  double whole_seconds = floor(unix_seconds);
+  double frac = unix_seconds - whole_seconds;
+  if (frac < 0.0) {
+    frac += 1.0;
+    whole_seconds -= 1.0;
+  }
+  time_t seconds = (time_t)whole_seconds;
+  int millis = (int)floor((frac * 1000.0) + 0.5);
+  if (millis >= 1000) {
+    millis = 0;
+    seconds += 1;
+  }
 
-    struct tm tm_value;
+  struct tm tm_value;
 #ifdef _WIN32
-    errno_t err = localtime_s(&tm_value, &seconds);
-    if (err != 0)
-    {
-        struct tm *localtime_result = localtime(&seconds);
-        if (localtime_result != NULL)
-        {
-            tm_value = *localtime_result;
+  errno_t err = localtime_s(&tm_value, &seconds);
+  if (err != 0) {
+    struct tm *localtime_result = localtime(&seconds);
+    if (localtime_result != NULL) {
+      tm_value = *localtime_result;
+    } else {
+      errno_t gmt_err = gmtime_s(&tm_value, &seconds);
+      if (gmt_err != 0) {
+        struct tm *gmtime_result = gmtime(&seconds);
+        if (gmtime_result != NULL) {
+          tm_value = *gmtime_result;
+        } else {
+          kgpc_fill_tm_from_unix_seconds(&tm_value, (int64_t)seconds);
         }
-        else
-        {
-            errno_t gmt_err = gmtime_s(&tm_value, &seconds);
-            if (gmt_err != 0)
-            {
-                struct tm *gmtime_result = gmtime(&seconds);
-                if (gmtime_result != NULL)
-                {
-                    tm_value = *gmtime_result;
-                }
-                else
-                {
-                    kgpc_fill_tm_from_unix_seconds(&tm_value, (int64_t)seconds);
-                }
-            }
-        }
+      }
     }
+  }
 #else
-    if (localtime_r(&seconds, &tm_value) == NULL)
-    {
-        kgpc_fill_tm_from_unix_seconds(&tm_value, (int64_t)seconds);
-    }
+  if (localtime_r(&seconds, &tm_value) == NULL) {
+    kgpc_fill_tm_from_unix_seconds(&tm_value, (int64_t)seconds);
+  }
 #endif
 
-    size_t capacity = 64;
-    size_t length = 0;
-    char *result = (char *)malloc(capacity);
-    if (result == NULL)
-        return kgpc_alloc_empty_string();
-    result[0] = '\0';
+  size_t capacity = 64;
+  size_t length = 0;
+  char *result = (char *)malloc(capacity);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+  result[0] = '\0';
 
-    const char *cursor = format;
-    while (*cursor != '\0')
-    {
-        if (*cursor == '\'')
-        {
-            ++cursor;
-            while (*cursor != '\0')
-            {
-                if (*cursor == '\'' && *(cursor + 1) == '\'')
-                {
-                    if (!append_char(&result, &length, &capacity, '\''))
-                    {
-                        free(result);
-                        return kgpc_alloc_empty_string();
-                    }
-                    cursor += 2;
-                    continue;
-                }
-                if (*cursor == '\'')
-                {
-                    ++cursor;
-                    break;
-                }
-                if (!append_char(&result, &length, &capacity, *cursor++))
-                {
-                    free(result);
-                    return kgpc_alloc_empty_string();
-                }
-            }
-            continue;
-        }
-
-        if (match_token_ci(cursor, "yyyy"))
-        {
-            char buffer[16];  // Increased from 8 to handle extreme values
-            snprintf(buffer, sizeof(buffer), "%04d", tm_value.tm_year + 1900);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 4;
-            continue;
-        }
-        if (match_token_ci(cursor, "yy"))
-        {
-            char buffer[4];
-            snprintf(buffer, sizeof(buffer), "%02d", (tm_value.tm_year + 1900) % 100);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 2;
-            continue;
-        }
-        if (match_token_ci(cursor, "mm"))
-        {
-            char buffer[16];  // Increased from 4 to handle extreme values
-            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mon + 1);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 2;
-            continue;
-        }
-        if (match_token_ci(cursor, "dd"))
-        {
-            char buffer[4];
-            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mday);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 2;
-            continue;
-        }
-        if (match_token_ci(cursor, "hh"))
-        {
-            char buffer[4];
-            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_hour);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 2;
-            continue;
-        }
-        if (match_token_ci(cursor, "nn"))
-        {
-            char buffer[4];
-            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_min);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 2;
-            continue;
-        }
-        if (match_token_ci(cursor, "ss"))
-        {
-            char buffer[4];
-            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_sec);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 2;
-            continue;
-        }
-        if (match_token_ci(cursor, "zzz"))
-        {
-            char buffer[12];  // Large enough for any int value
-            snprintf(buffer, sizeof(buffer), "%03d", millis);
-            if (!append_text(&result, &length, &capacity, buffer))
-            {
-                free(result);
-                return kgpc_alloc_empty_string();
-            }
-            cursor += 3;
-            continue;
-        }
-
-        if (!append_char(&result, &length, &capacity, *cursor++))
-        {
+  const char *cursor = format;
+  while (*cursor != '\0') {
+    if (*cursor == '\'') {
+      ++cursor;
+      while (*cursor != '\0') {
+        if (*cursor == '\'' && *(cursor + 1) == '\'') {
+          if (!append_char(&result, &length, &capacity, '\'')) {
             free(result);
             return kgpc_alloc_empty_string();
+          }
+          cursor += 2;
+          continue;
         }
+        if (*cursor == '\'') {
+          ++cursor;
+          break;
+        }
+        if (!append_char(&result, &length, &capacity, *cursor++)) {
+          free(result);
+          return kgpc_alloc_empty_string();
+        }
+      }
+      continue;
     }
 
-    /* Convert the bare malloc'd buffer into a KGPC-headered AnsiString so
-     * the caller's `:= kgpc_format_datetime(...)` assignment path can
-     * refcount and release it via kgpc_string_release rather than leaking
-     * the raw allocation.  kgpc_string_assign duplicates non-headered
-     * char* values into a fresh headered copy without ever freeing the
-     * source — leaving the malloc'd buffer here would leak its bytes
-     * on every DateTimeToStr / FormatDateTime call. */
-    (void)length;  /* result is already NUL-terminated by append_char/text. */
-    char *headered = kgpc_string_duplicate(result);
-    free(result);
-    return headered;
+    if (match_token_ci(cursor, "yyyy")) {
+      char buffer[16]; // Increased from 8 to handle extreme values
+      snprintf(buffer, sizeof(buffer), "%04d", tm_value.tm_year + 1900);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 4;
+      continue;
+    }
+    if (match_token_ci(cursor, "yy")) {
+      char buffer[4];
+      snprintf(buffer, sizeof(buffer), "%02d", (tm_value.tm_year + 1900) % 100);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 2;
+      continue;
+    }
+    if (match_token_ci(cursor, "mm")) {
+      char buffer[16]; // Increased from 4 to handle extreme values
+      snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mon + 1);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 2;
+      continue;
+    }
+    if (match_token_ci(cursor, "dd")) {
+      char buffer[4];
+      snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mday);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 2;
+      continue;
+    }
+    if (match_token_ci(cursor, "hh")) {
+      char buffer[4];
+      snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_hour);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 2;
+      continue;
+    }
+    if (match_token_ci(cursor, "nn")) {
+      char buffer[4];
+      snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_min);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 2;
+      continue;
+    }
+    if (match_token_ci(cursor, "ss")) {
+      char buffer[4];
+      snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_sec);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 2;
+      continue;
+    }
+    if (match_token_ci(cursor, "zzz")) {
+      char buffer[12]; // Large enough for any int value
+      snprintf(buffer, sizeof(buffer), "%03d", millis);
+      if (!append_text(&result, &length, &capacity, buffer)) {
+        free(result);
+        return kgpc_alloc_empty_string();
+      }
+      cursor += 3;
+      continue;
+    }
+
+    if (!append_char(&result, &length, &capacity, *cursor++)) {
+      free(result);
+      return kgpc_alloc_empty_string();
+    }
+  }
+
+  /* Convert the bare malloc'd buffer into a KGPC-headered AnsiString so
+   * the caller's `:= kgpc_format_datetime(...)` assignment path can
+   * refcount and release it via kgpc_string_release rather than leaking
+   * the raw allocation.  kgpc_string_assign duplicates non-headered
+   * char* values into a fresh headered copy without ever freeing the
+   * source — leaving the malloc'd buffer here would leak its bytes
+   * on every DateTimeToStr / FormatDateTime call. */
+  (void)length; /* result is already NUL-terminated by append_char/text. */
+  char *headered = kgpc_string_duplicate(result);
+  free(result);
+  return headered;
 }
 
-typedef struct
-{
-    char *data;
-    size_t length;
-    size_t capacity;
+typedef struct {
+  char *data;
+  size_t length;
+  size_t capacity;
 } kgpc_format_builder;
 
-static void kgpc_format_builder_init(kgpc_format_builder *builder)
-{
-    builder->data = NULL;
-    builder->length = 0;
-    builder->capacity = 0;
+static void kgpc_format_builder_init(kgpc_format_builder *builder) {
+  builder->data = NULL;
+  builder->length = 0;
+  builder->capacity = 0;
 }
 
-static void kgpc_format_builder_free(kgpc_format_builder *builder)
-{
-    if (builder->data != NULL)
-        free(builder->data);
-    builder->data = NULL;
-    builder->length = 0;
-    builder->capacity = 0;
+static void kgpc_format_builder_free(kgpc_format_builder *builder) {
+  if (builder->data != NULL)
+    free(builder->data);
+  builder->data = NULL;
+  builder->length = 0;
+  builder->capacity = 0;
 }
 
-static int kgpc_format_builder_reserve(kgpc_format_builder *builder, size_t extra)
-{
-    size_t needed = builder->length + extra + 1;
-    if (needed <= builder->capacity)
-        return 1;
-    size_t new_capacity = (builder->capacity == 0) ? 64 : builder->capacity;
-    while (new_capacity < needed)
-        new_capacity *= 2;
-    char *new_data = (char *)realloc(builder->data, new_capacity);
-    if (new_data == NULL)
-        return 0;
-    builder->data = new_data;
-    builder->capacity = new_capacity;
+static int kgpc_format_builder_reserve(kgpc_format_builder *builder,
+                                       size_t extra) {
+  size_t needed = builder->length + extra + 1;
+  if (needed <= builder->capacity)
     return 1;
+  size_t new_capacity = (builder->capacity == 0) ? 64 : builder->capacity;
+  while (new_capacity < needed)
+    new_capacity *= 2;
+  char *new_data = (char *)realloc(builder->data, new_capacity);
+  if (new_data == NULL)
+    return 0;
+  builder->data = new_data;
+  builder->capacity = new_capacity;
+  return 1;
 }
 
-static int kgpc_format_builder_append_buf(kgpc_format_builder *builder, const char *buf, size_t len)
-{
-    if (len == 0)
-        return 1;
-    if (!kgpc_format_builder_reserve(builder, len))
-        return 0;
-    memcpy(builder->data + builder->length, buf, len);
-    builder->length += len;
-    builder->data[builder->length] = '\0';
+static int kgpc_format_builder_append_buf(kgpc_format_builder *builder,
+                                          const char *buf, size_t len) {
+  if (len == 0)
     return 1;
+  if (!kgpc_format_builder_reserve(builder, len))
+    return 0;
+  memcpy(builder->data + builder->length, buf, len);
+  builder->length += len;
+  builder->data[builder->length] = '\0';
+  return 1;
 }
 
-static int kgpc_format_builder_append_char(kgpc_format_builder *builder, char ch)
-{
-    return kgpc_format_builder_append_buf(builder, &ch, 1);
+static int kgpc_format_builder_append_char(kgpc_format_builder *builder,
+                                           char ch) {
+  return kgpc_format_builder_append_buf(builder, &ch, 1);
 }
 
-static int kgpc_format_builder_append_padding(kgpc_format_builder *builder, size_t count)
-{
-    if (count == 0)
-        return 1;
-    if (!kgpc_format_builder_reserve(builder, count))
-        return 0;
-    memset(builder->data + builder->length, ' ', count);
-    builder->length += count;
-    builder->data[builder->length] = '\0';
+static int kgpc_format_builder_append_padding(kgpc_format_builder *builder,
+                                              size_t count) {
+  if (count == 0)
     return 1;
+  if (!kgpc_format_builder_reserve(builder, count))
+    return 0;
+  memset(builder->data + builder->length, ' ', count);
+  builder->length += count;
+  builder->data[builder->length] = '\0';
+  return 1;
 }
 
 static int kgpc_format_builder_append_formatted(kgpc_format_builder *builder,
-    const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    int needed = vsnprintf(NULL, 0, fmt, args);
-    va_end(args);
-    if (needed < 0)
-        return 0;
-    if (!kgpc_format_builder_reserve(builder, (size_t)needed))
-        return 0;
-    va_start(args, fmt);
-    vsnprintf(builder->data + builder->length, builder->capacity - builder->length, fmt, args);
-    va_end(args);
-    builder->length += (size_t)needed;
-    return 1;
+                                                const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  int needed = vsnprintf(NULL, 0, fmt, args);
+  va_end(args);
+  if (needed < 0)
+    return 0;
+  if (!kgpc_format_builder_reserve(builder, (size_t)needed))
+    return 0;
+  va_start(args, fmt);
+  vsnprintf(builder->data + builder->length,
+            builder->capacity - builder->length, fmt, args);
+  va_end(args);
+  builder->length += (size_t)needed;
+  return 1;
 }
 
-static int kgpc_format_builder_append_string_with_width(kgpc_format_builder *builder,
-    const char *value, size_t value_len, int width, int left_align)
-{
-    size_t padding = 0;
-    if (width > 0 && (size_t)width > value_len)
-        padding = (size_t)width - value_len;
-    if (!left_align && padding > 0)
-    {
-        if (!kgpc_format_builder_append_padding(builder, padding))
-            return 0;
-    }
-    if (!kgpc_format_builder_append_buf(builder, value, value_len))
-        return 0;
-    if (left_align && padding > 0)
-    {
-        if (!kgpc_format_builder_append_padding(builder, padding))
-            return 0;
-    }
-    return 1;
+static int kgpc_format_builder_append_string_with_width(
+    kgpc_format_builder *builder, const char *value, size_t value_len,
+    int width, int left_align) {
+  size_t padding = 0;
+  if (width > 0 && (size_t)width > value_len)
+    padding = (size_t)width - value_len;
+  if (!left_align && padding > 0) {
+    if (!kgpc_format_builder_append_padding(builder, padding))
+      return 0;
+  }
+  if (!kgpc_format_builder_append_buf(builder, value, value_len))
+    return 0;
+  if (left_align && padding > 0) {
+    if (!kgpc_format_builder_append_padding(builder, padding))
+      return 0;
+  }
+  return 1;
 }
 
-char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
-{
-    if (fmt == NULL)
-        fmt = "";
+char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count) {
+  if (fmt == NULL)
+    fmt = "";
 
-    kgpc_format_builder builder;
-    kgpc_format_builder_init(&builder);
+  kgpc_format_builder builder;
+  kgpc_format_builder_init(&builder);
 
-    size_t arg_index = 0;
-    while (*fmt != '\0')
-    {
-        if (*fmt != '%')
-        {
-            if (!kgpc_format_builder_append_char(&builder, *fmt++))
-            {
-                kgpc_format_builder_free(&builder);
-                return kgpc_alloc_empty_string();
-            }
-            continue;
-        }
-
-        ++fmt;
-        if (*fmt == '%')
-        {
-            if (!kgpc_format_builder_append_char(&builder, '%'))
-            {
-                kgpc_format_builder_free(&builder);
-                return kgpc_alloc_empty_string();
-            }
-            ++fmt;
-            continue;
-        }
-
-        int left_align = 0;
-        if (*fmt == '-')
-        {
-            left_align = 1;
-            ++fmt;
-        }
-
-        int width = -1;
-        if (isdigit((unsigned char)*fmt))
-        {
-            width = 0;
-            while (isdigit((unsigned char)*fmt))
-            {
-                width = width * 10 + (*fmt - '0');
-                ++fmt;
-            }
-        }
-
-        int precision = -1;
-        if (*fmt == '.')
-        {
-            ++fmt;
-            precision = 0;
-            while (isdigit((unsigned char)*fmt))
-            {
-                precision = precision * 10 + (*fmt - '0');
-                ++fmt;
-            }
-        }
-
-        char spec = *fmt ? *fmt++ : '\0';
-        if (spec == '\0')
-            break;
-
-        if (arg_index >= arg_count || args == NULL)
-        {
-            kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
-            continue;
-        }
-
-        const kgpc_tvarrec *arg = &args[arg_index++];
-        switch (spec)
-        {
-            case 'd':
-            case 'i':
-            case 'u':
-            case 'x':
-            case 'X':
-            case 'p':
-            case 'P':
-            {
-                long long value = arg->data.v_int;
-                if (arg->kind == KGPC_TVAR_KIND_BOOL || arg->kind == KGPC_TVAR_KIND_CHAR)
-                    value = arg->data.v_int;
-                else if (arg->kind == KGPC_TVAR_KIND_POINTER || arg->kind == KGPC_TVAR_KIND_STRING || arg->kind == KGPC_TVAR_KIND_ANSISTRING)
-                    value = (long long)(intptr_t)arg->data.v_ptr;
-                else if (arg->kind != KGPC_TVAR_KIND_INT)
-                {
-                    kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
-                    break;
-                }
-
-                char fmtbuf[32];
-                size_t pos = 0;
-                fmtbuf[pos++] = '%';
-                if (left_align)
-                    fmtbuf[pos++] = '-';
-                if (width >= 0)
-                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
-                if (precision >= 0 && spec != 'p' && spec != 'P')
-                {
-                    fmtbuf[pos++] = '.';
-                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", precision);
-                }
-                fmtbuf[pos++] = spec;
-                fmtbuf[pos] = '\0';
-
-                if (!kgpc_format_builder_append_formatted(&builder, fmtbuf, value))
-                {
-                    kgpc_format_builder_free(&builder);
-                    return kgpc_alloc_empty_string();
-                }
-                break;
-            }
-            case 'f':
-            case 'F':
-            case 'g':
-            case 'G':
-            case 'e':
-            case 'E':
-            case 'n':
-            case 'N':
-            {
-                double real_value = 0.0;
-                if (arg->kind == KGPC_TVAR_KIND_REAL)
-                    real_value = *(double *)arg->data.v_ptr;
-                else if (arg->kind == KGPC_TVAR_KIND_INT || arg->kind == KGPC_TVAR_KIND_BOOL ||
-                         arg->kind == KGPC_TVAR_KIND_CHAR)
-                    real_value = (double)arg->data.v_int;
-                else
-                {
-                    kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
-                    break;
-                }
-
-                char fmtbuf[32];
-                size_t pos = 0;
-                fmtbuf[pos++] = '%';
-                if (left_align)
-                    fmtbuf[pos++] = '-';
-                if (width >= 0)
-                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
-                if (precision >= 0)
-                {
-                    fmtbuf[pos++] = '.';
-                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", precision);
-                }
-                fmtbuf[pos++] = spec;
-                fmtbuf[pos] = '\0';
-
-                if (!kgpc_format_builder_append_formatted(&builder, fmtbuf, real_value))
-                {
-                    kgpc_format_builder_free(&builder);
-                    return kgpc_alloc_empty_string();
-                }
-                break;
-            }
-            case 's':
-            case 'S':
-            {
-                const char *str_ptr = (const char *)arg->data.v_ptr;
-                if (arg->kind == KGPC_TVAR_KIND_CHAR)
-                {
-                    char ch = (char)(arg->data.v_int & 0xFF);
-                    char temp[2] = { ch, '\0' };
-                    str_ptr = temp;
-                    size_t len = 1;
-                    if (!kgpc_format_builder_append_string_with_width(&builder, temp, len, width, left_align))
-                    {
-                        kgpc_format_builder_free(&builder);
-                        return kgpc_alloc_empty_string();
-                    }
-                    break;
-                }
-                if (arg->kind != KGPC_TVAR_KIND_STRING && arg->kind != KGPC_TVAR_KIND_POINTER && arg->kind != KGPC_TVAR_KIND_ANSISTRING)
-                {
-                    kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
-                    break;
-                }
-                if (str_ptr == NULL)
-                    str_ptr = "";
-                size_t len = kgpc_string_known_length(str_ptr);
-                if (precision >= 0 && (size_t)precision < len)
-                    len = (size_t)precision;
-                if (!kgpc_format_builder_append_string_with_width(&builder, str_ptr, len, width, left_align))
-                {
-                    kgpc_format_builder_free(&builder);
-                    return kgpc_alloc_empty_string();
-                }
-                break;
-            }
-            case 'c':
-            case 'C':
-            {
-                char ch = 0;
-                if (arg->kind == KGPC_TVAR_KIND_CHAR || arg->kind == KGPC_TVAR_KIND_INT ||
-                    arg->kind == KGPC_TVAR_KIND_BOOL)
-                    ch = (char)(arg->data.v_int & 0xFF);
-                else
-                {
-                    kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
-                    break;
-                }
-                if (!kgpc_format_builder_append_string_with_width(&builder, &ch, 1, width, left_align))
-                {
-                    kgpc_format_builder_free(&builder);
-                    return kgpc_alloc_empty_string();
-                }
-                break;
-            }
-            default:
-                kgpc_format_builder_append_char(&builder, spec);
-                break;
-        }
-    }
-
-    if (!kgpc_format_builder_reserve(&builder, 0))
-    {
+  size_t arg_index = 0;
+  while (*fmt != '\0') {
+    if (*fmt != '%') {
+      if (!kgpc_format_builder_append_char(&builder, *fmt++)) {
         kgpc_format_builder_free(&builder);
         return kgpc_alloc_empty_string();
+      }
+      continue;
     }
 
-    char *result = kgpc_string_duplicate(builder.data != NULL ? builder.data : "");
-    kgpc_format_builder_free(&builder);
-    return result != NULL ? result : kgpc_alloc_empty_string();
-}
-
-char *kgpc_float_to_string(double value, int precision)
-{
-    if (precision < 0)
-    {
-        if (isnan(value))
-            return kgpc_string_duplicate("-nan(ind)");
-        if (isinf(value))
-            return kgpc_string_duplicate(value > 0 ? "inf" : "-inf");
-
-        char buffer[64];
-        int len = snprintf(buffer, sizeof(buffer), "%.15g", value);
-        if (len < 0)
-            return kgpc_alloc_empty_string();
-        return kgpc_string_duplicate(buffer);
-    }
-    if (precision > 18)
-        precision = 18;
-
-    double normalized = value;
-    if (isfinite(value) && precision > 0)
-    {
-        double scale = 1.0;
-        for (int i = 0; i < precision; ++i)
-            scale *= 10.0;
-        if (scale != 0.0 && isfinite(scale))
-            normalized = round(value * scale) / scale;
-    }
-
-    if (isnan(normalized))
-        return kgpc_string_duplicate("-nan(ind)");
-    if (isinf(normalized))
-        return kgpc_string_duplicate(value > 0 ? "inf" : "-inf");
-
-    char fmt[16];
-    snprintf(fmt, sizeof(fmt), "%%.%df", precision);
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), fmt, normalized);
-    if (len < 0)
+    ++fmt;
+    if (*fmt == '%') {
+      if (!kgpc_format_builder_append_char(&builder, '%')) {
+        kgpc_format_builder_free(&builder);
         return kgpc_alloc_empty_string();
-    return kgpc_string_duplicate(buffer);
+      }
+      ++fmt;
+      continue;
+    }
+
+    int left_align = 0;
+    if (*fmt == '-') {
+      left_align = 1;
+      ++fmt;
+    }
+
+    int width = -1;
+    if (isdigit((unsigned char)*fmt)) {
+      width = 0;
+      while (isdigit((unsigned char)*fmt)) {
+        width = width * 10 + (*fmt - '0');
+        ++fmt;
+      }
+    }
+
+    int precision = -1;
+    if (*fmt == '.') {
+      ++fmt;
+      precision = 0;
+      while (isdigit((unsigned char)*fmt)) {
+        precision = precision * 10 + (*fmt - '0');
+        ++fmt;
+      }
+    }
+
+    char spec = *fmt ? *fmt++ : '\0';
+    if (spec == '\0')
+      break;
+
+    if (arg_index >= arg_count || args == NULL) {
+      kgpc_format_builder_append_buf(&builder, "[Invalid]",
+                                     strlen("[Invalid]"));
+      continue;
+    }
+
+    const kgpc_tvarrec *arg = &args[arg_index++];
+    switch (spec) {
+    case 'd':
+    case 'i':
+    case 'u':
+    case 'x':
+    case 'X':
+    case 'p':
+    case 'P': {
+      long long value = arg->data.v_int;
+      if (arg->kind == KGPC_TVAR_KIND_BOOL || arg->kind == KGPC_TVAR_KIND_CHAR)
+        value = arg->data.v_int;
+      else if (arg->kind == KGPC_TVAR_KIND_POINTER ||
+               arg->kind == KGPC_TVAR_KIND_STRING ||
+               arg->kind == KGPC_TVAR_KIND_ANSISTRING)
+        value = (long long)(intptr_t)arg->data.v_ptr;
+      else if (arg->kind != KGPC_TVAR_KIND_INT) {
+        kgpc_format_builder_append_buf(&builder, "[Invalid]",
+                                       strlen("[Invalid]"));
+        break;
+      }
+
+      char fmtbuf[32];
+      size_t pos = 0;
+      fmtbuf[pos++] = '%';
+      if (left_align)
+        fmtbuf[pos++] = '-';
+      if (width >= 0)
+        pos +=
+            (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
+      if (precision >= 0 && spec != 'p' && spec != 'P') {
+        fmtbuf[pos++] = '.';
+        pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d",
+                                precision);
+      }
+      fmtbuf[pos++] = spec;
+      fmtbuf[pos] = '\0';
+
+      if (!kgpc_format_builder_append_formatted(&builder, fmtbuf, value)) {
+        kgpc_format_builder_free(&builder);
+        return kgpc_alloc_empty_string();
+      }
+      break;
+    }
+    case 'f':
+    case 'F':
+    case 'g':
+    case 'G':
+    case 'e':
+    case 'E':
+    case 'n':
+    case 'N': {
+      double real_value = 0.0;
+      if (arg->kind == KGPC_TVAR_KIND_REAL)
+        real_value = *(double *)arg->data.v_ptr;
+      else if (arg->kind == KGPC_TVAR_KIND_INT ||
+               arg->kind == KGPC_TVAR_KIND_BOOL ||
+               arg->kind == KGPC_TVAR_KIND_CHAR)
+        real_value = (double)arg->data.v_int;
+      else {
+        kgpc_format_builder_append_buf(&builder, "[Invalid]",
+                                       strlen("[Invalid]"));
+        break;
+      }
+
+      char fmtbuf[32];
+      size_t pos = 0;
+      fmtbuf[pos++] = '%';
+      if (left_align)
+        fmtbuf[pos++] = '-';
+      if (width >= 0)
+        pos +=
+            (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
+      if (precision >= 0) {
+        fmtbuf[pos++] = '.';
+        pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d",
+                                precision);
+      }
+      fmtbuf[pos++] = spec;
+      fmtbuf[pos] = '\0';
+
+      if (!kgpc_format_builder_append_formatted(&builder, fmtbuf, real_value)) {
+        kgpc_format_builder_free(&builder);
+        return kgpc_alloc_empty_string();
+      }
+      break;
+    }
+    case 's':
+    case 'S': {
+      const char *str_ptr = (const char *)arg->data.v_ptr;
+      if (arg->kind == KGPC_TVAR_KIND_CHAR) {
+        char ch = (char)(arg->data.v_int & 0xFF);
+        char temp[2] = {ch, '\0'};
+        str_ptr = temp;
+        size_t len = 1;
+        if (!kgpc_format_builder_append_string_with_width(&builder, temp, len,
+                                                          width, left_align)) {
+          kgpc_format_builder_free(&builder);
+          return kgpc_alloc_empty_string();
+        }
+        break;
+      }
+      if (arg->kind != KGPC_TVAR_KIND_STRING &&
+          arg->kind != KGPC_TVAR_KIND_POINTER &&
+          arg->kind != KGPC_TVAR_KIND_ANSISTRING) {
+        kgpc_format_builder_append_buf(&builder, "[Invalid]",
+                                       strlen("[Invalid]"));
+        break;
+      }
+      if (str_ptr == NULL)
+        str_ptr = "";
+      size_t len = kgpc_string_known_length(str_ptr);
+      if (precision >= 0 && (size_t)precision < len)
+        len = (size_t)precision;
+      if (!kgpc_format_builder_append_string_with_width(&builder, str_ptr, len,
+                                                        width, left_align)) {
+        kgpc_format_builder_free(&builder);
+        return kgpc_alloc_empty_string();
+      }
+      break;
+    }
+    case 'c':
+    case 'C': {
+      char ch = 0;
+      if (arg->kind == KGPC_TVAR_KIND_CHAR || arg->kind == KGPC_TVAR_KIND_INT ||
+          arg->kind == KGPC_TVAR_KIND_BOOL)
+        ch = (char)(arg->data.v_int & 0xFF);
+      else {
+        kgpc_format_builder_append_buf(&builder, "[Invalid]",
+                                       strlen("[Invalid]"));
+        break;
+      }
+      if (!kgpc_format_builder_append_string_with_width(&builder, &ch, 1, width,
+                                                        left_align)) {
+        kgpc_format_builder_free(&builder);
+        return kgpc_alloc_empty_string();
+      }
+      break;
+    }
+    default:
+      kgpc_format_builder_append_char(&builder, spec);
+      break;
+    }
+  }
+
+  if (!kgpc_format_builder_reserve(&builder, 0)) {
+    kgpc_format_builder_free(&builder);
+    return kgpc_alloc_empty_string();
+  }
+
+  char *result =
+      kgpc_string_duplicate(builder.data != NULL ? builder.data : "");
+  kgpc_format_builder_free(&builder);
+  return result != NULL ? result : kgpc_alloc_empty_string();
 }
 
-int kgpc_string_to_int(const char *text, int *out_value)
-{
-    if (text == NULL)
-    {
-        if (out_value != NULL) *out_value = 0;
-        return 0;
+char *kgpc_float_to_string(double value, int precision) {
+  if (precision < 0) {
+    if (isnan(value))
+      return kgpc_string_duplicate("-nan(ind)");
+    if (isinf(value))
+      return kgpc_string_duplicate(value > 0 ? "inf" : "-inf");
+
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), "%.15g", value);
+    if (len < 0)
+      return kgpc_alloc_empty_string();
+    return kgpc_string_duplicate(buffer);
+  }
+  if (precision > 18)
+    precision = 18;
+
+  double normalized = value;
+  if (isfinite(value) && precision > 0) {
+    double scale = 1.0;
+    for (int i = 0; i < precision; ++i)
+      scale *= 10.0;
+    if (scale != 0.0 && isfinite(scale))
+      normalized = round(value * scale) / scale;
+  }
+
+  if (isnan(normalized))
+    return kgpc_string_duplicate("-nan(ind)");
+  if (isinf(normalized))
+    return kgpc_string_duplicate(value > 0 ? "inf" : "-inf");
+
+  char fmt[16];
+  snprintf(fmt, sizeof(fmt), "%%.%df", precision);
+  char buffer[64];
+  int len = snprintf(buffer, sizeof(buffer), fmt, normalized);
+  if (len < 0)
+    return kgpc_alloc_empty_string();
+  return kgpc_string_duplicate(buffer);
+}
+
+int kgpc_string_to_int(const char *text, int *out_value) {
+  if (text == NULL) {
+    if (out_value != NULL)
+      *out_value = 0;
+    return 0;
+  }
+  char *endptr;
+  errno = 0;
+  long long val = strtoll(text, &endptr, 10);
+  if (endptr == text || *endptr != '\0' || errno == ERANGE) {
+    if (out_value != NULL)
+      *out_value = 0;
+    return 0;
+  }
+  if (out_value != NULL)
+    *out_value = (int)val;
+  return 1;
+}
+
+int kgpc_env_flag(const char *name) {
+  const char *v = getenv(name);
+  return v && (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T');
+}
+
+int kgpc_string_to_real(const char *text, double *out_value) {
+  if (text == NULL) {
+    if (out_value != NULL)
+      *out_value = 0.0;
+    return 0;
+  }
+  const char *p = text;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+    p++;
+
+  int sign = 1;
+  if (*p == '+' || *p == '-') {
+    if (*p == '-')
+      sign = -1;
+    p++;
+  }
+
+  double int_part = 0.0;
+  int digits = 0;
+  while (*p >= '0' && *p <= '9') {
+    int_part = int_part * 10.0 + (double)(*p - '0');
+    p++;
+    digits++;
+  }
+
+  double frac_part = 0.0;
+  double frac_div = 1.0;
+  if (*p == '.') {
+    p++;
+    while (*p >= '0' && *p <= '9') {
+      frac_part = frac_part * 10.0 + (double)(*p - '0');
+      frac_div *= 10.0;
+      p++;
+      digits++;
     }
+  }
+
+  if (digits == 0) {
+    if (out_value != NULL)
+      *out_value = 0.0;
+    return 0;
+  }
+
+  if (*p == 'e' || *p == 'E') {
     char *endptr;
     errno = 0;
-    long long val = strtoll(text, &endptr, 10);
-    if (endptr == text || *endptr != '\0' || errno == ERANGE)
-    {
-        if (out_value != NULL) *out_value = 0;
-        return 0;
+    double val = strtod(text, &endptr);
+    if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
+      fprintf(stderr, "[kgpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n",
+              text ? text : "(null)", val, (void *)endptr, errno);
+    if (endptr == text || errno == ERANGE) {
+      if (out_value != NULL)
+        *out_value = 0.0;
+      return 0;
+    }
+    while (*endptr == ' ' || *endptr == '\t' || *endptr == '\r' ||
+           *endptr == '\n')
+      endptr++;
+    if (*endptr != '\0') {
+      if (out_value != NULL)
+        *out_value = 0.0;
+      return 0;
     }
     if (out_value != NULL)
-        *out_value = (int)val;
-    return 1;
-}
-
-int kgpc_env_flag(const char *name)
-{
-    const char *v = getenv(name);
-    return v && (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T');
-}
-
-int kgpc_string_to_real(const char *text, double *out_value)
-{
-    if (text == NULL)
-    {
-        if (out_value != NULL) *out_value = 0.0;
-        return 0;
-    }
-    const char *p = text;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-        p++;
-
-    int sign = 1;
-    if (*p == '+' || *p == '-')
-    {
-        if (*p == '-')
-            sign = -1;
-        p++;
-    }
-
-    double int_part = 0.0;
-    int digits = 0;
-    while (*p >= '0' && *p <= '9')
-    {
-        int_part = int_part * 10.0 + (double)(*p - '0');
-        p++;
-        digits++;
-    }
-
-    double frac_part = 0.0;
-    double frac_div = 1.0;
-    if (*p == '.')
-    {
-        p++;
-        while (*p >= '0' && *p <= '9')
-        {
-            frac_part = frac_part * 10.0 + (double)(*p - '0');
-            frac_div *= 10.0;
-            p++;
-            digits++;
-        }
-    }
-
-    if (digits == 0)
-    {
-        if (out_value != NULL) *out_value = 0.0;
-        return 0;
-    }
-
-    if (*p == 'e' || *p == 'E')
-    {
-        char *endptr;
-        errno = 0;
-        double val = strtod(text, &endptr);
-        if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
-            fprintf(stderr, "[kgpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n", text ? text : "(null)", val, (void*)endptr, errno);
-        if (endptr == text || errno == ERANGE)
-        {
-            if (out_value != NULL) *out_value = 0.0;
-            return 0;
-        }
-        while (*endptr == ' ' || *endptr == '\t' || *endptr == '\r' || *endptr == '\n')
-            endptr++;
-        if (*endptr != '\0')
-        {
-            if (out_value != NULL) *out_value = 0.0;
-            return 0;
-        }
-        if (out_value != NULL)
-            *out_value = val;
-        kgpc_real_cache_put(kgpc_double_to_bits(val), (long double)val);
-        return 1;
-    }
-
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-        p++;
-    if (*p != '\0')
-    {
-        if (out_value != NULL) *out_value = 0.0;
-        return 0;
-    }
-
-    double val = (int_part + (frac_part / frac_div)) * (double)sign;
-    if (out_value != NULL)
-        *out_value = val;
+      *out_value = val;
     kgpc_real_cache_put(kgpc_double_to_bits(val), (long double)val);
     return 1;
+  }
+
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+    p++;
+  if (*p != '\0') {
+    if (out_value != NULL)
+      *out_value = 0.0;
+    return 0;
+  }
+
+  double val = (int_part + (frac_part / frac_div)) * (double)sign;
+  if (out_value != NULL)
+    *out_value = val;
+  kgpc_real_cache_put(kgpc_double_to_bits(val), (long double)val);
+  return 1;
 }
 
 /* Convenience wrapper: parse string to double and return as value */
-double kgpc_str_to_float(const char *text)
-{
-    double val = 0.0;
-    if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
-        fprintf(stderr, "[kgpc] str_to_float('%s')\n", text ? text : "(null)");
-    (void)kgpc_string_to_real(text, &val);
-    if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
-        fprintf(stderr, "[kgpc] str_to_float -> %g\n", val);
-    return val;
+double kgpc_str_to_float(const char *text) {
+  double val = 0.0;
+  if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
+    fprintf(stderr, "[kgpc] str_to_float('%s')\n", text ? text : "(null)");
+  (void)kgpc_string_to_real(text, &val);
+  if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
+    fprintf(stderr, "[kgpc] str_to_float -> %g\n", val);
+  return val;
 }
 
-char *kgpc_get_current_dir(void)
-{
+char *kgpc_get_current_dir(void) {
 #ifdef _WIN32
-    DWORD needed = GetCurrentDirectoryA(0, NULL);
-    if (needed == 0)
-    {
-        kgpc_ioresult_set((int)GetLastError());
-        return kgpc_alloc_empty_string();
-    }
-    char *buffer = (char *)malloc((size_t)needed + 1);
-    if (buffer == NULL)
-    {
-        kgpc_ioresult_set(ENOMEM);
-        return kgpc_alloc_empty_string();
-    }
-    if (GetCurrentDirectoryA(needed + 1, buffer) == 0)
-    {
-        kgpc_ioresult_set((int)GetLastError());
-        free(buffer);
-        return kgpc_alloc_empty_string();
-    }
-    char *result = kgpc_string_duplicate(buffer);
-    kgpc_ioresult_set(0);
+  DWORD needed = GetCurrentDirectoryA(0, NULL);
+  if (needed == 0) {
+    kgpc_ioresult_set((int)GetLastError());
+    return kgpc_alloc_empty_string();
+  }
+  char *buffer = (char *)malloc((size_t)needed + 1);
+  if (buffer == NULL) {
+    kgpc_ioresult_set(ENOMEM);
+    return kgpc_alloc_empty_string();
+  }
+  if (GetCurrentDirectoryA(needed + 1, buffer) == 0) {
+    kgpc_ioresult_set((int)GetLastError());
     free(buffer);
-    return result;
+    return kgpc_alloc_empty_string();
+  }
+  char *result = kgpc_string_duplicate(buffer);
+  kgpc_ioresult_set(0);
+  free(buffer);
+  return result;
 #else
-    size_t max_len = 0;
+  size_t max_len = 0;
 #ifdef PATH_MAX
-    max_len = PATH_MAX;
+  max_len = PATH_MAX;
 #endif
-    if (max_len == 0)
-        max_len = 4096;
-    char *buffer = (char *)malloc(max_len);
-    if (buffer == NULL)
-    {
-        kgpc_ioresult_set(ENOMEM);
-        return kgpc_alloc_empty_string();
-    }
-    if (getcwd(buffer, max_len) == NULL)
-    {
-        kgpc_ioresult_set(errno);
-        free(buffer);
-        return kgpc_alloc_empty_string();
-    }
-    char *result = kgpc_string_duplicate(buffer);
-    kgpc_ioresult_set(0);
+  if (max_len == 0)
+    max_len = 4096;
+  char *buffer = (char *)malloc(max_len);
+  if (buffer == NULL) {
+    kgpc_ioresult_set(ENOMEM);
+    return kgpc_alloc_empty_string();
+  }
+  if (getcwd(buffer, max_len) == NULL) {
+    kgpc_ioresult_set(errno);
     free(buffer);
-    return result;
+    return kgpc_alloc_empty_string();
+  }
+  char *result = kgpc_string_duplicate(buffer);
+  kgpc_ioresult_set(0);
+  free(buffer);
+  return result;
 #endif
 }
 
-int kgpc_set_current_dir(const char *path)
-{
-    if (path == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return EINVAL;
-    }
+int kgpc_set_current_dir(const char *path) {
+  if (path == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return EINVAL;
+  }
 #ifdef _WIN32
-    int res = SetCurrentDirectoryA(path) ? 0 : (int)GetLastError();
-    kgpc_ioresult_set(res);
-    return res;
+  int res = SetCurrentDirectoryA(path) ? 0 : (int)GetLastError();
+  kgpc_ioresult_set(res);
+  return res;
 #else
-    int res = (chdir(path) == 0) ? 0 : errno;
-    kgpc_ioresult_set(res);
-    return res;
+  int res = (chdir(path) == 0) ? 0 : errno;
+  kgpc_ioresult_set(res);
+  return res;
 #endif
 }
 
-char *kgpc_get_environment_variable(const char *name)
-{
-    if (name == NULL)
-        return kgpc_alloc_empty_string();
+char *kgpc_get_environment_variable(const char *name) {
+  if (name == NULL)
+    return kgpc_alloc_empty_string();
 #ifdef _WIN32
-    DWORD needed = GetEnvironmentVariableA(name, NULL, 0);
-    if (needed == 0)
-        return kgpc_alloc_empty_string();
-    char *buffer = (char *)malloc((size_t)needed + 1);
-    if (buffer == NULL)
-        return kgpc_alloc_empty_string();
-    if (GetEnvironmentVariableA(name, buffer, needed + 1) == 0)
-    {
-        free(buffer);
-        return kgpc_alloc_empty_string();
-    }
-    char *result = kgpc_string_duplicate(buffer);
+  DWORD needed = GetEnvironmentVariableA(name, NULL, 0);
+  if (needed == 0)
+    return kgpc_alloc_empty_string();
+  char *buffer = (char *)malloc((size_t)needed + 1);
+  if (buffer == NULL)
+    return kgpc_alloc_empty_string();
+  if (GetEnvironmentVariableA(name, buffer, needed + 1) == 0) {
     free(buffer);
-    return result;
+    return kgpc_alloc_empty_string();
+  }
+  char *result = kgpc_string_duplicate(buffer);
+  free(buffer);
+  return result;
 #else
-    const char *value = getenv(name);
-    if (value == NULL)
-        return kgpc_alloc_empty_string();
-    return kgpc_string_duplicate(value);
+  const char *value = getenv(name);
+  if (value == NULL)
+    return kgpc_alloc_empty_string();
+  return kgpc_string_duplicate(value);
 #endif
 }
 
-int kgpc_set_environment_variable(const char *name, const char *value)
-{
-    if (name == NULL)
-        return EINVAL;
+int kgpc_set_environment_variable(const char *name, const char *value) {
+  if (name == NULL)
+    return EINVAL;
 #ifdef _WIN32
-    if (SetEnvironmentVariableA(name, value != NULL ? value : "") == 0)
-        return (int)GetLastError();
+  if (SetEnvironmentVariableA(name, value != NULL ? value : "") == 0)
+    return (int)GetLastError();
+  return 0;
+#else
+  if (value == NULL)
+    value = "";
+  return setenv(name, value, 1);
+#endif
+}
+
+int kgpc_unset_environment_variable(const char *name) {
+  if (name == NULL)
+    return EINVAL;
+#ifdef _WIN32
+  return SetEnvironmentVariableA(name, NULL) ? 0 : (int)GetLastError();
+#else
+  return unsetenv(name);
+#endif
+}
+
+int64_t kgpc_get_process_id(void) {
+#ifdef _WIN32
+  return (int64_t)GetCurrentProcessId();
+#else
+  return (int64_t)getpid();
+#endif
+}
+
+uintptr_t kgpc_load_library(const char *path) {
+#ifdef _WIN32
+  HMODULE handle = LoadLibraryA(path);
+  return (uintptr_t)handle;
+#else
+  void *handle = dlopen(path != NULL ? path : NULL, RTLD_LAZY);
+  if (handle == NULL && path == NULL)
+    handle = dlopen(NULL, RTLD_LAZY);
+  return (uintptr_t)handle;
+#endif
+}
+
+uintptr_t kgpc_get_proc_address(uintptr_t handle, const char *symbol) {
+  if (handle == 0 || symbol == NULL)
     return 0;
+#ifdef _WIN32
+  return (uintptr_t)GetProcAddress((HMODULE)handle, symbol);
 #else
-    if (value == NULL)
-        value = "";
-    return setenv(name, value, 1);
+  dlerror();
+  void *addr = dlsym((void *)handle, symbol);
+  return (uintptr_t)addr;
 #endif
 }
 
-int kgpc_unset_environment_variable(const char *name)
-{
-    if (name == NULL)
-        return EINVAL;
+int kgpc_free_library(uintptr_t handle) {
+  if (handle == 0)
+    return 0;
 #ifdef _WIN32
-    return SetEnvironmentVariableA(name, NULL) ? 0 : (int)GetLastError();
+  return FreeLibrary((HMODULE)handle) ? 1 : 0;
 #else
-    return unsetenv(name);
-#endif
-}
-
-int64_t kgpc_get_process_id(void)
-{
-#ifdef _WIN32
-    return (int64_t)GetCurrentProcessId();
-#else
-    return (int64_t)getpid();
-#endif
-}
-
-uintptr_t kgpc_load_library(const char *path)
-{
-#ifdef _WIN32
-    HMODULE handle = LoadLibraryA(path);
-    return (uintptr_t)handle;
-#else
-    void *handle = dlopen(path != NULL ? path : NULL, RTLD_LAZY);
-    if (handle == NULL && path == NULL)
-        handle = dlopen(NULL, RTLD_LAZY);
-    return (uintptr_t)handle;
-#endif
-}
-
-uintptr_t kgpc_get_proc_address(uintptr_t handle, const char *symbol)
-{
-    if (handle == 0 || symbol == NULL)
-        return 0;
-#ifdef _WIN32
-    return (uintptr_t)GetProcAddress((HMODULE)handle, symbol);
-#else
-    dlerror();
-    void *addr = dlsym((void *)handle, symbol);
-    return (uintptr_t)addr;
-#endif
-}
-
-int kgpc_free_library(uintptr_t handle)
-{
-    if (handle == 0)
-        return 0;
-#ifdef _WIN32
-    return FreeLibrary((HMODULE)handle) ? 1 : 0;
-#else
-    return (dlclose((void *)handle) == 0) ? 1 : 0;
+  return (dlclose((void *)handle) == 0) ? 1 : 0;
 #endif
 }
 
 typedef struct KgpcFpcDynLibsManager {
-    uintptr_t (*LoadLibraryU)(const char *name);
-    uintptr_t (*LoadLibraryA)(const char *name);
-    void *(*GetProcAddress)(uintptr_t lib, const char *proc_name);
-    void *(*GetProcAddressOrdinal)(uintptr_t lib, uintptr_t ordinal);
-    int (*UnloadLibrary)(uintptr_t lib);
-    char *(*GetLoadErrorStr)(void);
+  uintptr_t (*LoadLibraryU)(const char *name);
+  uintptr_t (*LoadLibraryA)(const char *name);
+  void *(*GetProcAddress)(uintptr_t lib, const char *proc_name);
+  void *(*GetProcAddressOrdinal)(uintptr_t lib, uintptr_t ordinal);
+  int (*UnloadLibrary)(uintptr_t lib);
+  char *(*GetLoadErrorStr)(void);
 } KgpcFpcDynLibsManager;
 
 typedef struct KgpcStringHeaderShim {
-    uint16_t codepage;
-    uint16_t elementsize;
-    int32_t refcount;
-    int64_t length;
+  uint16_t codepage;
+  uint16_t elementsize;
+  int32_t refcount;
+  int64_t length;
 } KgpcStringHeaderShim;
 
 /* Defined in Pascal (system.p / system.pp) — referenced as extern here. */
 extern KgpcFpcDynLibsManager CurrentDLM;
 
-static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value)
-{
-    if (value == NULL)
-        return NULL;
-    return (const KgpcStringHeaderShim *)(value - (ptrdiff_t)sizeof(KgpcStringHeaderShim));
-}
-
-static char *kgpc_fpc_unicode_to_ansi_dup(const char *value)
-{
-    const KgpcStringHeaderShim *hdr = kgpc_string_header_shim(value);
-    if (value == NULL)
-        return NULL;
-    if (hdr == NULL || hdr->elementsize != 2 || hdr->length <= 0)
-        return strdup(value);
-
-    size_t len = (size_t)hdr->length;
-    char *ansi = (char *)malloc(len + 1);
-    if (ansi == NULL)
-        return NULL;
-    const uint16_t *src = (const uint16_t *)value;
-    for (size_t i = 0; i < len; ++i)
-        ansi[i] = (src[i] < 256u) ? (char)src[i] : '?';
-    ansi[len] = '\0';
-    return ansi;
-}
-
-static uintptr_t kgpc_fpc_dynlib_load_u(const char *name)
-{
-    char *ansi = kgpc_fpc_unicode_to_ansi_dup(name);
-    uintptr_t handle = kgpc_load_library(ansi);
-    free(ansi);
-    return handle;
-}
-
-static uintptr_t kgpc_fpc_dynlib_load_a(const char *name)
-{
-    return kgpc_load_library(name);
-}
-
-static void *kgpc_fpc_dynlib_get_proc(uintptr_t lib, const char *proc_name)
-{
-    return (void *)kgpc_get_proc_address(lib, proc_name);
-}
-
-static void *kgpc_fpc_dynlib_get_proc_ordinal(uintptr_t lib, uintptr_t ordinal)
-{
-#ifdef _WIN32
-    return (void *)GetProcAddress((HMODULE)lib, (LPCSTR)(uintptr_t)ordinal);
-#else
-    (void)lib;
-    (void)ordinal;
+static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value) {
+  if (value == NULL)
     return NULL;
-#endif
+  return (const KgpcStringHeaderShim *)(value - (ptrdiff_t)sizeof(
+                                                    KgpcStringHeaderShim));
 }
 
-static int kgpc_fpc_dynlib_unload(uintptr_t lib)
-{
-    return kgpc_free_library(lib);
+static char *kgpc_fpc_unicode_to_ansi_dup(const char *value) {
+  const KgpcStringHeaderShim *hdr = kgpc_string_header_shim(value);
+  if (value == NULL)
+    return NULL;
+  if (hdr == NULL || hdr->elementsize != 2 || hdr->length <= 0)
+    return strdup(value);
+
+  size_t len = (size_t)hdr->length;
+  char *ansi = (char *)malloc(len + 1);
+  if (ansi == NULL)
+    return NULL;
+  const uint16_t *src = (const uint16_t *)value;
+  for (size_t i = 0; i < len; ++i)
+    ansi[i] = (src[i] < 256u) ? (char)src[i] : '?';
+  ansi[len] = '\0';
+  return ansi;
 }
 
-static char *kgpc_fpc_dynlib_error(void)
-{
+static uintptr_t kgpc_fpc_dynlib_load_u(const char *name) {
+  char *ansi = kgpc_fpc_unicode_to_ansi_dup(name);
+  uintptr_t handle = kgpc_load_library(ansi);
+  free(ansi);
+  return handle;
+}
+
+static uintptr_t kgpc_fpc_dynlib_load_a(const char *name) {
+  return kgpc_load_library(name);
+}
+
+static void *kgpc_fpc_dynlib_get_proc(uintptr_t lib, const char *proc_name) {
+  return (void *)kgpc_get_proc_address(lib, proc_name);
+}
+
+static void *kgpc_fpc_dynlib_get_proc_ordinal(uintptr_t lib,
+                                              uintptr_t ordinal) {
 #ifdef _WIN32
-    DWORD err = GetLastError();
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "LoadLibrary error %lu", (unsigned long)err);
-    return kgpc_string_duplicate(buffer);
+  return (void *)GetProcAddress((HMODULE)lib, (LPCSTR)(uintptr_t)ordinal);
 #else
-    const char *msg = dlerror();
-    if (msg == NULL)
-        msg = "";
-    return kgpc_string_duplicate(msg);
+  (void)lib;
+  (void)ordinal;
+  return NULL;
 #endif
 }
 
-__attribute__((constructor))
-static void kgpc_fpc_init_dynlibs_manager(void)
-{
-    CurrentDLM.LoadLibraryU = kgpc_fpc_dynlib_load_u;
-    CurrentDLM.LoadLibraryA = kgpc_fpc_dynlib_load_a;
-    CurrentDLM.GetProcAddress = kgpc_fpc_dynlib_get_proc;
-    CurrentDLM.GetProcAddressOrdinal = kgpc_fpc_dynlib_get_proc_ordinal;
-    CurrentDLM.UnloadLibrary = kgpc_fpc_dynlib_unload;
-    CurrentDLM.GetLoadErrorStr = kgpc_fpc_dynlib_error;
+static int kgpc_fpc_dynlib_unload(uintptr_t lib) {
+  return kgpc_free_library(lib);
 }
 
-int kgpc_directory_create(const char *path)
-{
-    if (path == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return EINVAL;
-    }
+static char *kgpc_fpc_dynlib_error(void) {
 #ifdef _WIN32
-    if (_mkdir(path) == 0)
+  DWORD err = GetLastError();
+  char buffer[64];
+  snprintf(buffer, sizeof(buffer), "LoadLibrary error %lu", (unsigned long)err);
+  return kgpc_string_duplicate(buffer);
 #else
-    if (mkdir(path, 0777) == 0)
+  const char *msg = dlerror();
+  if (msg == NULL)
+    msg = "";
+  return kgpc_string_duplicate(msg);
 #endif
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(errno);
-    return errno;
 }
 
-int kgpc_directory_remove(const char *path)
-{
-    if (path == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return EINVAL;
-    }
+__attribute__((constructor)) static void kgpc_fpc_init_dynlibs_manager(void) {
+  CurrentDLM.LoadLibraryU = kgpc_fpc_dynlib_load_u;
+  CurrentDLM.LoadLibraryA = kgpc_fpc_dynlib_load_a;
+  CurrentDLM.GetProcAddress = kgpc_fpc_dynlib_get_proc;
+  CurrentDLM.GetProcAddressOrdinal = kgpc_fpc_dynlib_get_proc_ordinal;
+  CurrentDLM.UnloadLibrary = kgpc_fpc_dynlib_unload;
+  CurrentDLM.GetLoadErrorStr = kgpc_fpc_dynlib_error;
+}
+
+int kgpc_directory_create(const char *path) {
+  if (path == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return EINVAL;
+  }
 #ifdef _WIN32
-    if (_rmdir(path) == 0)
+  if (_mkdir(path) == 0)
 #else
-    if (rmdir(path) == 0)
+  if (mkdir(path, 0777) == 0)
 #endif
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(errno);
-    return errno;
+  {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(errno);
+  return errno;
 }
 
-int kgpc_file_rename(const char *old_path, const char *new_path)
-{
-    if (old_path == NULL || new_path == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return EINVAL;
-    }
-    if (rename(old_path, new_path) == 0)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(errno);
-    return errno;
+int kgpc_directory_remove(const char *path) {
+  if (path == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return EINVAL;
+  }
+#ifdef _WIN32
+  if (_rmdir(path) == 0)
+#else
+  if (rmdir(path) == 0)
+#endif
+  {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(errno);
+  return errno;
 }
 
-int kgpc_file_exists(const char *path)
-{
-    if (path == NULL)
-        return 0;
+int kgpc_file_rename(const char *old_path, const char *new_path) {
+  if (old_path == NULL || new_path == NULL) {
+    kgpc_ioresult_set(EINVAL);
+    return EINVAL;
+  }
+  if (rename(old_path, new_path) == 0) {
+    kgpc_ioresult_set(0);
+    return 0;
+  }
+  kgpc_ioresult_set(errno);
+  return errno;
+}
+
+int kgpc_file_exists(const char *path) {
+  if (path == NULL)
+    return 0;
 #if defined(_WIN32)
-    struct _stat st;
-    if (_stat(path, &st) != 0)
-        return 0;
-    return !(_S_IFDIR & st.st_mode);
+  struct _stat st;
+  if (_stat(path, &st) != 0)
+    return 0;
+  return !(_S_IFDIR & st.st_mode);
 #else
-    struct stat st;
-    if (stat(path, &st) != 0)
-        return 0;
-    return !S_ISDIR(st.st_mode);
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return 0;
+  return !S_ISDIR(st.st_mode);
 #endif
 }
 
-int kgpc_directory_exists(const char *path)
-{
-    if (path == NULL)
-        return 0;
+int kgpc_directory_exists(const char *path) {
+  if (path == NULL)
+    return 0;
 #if defined(_WIN32)
-    struct _stat st;
-    if (_stat(path, &st) != 0)
-        return 0;
-    return (_S_IFDIR & st.st_mode);
+  struct _stat st;
+  if (_stat(path, &st) != 0)
+    return 0;
+  return (_S_IFDIR & st.st_mode);
 #else
-    struct stat st;
-    if (stat(path, &st) != 0)
-        return 0;
-    return S_ISDIR(st.st_mode);
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return 0;
+  return S_ISDIR(st.st_mode);
 #endif
 }
 
 /* FileAge(filename): returns file modification time as DOS date-time stamp,
    or -1 if file doesn't exist. Matches FPC's SysUtils.FileAge. */
-int64_t kgpc_fileage(const char *path)
-{
-    if (path == NULL)
-        return -1;
-    struct stat st;
-    if (stat(path, &st) != 0)
-        return -1;
-    /* Convert Unix timestamp to DOS date-time format:
-       Bits 0-4: seconds/2, 5-10: minutes, 11-15: hours,
-       Bits 16-20: day, 21-24: month, 25-31: year-1980 */
-    struct tm *tm = localtime(&st.st_mtime);
-    if (tm == NULL)
-        return -1;
-    int dos_time = (tm->tm_sec / 2) | (tm->tm_min << 5) | (tm->tm_hour << 11);
-    int dos_date = tm->tm_mday | ((tm->tm_mon + 1) << 5) | ((tm->tm_year - 80) << 9);
-    return (int64_t)((dos_date << 16) | dos_time);
+int64_t kgpc_fileage(const char *path) {
+  if (path == NULL)
+    return -1;
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return -1;
+  /* Convert Unix timestamp to DOS date-time format:
+     Bits 0-4: seconds/2, 5-10: minutes, 11-15: hours,
+     Bits 16-20: day, 21-24: month, 25-31: year-1980 */
+  struct tm *tm = localtime(&st.st_mtime);
+  if (tm == NULL)
+    return -1;
+  int dos_time = (tm->tm_sec / 2) | (tm->tm_min << 5) | (tm->tm_hour << 11);
+  int dos_date =
+      tm->tm_mday | ((tm->tm_mon + 1) << 5) | ((tm->tm_year - 80) << 9);
+  return (int64_t)((dos_date << 16) | dos_time);
 }
 
-int kgpc_delete_file(const char *path)
-{
-    if (path == NULL || path[0] == '\0')
-        return 0;
+int kgpc_delete_file(const char *path) {
+  if (path == NULL || path[0] == '\0')
+    return 0;
 #if defined(_WIN32)
-    int rc = _unlink(path);
+  int rc = _unlink(path);
 #else
-    int rc = remove(path);
+  int rc = remove(path);
 #endif
-    return (rc == 0) ? 1 : 0;
+  return (rc == 0) ? 1 : 0;
 }
 
 /* Wrapper for memcpy to be called from assembly code.
-   NULL-safe: if src is NULL, zeroes dest (Pascal semantics for nil PChar to shortstring). */
-void *kgpc_memcpy_wrapper(void *dest, const void *src, size_t n)
-{
-    if (src == NULL)
-    {
-        if (dest != NULL && n > 0)
-            memset(dest, 0, n);
-        return dest;
-    }
-    return memcpy(dest, src, n);
+   NULL-safe: if src is NULL, zeroes dest (Pascal semantics for nil PChar to
+   shortstring). */
+void *kgpc_memcpy_wrapper(void *dest, const void *src, size_t n) {
+  if (src == NULL) {
+    if (dest != NULL && n > 0)
+      memset(dest, 0, n);
+    return dest;
+  }
+  return memcpy(dest, src, n);
 }
 
-int64_t kgpc_assigned(const void *ptr)
-{
-    return (ptr != NULL) ? 1 : 0;
+int64_t kgpc_assigned(const void *ptr) { return (ptr != NULL) ? 1 : 0; }
+
+int64_t kgpc_aligned(const void *ptr, int64_t alignment) {
+  /* Validate alignment: must be positive */
+  assert(alignment > 0);
+  return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
 }
 
-int64_t kgpc_aligned(const void *ptr, int64_t alignment)
-{
-    /* Validate alignment: must be positive */
-    assert(alignment > 0);
-    return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
+int32_t fpc_in_abs_long(int32_t value) { return (value < 0) ? -value : value; }
+
+int64_t kgpc_abs_longint(int64_t value) { return (value < 0) ? -value : value; }
+
+int64_t fpc_in_const_abs(int64_t value) { return (value < 0) ? -value : value; }
+
+uint64_t kgpc_abs_unsigned(uint64_t value) { return value; }
+
+double fpc_in_abs_real(double value) { return fabs(value); }
+
+double fpc_in_sqrt_real(double value) { return sqrt(value); }
+
+double fpc_in_sin_real(double value) { return sin(value); }
+
+double kgpc_csc(double value) { return 1.0 / sin(value); }
+
+double fpc_in_cos_real(double value) { return cos(value); }
+
+double kgpc_sec(double value) { return 1.0 / cos(value); }
+
+double kgpc_tan(double value) { return tan(value); }
+
+double kgpc_cot(double value) { return cos(value) / sin(value); }
+
+double kgpc_sinh(double value) { return sinh(value); }
+
+double kgpc_csch(double value) { return 1.0 / sinh(value); }
+
+double kgpc_cosh(double value) { return cosh(value); }
+
+double kgpc_sech(double value) { return 1.0 / cosh(value); }
+
+double kgpc_tanh(double value) { return tanh(value); }
+
+double kgpc_coth(double value) {
+  double s = sinh(value);
+  return s != 0.0 ? cosh(value) / s : (value >= 0.0 ? INFINITY : -INFINITY);
 }
 
-int32_t fpc_in_abs_long(int32_t value)
-{
-    return (value < 0) ? -value : value;
+double fpc_in_arctan_real(double value) { return atan(value); }
+
+double kgpc_arccot(double value) {
+  /* Match FPC's ArcCot: returns 0.5*pi for x=0, arctan(1/x) otherwise.
+   * Note: for x < 0 this gives (-pi/2, 0) not (pi/2, pi). */
+  if (value == 0.0)
+    return KGPC_PI / 2.0;
+  return atan(1.0 / value);
 }
 
-int64_t kgpc_abs_longint(int64_t value)
-{
-    return (value < 0) ? -value : value;
+double kgpc_arctan2(double y, double x) { return atan2(y, x); }
+
+double kgpc_arcsin(double value) { return asin(value); }
+
+double kgpc_arccos(double value) { return acos(value); }
+
+double kgpc_arcsinh(double value) { return asinh(value); }
+
+double kgpc_arctanh(double value) { return atanh(value); }
+
+double kgpc_arccosh(double value) { return acosh(value); }
+
+double kgpc_arcsech(double value) {
+  if (value <= 0.0)
+    return INFINITY;
+  return acosh(1.0 / value);
 }
 
-int64_t fpc_in_const_abs(int64_t value)
-{
-    return (value < 0) ? -value : value;
+double kgpc_arccsch(double value) {
+  if (value == 0.0)
+    return (value >= 0.0) ? INFINITY : -INFINITY;
+  return asinh(1.0 / value);
 }
 
-uint64_t kgpc_abs_unsigned(uint64_t value)
-{
-    return value;
+double kgpc_arccoth(double value) {
+  if (value == 0.0)
+    return (value >= 0.0) ? INFINITY : -INFINITY;
+  return atanh(1.0 / value);
 }
 
-double fpc_in_abs_real(double value)
-{
-    return fabs(value);
+double kgpc_deg_to_rad(double value) { return value * (KGPC_PI / 180.0); }
+
+double kgpc_rad_to_deg(double value) { return value * (180.0 / KGPC_PI); }
+
+double kgpc_deg_to_grad(double value) { return value * (400.0 / 360.0); }
+
+double kgpc_grad_to_deg(double value) { return value * (360.0 / 400.0); }
+
+double kgpc_grad_to_rad(double value) { return (value / 200.0) * KGPC_PI; }
+
+double kgpc_rad_to_grad(double value) { return value * (200.0 / KGPC_PI); }
+
+double kgpc_cycle_to_rad(double value) { return value * (2.0 * KGPC_PI); }
+
+double kgpc_rad_to_cycle(double value) { return value / (2.0 * KGPC_PI); }
+
+double fpc_in_ln_real(double value) { return log(value); }
+
+double kgpc_logn(double base, double value) { return log(value) / log(base); }
+
+double fpc_in_exp_real(double value) { return exp(value); }
+
+double kgpc_power(double base, double exponent) { return pow(base, exponent); }
+
+double kgpc_hypot(double x, double y) { return hypot(x, y); }
+
+long long fpc_in_round_real(double value) {
+  double rounded;
+  if (value >= 0.0)
+    rounded = floor(value + 0.5);
+  else
+    rounded = ceil(value - 0.5);
+  return (long long)rounded;
 }
 
-double fpc_in_sqrt_real(double value)
-{
-    return sqrt(value);
-}
-
-double fpc_in_sin_real(double value)
-{
-    return sin(value);
-}
-
-double kgpc_csc(double value)
-{
-    return 1.0 / sin(value);
-}
-
-double fpc_in_cos_real(double value)
-{
-    return cos(value);
-}
-
-double kgpc_sec(double value)
-{
-    return 1.0 / cos(value);
-}
-
-double kgpc_tan(double value)
-{
-    return tan(value);
-}
-
-double kgpc_cot(double value)
-{
-    return cos(value) / sin(value);
-}
-
-double kgpc_sinh(double value)
-{
-    return sinh(value);
-}
-
-double kgpc_csch(double value)
-{
-    return 1.0 / sinh(value);
-}
-
-double kgpc_cosh(double value)
-{
-    return cosh(value);
-}
-
-double kgpc_sech(double value)
-{
-    return 1.0 / cosh(value);
-}
-
-double kgpc_tanh(double value)
-{
-    return tanh(value);
-}
-
-double kgpc_coth(double value)
-{
-    double s = sinh(value);
-    return s != 0.0 ? cosh(value) / s : (value >= 0.0 ? INFINITY : -INFINITY);
-}
-
-double fpc_in_arctan_real(double value)
-{
-    return atan(value);
-}
-
-double kgpc_arccot(double value)
-{
-    /* Match FPC's ArcCot: returns 0.5*pi for x=0, arctan(1/x) otherwise.
-     * Note: for x < 0 this gives (-pi/2, 0) not (pi/2, pi). */
-    if (value == 0.0)
-        return KGPC_PI / 2.0;
-    return atan(1.0 / value);
-}
-
-double kgpc_arctan2(double y, double x)
-{
-    return atan2(y, x);
-}
-
-double kgpc_arcsin(double value)
-{
-    return asin(value);
-}
-
-double kgpc_arccos(double value)
-{
-    return acos(value);
-}
-
-double kgpc_arcsinh(double value)
-{
-    return asinh(value);
-}
-
-double kgpc_arctanh(double value)
-{
-    return atanh(value);
-}
-
-double kgpc_arccosh(double value)
-{
-    return acosh(value);
-}
-
-double kgpc_arcsech(double value)
-{
-    if (value <= 0.0)
-        return INFINITY;
-    return acosh(1.0 / value);
-}
-
-double kgpc_arccsch(double value)
-{
-    if (value == 0.0)
-        return (value >= 0.0) ? INFINITY : -INFINITY;
-    return asinh(1.0 / value);
-}
-
-double kgpc_arccoth(double value)
-{
-    if (value == 0.0)
-        return (value >= 0.0) ? INFINITY : -INFINITY;
-    return atanh(1.0 / value);
-}
-
-double kgpc_deg_to_rad(double value)
-{
-    return value * (KGPC_PI / 180.0);
-}
-
-double kgpc_rad_to_deg(double value)
-{
-    return value * (180.0 / KGPC_PI);
-}
-
-double kgpc_deg_to_grad(double value)
-{
-    return value * (400.0 / 360.0);
-}
-
-double kgpc_grad_to_deg(double value)
-{
-    return value * (360.0 / 400.0);
-}
-
-double kgpc_grad_to_rad(double value)
-{
-    return (value / 200.0) * KGPC_PI;
-}
-
-double kgpc_rad_to_grad(double value)
-{
-    return value * (200.0 / KGPC_PI);
-}
-
-double kgpc_cycle_to_rad(double value)
-{
-    return value * (2.0 * KGPC_PI);
-}
-
-double kgpc_rad_to_cycle(double value)
-{
-    return value / (2.0 * KGPC_PI);
-}
-
-double fpc_in_ln_real(double value)
-{
-    return log(value);
-}
-
-double kgpc_logn(double base, double value)
-{
-    return log(value) / log(base);
-}
-
-double fpc_in_exp_real(double value)
-{
-    return exp(value);
-}
-
-double kgpc_power(double base, double exponent)
-{
-    return pow(base, exponent);
-}
-
-double kgpc_hypot(double x, double y)
-{
-    return hypot(x, y);
-}
-
-long long fpc_in_round_real(double value)
-{
-    double rounded;
-    if (value >= 0.0)
-        rounded = floor(value + 0.5);
-    else
-        rounded = ceil(value - 0.5);
-    return (long long)rounded;
-}
-
-long long fpc_in_trunc_real(double value)
-{
-    /* Use trunc() to avoid conflict with FPC RTL's Pascal ceil/floor aliases.
-     * FPC's math.pp generates ".set ceil, ceil_r" and ".set floor, floor_r"
-     * which override C library's ceil/floor symbols when linked together,
-     * causing infinite recursion if we called ceil() or floor() here. */
-    return (long long)trunc(value);
+long long fpc_in_trunc_real(double value) {
+  /* Use trunc() to avoid conflict with FPC RTL's Pascal ceil/floor aliases.
+   * FPC's math.pp generates ".set ceil, ceil_r" and ".set floor, floor_r"
+   * which override C library's ceil/floor symbols when linked together,
+   * causing infinite recursion if we called ceil() or floor() here. */
+  return (long long)trunc(value);
 }
 
 /* Trunc for Currency type - Currency stores values scaled by 10000.
  * The value is passed as a signed 64-bit integer. */
-long long kgpc_trunc_currency(long long currency_value)
-{
-    /* Currency is stored as value * 10000, so divide by 10000 to get actual value */
-    /* Truncate towards zero */
-    if (currency_value >= 0)
-        return currency_value / 10000;
-    return -((-currency_value) / 10000);
+long long kgpc_trunc_currency(long long currency_value) {
+  /* Currency is stored as value * 10000, so divide by 10000 to get actual value
+   */
+  /* Truncate towards zero */
+  if (currency_value >= 0)
+    return currency_value / 10000;
+  return -((-currency_value) / 10000);
 }
 
-long long kgpc_int(double value)
-{
-    return fpc_in_trunc_real(value);
-}
+long long kgpc_int(double value) { return fpc_in_trunc_real(value); }
 
 /* fpc_in_int_real: Int() intrinsic returning the integer part as a double.
    Used by FPC RTL [internproc:fpc_in_int_real]. */
-double fpc_in_int_real(double value)
-{
-    return (double)fpc_in_trunc_real(value);
+double fpc_in_int_real(double value) {
+  return (double)fpc_in_trunc_real(value);
 }
 
 /* fpc_in_pi_real: Pi() intrinsic returning the mathematical constant.
    Used by FPC RTL [internproc:fpc_in_pi_real]. */
-double fpc_in_pi_real(void)
-{
-    return 3.14159265358979323846;
+double fpc_in_pi_real(void) { return 3.14159265358979323846; }
+
+double fpc_in_frac_real(double value) {
+  return value - (double)fpc_in_trunc_real(value);
 }
 
-double fpc_in_frac_real(double value)
-{
-    return value - (double)fpc_in_trunc_real(value);
+long long kgpc_ceil(double value) {
+  /* Avoid C ceil() — FPC RTL aliases it to Pascal ceil_r. Use trunc+1. */
+  long long t = (long long)trunc(value);
+  return (value > (double)t) ? t + 1 : t;
 }
 
-long long kgpc_ceil(double value)
-{
-    /* Avoid C ceil() — FPC RTL aliases it to Pascal ceil_r. Use trunc+1. */
-    long long t = (long long)trunc(value);
-    return (value > (double)t) ? t + 1 : t;
+long long kgpc_floor(double value) {
+  /* Avoid C floor() — FPC RTL aliases it to Pascal floor_r. Use trunc-1. */
+  long long t = (long long)trunc(value);
+  return (value < (double)t) ? t - 1 : t;
 }
 
-long long kgpc_floor(double value)
-{
-    /* Avoid C floor() — FPC RTL aliases it to Pascal floor_r. Use trunc-1. */
-    long long t = (long long)trunc(value);
-    return (value < (double)t) ? t - 1 : t;
+static uint32_t kgpc_rol32(uint32_t value, uint32_t shift) {
+  return (value << shift) | (value >> (32u - shift));
 }
 
-static uint32_t kgpc_rol32(uint32_t value, uint32_t shift)
-{
-    return (value << shift) | (value >> (32u - shift));
+static uint64_t kgpc_splitmix64_next(uint64_t *state) {
+  uint64_t z = *state + 0x9e3779b97f4a7c15ULL;
+  *state = z;
+  z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+  return z ^ (z >> 31);
 }
 
-static uint64_t kgpc_splitmix64_next(uint64_t *state)
-{
-    uint64_t z = *state + 0x9e3779b97f4a7c15ULL;
-    *state = z;
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
+static void kgpc_xsr128_setup(uint32_t seed) {
+  uint64_t sm_state = (uint64_t)seed;
+  uint64_t x = kgpc_splitmix64_next(&sm_state);
+  kgpc_xsr_state[0] = (uint32_t)x;
+  kgpc_xsr_state[1] = (uint32_t)(x >> 32);
+  x = kgpc_splitmix64_next(&sm_state);
+  kgpc_xsr_state[2] = (uint32_t)x;
+  kgpc_xsr_state[3] = (uint32_t)(x >> 32);
 }
 
-static void kgpc_xsr128_setup(uint32_t seed)
-{
-    uint64_t sm_state = (uint64_t)seed;
-    uint64_t x = kgpc_splitmix64_next(&sm_state);
-    kgpc_xsr_state[0] = (uint32_t)x;
-    kgpc_xsr_state[1] = (uint32_t)(x >> 32);
-    x = kgpc_splitmix64_next(&sm_state);
-    kgpc_xsr_state[2] = (uint32_t)x;
-    kgpc_xsr_state[3] = (uint32_t)(x >> 32);
+static uint32_t kgpc_xsr128_next(void) {
+  uint32_t s0 = kgpc_xsr_state[0];
+  uint32_t s1 = kgpc_xsr_state[1];
+  uint32_t s2 = kgpc_xsr_state[2];
+  uint32_t s3 = kgpc_xsr_state[3];
+
+  uint32_t result = kgpc_rol32(s1 * 5u, 7) * 9u;
+  uint32_t t = s1 << 9;
+
+  s2 ^= s0;
+  s3 ^= s1;
+  s1 ^= s2;
+  s0 ^= s3;
+  s2 ^= t;
+  s3 = kgpc_rol32(s3, 11);
+
+  kgpc_xsr_state[0] = s0;
+  kgpc_xsr_state[1] = s1;
+  kgpc_xsr_state[2] = s2;
+  kgpc_xsr_state[3] = s3;
+  return result;
 }
 
-static uint32_t kgpc_xsr128_next(void)
-{
-    uint32_t s0 = kgpc_xsr_state[0];
-    uint32_t s1 = kgpc_xsr_state[1];
-    uint32_t s2 = kgpc_xsr_state[2];
-    uint32_t s3 = kgpc_xsr_state[3];
-
-    uint32_t result = kgpc_rol32(s1 * 5u, 7) * 9u;
-    uint32_t t = s1 << 9;
-
-    s2 ^= s0;
-    s3 ^= s1;
-    s1 ^= s2;
-    s0 ^= s3;
-    s2 ^= t;
-    s3 = kgpc_rol32(s3, 11);
-
-    kgpc_xsr_state[0] = s0;
-    kgpc_xsr_state[1] = s1;
-    kgpc_xsr_state[2] = s2;
-    kgpc_xsr_state[3] = s3;
-    return result;
+static uint32_t kgpc_xsr128_u32rand(void) {
+  if (kgpc_randseed != kgpc_old_randseed) {
+    kgpc_xsr128_setup(kgpc_randseed);
+    kgpc_randseed = ~kgpc_randseed;
+    kgpc_old_randseed = kgpc_randseed;
+  }
+  return kgpc_xsr128_next();
 }
 
-static uint32_t kgpc_xsr128_u32rand(void)
-{
-    if (kgpc_randseed != kgpc_old_randseed)
-    {
-        kgpc_xsr128_setup(kgpc_randseed);
-        kgpc_randseed = ~kgpc_randseed;
-        kgpc_old_randseed = kgpc_randseed;
+void kgpc_randomize(void) { kgpc_randseed = (uint32_t)time(NULL); }
+
+double kgpc_random_real(void) {
+  uint32_t r0 = kgpc_xsr128_u32rand();
+  uint64_t mantissa = (uint64_t)(r0 & ((1u << 20) - 1u)) << 32;
+  mantissa |= (uint64_t)kgpc_xsr128_u32rand();
+
+  int32_t exponent = 1023 - 1 - 31;
+  if ((r0 >> 20) == 0) {
+    exponent += 20;
+    do {
+      exponent -= 32;
+      r0 = kgpc_xsr128_u32rand();
+    } while (r0 == 0);
+  }
+
+  uint32_t bsr = 31u - (uint32_t)__builtin_clz(r0);
+  uint64_t bits = mantissa | ((uint64_t)(exponent + (int32_t)bsr) << 52);
+  double result = 0.0;
+  memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
+double kgpc_random_real_upper(double upper) {
+  if (upper <= 0.0)
+    return 0.0;
+  return kgpc_random_real() * upper;
+}
+
+static uint64_t kgpc_random_u64_bounded(uint64_t bound) {
+  if (bound == 0)
+    return 0;
+
+  /* For 32-bit bounds, use a faster path with 64-bit multiplication. */
+  if (bound <= 0xFFFFFFFFu) {
+    uint32_t b32 = (uint32_t)bound;
+    uint64_t m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
+    if ((uint32_t)m < b32) {
+      uint32_t t = (uint32_t)(0u - b32) % b32;
+      while ((uint32_t)m < t)
+        m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
     }
-    return kgpc_xsr128_next();
-}
+    return m >> 32;
+  }
 
-void kgpc_randomize(void)
-{
-    kgpc_randseed = (uint32_t)time(NULL);
-}
+  /* For larger bounds, use rejection sampling with 128-bit multiplication
+   * (Lemire's method). */
+  uint32_t a = kgpc_xsr128_u32rand();
+  __uint128_t prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
+  __uint128_t full = prod * bound;
+  uint64_t mLo = (uint64_t)full;
+  uint64_t mHi = (uint64_t)(full >> 64);
 
-double kgpc_random_real(void)
-{
-    uint32_t r0 = kgpc_xsr128_u32rand();
-    uint64_t mantissa = (uint64_t)(r0 & ((1u << 20) - 1u)) << 32;
-    mantissa |= (uint64_t)kgpc_xsr128_u32rand();
-
-    int32_t exponent = 1023 - 1 - 31;
-    if ((r0 >> 20) == 0)
-    {
-        exponent += 20;
-        do
-        {
-            exponent -= 32;
-            r0 = kgpc_xsr128_u32rand();
-        } while (r0 == 0);
+  if (mLo < bound) {
+    uint64_t t = (uint64_t)(0u - bound) % bound;
+    while (mLo < t) {
+      a = kgpc_xsr128_u32rand();
+      prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
+      full = prod * bound;
+      mLo = (uint64_t)full;
+      mHi = (uint64_t)(full >> 64);
     }
-
-    uint32_t bsr = 31u - (uint32_t)__builtin_clz(r0);
-    uint64_t bits = mantissa | ((uint64_t)(exponent + (int32_t)bsr) << 52);
-    double result = 0.0;
-    memcpy(&result, &bits, sizeof(result));
-    return result;
+  }
+  return mHi;
 }
 
-double kgpc_random_real_upper(double upper)
-{
-    if (upper <= 0.0)
-        return 0.0;
-    return kgpc_random_real() * upper;
+int64_t kgpc_random_int(int64_t upper) {
+  uint64_t ul = (uint64_t)upper;
+  if (upper < 0)
+    ul = ~ul;
+
+  uint64_t res = kgpc_random_u64_bounded(ul);
+
+  int64_t result = (int64_t)res;
+  if (upper < -1)
+    result = -result - 1;
+  return result;
 }
 
-static uint64_t kgpc_random_u64_bounded(uint64_t bound)
-{
-    if (bound == 0)
-        return 0;
+int64_t kgpc_random_int64(int64_t upper) { return kgpc_random_int(upper); }
 
-    /* For 32-bit bounds, use a faster path with 64-bit multiplication. */
-    if (bound <= 0xFFFFFFFFu)
-    {
-        uint32_t b32 = (uint32_t)bound;
-        uint64_t m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
-        if ((uint32_t)m < b32)
-        {
-            uint32_t t = (uint32_t)(0u - b32) % b32;
-            while ((uint32_t)m < t)
-                m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
-        }
-        return m >> 32;
-    }
-
-    /* For larger bounds, use rejection sampling with 128-bit multiplication (Lemire's method). */
-    uint32_t a = kgpc_xsr128_u32rand();
-    __uint128_t prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
-    __uint128_t full = prod * bound;
-    uint64_t mLo = (uint64_t)full;
-    uint64_t mHi = (uint64_t)(full >> 64);
-
-    if (mLo < bound)
-    {
-        uint64_t t = (uint64_t)(0u - bound) % bound;
-        while (mLo < t)
-        {
-            a = kgpc_xsr128_u32rand();
-            prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
-            full = prod * bound;
-            mLo = (uint64_t)full;
-            mHi = (uint64_t)(full >> 64);
-        }
-    }
-    return mHi;
+int64_t kgpc_random_range(int64_t low, int64_t high) {
+  if (high <= low)
+    return low;
+  return low + kgpc_random_int64(high - low);
 }
 
-int64_t kgpc_random_int(int64_t upper)
-{
-    uint64_t ul = (uint64_t)upper;
-    if (upper < 0)
-        ul = ~ul;
+uint32_t kgpc_get_randseed(void) { return kgpc_randseed; }
 
-    uint64_t res = kgpc_random_u64_bounded(ul);
-
-    int64_t result = (int64_t)res;
-    if (upper < -1)
-        result = -result - 1;
-    return result;
-}
-
-int64_t kgpc_random_int64(int64_t upper)
-{
-    return kgpc_random_int(upper);
-}
-
-int64_t kgpc_random_range(int64_t low, int64_t high)
-{
-    if (high <= low)
-        return low;
-    return low + kgpc_random_int64(high - low);
-}
-
-uint32_t kgpc_get_randseed(void)
-{
-    return kgpc_randseed;
-}
-
-void kgpc_set_randseed(uint32_t seed)
-{
-    kgpc_randseed = seed;
-}
+void kgpc_set_randseed(uint32_t seed) { kgpc_randseed = seed; }
 
 #if defined(__GLIBC__) || defined(__linux__)
 extern void sincos(double, double *, double *);
 #define KGPC_HAVE_SINCOS 1
 #endif
 
-void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
-{
-    double angle = kgpc_bits_to_double(angle_bits);
+void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out) {
+  double angle = kgpc_bits_to_double(angle_bits);
 #ifdef KGPC_HAVE_SINCOS
-    sincos(angle, sin_out, cos_out);
+  sincos(angle, sin_out, cos_out);
 #else
-    if (sin_out != NULL)
-        *sin_out = sin(angle);
-    if (cos_out != NULL)
-        *cos_out = cos(angle);
+  if (sin_out != NULL)
+    *sin_out = sin(angle);
+  if (cos_out != NULL)
+    *cos_out = cos(angle);
 #endif
 }
 
+void Halt(int64_t code) { exit((int)code); }
 
-void Halt(int64_t code)
-{
-    exit((int)code);
-}
-
-/* Called when an abstract method is invoked - should never happen in correct code */
-void __kgpc_abstract_method_error(void)
-{
-    fprintf(stderr, "Runtime error: Abstract method called\n");
-    abort();
+/* Called when an abstract method is invoked - should never happen in correct
+ * code */
+void __kgpc_abstract_method_error(void) {
+  fprintf(stderr, "Runtime error: Abstract method called\n");
+  abort();
 }
 
 /* FPC compiler intrinsic stubs: get_frame, get_pc_addr, etc.
  * These return the current stack frame pointer for exception handling.
  * The _void suffix variant is needed because KGPC's codegen mangles
  * zero-argument functions with _void. */
-void *kgpc_get_frame(void)
-{
-    return __builtin_frame_address(0);
-}
+void *kgpc_get_frame(void) { return __builtin_frame_address(0); }
 
-void *kgpc_get_frame_void(void)
-{
-    return __builtin_frame_address(0);
-}
+void *kgpc_get_frame_void(void) { return __builtin_frame_address(0); }
 
-void *kgpc_get_frame_p(void *frame)
-{
-    (void)frame;
-    return __builtin_frame_address(0);
+void *kgpc_get_frame_p(void *frame) {
+  (void)frame;
+  return __builtin_frame_address(0);
 }
 
 /* FPC atomic intrinsics — these are [internproc] builtins in FPC that have
  * no Pascal body.  KGPC emits calls to the mangled names below. */
-long atomicincrement_i_i(long *target, long value) { return kgpc_atomic_add_long(target, value); }
-uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value) { return kgpc_atomic_add_u32(target, value); }
+long atomicincrement_i_i(long *target, long value) {
+  return kgpc_atomic_add_long(target, value);
+}
+uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value) {
+  return kgpc_atomic_add_u32(target, value);
+}
 
-/* [internproc] AtomicIncrement(var Target): 1-param overload, increments by 1 */
+/* [internproc] AtomicIncrement(var Target): 1-param overload, increments by 1
+ */
 long atomicincrement_i(long *target) { return kgpc_atomic_add_long(target, 1); }
-uint32_t atomicincrement_u32(uint32_t *target) { return kgpc_atomic_add_u32(target, 1); }
+uint32_t atomicincrement_u32(uint32_t *target) {
+  return kgpc_atomic_add_u32(target, 1);
+}
 
 /* LongInt (32-bit signed) overloads for compiler intrinsics. */
-int32_t atomicincrement_li(int32_t *target) { return kgpc_atomic_add_i32(target, 1); }
-int32_t atomicincrement_li_li(int32_t *target, int32_t value) { return kgpc_atomic_add_i32(target, value); }
+int32_t atomicincrement_li(int32_t *target) {
+  return kgpc_atomic_add_i32(target, 1);
+}
+int32_t atomicincrement_li_li(int32_t *target, int32_t value) {
+  return kgpc_atomic_add_i32(target, value);
+}
 
-long atomicdecrement_i(long *target) { return kgpc_atomic_add_long(target, -1); }
-uint32_t atomicdecrement_u32(uint32_t *target) { return kgpc_atomic_add_u32(target, (uint32_t)-1); }
-int32_t atomicdecrement_li(int32_t *target) { return kgpc_atomic_add_i32(target, -1); }
-int32_t atomicdecrement_li_li(int32_t *target, int32_t value) { return kgpc_atomic_add_i32(target, -value); }
+long atomicdecrement_i(long *target) {
+  return kgpc_atomic_add_long(target, -1);
+}
+uint32_t atomicdecrement_u32(uint32_t *target) {
+  return kgpc_atomic_add_u32(target, (uint32_t)-1);
+}
+int32_t atomicdecrement_li(int32_t *target) {
+  return kgpc_atomic_add_i32(target, -1);
+}
+int32_t atomicdecrement_li_li(int32_t *target, int32_t value) {
+  return kgpc_atomic_add_i32(target, -value);
+}
 
-int32_t atomicexchange_li_li(int32_t *target, int32_t new_val) { return kgpc_atomic_exchange_i32(target, new_val); }
-int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand) { return kgpc_atomic_cmp_exchange_i32(target, new_val, comparand); }
+int32_t atomicexchange_li_li(int32_t *target, int32_t new_val) {
+  return kgpc_atomic_exchange_i32(target, new_val);
+}
+int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val,
+                                   int32_t comparand) {
+  return kgpc_atomic_cmp_exchange_i32(target, new_val, comparand);
+}
 void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand) {
-    return kgpc_atomic_cmp_exchange_ptr(target, new_val, comparand);
+  return kgpc_atomic_cmp_exchange_ptr(target, new_val, comparand);
 }
 void *atomicexchange_p_p(void **target, void *new_val) {
-    return kgpc_atomic_exchange_ptr(target, new_val);
+  return kgpc_atomic_exchange_ptr(target, new_val);
 }
 
 /* [internproc] AtomicExchange for integer types */
-long atomicexchange_i_i(long *target, long new_val) { return kgpc_atomic_exchange_long(target, new_val); }
-uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val) { return kgpc_atomic_exchange_u32(target, new_val); }
+long atomicexchange_i_i(long *target, long new_val) {
+  return kgpc_atomic_exchange_long(target, new_val);
+}
+uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val) {
+  return kgpc_atomic_exchange_u32(target, new_val);
+}
 
 /* Int64 overloads of atomic intrinsics */
-long long atomicincrement_i64(long long *target) { return kgpc_atomic_add_i64(target, 1); }
-uint64_t atomicincrement_u64(uint64_t *target) { return kgpc_atomic_add_u64(target, 1); }
-long long atomicincrement_i64_i64(long long *target, long long value) { return kgpc_atomic_add_i64(target, value); }
-uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value) { return kgpc_atomic_add_u64(target, value); }
+long long atomicincrement_i64(long long *target) {
+  return kgpc_atomic_add_i64(target, 1);
+}
+uint64_t atomicincrement_u64(uint64_t *target) {
+  return kgpc_atomic_add_u64(target, 1);
+}
+long long atomicincrement_i64_i64(long long *target, long long value) {
+  return kgpc_atomic_add_i64(target, value);
+}
+uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value) {
+  return kgpc_atomic_add_u64(target, value);
+}
 
-long long atomicdecrement_i64(long long *target) { return kgpc_atomic_add_i64(target, -1); }
-uint64_t atomicdecrement_u64(uint64_t *target) { return kgpc_atomic_add_u64(target, (uint64_t)-1); }
+long long atomicdecrement_i64(long long *target) {
+  return kgpc_atomic_add_i64(target, -1);
+}
+uint64_t atomicdecrement_u64(uint64_t *target) {
+  return kgpc_atomic_add_u64(target, (uint64_t)-1);
+}
 
-long long atomicexchange_i64_i64(long long *target, long long new_val) { return kgpc_atomic_exchange_i64(target, new_val); }
-uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val) { return kgpc_atomic_exchange_u64(target, new_val); }
+long long atomicexchange_i64_i64(long long *target, long long new_val) {
+  return kgpc_atomic_exchange_i64(target, new_val);
+}
+uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val) {
+  return kgpc_atomic_exchange_u64(target, new_val);
+}
 
-long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand) { return kgpc_atomic_cmp_exchange_i64(target, new_val, comparand); }
-uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val, uint32_t comparand) { return kgpc_atomic_cmp_exchange_u32(target, new_val, comparand); }
-uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint64_t comparand) { return kgpc_atomic_cmp_exchange_u64(target, new_val, comparand); }
+long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val,
+                                        long long comparand) {
+  return kgpc_atomic_cmp_exchange_i64(target, new_val, comparand);
+}
+uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val,
+                                       uint32_t comparand) {
+  return kgpc_atomic_cmp_exchange_u32(target, new_val, comparand);
+}
+uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val,
+                                       uint64_t comparand) {
+  return kgpc_atomic_cmp_exchange_u64(target, new_val, comparand);
+}
 
 /* FPC_INTERLOCKEDEXCHANGEADD / FPC_INTERLOCKEDCOMPAREEXCHANGE64:
  * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
@@ -5353,68 +4978,60 @@ uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint6
    Return int64_t so the full rax register is defined — KGPC codegen reads
    the whole register and the C ABI does not guarantee zero-extension of
    narrow return types. */
-int64_t fpc_in_lo_Word(int64_t value)
-{
-    return (int64_t)(uint8_t)value;
+int64_t fpc_in_lo_Word(int64_t value) { return (int64_t)(uint8_t)value; }
+
+int64_t fpc_in_hi_Word(int64_t value) {
+  return (int64_t)(uint8_t)((uint16_t)value >> 8);
 }
 
-int64_t fpc_in_hi_Word(int64_t value)
-{
-    return (int64_t)(uint8_t)((uint16_t)value >> 8);
+int64_t fpc_in_lo_long(int64_t value) { return (int64_t)(uint16_t)value; }
+
+int64_t fpc_in_hi_long(int64_t value) {
+  return (int64_t)(uint16_t)((uint32_t)value >> 16);
 }
 
-int64_t fpc_in_lo_long(int64_t value)
-{
-    return (int64_t)(uint16_t)value;
-}
+int64_t fpc_in_lo_qword(uint64_t value) { return (int64_t)(uint32_t)value; }
 
-int64_t fpc_in_hi_long(int64_t value)
-{
-    return (int64_t)(uint16_t)((uint32_t)value >> 16);
-}
-
-int64_t fpc_in_lo_qword(uint64_t value)
-{
-    return (int64_t)(uint32_t)value;
-}
-
-int64_t fpc_in_hi_qword(uint64_t value)
-{
-    return (int64_t)(uint32_t)(value >> 32);
+int64_t fpc_in_hi_qword(uint64_t value) {
+  return (int64_t)(uint32_t)(value >> 32);
 }
 
 /* Set operations for 256-bit sets (set of Char / set of AnsiChar).
    Each set is 32 bytes = 4 x uint64. */
-void kgpc_set_union_256(void *dest, const void *a, const void *b)
-{
-    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-    uint64_t *d = (uint64_t *)dest;
-    d[0] = sa[0] | sb[0]; d[1] = sa[1] | sb[1];
-    d[2] = sa[2] | sb[2]; d[3] = sa[3] | sb[3];
+void kgpc_set_union_256(void *dest, const void *a, const void *b) {
+  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+  uint64_t *d = (uint64_t *)dest;
+  d[0] = sa[0] | sb[0];
+  d[1] = sa[1] | sb[1];
+  d[2] = sa[2] | sb[2];
+  d[3] = sa[3] | sb[3];
 }
 
-void kgpc_set_intersect_256(void *dest, const void *a, const void *b)
-{
-    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-    uint64_t *d = (uint64_t *)dest;
-    d[0] = sa[0] & sb[0]; d[1] = sa[1] & sb[1];
-    d[2] = sa[2] & sb[2]; d[3] = sa[3] & sb[3];
+void kgpc_set_intersect_256(void *dest, const void *a, const void *b) {
+  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+  uint64_t *d = (uint64_t *)dest;
+  d[0] = sa[0] & sb[0];
+  d[1] = sa[1] & sb[1];
+  d[2] = sa[2] & sb[2];
+  d[3] = sa[3] & sb[3];
 }
 
-void kgpc_set_diff_256(void *dest, const void *a, const void *b)
-{
-    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-    uint64_t *d = (uint64_t *)dest;
-    d[0] = sa[0] & ~sb[0]; d[1] = sa[1] & ~sb[1];
-    d[2] = sa[2] & ~sb[2]; d[3] = sa[3] & ~sb[3];
+void kgpc_set_diff_256(void *dest, const void *a, const void *b) {
+  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+  uint64_t *d = (uint64_t *)dest;
+  d[0] = sa[0] & ~sb[0];
+  d[1] = sa[1] & ~sb[1];
+  d[2] = sa[2] & ~sb[2];
+  d[3] = sa[3] & ~sb[3];
 }
 
-void kgpc_set_symdiff_256(void *dest, const void *a, const void *b)
-{
-    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-    uint64_t *d = (uint64_t *)dest;
-    d[0] = sa[0] ^ sb[0]; d[1] = sa[1] ^ sb[1];
-    d[2] = sa[2] ^ sb[2]; d[3] = sa[3] ^ sb[3];
+void kgpc_set_symdiff_256(void *dest, const void *a, const void *b) {
+  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+  uint64_t *d = (uint64_t *)dest;
+  d[0] = sa[0] ^ sb[0];
+  d[1] = sa[1] ^ sb[1];
+  d[2] = sa[2] ^ sb[2];
+  d[3] = sa[3] ^ sb[3];
 }
 
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.
@@ -5422,14 +5039,13 @@ void kgpc_set_symdiff_256(void *dest, const void *a, const void *b)
    Our runtime provides a C equivalent.
    The FPC RTL's system_exit passes the exit code (from operatingsystem_result)
    as the first argument, so we must accept and forward it. */
-void _haltproc(int exitcode)
-{
-    exit(exitcode);
-}
+void _haltproc(int exitcode) { exit(exitcode); }
 
 /* atomiccmpexchange_i_i_i: [internproc] AtomicCmpExchange intrinsic.
    No Pascal body exists — this is a compiler intrinsic. */
-int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand) { return kgpc_atomic_cmp_exchange_int(target, new_val, comparand); }
+int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand) {
+  return kgpc_atomic_cmp_exchange_int(target, new_val, comparand);
+}
 
 /* =====================================================================
  * TUnicodeStringManager (widestringmanager) initialization.
@@ -5476,43 +5092,39 @@ extern void *widestringmanager[25];
    Signature: procedure(source:punicodechar; var dest:RawByteString;
                          cp:TSystemCodePage; len:SizeInt)
    SysV ABI: rdi=source, rsi=&dest, rdx=cp, rcx=len */
-void kgpc_default_unicode2ansi_move(const uint16_t *source,
-    char **dest, int32_t cp, int64_t len)
-{
-    if (len <= 0 || source == NULL)
-    {
-        kgpc_string_setlength(dest, 0);
-        return;
-    }
-    /* Check if source is actually an AnsiString (elementsize==1).
-       KGPC aliases UnicodeString=AnsiString, so callers may pass
-       1-byte char data through PUnicodeChar parameters. */
-    int src_is_ansi = 0;
-    if (kgpc_string_is_managed((const char *)source))
-    {
-        KgpcStringHeader *shdr = (KgpcStringHeader *)((const char *)source - (int64_t)sizeof(KgpcStringHeader));
-        if (shdr->elementsize == 1)
-            src_is_ansi = 1;
-    }
-    kgpc_string_setlength(dest, len);
-    if (*dest == NULL)
-        return;
-    /* Set codepage in the header */
-    KgpcStringHeader *hdr = kgpc_string_header(*dest);
-    if (hdr != NULL)
-        hdr->codepage = (uint16_t)cp;
-    char *p = *dest;
-    if (src_is_ansi)
-    {
-        const char *asrc = (const char *)source;
-        for (int64_t i = 0; i < len; i++)
-            p[i] = asrc[i];
-    }
-    else
-    {
-        for (int64_t i = 0; i < len; i++)
-            p[i] = (source[i] < 256) ? (char)source[i] : '?';
-    }
+void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest,
+                                    int32_t cp, int64_t len) {
+  if (len <= 0 || source == NULL) {
+    kgpc_string_setlength(dest, 0);
+    return;
+  }
+  /* Check if source is actually an AnsiString (elementsize==1).
+     KGPC aliases UnicodeString=AnsiString, so callers may pass
+     1-byte char data through PUnicodeChar parameters. */
+  int src_is_ansi = 0;
+  if (kgpc_string_is_managed((const char *)source)) {
+    KgpcStringHeader *shdr =
+        (KgpcStringHeader *)((const char *)source -
+                             (int64_t)sizeof(KgpcStringHeader));
+    if (shdr->elementsize == 1)
+      src_is_ansi = 1;
+  }
+  kgpc_string_setlength(dest, len);
+  if (*dest == NULL)
+    return;
+  /* Set codepage in the header */
+  KgpcStringHeader *hdr = kgpc_string_header(*dest);
+  if (hdr != NULL)
+    hdr->codepage = (uint16_t)cp;
+  char *p = *dest;
+  if (src_is_ansi) {
+    const char *asrc = (const char *)source;
+    for (int64_t i = 0; i < len; i++)
+      p[i] = asrc[i];
+  } else {
+    for (int64_t i = 0; i < len; i++)
+      p[i] = (source[i] < 256) ? (char)source[i] : '?';
+  }
 }
 
 /* Default: convert ansi chars to unicode by zero-extending.
@@ -5523,155 +5135,157 @@ void kgpc_default_unicode2ansi_move(const uint16_t *source,
    UnicodeString in FPC is a reference-counted array of uint16_t with the
    same TAnsiRec header (but elementsize=2).  We allocate the header+data
    manually since KGPC doesn't have full UnicodeString runtime support. */
-void kgpc_default_ansi2unicode_move(const char *source,
-    int32_t cp, uint16_t **dest, int64_t len)
-{
-    /* Free existing value */
-    if (*dest != NULL)
-        kgpc_string_release((char *)*dest);
+void kgpc_default_ansi2unicode_move(const char *source, int32_t cp,
+                                    uint16_t **dest, int64_t len) {
+  /* Free existing value */
+  if (*dest != NULL)
+    kgpc_string_release((char *)*dest);
 
-    if (len <= 0) {
-        *dest = NULL;
-        return;
-    }
+  if (len <= 0) {
+    *dest = NULL;
+    return;
+  }
 
-    /* Allocate: header + len*2 bytes + 2 byte null terminator */
-    size_t data_bytes = (size_t)len * 2 + 2;
-    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-    if (hdr == NULL) {
-        *dest = NULL;
-        return;
-    }
-    hdr->codepage = 1200;       /* UTF-16LE */
-    hdr->elementsize = 2;       /* UnicodeChar = 2 bytes */
-    hdr->refcount = 1;
-    hdr->length = len;
-    uint16_t *data = (uint16_t *)(hdr + 1);
-    for (int64_t i = 0; i < len; i++)
-        data[i] = (uint16_t)(unsigned char)source[i];
-    data[len] = 0;  /* null terminator */
-    kgpc_string_set_insert((char *)data);
-    *dest = data;
+  /* Allocate: header + len*2 bytes + 2 byte null terminator */
+  size_t data_bytes = (size_t)len * 2 + 2;
+  KgpcStringHeader *hdr =
+      (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+  if (hdr == NULL) {
+    *dest = NULL;
+    return;
+  }
+  hdr->codepage = 1200; /* UTF-16LE */
+  hdr->elementsize = 2; /* UnicodeChar = 2 bytes */
+  hdr->refcount = 1;
+  hdr->length = len;
+  uint16_t *data = (uint16_t *)(hdr + 1);
+  for (int64_t i = 0; i < len; i++)
+    data[i] = (uint16_t)(unsigned char)source[i];
+  data[len] = 0; /* null terminator */
+  kgpc_string_set_insert((char *)data);
+  *dest = data;
 }
 
 /* Default Wide2Ansi — same as Unicode2Ansi for our purposes */
-static void kgpc_default_wide2ansi_move(const uint16_t *source,
-    char **dest, int32_t cp, int64_t len)
-{
-    kgpc_default_unicode2ansi_move(source, dest, cp, len);
+static void kgpc_default_wide2ansi_move(const uint16_t *source, char **dest,
+                                        int32_t cp, int64_t len) {
+  kgpc_default_unicode2ansi_move(source, dest, cp, len);
 }
 
 /* Default Ansi2Wide — same as Ansi2Unicode */
-static void kgpc_default_ansi2wide_move(const char *source,
-    int32_t cp, uint16_t **dest, int64_t len)
-{
-    kgpc_default_ansi2unicode_move(source, cp, dest, len);
+static void kgpc_default_ansi2wide_move(const char *source, int32_t cp,
+                                        uint16_t **dest, int64_t len) {
+  kgpc_default_ansi2unicode_move(source, cp, dest, len);
 }
 
 /* Upper/LowerAnsiString: return a new string with case changed */
-static char *kgpc_default_upper_ansistring(const char *s)
-{
-    size_t len = kgpc_string_known_length(s);
-    char *result = kgpc_string_alloc_with_length(len);
-    if (result == NULL) return kgpc_alloc_empty_string();
-    for (size_t i = 0; i < len; i++)
-        result[i] = (char)toupper((unsigned char)s[i]);
-    return result;
+static char *kgpc_default_upper_ansistring(const char *s) {
+  size_t len = kgpc_string_known_length(s);
+  char *result = kgpc_string_alloc_with_length(len);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+  for (size_t i = 0; i < len; i++)
+    result[i] = (char)toupper((unsigned char)s[i]);
+  return result;
 }
 
-static char *kgpc_default_lower_ansistring(const char *s)
-{
-    size_t len = kgpc_string_known_length(s);
-    char *result = kgpc_string_alloc_with_length(len);
-    if (result == NULL) return kgpc_alloc_empty_string();
-    for (size_t i = 0; i < len; i++)
-        result[i] = (char)tolower((unsigned char)s[i]);
-    return result;
+static char *kgpc_default_lower_ansistring(const char *s) {
+  size_t len = kgpc_string_known_length(s);
+  char *result = kgpc_string_alloc_with_length(len);
+  if (result == NULL)
+    return kgpc_alloc_empty_string();
+  for (size_t i = 0; i < len; i++)
+    result[i] = (char)tolower((unsigned char)s[i]);
+  return result;
 }
 
 /* CompareStr: case-sensitive AnsiString comparison */
-static int64_t kgpc_default_comparestr_ansistring(const char *s1, const char *s2)
-{
-    size_t len1 = kgpc_string_known_length(s1);
-    size_t len2 = kgpc_string_known_length(s2);
-    size_t minlen = (len1 < len2) ? len1 : len2;
-    int r = memcmp(s1 ? s1 : "", s2 ? s2 : "", minlen);
-    if (r != 0) return (int64_t)r;
-    if (len1 < len2) return -1;
-    if (len1 > len2) return 1;
-    return 0;
+static int64_t kgpc_default_comparestr_ansistring(const char *s1,
+                                                  const char *s2) {
+  size_t len1 = kgpc_string_known_length(s1);
+  size_t len2 = kgpc_string_known_length(s2);
+  size_t minlen = (len1 < len2) ? len1 : len2;
+  int r = memcmp(s1 ? s1 : "", s2 ? s2 : "", minlen);
+  if (r != 0)
+    return (int64_t)r;
+  if (len1 < len2)
+    return -1;
+  if (len1 > len2)
+    return 1;
+  return 0;
 }
 
 /* CompareText: case-insensitive AnsiString comparison */
-static int64_t kgpc_default_comparetext_ansistring(const char *s1, const char *s2)
-{
-    if (s1 == NULL) s1 = "";
-    if (s2 == NULL) s2 = "";
-    return (int64_t)strcasecmp(s1, s2);
+static int64_t kgpc_default_comparetext_ansistring(const char *s1,
+                                                   const char *s2) {
+  if (s1 == NULL)
+    s1 = "";
+  if (s2 == NULL)
+    s2 = "";
+  return (int64_t)strcasecmp(s1, s2);
 }
 
 /* PAnsiChar comparisons */
-static int64_t kgpc_default_strcomp(const char *s1, const char *s2)
-{
-    return (int64_t)strcmp(s1 ? s1 : "", s2 ? s2 : "");
+static int64_t kgpc_default_strcomp(const char *s1, const char *s2) {
+  return (int64_t)strcmp(s1 ? s1 : "", s2 ? s2 : "");
 }
 
-static int64_t kgpc_default_stricomp(const char *s1, const char *s2)
-{
-    return (int64_t)strcasecmp(s1 ? s1 : "", s2 ? s2 : "");
+static int64_t kgpc_default_stricomp(const char *s1, const char *s2) {
+  return (int64_t)strcasecmp(s1 ? s1 : "", s2 ? s2 : "");
 }
 
-static int64_t kgpc_default_strlcomp(const char *s1, const char *s2, uint64_t maxlen)
-{
-    return (int64_t)strncmp(s1 ? s1 : "", s2 ? s2 : "", (size_t)maxlen);
+static int64_t kgpc_default_strlcomp(const char *s1, const char *s2,
+                                     uint64_t maxlen) {
+  return (int64_t)strncmp(s1 ? s1 : "", s2 ? s2 : "", (size_t)maxlen);
 }
 
-static int64_t kgpc_default_strlicomp(const char *s1, const char *s2, uint64_t maxlen)
-{
-    return (int64_t)strncasecmp(s1 ? s1 : "", s2 ? s2 : "", (size_t)maxlen);
+static int64_t kgpc_default_strlicomp(const char *s1, const char *s2,
+                                      uint64_t maxlen) {
+  return (int64_t)strncasecmp(s1 ? s1 : "", s2 ? s2 : "", (size_t)maxlen);
 }
 
 /* In-place PAnsiChar case conversion */
-static char *kgpc_default_strlower(char *str)
-{
-    if (str == NULL) return str;
-    for (char *p = str; *p; p++)
-        *p = (char)tolower((unsigned char)*p);
+static char *kgpc_default_strlower(char *str) {
+  if (str == NULL)
     return str;
+  for (char *p = str; *p; p++)
+    *p = (char)tolower((unsigned char)*p);
+  return str;
 }
 
-static char *kgpc_default_strupper(char *str)
-{
-    if (str == NULL) return str;
-    for (char *p = str; *p; p++)
-        *p = (char)toupper((unsigned char)*p);
+static char *kgpc_default_strupper(char *str) {
+  if (str == NULL)
     return str;
+  for (char *p = str; *p; p++)
+    *p = (char)toupper((unsigned char)*p);
+  return str;
 }
 
 /* Stub wide/unicode case: just return the input unchanged */
 static void *kgpc_stub_widecase(void *s) { return s; }
 
 /* Stub wide/unicode compare: byte comparison */
-static int64_t kgpc_stub_compare_wide(void *s1, void *s2, int64_t opts)
-{
-    (void)opts;
-    if (s1 == s2) return 0;
-    if (s1 == NULL) return -1;
-    if (s2 == NULL) return 1;
-    return 0;  /* stub: treat as equal */
+static int64_t kgpc_stub_compare_wide(void *s1, void *s2, int64_t opts) {
+  (void)opts;
+  if (s1 == s2)
+    return 0;
+  if (s1 == NULL)
+    return -1;
+  if (s2 == NULL)
+    return 1;
+  return 0; /* stub: treat as equal */
 }
 
 /* CharLengthPChar: just strlen for single-byte encodings */
-static int64_t kgpc_default_charlength_pchar(const char *str)
-{
-    return str ? (int64_t)strlen(str) : 0;
+static int64_t kgpc_default_charlength_pchar(const char *str) {
+  return str ? (int64_t)strlen(str) : 0;
 }
 
 /* CodePointLength: 1 if non-null char, 0 otherwise */
-static int64_t kgpc_default_codepoint_length(const char *str, int64_t maxlookahead)
-{
-    (void)maxlookahead;
-    return (str != NULL && str[0] != '\0') ? 1 : 0;
+static int64_t kgpc_default_codepoint_length(const char *str,
+                                             int64_t maxlookahead) {
+  (void)maxlookahead;
+  return (str != NULL && str[0] != '\0') ? 1 : 0;
 }
 
 /* Stub thread init/fini: no-ops */
@@ -5680,42 +5294,40 @@ static void kgpc_stub_thread_noop(void) {}
 /* GetStandardCodePage: return 0 (system default) */
 extern int32_t DefaultSystemCodePage;
 extern int32_t DefaultFileSystemCodePage;
-static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
-{
-    if (stdcp != 2)  /* scpFileSystemSingleByte = 2 */
-        return DefaultSystemCodePage;
-    return DefaultFileSystemCodePage;
+static int32_t kgpc_default_get_standard_codepage(int32_t stdcp) {
+  if (stdcp != 2) /* scpFileSystemSingleByte = 2 */
+    return DefaultSystemCodePage;
+  return DefaultFileSystemCodePage;
 }
 
 /* Initialize widestringmanager with default C callbacks.
    Called from kgpc_init_args before the program body runs. */
-void kgpc_init_widestringmanager(void)
-{
-    widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
-    widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
-    widestringmanager[2]  = (void *)kgpc_stub_widecase;             /* UpperWide */
-    widestringmanager[3]  = (void *)kgpc_stub_widecase;             /* LowerWide */
-    widestringmanager[4]  = (void *)kgpc_stub_compare_wide;         /* CompareWide */
-    widestringmanager[5]  = (void *)kgpc_default_charlength_pchar;
-    widestringmanager[6]  = (void *)kgpc_default_codepoint_length;
-    widestringmanager[7]  = (void *)kgpc_default_upper_ansistring;
-    widestringmanager[8]  = (void *)kgpc_default_lower_ansistring;
-    widestringmanager[9]  = (void *)kgpc_default_comparestr_ansistring;
-    widestringmanager[10] = (void *)kgpc_default_comparetext_ansistring;
-    widestringmanager[11] = (void *)kgpc_default_strcomp;
-    widestringmanager[12] = (void *)kgpc_default_stricomp;
-    widestringmanager[13] = (void *)kgpc_default_strlcomp;
-    widestringmanager[14] = (void *)kgpc_default_strlicomp;
-    widestringmanager[15] = (void *)kgpc_default_strlower;
-    widestringmanager[16] = (void *)kgpc_default_strupper;
-    widestringmanager[17] = (void *)kgpc_stub_thread_noop;          /* ThreadInit */
-    widestringmanager[18] = (void *)kgpc_stub_thread_noop;          /* ThreadFini */
-    widestringmanager[19] = (void *)kgpc_default_unicode2ansi_move;
-    widestringmanager[20] = (void *)kgpc_default_ansi2unicode_move;
-    widestringmanager[21] = (void *)kgpc_stub_widecase;             /* UpperUnicode */
-    widestringmanager[22] = (void *)kgpc_stub_widecase;             /* LowerUnicode */
-    widestringmanager[23] = (void *)kgpc_stub_compare_wide;         /* CompareUnicode */
-    widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
+void kgpc_init_widestringmanager(void) {
+  widestringmanager[0] = (void *)kgpc_default_wide2ansi_move;
+  widestringmanager[1] = (void *)kgpc_default_ansi2wide_move;
+  widestringmanager[2] = (void *)kgpc_stub_widecase;     /* UpperWide */
+  widestringmanager[3] = (void *)kgpc_stub_widecase;     /* LowerWide */
+  widestringmanager[4] = (void *)kgpc_stub_compare_wide; /* CompareWide */
+  widestringmanager[5] = (void *)kgpc_default_charlength_pchar;
+  widestringmanager[6] = (void *)kgpc_default_codepoint_length;
+  widestringmanager[7] = (void *)kgpc_default_upper_ansistring;
+  widestringmanager[8] = (void *)kgpc_default_lower_ansistring;
+  widestringmanager[9] = (void *)kgpc_default_comparestr_ansistring;
+  widestringmanager[10] = (void *)kgpc_default_comparetext_ansistring;
+  widestringmanager[11] = (void *)kgpc_default_strcomp;
+  widestringmanager[12] = (void *)kgpc_default_stricomp;
+  widestringmanager[13] = (void *)kgpc_default_strlcomp;
+  widestringmanager[14] = (void *)kgpc_default_strlicomp;
+  widestringmanager[15] = (void *)kgpc_default_strlower;
+  widestringmanager[16] = (void *)kgpc_default_strupper;
+  widestringmanager[17] = (void *)kgpc_stub_thread_noop; /* ThreadInit */
+  widestringmanager[18] = (void *)kgpc_stub_thread_noop; /* ThreadFini */
+  widestringmanager[19] = (void *)kgpc_default_unicode2ansi_move;
+  widestringmanager[20] = (void *)kgpc_default_ansi2unicode_move;
+  widestringmanager[21] = (void *)kgpc_stub_widecase;     /* UpperUnicode */
+  widestringmanager[22] = (void *)kgpc_stub_widecase;     /* LowerUnicode */
+  widestringmanager[23] = (void *)kgpc_stub_compare_wide; /* CompareUnicode */
+  widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
 }
 
 /* =========================================================================
@@ -5723,97 +5335,111 @@ void kgpc_init_widestringmanager(void)
    ========================================================================= */
 
 int64_t kgpc_sar_int64(int64_t value, int32_t shift) {
-    return value >> (shift & 63);
+  return value >> (shift & 63);
 }
 
 /* FPC internal intrinsic stub — the FPC compiler would inline SAR
  * instructions, but since we emit a regular call we need a runtime
  * symbol.  The generic version uses 64-bit arithmetic. */
 int64_t fpc_in_sar_x_y(int64_t value, int64_t shift) {
-    return value >> (shift & 63);
+  return value >> (shift & 63);
 }
 
 int32_t kgpc_sar_longint(int32_t value, int32_t shift) {
-    return value >> (shift & 31);
+  return value >> (shift & 31);
 }
 
 int64_t kgpc_sar_smallint(int64_t value, int64_t shift) {
-    return (int64_t)(int16_t)(((int32_t)(int16_t)value) >> (shift & 15));
+  return (int64_t)(int16_t)(((int32_t)(int16_t)value) >> (shift & 15));
 }
 
 int64_t kgpc_sar_shortint(int64_t value, int64_t shift) {
-    return (int64_t)(int8_t)(((int32_t)(int8_t)value) >> (shift & 7));
+  return (int64_t)(int8_t)(((int32_t)(int8_t)value) >> (shift & 7));
 }
 
 uint32_t kgpc_rol_dword(uint32_t value, int32_t shift) {
-    shift &= 31;
-    return (value << shift) | (value >> (32 - shift));
+  shift &= 31;
+  return (value << shift) | (value >> (32 - shift));
 }
 
 uint32_t kgpc_ror_dword(uint32_t value, int32_t shift) {
-    shift &= 31;
-    return (value >> shift) | (value << (32 - shift));
+  shift &= 31;
+  return (value >> shift) | (value << (32 - shift));
 }
 
 uint64_t kgpc_rol_qword(uint64_t value, int32_t shift) {
-    shift &= 63;
-    return (value << shift) | (value >> (64 - shift));
+  shift &= 63;
+  return (value << shift) | (value >> (64 - shift));
 }
 
 uint64_t kgpc_ror_qword(uint64_t value, int32_t shift) {
-    shift &= 63;
-    return (value >> shift) | (value << (64 - shift));
+  shift &= 63;
+  return (value >> shift) | (value << (64 - shift));
 }
 
 int64_t kgpc_rol_word(int64_t value, int64_t shift) {
-    uint16_t v = (uint16_t)value;
-    shift &= 15;
-    return (int64_t)(uint16_t)((v << shift) | (v >> (16 - shift)));
+  uint16_t v = (uint16_t)value;
+  shift &= 15;
+  return (int64_t)(uint16_t)((v << shift) | (v >> (16 - shift)));
 }
 
 int64_t kgpc_ror_word(int64_t value, int64_t shift) {
-    uint16_t v = (uint16_t)value;
-    shift &= 15;
-    return (int64_t)(uint16_t)((v >> shift) | (v << (16 - shift)));
+  uint16_t v = (uint16_t)value;
+  shift &= 15;
+  return (int64_t)(uint16_t)((v >> shift) | (v << (16 - shift)));
 }
 
 int64_t kgpc_rol_byte(int64_t value, int64_t shift) {
-    uint8_t v = (uint8_t)value;
-    shift &= 7;
-    return (int64_t)(uint8_t)((v << shift) | (v >> (8 - shift)));
+  uint8_t v = (uint8_t)value;
+  shift &= 7;
+  return (int64_t)(uint8_t)((v << shift) | (v >> (8 - shift)));
 }
 
 int64_t kgpc_ror_byte(int64_t value, int64_t shift) {
-    uint8_t v = (uint8_t)value;
-    shift &= 7;
-    return (int64_t)(uint8_t)((v >> shift) | (v << (8 - shift)));
+  uint8_t v = (uint8_t)value;
+  shift &= 7;
+  return (int64_t)(uint8_t)((v >> shift) | (v << (8 - shift)));
 }
 
 int32_t kgpc_compare_mem(const void *p1, const void *p2, int64_t count) {
-    if (count <= 0) return 1; /* true */
-    return memcmp(p1, p2, (size_t)count) == 0 ? 1 : 0;
+  if (count <= 0)
+    return 1; /* true */
+  return memcmp(p1, p2, (size_t)count) == 0 ? 1 : 0;
 }
 
 void kgpc_prefetch(const void *p) {
-    (void)p;
-    /* No-op; just a hint */
+  (void)p;
+  /* No-op; just a hint */
 }
 
-int64_t kgpc_hi_qword(uint64_t value) { return (int64_t)(uint32_t)(value >> 32); }
-int64_t kgpc_hi_dword(int64_t value) { return (int64_t)(uint16_t)((uint32_t)value >> 16); }
-int64_t kgpc_hi_word(int64_t value)  { return (int64_t)(uint8_t)((uint16_t)value >> 8); }
-int64_t kgpc_lo_qword(uint64_t value) { return (int64_t)(uint32_t)(value & 0xFFFFFFFFu); }
-int64_t kgpc_lo_dword(int64_t value) { return (int64_t)(uint16_t)(value & 0xFFFF); }
-int64_t kgpc_lo_word(int64_t value)  { return (int64_t)(uint8_t)(value & 0xFF); }
+int64_t kgpc_hi_qword(uint64_t value) {
+  return (int64_t)(uint32_t)(value >> 32);
+}
+int64_t kgpc_hi_dword(int64_t value) {
+  return (int64_t)(uint16_t)((uint32_t)value >> 16);
+}
+int64_t kgpc_hi_word(int64_t value) {
+  return (int64_t)(uint8_t)((uint16_t)value >> 8);
+}
+int64_t kgpc_lo_qword(uint64_t value) {
+  return (int64_t)(uint32_t)(value & 0xFFFFFFFFu);
+}
+int64_t kgpc_lo_dword(int64_t value) {
+  return (int64_t)(uint16_t)(value & 0xFFFF);
+}
+int64_t kgpc_lo_word(int64_t value) { return (int64_t)(uint8_t)(value & 0xFF); }
 
 void kgpc_runerror(int32_t code) {
-    fprintf(stderr, "Runtime error %d\n", code);
-    exit(code);
+  fprintf(stderr, "Runtime error %d\n", code);
+  exit(code);
 }
 
 /* GetMemory/FreeMemory/ReallocMemory - C heap wrappers */
 void *kgpc_getmem_ptr(size_t size) { return malloc(size); }
-size_t kgpc_freemem_ptr(void *p) { free(p); return 0; }
+size_t kgpc_freemem_ptr(void *p) {
+  free(p);
+  return 0;
+}
 void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
 
 /* Memory barriers - no-ops on x86 (strong memory model) */
@@ -5834,21 +5460,19 @@ void FindComponentClass(void) { __kgpc_abstract_method_error(); }
  * (e.g. TList = class(TObject, IFPObserved)) need default QueryInterface,
  * _AddRef, and _Release methods. These behave like FPC's defaults:
  * no reference counting, QueryInterface delegates to GetInterface. */
-int64_t kgpc_default_queryinterface(const void *self, const void *guid, void **out_intf)
-{
-    if (kgpc_get_interface(self, guid, out_intf))
-        return 0;  /* S_OK */
-    return (int64_t)0x80004002u;  /* E_NOINTERFACE */
+int64_t kgpc_default_queryinterface(const void *self, const void *guid,
+                                    void **out_intf) {
+  if (kgpc_get_interface(self, guid, out_intf))
+    return 0;                  /* S_OK */
+  return (int64_t)0x80004002u; /* E_NOINTERFACE */
 }
 
-int64_t kgpc_default_addref(const void *self)
-{
-    (void)self;
-    return -1;
+int64_t kgpc_default_addref(const void *self) {
+  (void)self;
+  return -1;
 }
 
-int64_t kgpc_default_release(const void *self)
-{
-    (void)self;
-    return -1;
+int64_t kgpc_default_release(const void *self) {
+  (void)self;
+  return -1;
 }

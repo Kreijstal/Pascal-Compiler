@@ -1,0 +1,18 @@
+# KGPC C formatting.
+#
+# Style: LLVM default (K&R braces, 2-space indent).  Applied across
+# KGPC/, common/, and cparser/ -- with cparser/acutest.h excluded via
+# .clang-format-ignore so we don't diverge from upstream.
+#
+# Reformat the whole tree:
+#   clang-format -i $(git ls-files '*.c' '*.h' '*.cpp' '*.hpp')
+#
+# Reformat a single file:
+#   clang-format -i path/to/file.c
+BasedOnStyle: LLVM
+
+# Do NOT reorder includes.  The current sources contain headers that
+# rely on transitive includes from neighbouring files; resorting blocks
+# breaks the build.  Fixing the underlying transitive-include leaks is a
+# separate, non-formatting cleanup.
+SortIncludes: Never

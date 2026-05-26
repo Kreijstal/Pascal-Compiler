@@ -13,76 +13,77 @@
 
 // Windows compatibility: strndup is not available on some Windows compilers
 #if defined(_WIN32) && !defined(HAVE_STRNDUP)
-static char* strndup(const char* s, size_t n)
-{
-    size_t len = strnlen(s, n);
-    char* buf = (char*)malloc(len + 1);
-    if (buf == NULL)
-        return NULL;
-    memcpy(buf, s, len);
-    buf[len] = '\0';
-    return buf;
+static char *strndup(const char *s, size_t n) {
+  size_t len = strnlen(s, n);
+  char *buf = (char *)malloc(len + 1);
+  if (buf == NULL)
+    return NULL;
+  memcpy(buf, s, len);
+  buf[len] = '\0';
+  return buf;
 }
 #endif
 
-extern ast_t* ast_nil;
+extern ast_t *ast_nil;
 
-static ParseResult debug_print_fn(input_t* in, void* args, char* parser_name) {
-    char* msg = (char*)args;
-    FILE* f = fopen("/tmp/parser_trace.log", "a");
-    if (f) {
-        fprintf(f, "DEBUG: %s at line %d, col %d, next char: '%c' (0x%02x)\n", 
-                msg, in->line, in->col, in->buffer[in->start], (unsigned char)in->buffer[in->start]);
-        fclose(f);
-    }
-    return make_success(ast_nil);
+static ParseResult debug_print_fn(input_t *in, void *args, char *parser_name) {
+  char *msg = (char *)args;
+  FILE *f = fopen("/tmp/parser_trace.log", "a");
+  if (f) {
+    fprintf(f, "DEBUG: %s at line %d, col %d, next char: '%c' (0x%02x)\n", msg,
+            in->line, in->col, in->buffer[in->start],
+            (unsigned char)in->buffer[in->start]);
+    fclose(f);
+  }
+  return make_success(ast_nil);
 }
 
-combinator_t* debug_print(char* msg) {
-    combinator_t* comb = new_combinator();
-    comb->fn = debug_print_fn;
-    comb->args = strdup(msg);
-    return comb;
+combinator_t *debug_print(char *msg) {
+  combinator_t *comb = new_combinator();
+  comb->fn = debug_print_fn;
+  comb->args = strdup(msg);
+  return comb;
 }
 
 // Helper to create simple keyword AST nodes for modifiers
-static void set_combinator_name(combinator_t* comb, const char* name) {
-    if (comb == NULL)
-        return;
+static void set_combinator_name(combinator_t *comb, const char *name) {
+  if (comb == NULL)
+    return;
 
-    if (comb->name != NULL) {
-        free(comb->name);
-    }
-    comb->name = strdup(name);
+  if (comb->name != NULL) {
+    free(comb->name);
+  }
+  comb->name = strdup(name);
 }
 
 // Removed permissive begin..end skipper to enforce strict parsing.
 
-static ast_t* make_modifier_node(ast_t* original, const char* keyword) {
-    ast_t* modifier = (original != NULL && original != ast_nil) ? original : new_ast();
-    modifier->typ = PASCAL_T_IDENTIFIER;
-    modifier->sym = sym_lookup(keyword);
-    modifier->child = NULL;
-    modifier->next = NULL;
-    return modifier;
+static ast_t *make_modifier_node(ast_t *original, const char *keyword) {
+  ast_t *modifier =
+      (original != NULL && original != ast_nil) ? original : new_ast();
+  modifier->typ = PASCAL_T_IDENTIFIER;
+  modifier->sym = sym_lookup(keyword);
+  modifier->child = NULL;
+  modifier->next = NULL;
+  return modifier;
 }
 
-static ast_t* map_const_modifier(ast_t* ast) {
-    return make_modifier_node(ast, "const");
+static ast_t *map_const_modifier(ast_t *ast) {
+  return make_modifier_node(ast, "const");
 }
 
-static ast_t* map_var_modifier(ast_t* ast) {
-    return make_modifier_node(ast, "var");
+static ast_t *map_var_modifier(ast_t *ast) {
+  return make_modifier_node(ast, "var");
 }
 
 // Maps the 'out' keyword to a modifier node
-static ast_t* map_out_modifier(ast_t* ast) {
-    return make_modifier_node(ast, "out");
+static ast_t *map_out_modifier(ast_t *ast) {
+  return make_modifier_node(ast, "out");
 }
 
 // Maps the 'constref' keyword (FPC/Delphi) to a modifier node
-static ast_t* map_constref_modifier(ast_t* ast) {
-    return make_modifier_node(ast, "constref");
+static ast_t *map_constref_modifier(ast_t *ast) {
+  return make_modifier_node(ast, "constref");
 }
 
 // Maps directive keywords (forward, external, assembler) to AST nodes
@@ -109,4170 +110,3783 @@ static ast_t* map_constref_modifier(ast_t* ast) {
 //     return make_modifier_node(ast, "assembler");
 // }
 
-static keyword_dispatch_args_t* create_keyword_dispatch(size_t capacity) {
-    keyword_dispatch_args_t* args = (keyword_dispatch_args_t*)safe_malloc(sizeof(keyword_dispatch_args_t));
-    memset(args, 0, sizeof(*args));
-    if (capacity > 0) {
-        args->entries = (pascal_keyword_entry_t*)safe_malloc(sizeof(pascal_keyword_entry_t) * capacity);
-        memset(args->entries, 0, sizeof(pascal_keyword_entry_t) * capacity);
-    } else {
-        args->entries = NULL;
-    }
-    args->entry_count = 0;
-    args->skip_keywords = NULL;
-    args->skip_keyword_count = 0;
-    args->fallback_parser = NULL;
-    return args;
+static keyword_dispatch_args_t *create_keyword_dispatch(size_t capacity) {
+  keyword_dispatch_args_t *args =
+      (keyword_dispatch_args_t *)safe_malloc(sizeof(keyword_dispatch_args_t));
+  memset(args, 0, sizeof(*args));
+  if (capacity > 0) {
+    args->entries = (pascal_keyword_entry_t *)safe_malloc(
+        sizeof(pascal_keyword_entry_t) * capacity);
+    memset(args->entries, 0, sizeof(pascal_keyword_entry_t) * capacity);
+  } else {
+    args->entries = NULL;
+  }
+  args->entry_count = 0;
+  args->skip_keywords = NULL;
+  args->skip_keyword_count = 0;
+  args->fallback_parser = NULL;
+  return args;
 }
 
-static void register_keyword_entry(keyword_dispatch_args_t* args, size_t capacity, size_t* index, const char* keyword, combinator_t* parser) {
-    if (args == NULL || args->entries == NULL || index == NULL || parser == NULL || keyword == NULL) {
-        return;
-    }
-    if (*index >= capacity) {
-        return;
-    }
-    pascal_keyword_entry_t* entry = &args->entries[*index];
-    entry->keyword = keyword;
-    entry->length = strlen(keyword);
-    entry->parser = parser;
-    (*index)++;
+static void register_keyword_entry(keyword_dispatch_args_t *args,
+                                   size_t capacity, size_t *index,
+                                   const char *keyword, combinator_t *parser) {
+  if (args == NULL || args->entries == NULL || index == NULL ||
+      parser == NULL || keyword == NULL) {
+    return;
+  }
+  if (*index >= capacity) {
+    return;
+  }
+  pascal_keyword_entry_t *entry = &args->entries[*index];
+  entry->keyword = keyword;
+  entry->length = strlen(keyword);
+  entry->parser = parser;
+  (*index)++;
 }
 
-static bool dispatch_word_should_skip(const keyword_dispatch_args_t* args, const pascal_word_slice_t* word) {
-    if (args == NULL || args->skip_keywords == NULL || word == NULL || word->start == NULL) {
-        return false;
-    }
-    for (size_t i = 0; i < args->skip_keyword_count; ++i) {
-        const char* candidate = args->skip_keywords[i];
-        if (candidate != NULL && pascal_word_equals_ci(word, candidate)) {
-            return true;
-        }
-    }
+static bool dispatch_word_should_skip(const keyword_dispatch_args_t *args,
+                                      const pascal_word_slice_t *word) {
+  if (args == NULL || args->skip_keywords == NULL || word == NULL ||
+      word->start == NULL) {
     return false;
+  }
+  for (size_t i = 0; i < args->skip_keyword_count; ++i) {
+    const char *candidate = args->skip_keywords[i];
+    if (candidate != NULL && pascal_word_equals_ci(word, candidate)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-static bool keyword_dispatch_peek_word(const keyword_dispatch_args_t* args, const input_t* in, pascal_word_slice_t* out) {
-    if (args == NULL || in == NULL || out == NULL) {
-        return false;
+static bool keyword_dispatch_peek_word(const keyword_dispatch_args_t *args,
+                                       const input_t *in,
+                                       pascal_word_slice_t *out) {
+  if (args == NULL || in == NULL || out == NULL) {
+    return false;
+  }
+  pascal_word_slice_t slice;
+  int pos = in->start;
+  size_t guard = 0;
+  while (true) {
+    if (!pascal_peek_word_after(in, pos, &slice)) {
+      return false;
     }
-    pascal_word_slice_t slice;
-    int pos = in->start;
-    size_t guard = 0;
-    while (true) {
-        if (!pascal_peek_word_after(in, pos, &slice)) {
-            return false;
-        }
-        if (!dispatch_word_should_skip(args, &slice)) {
-            *out = slice;
-            return true;
-        }
-        pos = skip_pascal_layout_preview(in, slice.end_pos);
-        if (++guard > 4) {
-            return false;
-        }
+    if (!dispatch_word_should_skip(args, &slice)) {
+      *out = slice;
+      return true;
     }
+    pos = skip_pascal_layout_preview(in, slice.end_pos);
+    if (++guard > 4) {
+      return false;
+    }
+  }
 }
 
-static ParseResult keyword_dispatch_fn(input_t* in, void* args, char* parser_name) {
-    keyword_dispatch_args_t* dispatch = (keyword_dispatch_args_t*)args;
-    if (dispatch == NULL) {
-        return make_failure(in, strdup("keyword dispatcher misconfigured"));
+static ParseResult keyword_dispatch_fn(input_t *in, void *args,
+                                       char *parser_name) {
+  keyword_dispatch_args_t *dispatch = (keyword_dispatch_args_t *)args;
+  if (dispatch == NULL) {
+    return make_failure(in, strdup("keyword dispatcher misconfigured"));
+  }
+  pascal_word_slice_t word = {0};
+  if (!keyword_dispatch_peek_word(dispatch, in, &word)) {
+    return make_failure(in, strdup("keyword dispatcher did not find a match"));
+  }
+  for (size_t i = 0; i < dispatch->entry_count; ++i) {
+    pascal_keyword_entry_t *entry = &dispatch->entries[i];
+    if (entry->keyword == NULL || entry->parser == NULL) {
+      continue;
     }
-    pascal_word_slice_t word = {0};
-    if (!keyword_dispatch_peek_word(dispatch, in, &word)) {
-        return make_failure(in, strdup("keyword dispatcher did not find a match"));
+    if (pascal_word_equals_ci(&word, entry->keyword)) {
+      if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL &&
+          strcasecmp(entry->keyword, "type") == 0) {
+        char *matched = strndup(word.start, word.length);
+        fprintf(stderr, "[KGPC] keyword_dispatch matched '%s' in %s\n",
+                matched != NULL ? matched : "<null>",
+                parser_name != NULL ? parser_name : "<unknown>");
+        free(matched);
+      }
+      ParseResult res = parse(in, entry->parser);
+      if (!res.is_success && getenv("KGPC_DEBUG_DISPATCH_FAIL") != NULL) {
+        int line =
+            res.value.error ? res.value.error->line : (in ? in->line : 0);
+        int col = res.value.error ? res.value.error->col : (in ? in->col : 0);
+        const char *msg = (res.value.error && res.value.error->message)
+                              ? res.value.error->message
+                              : "unknown error";
+        fprintf(stderr,
+                "[KGPC] keyword_dispatch failed '%s' in %s at %d:%d: %s\n",
+                entry->keyword, parser_name != NULL ? parser_name : "<unknown>",
+                line, col, msg);
+      }
+      return res;
     }
-    for (size_t i = 0; i < dispatch->entry_count; ++i) {
-        pascal_keyword_entry_t* entry = &dispatch->entries[i];
-        if (entry->keyword == NULL || entry->parser == NULL) {
-            continue;
-        }
-        if (pascal_word_equals_ci(&word, entry->keyword)) {
-            if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL &&
-                strcasecmp(entry->keyword, "type") == 0) {
-                char* matched = strndup(word.start, word.length);
-                fprintf(stderr, "[KGPC] keyword_dispatch matched '%s' in %s\n",
-                    matched != NULL ? matched : "<null>",
-                    parser_name != NULL ? parser_name : "<unknown>");
-                free(matched);
-            }
-            ParseResult res = parse(in, entry->parser);
-            if (!res.is_success && getenv("KGPC_DEBUG_DISPATCH_FAIL") != NULL) {
-                int line = res.value.error ? res.value.error->line : (in ? in->line : 0);
-                int col = res.value.error ? res.value.error->col : (in ? in->col : 0);
-                const char *msg = (res.value.error && res.value.error->message) ? res.value.error->message : "unknown error";
-                fprintf(stderr, "[KGPC] keyword_dispatch failed '%s' in %s at %d:%d: %s\n",
-                    entry->keyword,
-                    parser_name != NULL ? parser_name : "<unknown>",
-                    line, col, msg);
-            }
-            return res;
-        }
-    }
-    char* unexpected = strndup(word.start, word.length);
-    if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL) {
-        fprintf(stderr, "[KGPC] keyword_dispatch unexpected '%s' in %s at %d:%d\n",
+  }
+  char *unexpected = strndup(word.start, word.length);
+  if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL) {
+    fprintf(stderr, "[KGPC] keyword_dispatch unexpected '%s' in %s at %d:%d\n",
             unexpected != NULL ? unexpected : "<null>",
             parser_name != NULL ? parser_name : "<unknown>",
-            in != NULL ? in->line : 0,
-            in != NULL ? in->col : 0);
-    }
-    return make_failure_v2(in, parser_name, strdup("Unexpected keyword in dispatcher"), unexpected);
+            in != NULL ? in->line : 0, in != NULL ? in->col : 0);
+  }
+  return make_failure_v2(
+      in, parser_name, strdup("Unexpected keyword in dispatcher"), unexpected);
 }
 
-static int resolve_input_length_local(const input_t* in) {
-    if (in == NULL) {
-        return 0;
-    }
-    if (in->length > 0) {
-        return in->length;
-    }
-    if (in->buffer == NULL) {
-        return 0;
-    }
-    return (int)strlen(in->buffer);
+static int resolve_input_length_local(const input_t *in) {
+  if (in == NULL) {
+    return 0;
+  }
+  if (in->length > 0) {
+    return in->length;
+  }
+  if (in->buffer == NULL) {
+    return 0;
+  }
+  return (int)strlen(in->buffer);
 }
 
 // Parser that consumes a balanced parenthesis block starting at '('
-// Handles nested parentheses, strings, and Pascal comments to avoid premature termination.
+// Handles nested parentheses, strings, and Pascal comments to avoid premature
+// termination.
 
-static bool looks_like_range_literal(const input_t* in, int pos) {
-    if (in == NULL || in->buffer == NULL) {
-        return false;
-    }
-    const char* buffer = in->buffer;
-    int length = resolve_input_length_local(in);
-    int limit = pos + 512;
-    if (limit > length) {
-        limit = length;
-    }
-    bool in_string = false;
-    int paren_depth = 0;
-    int bracket_depth = 0;
-    while (pos < limit) {
-        unsigned char ch = (unsigned char)buffer[pos];
-        if (in_string) {
-            if (ch == '\'') {
-                if (pos + 1 < length && buffer[pos + 1] == '\'') {
-                    pos += 2;
-                    continue;
-                }
-                in_string = false;
-            }
-            pos++;
-            continue;
-        }
-        if (ch == '\'') {
-            in_string = true;
-            pos++;
-            continue;
-        }
-        if (ch == '{') {
-            pos++;
-            while (pos < length && buffer[pos] != '}') {
-                pos++;
-            }
-            if (pos < length) pos++;
-            continue;
-        }
-        if (ch == '(' && pos + 1 < length && buffer[pos + 1] == '*') {
-            pos += 2;
-            while ((pos + 1) < length && !(buffer[pos] == '*' && buffer[pos + 1] == ')')) {
-                pos++;
-            }
-            if ((pos + 1) < length) {
-                pos += 2;
-            } else {
-                pos = length;
-            }
-            continue;
-        }
-        if (ch == '/' && pos + 1 < length && buffer[pos + 1] == '/') {
-            pos += 2;
-            while (pos < length && buffer[pos] != '\n' && buffer[pos] != '\r') {
-                pos++;
-            }
-            continue;
-        }
-        if (ch == '(') {
-            paren_depth++;
-            pos++;
-            continue;
-        }
-        if (ch == ')') {
-            if (paren_depth > 0) {
-                paren_depth--;
-                pos++;
-                continue;
-            }
-            break;
-        }
-        if (ch == '[') {
-            bracket_depth++;
-            pos++;
-            continue;
-        }
-        if (ch == ']') {
-            if (bracket_depth > 0)
-                bracket_depth--;
-            pos++;
-            continue;
-        }
-        if ((ch == ';' || ch == ',') && paren_depth == 0 && bracket_depth == 0) {
-            break;
-        }
-        if (ch == '.' && pos + 1 < length && buffer[pos + 1] == '.' &&
-            paren_depth == 0 && bracket_depth == 0) {
-            return true;
-        }
-        pos++;
-    }
+static bool looks_like_range_literal(const input_t *in, int pos) {
+  if (in == NULL || in->buffer == NULL) {
     return false;
+  }
+  const char *buffer = in->buffer;
+  int length = resolve_input_length_local(in);
+  int limit = pos + 512;
+  if (limit > length) {
+    limit = length;
+  }
+  bool in_string = false;
+  int paren_depth = 0;
+  int bracket_depth = 0;
+  while (pos < limit) {
+    unsigned char ch = (unsigned char)buffer[pos];
+    if (in_string) {
+      if (ch == '\'') {
+        if (pos + 1 < length && buffer[pos + 1] == '\'') {
+          pos += 2;
+          continue;
+        }
+        in_string = false;
+      }
+      pos++;
+      continue;
+    }
+    if (ch == '\'') {
+      in_string = true;
+      pos++;
+      continue;
+    }
+    if (ch == '{') {
+      pos++;
+      while (pos < length && buffer[pos] != '}') {
+        pos++;
+      }
+      if (pos < length)
+        pos++;
+      continue;
+    }
+    if (ch == '(' && pos + 1 < length && buffer[pos + 1] == '*') {
+      pos += 2;
+      while ((pos + 1) < length &&
+             !(buffer[pos] == '*' && buffer[pos + 1] == ')')) {
+        pos++;
+      }
+      if ((pos + 1) < length) {
+        pos += 2;
+      } else {
+        pos = length;
+      }
+      continue;
+    }
+    if (ch == '/' && pos + 1 < length && buffer[pos + 1] == '/') {
+      pos += 2;
+      while (pos < length && buffer[pos] != '\n' && buffer[pos] != '\r') {
+        pos++;
+      }
+      continue;
+    }
+    if (ch == '(') {
+      paren_depth++;
+      pos++;
+      continue;
+    }
+    if (ch == ')') {
+      if (paren_depth > 0) {
+        paren_depth--;
+        pos++;
+        continue;
+      }
+      break;
+    }
+    if (ch == '[') {
+      bracket_depth++;
+      pos++;
+      continue;
+    }
+    if (ch == ']') {
+      if (bracket_depth > 0)
+        bracket_depth--;
+      pos++;
+      continue;
+    }
+    if ((ch == ';' || ch == ',') && paren_depth == 0 && bracket_depth == 0) {
+      break;
+    }
+    if (ch == '.' && pos + 1 < length && buffer[pos + 1] == '.' &&
+        paren_depth == 0 && bracket_depth == 0) {
+      return true;
+    }
+    pos++;
+  }
+  return false;
 }
 
-static bool looks_like_constructed_type(const input_t* in, int pos) {
-    if (in == NULL || in->buffer == NULL) {
-        return false;
-    }
-    int length = resolve_input_length_local(in);
-    const char* buffer = in->buffer;
-    pascal_word_slice_t slice;
-    if (!pascal_peek_word_after(in, pos, &slice)) {
-        return false;
-    }
-    int cursor = slice.end_pos;
-    while (cursor < length) {
-        cursor = skip_pascal_layout_preview(in, cursor);
-        if (cursor >= length) {
-            break;
-        }
-        if (buffer[cursor] != '.') {
-            break;
-        }
-        cursor++;
-        if (!pascal_peek_word_after(in, cursor, &slice)) {
-            return false;
-        }
-        cursor = slice.end_pos;
-    }
+static bool looks_like_constructed_type(const input_t *in, int pos) {
+  if (in == NULL || in->buffer == NULL) {
+    return false;
+  }
+  int length = resolve_input_length_local(in);
+  const char *buffer = in->buffer;
+  pascal_word_slice_t slice;
+  if (!pascal_peek_word_after(in, pos, &slice)) {
+    return false;
+  }
+  int cursor = slice.end_pos;
+  while (cursor < length) {
     cursor = skip_pascal_layout_preview(in, cursor);
-    return (cursor < length && buffer[cursor] == '<');
+    if (cursor >= length) {
+      break;
+    }
+    if (buffer[cursor] != '.') {
+      break;
+    }
+    cursor++;
+    if (!pascal_peek_word_after(in, cursor, &slice)) {
+      return false;
+    }
+    cursor = slice.end_pos;
+  }
+  cursor = skip_pascal_layout_preview(in, cursor);
+  return (cursor < length && buffer[cursor] == '<');
 }
 
-static ParseResult run_type_branch(input_t* in, combinator_t* branch) {
-    if (branch == NULL) {
-        return make_failure(in, strdup("type dispatcher missing branch parser"));
-    }
-    ParseResult res = parse(in, branch);
-    if (res.is_success) {
-        res.value.ast = ast1(PASCAL_T_TYPE_SPEC, res.value.ast);
-    }
-    return res;
+static ParseResult run_type_branch(input_t *in, combinator_t *branch) {
+  if (branch == NULL) {
+    return make_failure(in, strdup("type dispatcher missing branch parser"));
+  }
+  ParseResult res = parse(in, branch);
+  if (res.is_success) {
+    res.value.ast = ast1(PASCAL_T_TYPE_SPEC, res.value.ast);
+  }
+  return res;
 }
 
 /* Helper function to check if a character can start a range expression */
 static int is_range_start_char(unsigned char ch) {
-    return isdigit(ch) || ch == '\'' || ch == '$' || ch == '%' || 
-           ch == '#' || ch == '&' || ch == '+' || ch == '-';
+  return isdigit(ch) || ch == '\'' || ch == '$' || ch == '%' || ch == '#' ||
+         ch == '&' || ch == '+' || ch == '-';
 }
 
-static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* parser_name) {
-    type_dispatch_args_t* dispatch = (type_dispatch_args_t*)args;
-    if (dispatch == NULL) {
-        return make_failure(in, strdup("type dispatcher misconfigured"));
-    }
-    if (in == NULL || in->buffer == NULL) {
-        return make_failure(in, strdup("type dispatcher missing input"));
-    }
-    const char* buffer = in->buffer;
-    int length = resolve_input_length_local(in);
-    int pos = skip_pascal_layout_preview(in, in->start);
-    if (pos >= length) {
-        return make_failure_static(in, "Unexpected end of input while parsing type");
-    }
-    unsigned char ch = (unsigned char)buffer[pos];
+static ParseResult type_definition_dispatch_fn(input_t *in, void *args,
+                                               char *parser_name) {
+  type_dispatch_args_t *dispatch = (type_dispatch_args_t *)args;
+  if (dispatch == NULL) {
+    return make_failure(in, strdup("type dispatcher misconfigured"));
+  }
+  if (in == NULL || in->buffer == NULL) {
+    return make_failure(in, strdup("type dispatcher missing input"));
+  }
+  const char *buffer = in->buffer;
+  int length = resolve_input_length_local(in);
+  int pos = skip_pascal_layout_preview(in, in->start);
+  if (pos >= length) {
+    return make_failure_static(in,
+                               "Unexpected end of input while parsing type");
+  }
+  unsigned char ch = (unsigned char)buffer[pos];
 
-    if (dispatch->pointer_parser && ch == '^') {
-        return run_type_branch(in, dispatch->pointer_parser);
-    }
-    if (dispatch->enumerated_parser && ch == '(') {
-        return run_type_branch(in, dispatch->enumerated_parser);
-    }
-    if (dispatch->range_parser && is_range_start_char(ch)) {
-        return run_type_branch(in, dispatch->range_parser);
-    }
+  if (dispatch->pointer_parser && ch == '^') {
+    return run_type_branch(in, dispatch->pointer_parser);
+  }
+  if (dispatch->enumerated_parser && ch == '(') {
+    return run_type_branch(in, dispatch->enumerated_parser);
+  }
+  if (dispatch->range_parser && is_range_start_char(ch)) {
+    return run_type_branch(in, dispatch->range_parser);
+  }
 
-    pascal_word_slice_t word;
-    if (pascal_peek_word_after(in, pos, &word)) {
-        if (pascal_word_equals_ci(&word, "type")) {
-            pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next)) {
-                /* Check for "type helper" first */
-                if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
-                    return run_type_branch(in, dispatch->helper_parser);
-                }
-                /* Handle "type <typename>" (distinct type) - when word after "type" is an identifier.
-                   The distinct_type_parser will parse "type <identifier>" and handle the full validation. */
-                if (dispatch->distinct_type_parser) {
-                    return run_type_branch(in, dispatch->distinct_type_parser);
-                }
-            }
-            /* Handle "type <range>" (distinct type from subrange) - e.g., type 0..$10ffff
-               When the token after "type" starts with a digit or range-starting char,
-               use the distinct_type_range_parser if available. */
-            if (dispatch->distinct_type_range_parser) {
-                int range_pos = skip_pascal_layout_preview(in, word.end_pos);
-                if (range_pos < length) {
-                    unsigned char range_ch = (unsigned char)buffer[range_pos];
-                    if (is_range_start_char(range_ch)) {
-                        return run_type_branch(in, dispatch->distinct_type_range_parser);
-                    }
-                }
-            }
+  pascal_word_slice_t word;
+  if (pascal_peek_word_after(in, pos, &word)) {
+    if (pascal_word_equals_ci(&word, "type")) {
+      pascal_word_slice_t next;
+      if (pascal_peek_word_after(in, word.end_pos, &next)) {
+        /* Check for "type helper" first */
+        if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
+          return run_type_branch(in, dispatch->helper_parser);
         }
-        if (dispatch->helper_parser &&
-            (pascal_word_equals_ci(&word, "record") || pascal_word_equals_ci(&word, "class"))) {
-            pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next) &&
-                pascal_word_equals_ci(&next, "helper")) {
-                return run_type_branch(in, dispatch->helper_parser);
-            }
+        /* Handle "type <typename>" (distinct type) - when word after "type" is
+           an identifier. The distinct_type_parser will parse "type
+           <identifier>" and handle the full validation. */
+        if (dispatch->distinct_type_parser) {
+          return run_type_branch(in, dispatch->distinct_type_parser);
         }
-        if (dispatch->reference_parser && pascal_word_equals_ci(&word, "reference")) {
-            return run_type_branch(in, dispatch->reference_parser);
+      }
+      /* Handle "type <range>" (distinct type from subrange) - e.g., type
+         0..$10ffff When the token after "type" starts with a digit or
+         range-starting char, use the distinct_type_range_parser if available.
+       */
+      if (dispatch->distinct_type_range_parser) {
+        int range_pos = skip_pascal_layout_preview(in, word.end_pos);
+        if (range_pos < length) {
+          unsigned char range_ch = (unsigned char)buffer[range_pos];
+          if (is_range_start_char(range_ch)) {
+            return run_type_branch(in, dispatch->distinct_type_range_parser);
+          }
         }
-        if (dispatch->procedure_parser && pascal_word_equals_ci(&word, "procedure")) {
-            return run_type_branch(in, dispatch->procedure_parser);
-        }
-        if (dispatch->function_parser && pascal_word_equals_ci(&word, "function")) {
-            return run_type_branch(in, dispatch->function_parser);
-        }
-        if (dispatch->interface_parser && pascal_word_equals_ci(&word, "interface")) {
-            return run_type_branch(in, dispatch->interface_parser);
-        }
-        if (pascal_word_equals_ci(&word, "class")) {
-            pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next)) {
-                // "class helper" is parsed via helper parser
-                if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
-                    return run_type_branch(in, dispatch->helper_parser);
-                }
-                // "class of" is a class reference type
-                if (dispatch->class_of_parser && pascal_word_equals_ci(&next, "of")) {
-                    return run_type_branch(in, dispatch->class_of_parser);
-                }
-            }
-            // Regular class type
-            if (dispatch->class_parser) {
-                return run_type_branch(in, dispatch->class_parser);
-            }
-        }
-        if (pascal_word_equals_ci(&word, "record")) {
-            pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next)) {
-                // "record helper" is parsed via helper parser
-                if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
-                    return run_type_branch(in, dispatch->helper_parser);
-                }
-            }
-            if (dispatch->record_parser) {
-                return run_type_branch(in, dispatch->record_parser);
-            }
-        }
-        if (pascal_word_equals_ci(&word, "packed") || pascal_word_equals_ci(&word, "bitpacked")) {
-            pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next)) {
-                if (dispatch->record_parser && pascal_word_equals_ci(&next, "record")) {
-                    return run_type_branch(in, dispatch->record_parser);
-                }
-                if (dispatch->array_parser && pascal_word_equals_ci(&next, "array")) {
-                    return run_type_branch(in, dispatch->array_parser);
-                }
-            }
-        }
-        if (dispatch->object_parser && pascal_word_equals_ci(&word, "object")) {
-            return run_type_branch(in, dispatch->object_parser);
-        }
-        if (dispatch->array_parser && pascal_word_equals_ci(&word, "array")) {
-            return run_type_branch(in, dispatch->array_parser);
-        }
-        if (dispatch->file_parser && pascal_word_equals_ci(&word, "file")) {
-            return run_type_branch(in, dispatch->file_parser);
-        }
-        if (dispatch->set_parser && pascal_word_equals_ci(&word, "set")) {
-            return run_type_branch(in, dispatch->set_parser);
-        }
-        if (dispatch->specialize_parser && pascal_word_equals_ci(&word, "specialize")) {
-            return run_type_branch(in, dispatch->specialize_parser);
-        }
-        if (pascal_word_equals_ci(&word, "packed")) {
-            pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next)) {
-                if (dispatch->record_parser && pascal_word_equals_ci(&next, "record")) {
-                    return run_type_branch(in, dispatch->record_parser);
-                }
-                if (dispatch->object_parser && pascal_word_equals_ci(&next, "object")) {
-                    return run_type_branch(in, dispatch->object_parser);
-                }
-                if (dispatch->array_parser && pascal_word_equals_ci(&next, "array")) {
-                    return run_type_branch(in, dispatch->array_parser);
-                }
-                if (dispatch->set_parser && pascal_word_equals_ci(&next, "set")) {
-                    return run_type_branch(in, dispatch->set_parser);
-                }
-            }
-        }
+      }
     }
-
-    if (dispatch->range_parser && looks_like_range_literal(in, pos)) {
-        return run_type_branch(in, dispatch->range_parser);
+    if (dispatch->helper_parser && (pascal_word_equals_ci(&word, "record") ||
+                                    pascal_word_equals_ci(&word, "class"))) {
+      pascal_word_slice_t next;
+      if (pascal_peek_word_after(in, word.end_pos, &next) &&
+          pascal_word_equals_ci(&next, "helper")) {
+        return run_type_branch(in, dispatch->helper_parser);
+      }
     }
-
-    if (dispatch->constructed_parser && looks_like_constructed_type(in, pos)) {
-        return run_type_branch(in, dispatch->constructed_parser);
+    if (dispatch->reference_parser &&
+        pascal_word_equals_ci(&word, "reference")) {
+      return run_type_branch(in, dispatch->reference_parser);
     }
-
-    if (dispatch->identifier_parser) {
-        return run_type_branch(in, dispatch->identifier_parser);
+    if (dispatch->procedure_parser &&
+        pascal_word_equals_ci(&word, "procedure")) {
+      return run_type_branch(in, dispatch->procedure_parser);
     }
+    if (dispatch->function_parser && pascal_word_equals_ci(&word, "function")) {
+      return run_type_branch(in, dispatch->function_parser);
+    }
+    if (dispatch->interface_parser &&
+        pascal_word_equals_ci(&word, "interface")) {
+      return run_type_branch(in, dispatch->interface_parser);
+    }
+    if (pascal_word_equals_ci(&word, "class")) {
+      pascal_word_slice_t next;
+      if (pascal_peek_word_after(in, word.end_pos, &next)) {
+        // "class helper" is parsed via helper parser
+        if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
+          return run_type_branch(in, dispatch->helper_parser);
+        }
+        // "class of" is a class reference type
+        if (dispatch->class_of_parser && pascal_word_equals_ci(&next, "of")) {
+          return run_type_branch(in, dispatch->class_of_parser);
+        }
+      }
+      // Regular class type
+      if (dispatch->class_parser) {
+        return run_type_branch(in, dispatch->class_parser);
+      }
+    }
+    if (pascal_word_equals_ci(&word, "record")) {
+      pascal_word_slice_t next;
+      if (pascal_peek_word_after(in, word.end_pos, &next)) {
+        // "record helper" is parsed via helper parser
+        if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
+          return run_type_branch(in, dispatch->helper_parser);
+        }
+      }
+      if (dispatch->record_parser) {
+        return run_type_branch(in, dispatch->record_parser);
+      }
+    }
+    if (pascal_word_equals_ci(&word, "packed") ||
+        pascal_word_equals_ci(&word, "bitpacked")) {
+      pascal_word_slice_t next;
+      if (pascal_peek_word_after(in, word.end_pos, &next)) {
+        if (dispatch->record_parser && pascal_word_equals_ci(&next, "record")) {
+          return run_type_branch(in, dispatch->record_parser);
+        }
+        if (dispatch->array_parser && pascal_word_equals_ci(&next, "array")) {
+          return run_type_branch(in, dispatch->array_parser);
+        }
+      }
+    }
+    if (dispatch->object_parser && pascal_word_equals_ci(&word, "object")) {
+      return run_type_branch(in, dispatch->object_parser);
+    }
+    if (dispatch->array_parser && pascal_word_equals_ci(&word, "array")) {
+      return run_type_branch(in, dispatch->array_parser);
+    }
+    if (dispatch->file_parser && pascal_word_equals_ci(&word, "file")) {
+      return run_type_branch(in, dispatch->file_parser);
+    }
+    if (dispatch->set_parser && pascal_word_equals_ci(&word, "set")) {
+      return run_type_branch(in, dispatch->set_parser);
+    }
+    if (dispatch->specialize_parser &&
+        pascal_word_equals_ci(&word, "specialize")) {
+      return run_type_branch(in, dispatch->specialize_parser);
+    }
+    if (pascal_word_equals_ci(&word, "packed")) {
+      pascal_word_slice_t next;
+      if (pascal_peek_word_after(in, word.end_pos, &next)) {
+        if (dispatch->record_parser && pascal_word_equals_ci(&next, "record")) {
+          return run_type_branch(in, dispatch->record_parser);
+        }
+        if (dispatch->object_parser && pascal_word_equals_ci(&next, "object")) {
+          return run_type_branch(in, dispatch->object_parser);
+        }
+        if (dispatch->array_parser && pascal_word_equals_ci(&next, "array")) {
+          return run_type_branch(in, dispatch->array_parser);
+        }
+        if (dispatch->set_parser && pascal_word_equals_ci(&next, "set")) {
+          return run_type_branch(in, dispatch->set_parser);
+        }
+      }
+    }
+  }
 
-    return make_failure_static(in, "Unable to classify type definition");
+  if (dispatch->range_parser && looks_like_range_literal(in, pos)) {
+    return run_type_branch(in, dispatch->range_parser);
+  }
+
+  if (dispatch->constructed_parser && looks_like_constructed_type(in, pos)) {
+    return run_type_branch(in, dispatch->constructed_parser);
+  }
+
+  if (dispatch->identifier_parser) {
+    return run_type_branch(in, dispatch->identifier_parser);
+  }
+
+  return make_failure_static(in, "Unable to classify type definition");
 }
 
-static ast_t* discard_ast(ast_t* ast) {
-    if (ast != NULL && ast != ast_nil) {
-        free_ast(ast);
-    }
-    return ast_nil;
+static ast_t *discard_ast(ast_t *ast) {
+  if (ast != NULL && ast != ast_nil) {
+    free_ast(ast);
+  }
+  return ast_nil;
 }
 
 // Helper to discard parse failures
 static inline void discard_failure(ParseResult result) {
-    if (!result.is_success) {
-        free_error(result.value.error);
-    }
+  if (!result.is_success) {
+    free_error(result.value.error);
+  }
 }
 
 // Custom parser function to handle identifier with optional [size] subscript
 // This supports type aliases like: TAlfa = string[20];
-static ParseResult identifier_with_optional_subscript_fn(input_t* in, void* args, char* parser_name) {
-    InputState state;
-    save_input_state(in, &state);
-    
-    // Parse the base identifier (e.g., "string")
-    combinator_t* base_id = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
-    ParseResult base_res = parse(in, base_id);
-    free_combinator(base_id);
-    
-    if (!base_res.is_success) {
-        return base_res;
+static ParseResult identifier_with_optional_subscript_fn(input_t *in,
+                                                         void *args,
+                                                         char *parser_name) {
+  InputState state;
+  save_input_state(in, &state);
+
+  // Parse the base identifier (e.g., "string")
+  combinator_t *base_id =
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+  ParseResult base_res = parse(in, base_id);
+  free_combinator(base_id);
+
+  if (!base_res.is_success) {
+    return base_res;
+  }
+
+  ast_t *identifier_ast = base_res.value.ast;
+
+  // Check for optional [size] subscript (e.g., [20])
+  InputState subscript_state;
+  save_input_state(in, &subscript_state);
+
+  combinator_t *open_bracket = token(match("["));
+  ParseResult open_res = parse(in, open_bracket);
+  free_combinator(open_bracket);
+
+  if (open_res.is_success) {
+    free_ast(open_res.value.ast);
+
+    // Parse the size expression
+    combinator_t *size_expr = new_combinator();
+    init_pascal_expression_parser(&size_expr, NULL);
+    ParseResult size_res = parse(in, size_expr);
+    free_combinator(size_expr);
+
+    if (!size_res.is_success) {
+      discard_failure(size_res);
+      free_ast(identifier_ast);
+      restore_input_state(in, &subscript_state);
+      return make_failure(in,
+                          strdup("Expected size expression in type subscript"));
     }
-    
-    ast_t* identifier_ast = base_res.value.ast;
-    
-    // Check for optional [size] subscript (e.g., [20])
-    InputState subscript_state;
-    save_input_state(in, &subscript_state);
-    
-    combinator_t* open_bracket = token(match("["));
-    ParseResult open_res = parse(in, open_bracket);
-    free_combinator(open_bracket);
-    
-    if (open_res.is_success) {
-        free_ast(open_res.value.ast);
-        
-        // Parse the size expression
-        combinator_t* size_expr = new_combinator();
-        init_pascal_expression_parser(&size_expr, NULL);
-        ParseResult size_res = parse(in, size_expr);
-        free_combinator(size_expr);
-        
-        if (!size_res.is_success) {
-            discard_failure(size_res);
-            free_ast(identifier_ast);
-            restore_input_state(in, &subscript_state);
-            return make_failure(in, strdup("Expected size expression in type subscript"));
-        }
-        
-        // Parse closing ]
-        combinator_t* close_bracket = token(match("]"));
-        ParseResult close_res = parse(in, close_bracket);
-        free_combinator(close_bracket);
-        
-        if (!close_res.is_success) {
-            discard_failure(close_res);
-            free_ast(size_res.value.ast);
-            free_ast(identifier_ast);
-            restore_input_state(in, &subscript_state);
-            return make_failure(in, strdup("Expected ']' after type subscript"));
-        }
-        free_ast(close_res.value.ast);
-        
-        /* Preserve size expression so frontend can model string[N] aliases. */
-        if (identifier_ast->child == NULL)
-            identifier_ast->child = size_res.value.ast;
-        else
-            free_ast(size_res.value.ast);
-    } else {
-        discard_failure(open_res);
-        restore_input_state(in, &subscript_state);
+
+    // Parse closing ]
+    combinator_t *close_bracket = token(match("]"));
+    ParseResult close_res = parse(in, close_bracket);
+    free_combinator(close_bracket);
+
+    if (!close_res.is_success) {
+      discard_failure(close_res);
+      free_ast(size_res.value.ast);
+      free_ast(identifier_ast);
+      restore_input_state(in, &subscript_state);
+      return make_failure(in, strdup("Expected ']' after type subscript"));
     }
-    
-    ParseResult result;
-    result.is_success = true;
-    result.value.ast = identifier_ast;
-    return result;
+    free_ast(close_res.value.ast);
+
+    /* Preserve size expression so frontend can model string[N] aliases. */
+    if (identifier_ast->child == NULL)
+      identifier_ast->child = size_res.value.ast;
+    else
+      free_ast(size_res.value.ast);
+  } else {
+    discard_failure(open_res);
+    restore_input_state(in, &subscript_state);
+  }
+
+  ParseResult result;
+  result.is_success = true;
+  result.value.ast = identifier_ast;
+  return result;
 }
 
-static bool is_modifier_keyword(ast_t* node) {
-    if (node == NULL || node->sym == NULL || node->sym->name == NULL)
-        return false;
+static bool is_modifier_keyword(ast_t *node) {
+  if (node == NULL || node->sym == NULL || node->sym->name == NULL)
+    return false;
 
-    const char* name = node->sym->name;
-    return strcasecmp(name, "var") == 0 ||
-           strcasecmp(name, "const") == 0 ||
-           strcasecmp(name, "out") == 0 ||
-           strcasecmp(name, "constref") == 0;
+  const char *name = node->sym->name;
+  return strcasecmp(name, "var") == 0 || strcasecmp(name, "const") == 0 ||
+         strcasecmp(name, "out") == 0 || strcasecmp(name, "constref") == 0;
 }
 
-static ast_t* create_placeholder_modifier(ast_t* reference) {
-    ast_t* placeholder = new_ast();
-    placeholder->typ = PASCAL_T_NONE;
-    placeholder->child = NULL;
-    placeholder->next = NULL;
-    placeholder->sym = NULL;
-    if (reference != NULL) {
-        placeholder->line = reference->line;
-        placeholder->col = reference->col;
-    }
-    return placeholder;
+static ast_t *create_placeholder_modifier(ast_t *reference) {
+  ast_t *placeholder = new_ast();
+  placeholder->typ = PASCAL_T_NONE;
+  placeholder->child = NULL;
+  placeholder->next = NULL;
+  placeholder->sym = NULL;
+  if (reference != NULL) {
+    placeholder->line = reference->line;
+    placeholder->col = reference->col;
+  }
+  return placeholder;
 }
 
-static combinator_t* create_label_identifier(void) {
-    return multi(new_combinator(), PASCAL_T_NONE,
-        token(integer(PASCAL_T_INTEGER)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+static combinator_t *create_label_identifier(void) {
+  return multi(new_combinator(), PASCAL_T_NONE,
+               token(integer(PASCAL_T_INTEGER)),
+               token(cident(PASCAL_T_IDENTIFIER)), NULL);
 }
 
-static combinator_t* create_label_section(void) {
-    return seq(new_combinator(), PASCAL_T_LABEL_SECTION,
-        token(keyword_ci("label")),
-        sep_by(create_label_identifier(), token(match(","))),
-        token(match(";")),
-        NULL
-    );
+static combinator_t *create_label_section(void) {
+  return seq(new_combinator(), PASCAL_T_LABEL_SECTION,
+             token(keyword_ci("label")),
+             sep_by(create_label_identifier(), token(match(","))),
+             token(match(";")), NULL);
 }
 
-static ast_t* wrap_external_name_clause(ast_t* parsed) {
-    if (parsed == NULL || parsed == ast_nil)
-        return parsed;
-    ast_t* node = new_ast();
-    node->typ = PASCAL_T_EXTERNAL_NAME;
-    node->child = parsed;
-    node->next = NULL;
-    node->sym = NULL;
-    return node;
-}
-
-static ast_t* wrap_public_name_clause(ast_t* parsed) {
-    if (parsed == NULL || parsed == ast_nil)
-        return parsed;
-    ast_t* node = new_ast();
-    node->typ = PASCAL_T_PUBLIC_NAME;
-    node->child = parsed;
-    node->next = NULL;
-    node->sym = NULL;
-    return node;
-}
-
-static ast_t* mark_type_helper_record(ast_t* parsed) {
-    if (parsed == NULL || parsed == ast_nil)
-        return parsed;
-    parsed->sym = sym_lookup("helper");
+static ast_t *wrap_external_name_clause(ast_t *parsed) {
+  if (parsed == NULL || parsed == ast_nil)
     return parsed;
+  ast_t *node = new_ast();
+  node->typ = PASCAL_T_EXTERNAL_NAME;
+  node->child = parsed;
+  node->next = NULL;
+  node->sym = NULL;
+  return node;
 }
 
-static combinator_t* make_generic_type_prefix(void) {
-    return seq(new_combinator(), PASCAL_T_NONE,
-        optional(token(keyword_ci("generic"))),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        token(match("<")),
-        NULL
-    );
+static ast_t *wrap_public_name_clause(ast_t *parsed) {
+  if (parsed == NULL || parsed == ast_nil)
+    return parsed;
+  ast_t *node = new_ast();
+  node->typ = PASCAL_T_PUBLIC_NAME;
+  node->child = parsed;
+  node->next = NULL;
+  node->sym = NULL;
+  return node;
 }
 
-static combinator_t* make_inferred_var_prefix(void) {
-    return seq(new_combinator(), PASCAL_T_NONE,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        token(match(":=")),
-        NULL
-    );
+static ast_t *mark_type_helper_record(ast_t *parsed) {
+  if (parsed == NULL || parsed == ast_nil)
+    return parsed;
+  parsed->sym = sym_lookup("helper");
+  return parsed;
 }
 
-static combinator_t* create_optional_modifier(void) {
-    combinator_t* modifier_choice = multi(new_combinator(), PASCAL_T_NONE,
-        map(token(keyword_ci("const")), map_const_modifier),
-        map(token(keyword_ci("var")), map_var_modifier),
-        map(token(keyword_ci("out")), map_out_modifier),
-        map(token(keyword_ci("constref")), map_constref_modifier),
-        NULL
-    );
-
-    return optional(modifier_choice);
+static combinator_t *make_generic_type_prefix(void) {
+  return seq(new_combinator(), PASCAL_T_NONE,
+             optional(token(keyword_ci("generic"))),
+             token(cident(PASCAL_T_IDENTIFIER)), token(match("<")), NULL);
 }
 
-static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec, ast_t** out_default_value) {
-    ast_t* prev = NULL;
-    ast_t* cursor = identifier_start;
-    ast_t* slow = identifier_start;
-    ast_t* fast = identifier_start;
-    int guard = 0;
-    const int guard_limit = 100000;
-    if (out_default_value != NULL) {
+static combinator_t *make_inferred_var_prefix(void) {
+  return seq(new_combinator(), PASCAL_T_NONE,
+             token(cident(PASCAL_T_IDENTIFIER)), token(match(":=")), NULL);
+}
+
+static combinator_t *create_optional_modifier(void) {
+  combinator_t *modifier_choice =
+      multi(new_combinator(), PASCAL_T_NONE,
+            map(token(keyword_ci("const")), map_const_modifier),
+            map(token(keyword_ci("var")), map_var_modifier),
+            map(token(keyword_ci("out")), map_out_modifier),
+            map(token(keyword_ci("constref")), map_constref_modifier), NULL);
+
+  return optional(modifier_choice);
+}
+
+static ast_t *detach_type_spec(ast_t *identifier_start, ast_t **out_type_spec,
+                               ast_t **out_default_value) {
+  ast_t *prev = NULL;
+  ast_t *cursor = identifier_start;
+  ast_t *slow = identifier_start;
+  ast_t *fast = identifier_start;
+  int guard = 0;
+  const int guard_limit = 100000;
+  if (out_default_value != NULL) {
+    *out_default_value = NULL;
+  }
+  while (cursor != NULL) {
+    guard++;
+    if (guard > guard_limit) {
+      fprintf(stderr,
+              "ERROR: detach_type_spec exceeded guard limit (%d); possible "
+              "cycle in param list (node=%p typ=%d).\n",
+              guard_limit, (void *)cursor, cursor->typ);
+      *out_type_spec = NULL;
+      if (out_default_value != NULL) {
         *out_default_value = NULL;
+      }
+      return identifier_start;
     }
-    while (cursor != NULL) {
-        guard++;
-        if (guard > guard_limit) {
-            fprintf(stderr, "ERROR: detach_type_spec exceeded guard limit (%d); possible cycle in param list (node=%p typ=%d).\n",
-                guard_limit, (void*)cursor, cursor->typ);
-            *out_type_spec = NULL;
-            if (out_default_value != NULL) {
-                *out_default_value = NULL;
-            }
-            return identifier_start;
+    if (fast != NULL && fast->next != NULL) {
+      fast = fast->next->next;
+      slow = slow ? slow->next : NULL;
+      if (fast != NULL && slow == fast) {
+        fprintf(stderr,
+                "ERROR: Cycle detected in parameter list while detaching type "
+                "spec (node=%p typ=%d).\n",
+                (void *)cursor, cursor->typ);
+        *out_type_spec = NULL;
+        if (out_default_value != NULL) {
+          *out_default_value = NULL;
         }
-        if (fast != NULL && fast->next != NULL) {
-            fast = fast->next->next;
-            slow = slow ? slow->next : NULL;
-            if (fast != NULL && slow == fast) {
-                fprintf(stderr, "ERROR: Cycle detected in parameter list while detaching type spec (node=%p typ=%d).\n",
-                    (void*)cursor, cursor->typ);
-                *out_type_spec = NULL;
-                if (out_default_value != NULL) {
-                    *out_default_value = NULL;
-                }
-                return identifier_start;
-            }
-        }
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
-            fprintf(stderr, "[detach_type_spec] cursor=%p typ=%d (TYPE_SPEC=%d DEFAULT_VALUE=%d) next=%p next_typ=%d\n",
-                (void*)cursor, cursor->typ,
-                PASCAL_T_TYPE_SPEC, PASCAL_T_DEFAULT_VALUE,
-                (void*)(cursor->next),
-                cursor->next ? cursor->next->typ : -1);
-        }
-        if (cursor->typ == PASCAL_T_TYPE_SPEC) {
-            if (prev != NULL) {
-                prev->next = NULL;
-            } else {
-                identifier_start = NULL;
-            }
-            *out_type_spec = cursor;
-            /* Check if next node is a default value */
-            if (cursor->next != NULL && cursor->next->typ == PASCAL_T_DEFAULT_VALUE) {
-                if (out_default_value != NULL) {
-                    *out_default_value = cursor->next;
-                }
-                cursor->next = NULL;
-            } else {
-                cursor->next = NULL;
-            }
-            return identifier_start;
-        }
-        prev = cursor;
-        cursor = cursor->next;
+        return identifier_start;
+      }
     }
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+      fprintf(stderr,
+              "[detach_type_spec] cursor=%p typ=%d (TYPE_SPEC=%d "
+              "DEFAULT_VALUE=%d) next=%p next_typ=%d\n",
+              (void *)cursor, cursor->typ, PASCAL_T_TYPE_SPEC,
+              PASCAL_T_DEFAULT_VALUE, (void *)(cursor->next),
+              cursor->next ? cursor->next->typ : -1);
+    }
+    if (cursor->typ == PASCAL_T_TYPE_SPEC) {
+      if (prev != NULL) {
+        prev->next = NULL;
+      } else {
+        identifier_start = NULL;
+      }
+      *out_type_spec = cursor;
+      /* Check if next node is a default value */
+      if (cursor->next != NULL && cursor->next->typ == PASCAL_T_DEFAULT_VALUE) {
+        if (out_default_value != NULL) {
+          *out_default_value = cursor->next;
+        }
+        cursor->next = NULL;
+      } else {
+        cursor->next = NULL;
+      }
+      return identifier_start;
+    }
+    prev = cursor;
+    cursor = cursor->next;
+  }
 
-    *out_type_spec = NULL;
-    return identifier_start;
+  *out_type_spec = NULL;
+  return identifier_start;
 }
 
-static ast_t* find_tail(ast_t* node) {
-    ast_t* tail = node;
-    ast_t* slow = node;
-    ast_t* fast = node;
-    int guard = 0;
-    const int guard_limit = 100000;
-    while (tail != NULL && tail->next != NULL) {
-        guard++;
-        if (guard > guard_limit) {
-            fprintf(stderr, "ERROR: find_tail exceeded guard limit (%d); possible cycle in param list (node=%p typ=%d).\n",
-                guard_limit, (void*)tail, tail->typ);
-            return tail;
-        }
-        if (fast != NULL && fast->next != NULL) {
-            fast = fast->next->next;
-            slow = slow ? slow->next : NULL;
-            if (fast != NULL && slow == fast) {
-                fprintf(stderr, "ERROR: Cycle detected while finding tail of parameter list (node=%p typ=%d).\n",
-                    (void*)tail, tail->typ);
-                return tail;
-            }
-        }
-        tail = tail->next;
+static ast_t *find_tail(ast_t *node) {
+  ast_t *tail = node;
+  ast_t *slow = node;
+  ast_t *fast = node;
+  int guard = 0;
+  const int guard_limit = 100000;
+  while (tail != NULL && tail->next != NULL) {
+    guard++;
+    if (guard > guard_limit) {
+      fprintf(stderr,
+              "ERROR: find_tail exceeded guard limit (%d); possible cycle in "
+              "param list (node=%p typ=%d).\n",
+              guard_limit, (void *)tail, tail->typ);
+      return tail;
     }
-    return tail;
+    if (fast != NULL && fast->next != NULL) {
+      fast = fast->next->next;
+      slow = slow ? slow->next : NULL;
+      if (fast != NULL && slow == fast) {
+        fprintf(stderr,
+                "ERROR: Cycle detected while finding tail of parameter list "
+                "(node=%p typ=%d).\n",
+                (void *)tail, tail->typ);
+        return tail;
+      }
+    }
+    tail = tail->next;
+  }
+  return tail;
 }
 
 // This function takes a flat list of nodes from a 'seq' combinator
 // and structures them into a single, hierarchical PASCAL_T_PARAM node.
-static ast_t* structure_param_node(ast_t* ast) {
-    if (ast == NULL || ast == ast_nil)
-        return ast_nil;
+static ast_t *structure_param_node(ast_t *ast) {
+  if (ast == NULL || ast == ast_nil)
+    return ast_nil;
 
-    ast_t* modifier = NULL;
-    ast_t* identifier_start = ast;
-    ast_t* type_spec = NULL;
-    ast_t* default_value = NULL;
+  ast_t *modifier = NULL;
+  ast_t *identifier_start = ast;
+  ast_t *type_spec = NULL;
+  ast_t *default_value = NULL;
 
-    if (is_modifier_keyword(ast)) {
-        modifier = ast;
-        identifier_start = ast->next;
-        modifier->next = NULL;
-    }
+  if (is_modifier_keyword(ast)) {
+    modifier = ast;
+    identifier_start = ast->next;
+    modifier->next = NULL;
+  }
 
-    identifier_start = detach_type_spec(identifier_start, &type_spec, &default_value);
-    
-    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
-        fprintf(stderr, "[structure_param_node] type_spec=%p default_value=%p\n",
-            (void*)type_spec, (void*)default_value);
-    }
+  identifier_start =
+      detach_type_spec(identifier_start, &type_spec, &default_value);
 
-    if (modifier == NULL)
-        modifier = create_placeholder_modifier(identifier_start != NULL ? identifier_start : type_spec);
+  if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+    fprintf(stderr, "[structure_param_node] type_spec=%p default_value=%p\n",
+            (void *)type_spec, (void *)default_value);
+  }
 
-    ast_t* param_node = new_ast();
-    param_node->typ = PASCAL_T_PARAM;
-    param_node->child = modifier;
-    param_node->line = modifier ? modifier->line : 0;
-    param_node->col = modifier ? modifier->col : 0;
+  if (modifier == NULL)
+    modifier = create_placeholder_modifier(
+        identifier_start != NULL ? identifier_start : type_spec);
 
-    ast_t* tail = modifier;
-    tail->next = identifier_start;
+  ast_t *param_node = new_ast();
+  param_node->typ = PASCAL_T_PARAM;
+  param_node->child = modifier;
+  param_node->line = modifier ? modifier->line : 0;
+  param_node->col = modifier ? modifier->col : 0;
 
-    if (identifier_start != NULL) {
-        ast_t* identifiers_tail = find_tail(identifier_start);
-        tail = identifiers_tail != NULL ? identifiers_tail : tail;
-    }
+  ast_t *tail = modifier;
+  tail->next = identifier_start;
 
-    if (type_spec != NULL) {
-        tail->next = type_spec;
-        tail = type_spec;
-    }
+  if (identifier_start != NULL) {
+    ast_t *identifiers_tail = find_tail(identifier_start);
+    tail = identifiers_tail != NULL ? identifiers_tail : tail;
+  }
 
-    /* Attach default value node if present */
-    if (default_value != NULL) {
-        tail->next = default_value;
-        tail = default_value;
-        #ifdef DEBUG_DEFAULT_PARAMS
-        fprintf(stderr, "[structure_param_node] attached default_value, now type_spec->next=%p\n",
-            type_spec ? (void*)type_spec->next : NULL);
-        #endif
-    }
+  if (type_spec != NULL) {
+    tail->next = type_spec;
+    tail = type_spec;
+  }
 
-    if (tail != NULL)
-        tail->next = NULL;
+  /* Attach default value node if present */
+  if (default_value != NULL) {
+    tail->next = default_value;
+    tail = default_value;
+#ifdef DEBUG_DEFAULT_PARAMS
+    fprintf(stderr,
+            "[structure_param_node] attached default_value, now "
+            "type_spec->next=%p\n",
+            type_spec ? (void *)type_spec->next : NULL);
+#endif
+  }
 
-    return param_node;
+  if (tail != NULL)
+    tail->next = NULL;
+
+  return param_node;
 }
 
-static combinator_t* create_param_name_list(void) {
-    return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+static combinator_t *create_param_name_list(void) {
+  return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
 }
 
 // Shared expression parser for parameter default values
 // This is lazily initialized to avoid circular dependencies
-static combinator_t** g_param_default_expr_parser = NULL;
+static combinator_t **g_param_default_expr_parser = NULL;
 
-static combinator_t* get_param_default_expr_parser(void) {
-    if (g_param_default_expr_parser == NULL) {
-        g_param_default_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-        *g_param_default_expr_parser = new_combinator();
-        init_pascal_expression_parser(g_param_default_expr_parser, NULL);
-        (*g_param_default_expr_parser)->extra_to_free = g_param_default_expr_parser;
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
-            fprintf(stderr, "[get_param_default_expr_parser] Initialized expr parser at %p -> %p\n",
-                (void*)g_param_default_expr_parser, (void*)*g_param_default_expr_parser);
-        }
+static combinator_t *get_param_default_expr_parser(void) {
+  if (g_param_default_expr_parser == NULL) {
+    g_param_default_expr_parser =
+        (combinator_t **)safe_malloc(sizeof(combinator_t *));
+    *g_param_default_expr_parser = new_combinator();
+    init_pascal_expression_parser(g_param_default_expr_parser, NULL);
+    (*g_param_default_expr_parser)->extra_to_free = g_param_default_expr_parser;
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+      fprintf(stderr,
+              "[get_param_default_expr_parser] Initialized expr parser at %p "
+              "-> %p\n",
+              (void *)g_param_default_expr_parser,
+              (void *)*g_param_default_expr_parser);
     }
-    return lazy(g_param_default_expr_parser);
+  }
+  return lazy(g_param_default_expr_parser);
 }
 
-static combinator_t* create_param_type_spec(void) {
-    combinator_t* type_arg = token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by(type_arg, token(match(","))),
-        token(match(">")),
-        NULL
-    );
-    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        optional(token(keyword_ci("specialize"))),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list,
-        NULL
-    );
+static combinator_t *create_param_type_spec(void) {
+  combinator_t *type_arg =
+      token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
+  combinator_t *type_arg_list =
+      seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
+          sep_by(type_arg, token(match(","))), token(match(">")), NULL);
+  combinator_t *constructed_type =
+      seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+          optional(token(keyword_ci("specialize"))),
+          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+          type_arg_list, NULL);
 
-    combinator_t* type_reference = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
-        array_type(PASCAL_T_ARRAY_TYPE),
-        procedure_type(PASCAL_T_PROCEDURE_TYPE),
-        function_type(PASCAL_T_FUNCTION_TYPE),
-        set_type(PASCAL_T_SET),
-        range_type(PASCAL_T_RANGE_TYPE),
-        pointer_type(PASCAL_T_POINTER_TYPE),
-        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
-        record_type(PASCAL_T_RECORD_TYPE),
-        constructed_type,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  combinator_t *type_reference = multi(
+      new_combinator(), PASCAL_T_TYPE_SPEC,
+      reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
+      array_type(PASCAL_T_ARRAY_TYPE), procedure_type(PASCAL_T_PROCEDURE_TYPE),
+      function_type(PASCAL_T_FUNCTION_TYPE), set_type(PASCAL_T_SET),
+      range_type(PASCAL_T_RANGE_TYPE), pointer_type(PASCAL_T_POINTER_TYPE),
+      enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+      record_type(PASCAL_T_RECORD_TYPE), constructed_type,
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+      token(cident(PASCAL_T_IDENTIFIER)), NULL);
 
-    // Default value for parameter: = expression
-    // Supports default parameter values like: procedure Test(x: Integer = 10);
-    // NOTE: The inner seq has PASCAL_T_DEFAULT_VALUE so it creates a wrapper node
-    combinator_t* default_value_inner = seq(new_combinator(), PASCAL_T_DEFAULT_VALUE,
-        token(match("=")),
-        get_param_default_expr_parser(),
-        NULL
-    );
-    combinator_t* default_value = optional(default_value_inner);
+  // Default value for parameter: = expression
+  // Supports default parameter values like: procedure Test(x: Integer = 10);
+  // NOTE: The inner seq has PASCAL_T_DEFAULT_VALUE so it creates a wrapper node
+  combinator_t *default_value_inner =
+      seq(new_combinator(), PASCAL_T_DEFAULT_VALUE, token(match("=")),
+          get_param_default_expr_parser(), NULL);
+  combinator_t *default_value = optional(default_value_inner);
 
-    // NOTE: The outer seq has PASCAL_T_NONE so children are flattened into a linked list
-    // Result structure: TYPE_SPEC -> DEFAULT_VALUE (if present)
-    return optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        type_reference,
-        default_value,
-        NULL
-    ));
+  // NOTE: The outer seq has PASCAL_T_NONE so children are flattened into a
+  // linked list Result structure: TYPE_SPEC -> DEFAULT_VALUE (if present)
+  return optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                      type_reference, default_value, NULL));
 }
 
-static combinator_t* create_simple_param_list(void) {
-    combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
-        create_optional_modifier(),
-        param_name_list,
-        create_param_type_spec(),
-        NULL
-    );
-    combinator_t* param = map(param_seq, structure_param_node);
-    return optional(between(
-        token(match("(")),
-        token(match(")")),
-        sep_by(param, token(match(";")))
-    ));
+static combinator_t *create_simple_param_list(void) {
+  combinator_t *param_name_list =
+      sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+  combinator_t *param_seq =
+      seq(new_combinator(), PASCAL_T_NONE, create_optional_modifier(),
+          param_name_list, create_param_type_spec(), NULL);
+  combinator_t *param = map(param_seq, structure_param_node);
+  return optional(between(token(match("(")), token(match(")")),
+                          sep_by(param, token(match(";")))));
 }
 
-// Parser for operator names - supports both FPC-style symbols (+, *, etc.) and Delphi-style names (Add, Multiply, etc.)
-static ParseResult operator_name_fn(input_t* in, void* args, char* parser_name) {
-    prim_args* pargs = (prim_args*)args;
-    InputState state;
-    save_input_state(in, &state);
+// Parser for operator names - supports both FPC-style symbols (+, *, etc.) and
+// Delphi-style names (Add, Multiply, etc.)
+static ParseResult operator_name_fn(input_t *in, void *args,
+                                    char *parser_name) {
+  prim_args *pargs = (prim_args *)args;
+  InputState state;
+  save_input_state(in, &state);
 
-    // Try to parse operator symbol first
-    const char* operator_symbols[] = {
-        ">=", "<=", "<>", ":=", "**",
-        "+", "-", "*", "/", "=", "<", ">",
-        "div", "mod", "and", "or", "xor", "shl", "shr",
-        "in", "is", "as", NULL
-    };
+  // Try to parse operator symbol first
+  const char *operator_symbols[] = {">=",  "<=",  "<>",  ":=", "**",  "+",
+                                    "-",   "*",   "/",   "=",  "<",   ">",
+                                    "div", "mod", "and", "or", "xor", "shl",
+                                    "shr", "in",  "is",  "as", NULL};
 
-    for (int i = 0; operator_symbols[i] != NULL; i++) {
-        InputState symbol_state;
-        save_input_state(in, &symbol_state);
-        
-        const char* symbol = operator_symbols[i];
-        int len = strlen(symbol);
-        bool matches = true;
-        
-        for (int j = 0; j < len; j++) {
-            char c = read1(in);
-            if (c == EOF || tolower((unsigned char)c) != tolower((unsigned char)symbol[j])) {
-                matches = false;
-                break;
-            }
-        }
-        
-        if (matches) {
-            /* Ensure word-boundary for alphabetic operator names (in, is, as, div, mod, etc.)
-             * so we don't accept prefixes of identifiers like "Initialize". */
-            if (isalpha((unsigned char)symbol[0])) {
-                if (in->start < in->length) {
-                    unsigned char next = (unsigned char)in->buffer[in->start];
-                    if (isalnum(next) || next == '_' || next >= 0x80) {
-                        restore_input_state(in, &symbol_state);
-                        continue;
-                    }
-                }
-            }
-            // Create AST node for operator symbol
-            ast_t* ast = new_ast();
-            ast->typ = pargs->tag;
-            ast->sym = sym_lookup(symbol);
-            ast->child = NULL;
-            ast->next = NULL;
-            set_ast_position(ast, in);
-            return make_success(ast);
-        }
-        
-        restore_input_state(in, &symbol_state);
+  for (int i = 0; operator_symbols[i] != NULL; i++) {
+    InputState symbol_state;
+    save_input_state(in, &symbol_state);
+
+    const char *symbol = operator_symbols[i];
+    int len = strlen(symbol);
+    bool matches = true;
+
+    for (int j = 0; j < len; j++) {
+      char c = read1(in);
+      if (c == EOF ||
+          tolower((unsigned char)c) != tolower((unsigned char)symbol[j])) {
+        matches = false;
+        break;
+      }
     }
 
-    // If no symbol matched, try parsing as identifier (Delphi-style: Add, Multiply, etc.)
-    combinator_t* ident_parser = cident(pargs->tag);
-    ParseResult ident_res = parse(in, ident_parser);
-    free_combinator(ident_parser);
-    
-    if (ident_res.is_success) {
-        return ident_res;
+    if (matches) {
+      /* Ensure word-boundary for alphabetic operator names (in, is, as, div,
+       * mod, etc.) so we don't accept prefixes of identifiers like
+       * "Initialize". */
+      if (isalpha((unsigned char)symbol[0])) {
+        if (in->start < in->length) {
+          unsigned char next = (unsigned char)in->buffer[in->start];
+          if (isalnum(next) || next == '_' || next >= 0x80) {
+            restore_input_state(in, &symbol_state);
+            continue;
+          }
+        }
+      }
+      // Create AST node for operator symbol
+      ast_t *ast = new_ast();
+      ast->typ = pargs->tag;
+      ast->sym = sym_lookup(symbol);
+      ast->child = NULL;
+      ast->next = NULL;
+      set_ast_position(ast, in);
+      return make_success(ast);
     }
-    
-    discard_failure(ident_res);
-    restore_input_state(in, &state);
-    return make_failure_static(in, "Expected operator name or symbol");
+
+    restore_input_state(in, &symbol_state);
+  }
+
+  // If no symbol matched, try parsing as identifier (Delphi-style: Add,
+  // Multiply, etc.)
+  combinator_t *ident_parser = cident(pargs->tag);
+  ParseResult ident_res = parse(in, ident_parser);
+  free_combinator(ident_parser);
+
+  if (ident_res.is_success) {
+    return ident_res;
+  }
+
+  discard_failure(ident_res);
+  restore_input_state(in, &state);
+  return make_failure_static(in, "Expected operator name or symbol");
 }
 
-combinator_t* operator_name(tag_t tag) {
-    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
-    args->tag = tag;
-    combinator_t* comb = new_combinator();
-    comb->fn = operator_name_fn;
-    comb->args = args;
-    return comb;
+combinator_t *operator_name(tag_t tag) {
+  prim_args *args = (prim_args *)safe_malloc(sizeof(prim_args));
+  args->tag = tag;
+  combinator_t *comb = new_combinator();
+  comb->fn = operator_name_fn;
+  comb->args = args;
+  return comb;
 }
 
 // Helper function to create parameter parser (reduces code duplication)
-combinator_t* create_pascal_param_parser(void) {
-    static combinator_t* cached_param_parser = NULL;
-    if (cached_param_parser != NULL) return cached_param_parser;
-
-    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
-        create_optional_modifier(),
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-    combinator_t* param = map(param_seq, structure_param_node);
-    set_combinator_name(param, "param");
-
-    cached_param_parser = optional(between(
-        token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
-    combinator_mark_cached(cached_param_parser);
+combinator_t *create_pascal_param_parser(void) {
+  static combinator_t *cached_param_parser = NULL;
+  if (cached_param_parser != NULL)
     return cached_param_parser;
+
+  combinator_t *param_seq =
+      seq(new_combinator(), PASCAL_T_NONE, create_optional_modifier(),
+          create_param_name_list(), create_param_type_spec(), NULL);
+  combinator_t *param = map(param_seq, structure_param_node);
+  set_combinator_name(param, "param");
+
+  cached_param_parser = optional(between(token(match("(")), token(match(")")),
+                                         sep_by(param, token(match(";")))));
+  combinator_mark_cached(cached_param_parser);
+  return cached_param_parser;
 }
 
 // Helper function to create generic type lookahead combinator
-// Checks for '< identifier' pattern to distinguish generic types from '<>' operator
-combinator_t* create_generic_type_lookahead(void) {
-    combinator_t* type_arg = token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
-    return seq(new_combinator(), PASCAL_T_NONE,
-        token(match("<")),
-        type_arg,
-        NULL
-    );
+// Checks for '< identifier' pattern to distinguish generic types from '<>'
+// operator
+combinator_t *create_generic_type_lookahead(void) {
+  combinator_t *type_arg =
+      token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
+  return seq(new_combinator(), PASCAL_T_NONE, token(match("<")), type_arg,
+             NULL);
 }
 
-static ast_t* wrap_program_params(ast_t* params) {
-    ast_t* params_node = new_ast();
-    params_node->typ = PASCAL_T_PROGRAM_PARAMS;
-    params_node->child = (params == ast_nil) ? NULL : params;
-    return params_node;
+static ast_t *wrap_program_params(ast_t *params) {
+  ast_t *params_node = new_ast();
+  params_node->typ = PASCAL_T_PROGRAM_PARAMS;
+  params_node->child = (params == ast_nil) ? NULL : params;
+  return params_node;
 }
 
 // Custom parser for main block content that parses statements properly
-static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_name) {
-    main_block_args_t* mb_args = (main_block_args_t*)args;
-    const char* debug_flag = getenv("KGPC_DEBUG_MAIN_BLOCK");
-    if (debug_flag != NULL) {
-        fprintf(stderr, "[pascal_parser] main block parse start at %d\n", in ? in->start : -1);
-    }
-    if (mb_args == NULL || mb_args->stmt_parser == NULL || *mb_args->stmt_parser == NULL) {
-        return make_failure(in, strdup("main block statement parser unavailable"));
-    }
-    combinator_t** stmt_parser_ref = mb_args->stmt_parser;
-    // Use the shared statement-list parser so empty statements between semicolons
-    // are accepted consistently with the statement parser.
-    combinator_t* stmt_sequence = make_pascal_stmt_list_parser(stmt_parser_ref);
+static ParseResult main_block_content_fn(input_t *in, void *args,
+                                         char *parser_name) {
+  main_block_args_t *mb_args = (main_block_args_t *)args;
+  const char *debug_flag = getenv("KGPC_DEBUG_MAIN_BLOCK");
+  if (debug_flag != NULL) {
+    fprintf(stderr, "[pascal_parser] main block parse start at %d\n",
+            in ? in->start : -1);
+  }
+  if (mb_args == NULL || mb_args->stmt_parser == NULL ||
+      *mb_args->stmt_parser == NULL) {
+    return make_failure(in, strdup("main block statement parser unavailable"));
+  }
+  combinator_t **stmt_parser_ref = mb_args->stmt_parser;
+  // Use the shared statement-list parser so empty statements between semicolons
+  // are accepted consistently with the statement parser.
+  combinator_t *stmt_sequence = make_pascal_stmt_list_parser(stmt_parser_ref);
 
-    if (debug_flag != NULL) {
-        fprintf(stderr, "[pascal_parser] about to parse main block statements\n");
-    }
+  if (debug_flag != NULL) {
+    fprintf(stderr, "[pascal_parser] about to parse main block statements\n");
+  }
 
-    ParseResult stmt_result = parse(in, stmt_sequence);
+  ParseResult stmt_result = parse(in, stmt_sequence);
 
-    free_combinator(stmt_sequence);
+  free_combinator(stmt_sequence);
 
-    if (debug_flag != NULL) {
-        if (stmt_result.is_success) {
-            fprintf(stderr, "[pascal_parser] main block parse ok, consumed up to %d\n", in ? in->start : -1);
-            if (stmt_result.value.ast) {
-                fprintf(stderr, "[pascal_parser]   result ast typ=%d\n", stmt_result.value.ast->typ);
-                if (stmt_result.value.ast == ast_nil) {
-                    fprintf(stderr, "[pascal_parser]   result ast is ast_nil!\n");
-                }
-                if (stmt_result.value.ast->child) {
-                    fprintf(stderr, "[pascal_parser]   result ast has child typ=%d\n", 
-                            stmt_result.value.ast->child->typ);
-                    // Check if the child is the sep_by result
-                    if (stmt_result.value.ast->child->next) {
-                        ast_t* sep_by_result = stmt_result.value.ast->child->next;
-                        fprintf(stderr, "[pascal_parser]   sep_by result (second child) typ=%d\n", sep_by_result->typ);
-                        if (sep_by_result == ast_nil) {
-                            fprintf(stderr, "[pascal_parser]   sep_by result is ast_nil!\n");
-                        } else if (sep_by_result->child) {
-                            fprintf(stderr, "[pascal_parser]   sep_by has children, first child typ=%d\n", 
-                                    sep_by_result->child->typ);
-                        } else {
-                            fprintf(stderr, "[pascal_parser]   sep_by result has NO children\n");
-                        }
-                    }
-                } else {
-                    fprintf(stderr, "[pascal_parser]   result ast child is NULL\n");
-                }
+  if (debug_flag != NULL) {
+    if (stmt_result.is_success) {
+      fprintf(stderr,
+              "[pascal_parser] main block parse ok, consumed up to %d\n",
+              in ? in->start : -1);
+      if (stmt_result.value.ast) {
+        fprintf(stderr, "[pascal_parser]   result ast typ=%d\n",
+                stmt_result.value.ast->typ);
+        if (stmt_result.value.ast == ast_nil) {
+          fprintf(stderr, "[pascal_parser]   result ast is ast_nil!\n");
+        }
+        if (stmt_result.value.ast->child) {
+          fprintf(stderr, "[pascal_parser]   result ast has child typ=%d\n",
+                  stmt_result.value.ast->child->typ);
+          // Check if the child is the sep_by result
+          if (stmt_result.value.ast->child->next) {
+            ast_t *sep_by_result = stmt_result.value.ast->child->next;
+            fprintf(stderr,
+                    "[pascal_parser]   sep_by result (second child) typ=%d\n",
+                    sep_by_result->typ);
+            if (sep_by_result == ast_nil) {
+              fprintf(stderr, "[pascal_parser]   sep_by result is ast_nil!\n");
+            } else if (sep_by_result->child) {
+              fprintf(
+                  stderr,
+                  "[pascal_parser]   sep_by has children, first child typ=%d\n",
+                  sep_by_result->child->typ);
             } else {
-                fprintf(stderr, "[pascal_parser]   result ast is NULL\n");
+              fprintf(stderr,
+                      "[pascal_parser]   sep_by result has NO children\n");
             }
+          }
         } else {
-            fprintf(stderr, "[pascal_parser] main block parse FAILED at %d (%s)\n",
-                in ? in->start : -1,
-                (stmt_result.value.error && stmt_result.value.error->message) ? stmt_result.value.error->message : "unknown");
+          fprintf(stderr, "[pascal_parser]   result ast child is NULL\n");
         }
+      } else {
+        fprintf(stderr, "[pascal_parser]   result ast is NULL\n");
+      }
+    } else {
+      fprintf(stderr, "[pascal_parser] main block parse FAILED at %d (%s)\n",
+              in ? in->start : -1,
+              (stmt_result.value.error && stmt_result.value.error->message)
+                  ? stmt_result.value.error->message
+                  : "unknown");
     }
-    
-    return stmt_result;
+  }
+
+  return stmt_result;
 }
 
-static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
-    combinator_t* comb = new_combinator();
-    main_block_args_t* args = safe_malloc(sizeof(main_block_args_t));
-    args->stmt_parser = stmt_parser_ref;
-    comb->args = args;
-    comb->type = COMB_MAIN_BLOCK_CONTENT;
-    comb->fn = main_block_content_fn;
-    return comb;
+static combinator_t *main_block_content(combinator_t **stmt_parser_ref) {
+  combinator_t *comb = new_combinator();
+  main_block_args_t *args = safe_malloc(sizeof(main_block_args_t));
+  args->stmt_parser = stmt_parser_ref;
+  comb->args = args;
+  comb->type = COMB_MAIN_BLOCK_CONTENT;
+  comb->fn = main_block_content_fn;
+  return comb;
 }
 
-// Helper function to wrap the content of a begin-end block in a PASCAL_T_MAIN_BLOCK node
-static ast_t* build_main_block_ast(ast_t* ast) {
-    const char* debug_flag = getenv("KGPC_DEBUG_MAIN_BLOCK");
-    if (debug_flag != NULL) {
-        fprintf(stderr, "[build_main_block_ast] input ast=%p\n", (void*)ast);
-        if (ast && ast != ast_nil) {
-            fprintf(stderr, "[build_main_block_ast]   ast->typ=%d\n", ast->typ);
-            fprintf(stderr, "[build_main_block_ast]   ast->child=%p\n", (void*)ast->child);
-            if (ast->child && ast->child != ast_nil) {
-                fprintf(stderr, "[build_main_block_ast]     child->typ=%d\n", ast->child->typ);
-                fprintf(stderr, "[build_main_block_ast]     child->next=%p\n", (void*)ast->child->next);
-                if (ast->child->next && ast->child->next != ast_nil) {
-                    fprintf(stderr, "[build_main_block_ast]       next->typ=%d\n", ast->child->next->typ);
-                }
-            }
-        } else if (ast == ast_nil) {
-            fprintf(stderr, "[build_main_block_ast]   ast is ast_nil\n");
+// Helper function to wrap the content of a begin-end block in a
+// PASCAL_T_MAIN_BLOCK node
+static ast_t *build_main_block_ast(ast_t *ast) {
+  const char *debug_flag = getenv("KGPC_DEBUG_MAIN_BLOCK");
+  if (debug_flag != NULL) {
+    fprintf(stderr, "[build_main_block_ast] input ast=%p\n", (void *)ast);
+    if (ast && ast != ast_nil) {
+      fprintf(stderr, "[build_main_block_ast]   ast->typ=%d\n", ast->typ);
+      fprintf(stderr, "[build_main_block_ast]   ast->child=%p\n",
+              (void *)ast->child);
+      if (ast->child && ast->child != ast_nil) {
+        fprintf(stderr, "[build_main_block_ast]     child->typ=%d\n",
+                ast->child->typ);
+        fprintf(stderr, "[build_main_block_ast]     child->next=%p\n",
+                (void *)ast->child->next);
+        if (ast->child->next && ast->child->next != ast_nil) {
+          fprintf(stderr, "[build_main_block_ast]       next->typ=%d\n",
+                  ast->child->next->typ);
         }
+      }
+    } else if (ast == ast_nil) {
+      fprintf(stderr, "[build_main_block_ast]   ast is ast_nil\n");
     }
-    
-    ast_t* block_node = new_ast();
-    block_node->typ = PASCAL_T_MAIN_BLOCK;
-    
-    // CRITICAL FIX: The issue is that when sep_by returns an empty list, the entire
-    // seq result becomes ast_nil. But we actually want to preserve the statement list
-    // even if it's empty. The problem is that main_block_content_fn wraps everything
-    // in a seq(PASCAL_T_NONE, ...) and when all children are ast_nil, seq returns ast_nil.
-    //
-    // The real fix is: don't use seq with PASCAL_T_NONE for the main block content.
-    // Instead, just return the sep_by result directly. But since we can't change that
-    // without potentially breaking other things, we need to handle it here.
-    //
-    // For now, if we get ast_nil, we'll just set child to NULL (empty block).
-    // The real statements should be coming through in the non-ast_nil case.
-    
-    if (ast == ast_nil || ast == NULL) {
-        block_node->child = NULL;
-        if (debug_flag != NULL) {
-            fprintf(stderr, "[build_main_block_ast] result: child=NULL (ast was nil/NULL)\n");
-        }
-        return block_node;
-    }
-    
-    // If we have a real AST node, use it directly as the child
-    // This will be the statement list from sep_by
-    block_node->child = ast;
+  }
+
+  ast_t *block_node = new_ast();
+  block_node->typ = PASCAL_T_MAIN_BLOCK;
+
+  // CRITICAL FIX: The issue is that when sep_by returns an empty list, the
+  // entire seq result becomes ast_nil. But we actually want to preserve the
+  // statement list even if it's empty. The problem is that
+  // main_block_content_fn wraps everything in a seq(PASCAL_T_NONE, ...) and
+  // when all children are ast_nil, seq returns ast_nil.
+  //
+  // The real fix is: don't use seq with PASCAL_T_NONE for the main block
+  // content. Instead, just return the sep_by result directly. But since we
+  // can't change that without potentially breaking other things, we need to
+  // handle it here.
+  //
+  // For now, if we get ast_nil, we'll just set child to NULL (empty block).
+  // The real statements should be coming through in the non-ast_nil case.
+
+  if (ast == ast_nil || ast == NULL) {
+    block_node->child = NULL;
     if (debug_flag != NULL) {
-        fprintf(stderr, "[build_main_block_ast] result: child=%p (used ast directly)\n", (void*)ast);
+      fprintf(stderr,
+              "[build_main_block_ast] result: child=NULL (ast was nil/NULL)\n");
     }
-    
     return block_node;
+  }
+
+  // If we have a real AST node, use it directly as the child
+  // This will be the statement list from sep_by
+  block_node->child = ast;
+  if (debug_flag != NULL) {
+    fprintf(stderr,
+            "[build_main_block_ast] result: child=%p (used ast directly)\n",
+            (void *)ast);
+  }
+
+  return block_node;
 }
 
 // Removed permissive final-period skipper to enforce strict parsing.
 
+// Pascal Program/Terminated Statement Parser - for standalone statements with
+// semicolons
+void init_pascal_program_parser(combinator_t **p) {
+  // Create the base statement parser
+  combinator_t **base_stmt =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *base_stmt = new_combinator();
+  init_pascal_statement_parser(base_stmt);
 
-// Pascal Program/Terminated Statement Parser - for standalone statements with semicolons
-void init_pascal_program_parser(combinator_t** p) {
-    // Create the base statement parser
-    combinator_t** base_stmt = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *base_stmt = new_combinator();
-    init_pascal_statement_parser(base_stmt);
+  // Terminated statement: statement followed by semicolon
+  seq(*p, PASCAL_T_NONE,
+      lazy(base_stmt),   // any statement
+      token(match(";")), // followed by semicolon
+      NULL);
 
-    // Terminated statement: statement followed by semicolon
-    seq(*p, PASCAL_T_NONE,
-        lazy(base_stmt),                       // any statement
-        token(match(";")),                     // followed by semicolon
-        NULL
-    );
-
-    (*p)->extra_to_free = base_stmt;
+  (*p)->extra_to_free = base_stmt;
 }
 
 // Helper function to create statement list parser
-static combinator_t* make_stmt_list_parser(combinator_t** stmt_parser) {
-    return make_pascal_stmt_list_parser(stmt_parser);
+static combinator_t *make_stmt_list_parser(combinator_t **stmt_parser) {
+  return make_pascal_stmt_list_parser(stmt_parser);
 }
 
-static combinator_t* create_helper_body_parser(void) {
-    combinator_t** helper_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *helper_const_expr_parser = new_combinator();
-    init_pascal_expression_parser(helper_const_expr_parser, NULL);
+static combinator_t *create_helper_body_parser(void) {
+  combinator_t **helper_const_expr_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *helper_const_expr_parser = new_combinator();
+  init_pascal_expression_parser(helper_const_expr_parser, NULL);
 
-    combinator_t* const_value = lazy(helper_const_expr_parser);
+  combinator_t *const_value = lazy(helper_const_expr_parser);
 
-    combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
+  combinator_t *const_decl = seq(
+      new_combinator(), PASCAL_T_CONST_DECL, token(cident(PASCAL_T_IDENTIFIER)),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+                   NULL)),
+      token(match("=")), const_value, token(match(";")), NULL);
+
+  combinator_t *const_section =
+      seq(new_combinator(), PASCAL_T_CONST_SECTION, token(keyword_ci("const")),
+          commit(many(const_decl)), NULL);
+  const_section->extra_to_free = helper_const_expr_parser;
+
+  combinator_t *access_modifier =
+      seq(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
+          optional(token(keyword_ci("strict"))),
+          multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("private")),
+                token(keyword_ci("protected")), token(keyword_ci("public")),
+                token(keyword_ci("published")), NULL),
+          optional(token(match(":"))), NULL);
+
+  combinator_t *helper_method_directive_keyword =
+      multi(new_combinator(), PASCAL_T_NONE,
+            token(create_keyword_parser("virtual", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("reintroduce", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("abstract", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)), NULL);
+
+  combinator_t *helper_method_directives =
+      many(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+               helper_method_directive_keyword,
+               optional(token(pascal_string(PASCAL_T_STRING))),
+               token(match(";")), NULL));
+
+  combinator_t *helper_return_type =
+      multi(new_combinator(), PASCAL_T_TYPE_SPEC,
             token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        token(match("=")),
-        const_value,
-        token(match(";")),
-        NULL
-    );
+            token(cident(PASCAL_T_IDENTIFIER)), NULL);
 
-    combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
-        token(keyword_ci("const")),
-        commit(many(const_decl)),
-        NULL
-    );
-    const_section->extra_to_free = helper_const_expr_parser;
+  combinator_t *helper_procedure_decl =
+      seq(new_combinator(), PASCAL_T_METHOD_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)),
+          create_pascal_param_parser(), token(match(";")),
+          helper_method_directives, NULL);
 
-    combinator_t* access_modifier = seq(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
-        optional(token(keyword_ci("strict"))),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("private")),
-            token(keyword_ci("protected")),
-            token(keyword_ci("public")),
-            token(keyword_ci("published")),
-            NULL
-        ),
-        optional(token(match(":"))),
-        NULL
-    );
+  combinator_t *helper_function_decl =
+      seq(new_combinator(), PASCAL_T_METHOD_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)),
+          create_pascal_param_parser(), token(match(":")), helper_return_type,
+          token(match(";")), helper_method_directives, NULL);
 
-    combinator_t* helper_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(create_keyword_parser("virtual", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("reintroduce", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("abstract", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  combinator_t *helper_constructor_decl =
+      seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("constructor")), token(cident(PASCAL_T_IDENTIFIER)),
+          create_pascal_param_parser(), token(match(";")),
+          helper_method_directives, NULL);
 
-    combinator_t* helper_method_directives = many(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-        helper_method_directive_keyword,
-        optional(token(pascal_string(PASCAL_T_STRING))),
-        token(match(";")),
-        NULL
-    ));
+  combinator_t *helper_destructor_decl =
+      seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("destructor")), token(cident(PASCAL_T_IDENTIFIER)),
+          create_pascal_param_parser(), token(match(";")),
+          helper_method_directives, NULL);
 
-    combinator_t* helper_return_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  combinator_t *helper_property_indexer = optional(seq(
+      new_combinator(), PASCAL_T_PARAM_LIST,
+      between(
+          token(match("[")), token(match("]")),
+          sep_by(
+              seq(new_combinator(), PASCAL_T_PARAM,
+                  sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+                  token(match(":")),
+                  token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+                  NULL),
+              token(match(";")))),
+      NULL));
+  combinator_t *helper_property_decl = seq(
+      new_combinator(), PASCAL_T_PROPERTY_DECL,
+      optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+      token(keyword_ci("property")),
+      token(cident(PASCAL_T_IDENTIFIER)), // property name
+      helper_property_indexer,
+      optional(seq(
+          new_combinator(), PASCAL_T_NONE, token(match(":")),
+          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // type name
+          NULL)),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("read")),
+                   token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+                   NULL)),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("write")),
+                   token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+                   NULL)),
+      token(match(";")), NULL);
 
-    combinator_t* helper_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("procedure")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        create_pascal_param_parser(),
-        token(match(";")),
-        helper_method_directives,
-        NULL
-    );
+  combinator_t *helper_var_decl =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("var")),
+          until(token(match(";")), PASCAL_T_NONE), token(match(";")), NULL);
 
-    combinator_t* helper_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("function")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        create_pascal_param_parser(),
-        token(match(":")),
-        helper_return_type,
-        token(match(";")),
-        helper_method_directives,
-        NULL
-    );
+  combinator_t *helper_item = multi(
+      new_combinator(), PASCAL_T_NONE, const_section, access_modifier,
+      helper_procedure_decl, helper_function_decl, helper_constructor_decl,
+      helper_destructor_decl, helper_property_decl, helper_var_decl, NULL);
 
-    combinator_t* helper_constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("constructor")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        create_pascal_param_parser(),
-        token(match(";")),
-        helper_method_directives,
-        NULL
-    );
-
-    combinator_t* helper_destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("destructor")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        create_pascal_param_parser(),
-        token(match(";")),
-        helper_method_directives,
-        NULL
-    );
-
-    combinator_t* helper_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
-        between(
-            token(match("[")),
-            token(match("]")),
-            sep_by(seq(new_combinator(), PASCAL_T_PARAM,
-                sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-                token(match(":")),
-                token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-                NULL
-            ), token(match(";")))
-        ),
-        NULL
-    ));
-    combinator_t* helper_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("property")),
-        token(cident(PASCAL_T_IDENTIFIER)), // property name
-        helper_property_indexer,
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // type name
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
-            NULL
-        )),
-        token(match(";")),
-        NULL
-    );
-
-    combinator_t* helper_var_decl = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("var")),
-        until(token(match(";")), PASCAL_T_NONE),
-        token(match(";")),
-        NULL
-    );
-
-    combinator_t* helper_item = multi(new_combinator(), PASCAL_T_NONE,
-        const_section,
-        access_modifier,
-        helper_procedure_decl,
-        helper_function_decl,
-        helper_constructor_decl,
-        helper_destructor_decl,
-        helper_property_decl,
-        helper_var_decl,
-        NULL
-    );
-
-    return many(helper_item);
+  return many(helper_item);
 }
 
 // Pascal Unit Parser
-void init_pascal_unit_parser(combinator_t** p) {
-    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser = new_combinator();
-    init_pascal_statement_parser(stmt_parser);
+void init_pascal_unit_parser(combinator_t **p) {
+  combinator_t **stmt_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *stmt_parser = new_combinator();
+  init_pascal_statement_parser(stmt_parser);
 
-    // Uses section: uses unit1, unit2, unit3;
-    combinator_t* uses_unit = token(pascal_qualified_identifier(PASCAL_T_USES_UNIT));
-    combinator_t* uses_section = seq(new_combinator(), PASCAL_T_USES_SECTION,
-        token(keyword_ci("uses")),                      // uses keyword (with word boundary check)
-        sep_by(uses_unit, token(match(","))),        // unit names separated by commas
-        token(match(";")),                           // semicolon
-        NULL
-    );
+  // Uses section: uses unit1, unit2, unit3;
+  combinator_t *uses_unit =
+      token(pascal_qualified_identifier(PASCAL_T_USES_UNIT));
+  combinator_t *uses_section = seq(
+      new_combinator(), PASCAL_T_USES_SECTION,
+      token(keyword_ci("uses")), // uses keyword (with word boundary check)
+      sep_by(uses_unit, token(match(","))), // unit names separated by commas
+      token(match(";")),                    // semicolon
+      NULL);
 
-    // Type section: type name = TypeDefinition; ...
-    combinator_t* specialize_args = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    );
+  // Type section: type name = TypeDefinition; ...
+  combinator_t *specialize_args =
+      seq(new_combinator(), PASCAL_T_NONE, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL);
 
-    combinator_t* specialize_type = seq(new_combinator(), PASCAL_T_TYPE_SPEC,
-        token(keyword_ci("specialize")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        optional(specialize_args),
-        NULL
-    );
+  combinator_t *specialize_type =
+      seq(new_combinator(), PASCAL_T_TYPE_SPEC, token(keyword_ci("specialize")),
+          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+          optional(specialize_args), NULL);
 
-    combinator_t* helper_body = optional(create_helper_body_parser());
+  combinator_t *helper_body = optional(create_helper_body_parser());
 
-    combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("type")),
-        token(keyword_ci("record")),
-        token(keyword_ci("class")),
-        NULL
-    );
+  combinator_t *helper_kind =
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("type")),
+            token(keyword_ci("record")), token(keyword_ci("class")), NULL);
 
-    combinator_t* helper_base_type_ref = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        type_name(PASCAL_T_IDENTIFIER),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  combinator_t *helper_base_type_ref = multi(
+      new_combinator(), PASCAL_T_TYPE_SPEC, type_name(PASCAL_T_IDENTIFIER),
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+      token(cident(PASCAL_T_IDENTIFIER)), NULL);
 
-    combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
-        helper_kind,
-        token(keyword_ci("helper")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("(")),
-            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-            token(match(")")),
-            NULL
-        )),
-        token(keyword_ci("for")),
-        helper_base_type_ref,
-        helper_body,
-        token(keyword_ci("end")),
-        NULL
-    ), mark_type_helper_record);
+  combinator_t *type_helper_type = map(
+      seq(new_combinator(), PASCAL_T_RECORD_TYPE, helper_kind,
+          token(keyword_ci("helper")),
+          optional(seq(new_combinator(), PASCAL_T_NONE, token(match("(")),
+                       token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+                       token(match(")")), NULL)),
+          token(keyword_ci("for")), helper_base_type_ref, helper_body,
+          token(keyword_ci("end")), NULL),
+      mark_type_helper_record);
 
-    // Constructed type parser for generic types like TFoo<Integer>
-    // Peek to ensure this looks like a generic type before committing
-    // This prevents parsing '<>' (not-equal operator) as an empty generic type
-    combinator_t* type_arg = token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by1(type_arg, token(match(","))),  // Require at least one type argument
-        token(match(">")),
-        NULL
-    );
-    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
-        type_arg_list,                          // Now parse the full type argument list
-        NULL
-    );
+  // Constructed type parser for generic types like TFoo<Integer>
+  // Peek to ensure this looks like a generic type before committing
+  // This prevents parsing '<>' (not-equal operator) as an empty generic type
+  combinator_t *type_arg =
+      token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
+  combinator_t *type_arg_list =
+      seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
+          sep_by1(type_arg,
+                  token(match(","))), // Require at least one type argument
+          token(match(">")), NULL);
+  combinator_t *constructed_type =
+      seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+          peek(create_generic_type_lookahead()), // Lookahead to ensure '<
+                                                 // identifier' pattern
+          type_arg_list, // Now parse the full type argument list
+          NULL);
 
-    combinator_t* reference_type = reference_to_type(PASCAL_T_REFERENCE_TO_TYPE);
-    combinator_t* iface_type = interface_type(PASCAL_T_INTERFACE_TYPE);
-    combinator_t* class_spec = class_type(PASCAL_T_CLASS_TYPE);
-    combinator_t* record_spec = record_type(PASCAL_T_RECORD_TYPE);
-    combinator_t* object_spec = object_type(PASCAL_T_OBJECT_TYPE);
-    combinator_t* enum_spec = enumerated_type(PASCAL_T_ENUMERATED_TYPE);
-    combinator_t* array_spec = array_type(PASCAL_T_ARRAY_TYPE);
-    combinator_t* file_spec = file_type(PASCAL_T_FILE_TYPE);
-    combinator_t* set_spec = set_type(PASCAL_T_SET);
-    combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
-    combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
-    
-    /* Distinct type parser: "type <typename>" creates a distinct (strong) type alias.
-     * Example: Real = type Double; creates a new type distinct from Double.
-     * FPC also supports "type AnsiString(CP_UTF8)" with codepage parameter, which
-     * we parse but ignore the parameter since we don't handle codepages. */
-    combinator_t* distinct_type_codepage_param = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match("(")),
-        token(cident(PASCAL_T_IDENTIFIER)),  /* codepage constant name */
-        token(match(")")),
-        NULL
-    ));
-    combinator_t* distinct_type_target = multi(new_combinator(), PASCAL_T_NONE,
-        pointer_spec,                                           /* type ^TFoo */
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),/* type Unit.TFoo */
-        token(cident(PASCAL_T_IDENTIFIER)),                     /* type TFoo */
-        NULL
-    );
-    combinator_t* distinct_type_spec = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
-        token(keyword_ci("type")),
-        distinct_type_target,
-        distinct_type_codepage_param,  /* optional (CODEPAGE) */
-        NULL
-    );
-    
-    /* Distinct type from range: "type 0..$10ffff" creates a distinct type from a subrange */
-    combinator_t* distinct_type_range_spec = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
-        token(keyword_ci("type")),
-        range_spec,  /* reuse the range parser */
-        NULL
-    );
-    
-    // Create parser for identifier with optional subscript (e.g., string[20])
-    combinator_t* simple_identifier = new_combinator();
-    simple_identifier->type = COMB_TYPE_DISPATCH;
-    simple_identifier->fn = identifier_with_optional_subscript_fn;
-    simple_identifier->args = NULL;
-    set_combinator_name(simple_identifier, "identifier_with_optional_subscript");
+  combinator_t *reference_type = reference_to_type(PASCAL_T_REFERENCE_TO_TYPE);
+  combinator_t *iface_type = interface_type(PASCAL_T_INTERFACE_TYPE);
+  combinator_t *class_spec = class_type(PASCAL_T_CLASS_TYPE);
+  combinator_t *record_spec = record_type(PASCAL_T_RECORD_TYPE);
+  combinator_t *object_spec = object_type(PASCAL_T_OBJECT_TYPE);
+  combinator_t *enum_spec = enumerated_type(PASCAL_T_ENUMERATED_TYPE);
+  combinator_t *array_spec = array_type(PASCAL_T_ARRAY_TYPE);
+  combinator_t *file_spec = file_type(PASCAL_T_FILE_TYPE);
+  combinator_t *set_spec = set_type(PASCAL_T_SET);
+  combinator_t *range_spec = range_type(PASCAL_T_RANGE_TYPE);
+  combinator_t *pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
 
-    type_dispatch_args_t* type_args = (type_dispatch_args_t*)safe_malloc(sizeof(type_dispatch_args_t));
-    memset(type_args, 0, sizeof(*type_args));
-    type_args->helper_parser = type_helper_type;
-    type_args->reference_parser = reference_type;
-    type_args->procedure_parser = procedure_type(PASCAL_T_PROCEDURE_TYPE);
-    type_args->function_parser = function_type(PASCAL_T_FUNCTION_TYPE);
-    type_args->interface_parser = iface_type;
-    type_args->class_parser = class_spec;
-    type_args->class_of_parser = class_of_type(PASCAL_T_CLASS_OF_TYPE);
-    type_args->record_parser = record_spec;
-    type_args->object_parser = object_spec;
-    type_args->enumerated_parser = enum_spec;
-    type_args->array_parser = array_spec;
-    type_args->file_parser = file_spec;
-    type_args->set_parser = set_spec;
-    type_args->range_parser = range_spec;
-    type_args->pointer_parser = pointer_spec;
-    type_args->specialize_parser = specialize_type;
-    type_args->constructed_parser = constructed_type;
-    type_args->identifier_parser = simple_identifier;
-    type_args->distinct_type_parser = distinct_type_spec;
-    type_args->distinct_type_range_parser = distinct_type_range_spec;
+  /* Distinct type parser: "type <typename>" creates a distinct (strong) type
+   * alias. Example: Real = type Double; creates a new type distinct from
+   * Double. FPC also supports "type AnsiString(CP_UTF8)" with codepage
+   * parameter, which we parse but ignore the parameter since we don't handle
+   * codepages. */
+  combinator_t *distinct_type_codepage_param = optional(
+      seq(new_combinator(), PASCAL_T_NONE, token(match("(")),
+          token(cident(PASCAL_T_IDENTIFIER)), /* codepage constant name */
+          token(match(")")), NULL));
+  combinator_t *distinct_type_target =
+      multi(new_combinator(), PASCAL_T_NONE, pointer_spec, /* type ^TFoo */
+            token(pascal_qualified_identifier(
+                PASCAL_T_IDENTIFIER)),          /* type Unit.TFoo */
+            token(cident(PASCAL_T_IDENTIFIER)), /* type TFoo */
+            NULL);
+  combinator_t *distinct_type_spec =
+      seq(new_combinator(), PASCAL_T_DISTINCT_TYPE, token(keyword_ci("type")),
+          distinct_type_target,
+          distinct_type_codepage_param, /* optional (CODEPAGE) */
+          NULL);
 
-    combinator_t* type_definition = new_combinator();
-    type_definition->type = COMB_TYPE_DISPATCH;
-    type_definition->fn = type_definition_dispatch_fn;
-    type_definition->args = type_args;
+  /* Distinct type from range: "type 0..$10ffff" creates a distinct type from a
+   * subrange */
+  combinator_t *distinct_type_range_spec =
+      seq(new_combinator(), PASCAL_T_DISTINCT_TYPE, token(keyword_ci("type")),
+          range_spec, /* reuse the range parser */
+          NULL);
 
-    // Const section: const name : type = value; ...
-    // Use the full expression parser so typed constants support the same
-    // constructs as regular expressions (arrays, arithmetic, sets, etc.).
-    combinator_t** const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *const_expr_parser = new_combinator();
-    init_pascal_expression_parser(const_expr_parser, NULL);
+  // Create parser for identifier with optional subscript (e.g., string[20])
+  combinator_t *simple_identifier = new_combinator();
+  simple_identifier->type = COMB_TYPE_DISPATCH;
+  simple_identifier->fn = identifier_with_optional_subscript_fn;
+  simple_identifier->args = NULL;
+  set_combinator_name(simple_identifier, "identifier_with_optional_subscript");
 
-    combinator_t* const_value = lazy(const_expr_parser);
+  type_dispatch_args_t *type_args =
+      (type_dispatch_args_t *)safe_malloc(sizeof(type_dispatch_args_t));
+  memset(type_args, 0, sizeof(*type_args));
+  type_args->helper_parser = type_helper_type;
+  type_args->reference_parser = reference_type;
+  type_args->procedure_parser = procedure_type(PASCAL_T_PROCEDURE_TYPE);
+  type_args->function_parser = function_type(PASCAL_T_FUNCTION_TYPE);
+  type_args->interface_parser = iface_type;
+  type_args->class_parser = class_spec;
+  type_args->class_of_parser = class_of_type(PASCAL_T_CLASS_OF_TYPE);
+  type_args->record_parser = record_spec;
+  type_args->object_parser = object_spec;
+  type_args->enumerated_parser = enum_spec;
+  type_args->array_parser = array_spec;
+  type_args->file_parser = file_spec;
+  type_args->set_parser = set_spec;
+  type_args->range_parser = range_spec;
+  type_args->pointer_parser = pointer_spec;
+  type_args->specialize_parser = specialize_type;
+  type_args->constructed_parser = constructed_type;
+  type_args->identifier_parser = simple_identifier;
+  type_args->distinct_type_parser = distinct_type_spec;
+  type_args->distinct_type_range_parser = distinct_type_range_spec;
 
-    // Post-const directives for typed constants: cvar/public/external/weakexternal...
-    combinator_t* const_post_directive = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("cvar")),
-            token(match(";")),
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("public")),
-            optional(seq(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("name")),
-                token(pascal_string(PASCAL_T_STRING)),
-                NULL
-            )),
-            token(match(";")),
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("external")),
-            optional(token(pascal_string(PASCAL_T_STRING))),  // optional lib name
-            optional(seq(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("name")),
-                token(pascal_string(PASCAL_T_STRING)),
-                NULL
-            )),
-            token(match(";")),
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("weakexternal")),
-            optional(seq(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("name")),
-                token(pascal_string(PASCAL_T_STRING)),
-                NULL
-            )),
-            token(match(";")),
-            NULL
-        ),
-        NULL
-    );
-    combinator_t* const_post_directives = many(const_post_directive);
+  combinator_t *type_definition = new_combinator();
+  type_definition->type = COMB_TYPE_DISPATCH;
+  type_definition->fn = type_definition_dispatch_fn;
+  type_definition->args = type_args;
 
-    // Hint directives for constants: deprecated, platform, library
-    // Pattern: (deprecated ['message'] | platform | library | experimental | unimplemented)*
-    // Supports multiple directives like "platform deprecated"
-    combinator_t* single_const_hint = seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("deprecated")),
-            token(keyword_ci("platform")),
-            token(keyword_ci("library")),
-            token(keyword_ci("experimental")),
-            token(keyword_ci("unimplemented")),
-            NULL
-        ),
-        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message for deprecated
-        NULL
-    );
-    combinator_t* const_hint_directive = many(single_const_hint);
+  // Const section: const name : type = value; ...
+  // Use the full expression parser so typed constants support the same
+  // constructs as regular expressions (arrays, arithmetic, sets, etc.).
+  combinator_t **const_expr_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *const_expr_parser = new_combinator();
+  init_pascal_expression_parser(const_expr_parser, NULL);
 
-    combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),          // constant name
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),                       // optional type specification
-            type_definition,                         // full type definition (not just simple identifier)
-            NULL
-        )),
-        token(match("=")),                           // equals sign
-        const_value,                                 // constant value (simplified for now)
-        const_hint_directive,                        // optional: deprecated, platform, library
-        token(match(";")),                           // semicolon
-        const_post_directives,                       // optional: cvar/public/external directives
-        NULL
-    );
+  combinator_t *const_value = lazy(const_expr_parser);
 
-    combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
-        token(keyword_ci("const")),                     // const keyword (with word boundary check)
-        many(const_decl),                            // multiple const declarations
-        debug_print("Exiting const_section"),
-        NULL
-    );
-    const_section->extra_to_free = const_expr_parser;
+  // Post-const directives for typed constants:
+  // cvar/public/external/weakexternal...
+  combinator_t *const_post_directive = multi(
+      new_combinator(), PASCAL_T_NONE,
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("cvar")),
+          token(match(";")), NULL),
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("public")),
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(keyword_ci("name")),
+                       token(pascal_string(PASCAL_T_STRING)), NULL)),
+          token(match(";")), NULL),
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("external")),
+          optional(token(pascal_string(PASCAL_T_STRING))), // optional lib name
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(keyword_ci("name")),
+                       token(pascal_string(PASCAL_T_STRING)), NULL)),
+          token(match(";")), NULL),
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("weakexternal")),
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(keyword_ci("name")),
+                       token(pascal_string(PASCAL_T_STRING)), NULL)),
+          token(match(";")), NULL),
+      NULL);
+  combinator_t *const_post_directives = many(const_post_directive);
 
-    /* Resourcestring values - now use expression parser to support concatenation 
-     * (e.g., 'Part one' + LineEnding + 'Part two' as used in FPC RTL sysconst.pp) */
-    combinator_t* resourcestring_value = lazy(const_expr_parser);
+  // Hint directives for constants: deprecated, platform, library
+  // Pattern: (deprecated ['message'] | platform | library | experimental |
+  // unimplemented)* Supports multiple directives like "platform deprecated"
+  combinator_t *single_const_hint =
+      seq(new_combinator(), PASCAL_T_NONE,
+          multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("deprecated")), token(keyword_ci("platform")),
+                token(keyword_ci("library")), token(keyword_ci("experimental")),
+                token(keyword_ci("unimplemented")), NULL),
+          optional(token(pascal_string(
+              PASCAL_T_STRING))), // optional message for deprecated
+          NULL);
+  combinator_t *const_hint_directive = many(single_const_hint);
 
-    // Resourcestring can also have hint directives (e.g., deprecated in rtlconsts.pp)
-    combinator_t* resourcestring_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("deprecated")),
-            token(keyword_ci("platform")),
-            token(keyword_ci("library")),
-            token(keyword_ci("experimental")),
-            token(keyword_ci("unimplemented")),
-            NULL
-        ),
-        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message
-        NULL
-    ));
+  combinator_t *const_decl = seq(
+      new_combinator(), PASCAL_T_CONST_DECL,
+      token(cident(PASCAL_T_IDENTIFIER)), // constant name
+      optional(seq(
+          new_combinator(), PASCAL_T_NONE,
+          token(match(":")), // optional type specification
+          type_definition, // full type definition (not just simple identifier)
+          NULL)),
+      token(match("=")),     // equals sign
+      const_value,           // constant value (simplified for now)
+      const_hint_directive,  // optional: deprecated, platform, library
+      token(match(";")),     // semicolon
+      const_post_directives, // optional: cvar/public/external directives
+      NULL);
 
-    combinator_t* resourcestring_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        token(match("=")),
-        resourcestring_value,
-        resourcestring_hint_directive,              // optional: deprecated, etc.
-        token(match(";")),
-        NULL
-    );
+  combinator_t *const_section = seq(
+      new_combinator(), PASCAL_T_CONST_SECTION,
+      token(keyword_ci("const")), // const keyword (with word boundary check)
+      many(const_decl),           // multiple const declarations
+      debug_print("Exiting const_section"), NULL);
+  const_section->extra_to_free = const_expr_parser;
 
-    combinator_t* resourcestring_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
-        token(keyword_ci("resourcestring")),
-        many(resourcestring_decl),
-        NULL
-    );
-    
-    // Type constraint parser: T: class, T: record, T: constructor, T: interface, or T: SomeUnit.TType
-    combinator_t* constraint_keyword = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
-        token(keyword_ci("class")),
-        token(keyword_ci("record")),
-        token(keyword_ci("constructor")),
-        token(keyword_ci("interface")),
-        NULL
-    );
-    combinator_t* constraint_item = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
-        constraint_keyword,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    
-    combinator_t* type_constraint = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        sep_by(constraint_item, token(match(","))),
-        NULL
-    ));
-    
-    // Type parameter with optional constraint: T or T: class
-    combinator_t* type_param_with_constraint = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        type_constraint,
-        NULL
-    );
-    
-    // Type parameter list parser: <T, U, V> or <T: class, U: record>
-    combinator_t* type_param_sep = multi(new_combinator(), PASCAL_T_NONE,
-        token(match(",")),
-        token(match(";")),
-        NULL
-    );
-    combinator_t* type_param_list_required = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(type_param_with_constraint, type_param_sep),
-        token(match(">")),
-        NULL
-    );
+  /* Resourcestring values - now use expression parser to support concatenation
+   * (e.g., 'Part one' + LineEnding + 'Part two' as used in FPC RTL sysconst.pp)
+   */
+  combinator_t *resourcestring_value = lazy(const_expr_parser);
 
-    // Type hint directives: deprecated ['message'] | platform | library | experimental | unimplemented
-    combinator_t* type_hint_item = seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("deprecated")),
-            token(keyword_ci("platform")),
-            token(keyword_ci("library")),
-            token(keyword_ci("experimental")),
-            token(keyword_ci("unimplemented")),
-            NULL
-        ),
-        optional(token(pascal_string(PASCAL_T_STRING))),
-        NULL
-    );
-    combinator_t* type_hint_directive = many(type_hint_item);
+  // Resourcestring can also have hint directives (e.g., deprecated in
+  // rtlconsts.pp)
+  combinator_t *resourcestring_hint_directive = optional(
+      seq(new_combinator(), PASCAL_T_NONE,
+          multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("deprecated")), token(keyword_ci("platform")),
+                token(keyword_ci("library")), token(keyword_ci("experimental")),
+                token(keyword_ci("unimplemented")), NULL),
+          optional(token(pascal_string(PASCAL_T_STRING))), // optional message
+          NULL));
 
-    // Generic type declaration: TFoo<T> = class ...
-    // This requires the angle brackets with type parameters
-    combinator_t* generic_type_decl = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
-        optional(token(keyword_ci("generic"))),      // optional generic keyword
-        token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        type_param_list_required,                     // type parameters (REQUIRED - has angle brackets)
-        token(match("=")),                           // equals sign
-        type_definition,                              // type definition
-        type_hint_directive,                          // optional type hints
-        optional(token(match(";"))),                 // semicolon (optional for last decl)
-        NULL
-    );
-    generic_type_decl = right(peek(make_generic_type_prefix()), generic_type_decl);
+  combinator_t *resourcestring_decl = seq(
+      new_combinator(), PASCAL_T_CONST_DECL, token(cident(PASCAL_T_IDENTIFIER)),
+      token(match("=")), resourcestring_value,
+      resourcestring_hint_directive, // optional: deprecated, etc.
+      token(match(";")), NULL);
 
-    // Regular type declaration: TFoo = Integer
-    combinator_t* regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
-        optional(token(keyword_ci("generic"))),      // optional generic keyword
-        token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        token(match("=")),                           // equals sign
-        type_definition,                              // type definition
-        type_hint_directive,                          // optional type hints
-        optional(token(match(";"))),                 // semicolon (optional for last decl)
-        NULL
-    );
+  combinator_t *resourcestring_section =
+      seq(new_combinator(), PASCAL_T_CONST_SECTION,
+          token(keyword_ci("resourcestring")), many(resourcestring_decl), NULL);
 
-    combinator_t* type_decl = multi(new_combinator(), PASCAL_T_NONE,
-        generic_type_decl,      // Try generic first (requires <...>)
-        regular_type_decl,      // Fall back to regular (no <...>)
-        NULL
-    );
+  // Type constraint parser: T: class, T: record, T: constructor, T: interface,
+  // or T: SomeUnit.TType
+  combinator_t *constraint_keyword = multi(
+      new_combinator(), PASCAL_T_TYPE_CONSTRAINT, token(keyword_ci("class")),
+      token(keyword_ci("record")), token(keyword_ci("constructor")),
+      token(keyword_ci("interface")), NULL);
+  combinator_t *constraint_item =
+      multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT, constraint_keyword,
+            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), NULL);
 
-    combinator_t* type_section = seq(new_combinator(), PASCAL_T_TYPE_SECTION,
-        token(keyword_ci("type")),                      // type keyword (with word boundary check)
-        many(type_decl),                             // multiple type declarations
-        NULL
-    );
+  combinator_t *type_constraint =
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   sep_by(constraint_item, token(match(","))), NULL));
 
-    combinator_t* param_list = create_pascal_param_parser();
+  // Type parameter with optional constraint: T or T: class
+  combinator_t *type_param_with_constraint =
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+          token(cident(PASCAL_T_IDENTIFIER)), type_constraint, NULL);
 
-    // Variable declaration for function/procedure local variables
-    combinator_t** var_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *var_expr_parser = new_combinator();
-    init_pascal_expression_parser(var_expr_parser, NULL);
+  // Type parameter list parser: <T, U, V> or <T: class, U: record>
+  combinator_t *type_param_sep =
+      multi(new_combinator(), PASCAL_T_NONE, token(match(",")),
+            token(match(";")), NULL);
+  combinator_t *type_param_list_required =
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(type_param_with_constraint, type_param_sep), token(match(">")),
+          NULL);
 
-    // Support optional 'absolute <identifier>' clause
-    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_ABSOLUTE_CLAUSE,
-        token(keyword_ci("absolute")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        NULL
-    ));
+  // Type hint directives: deprecated ['message'] | platform | library |
+  // experimental | unimplemented
+  combinator_t *type_hint_item =
+      seq(new_combinator(), PASCAL_T_NONE,
+          multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("deprecated")), token(keyword_ci("platform")),
+                token(keyword_ci("library")), token(keyword_ci("experimental")),
+                token(keyword_ci("unimplemented")), NULL),
+          optional(token(pascal_string(PASCAL_T_STRING))), NULL);
+  combinator_t *type_hint_directive = many(type_hint_item);
 
-    // Hint directives for variables: deprecated ['message'] | platform | library
-    combinator_t* var_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("deprecated")),
-            token(keyword_ci("platform")),
-            token(keyword_ci("library")),
-            NULL
-        ),
-        optional(token(pascal_string(PASCAL_T_STRING))),  // optional deprecated message
-        NULL
-    ));
+  // Generic type declaration: TFoo<T> = class ...
+  // This requires the angle brackets with type parameters
+  combinator_t *generic_type_decl =
+      seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
+          optional(token(keyword_ci("generic"))), // optional generic keyword
+          token(cident(PASCAL_T_IDENTIFIER)),     // type name
+          type_param_list_required,    // type parameters (REQUIRED - has angle
+                                       // brackets)
+          token(match("=")),           // equals sign
+          type_definition,             // type definition
+          type_hint_directive,         // optional type hints
+          optional(token(match(";"))), // semicolon (optional for last decl)
+          NULL);
+  generic_type_decl =
+      right(peek(make_generic_type_prefix()), generic_type_decl);
 
-    // FPC linkage clause for unit-level variables: "public name 'alias'" or "external name 'alias'"
-    // This comes after the semicolon in patterns like: "var x: type; public name 'alias';"
-    combinator_t* unit_var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            map(seq(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("public")),
-                token(keyword_ci("name")),
-                token(pascal_string(PASCAL_T_STRING)),
-                NULL
-            ), wrap_public_name_clause),
-            map(seq(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("external")),
-                optional(seq(new_combinator(), PASCAL_T_NONE,  // optional lib name (string or ident, but not 'name' keyword)
-                    pnot(peek(token(keyword_ci("name")))),
-                    multi(new_combinator(), PASCAL_T_NONE,
-                        token(pascal_string(PASCAL_T_STRING)),
-                        token(cident(PASCAL_T_IDENTIFIER)),
-                        NULL
-                    ),
-                    NULL
-                )),
-                optional(seq(new_combinator(), PASCAL_T_NONE,
-                    token(keyword_ci("name")),
-                    token(pascal_string(PASCAL_T_STRING)),
-                    NULL
-                )),
-                NULL
-            ), wrap_external_name_clause),
-            NULL
-        ),
-        token(match(";")),  // trailing semicolon after linkage clause
-        NULL
-    ));
+  // Regular type declaration: TFoo = Integer
+  combinator_t *regular_type_decl =
+      seq(new_combinator(), PASCAL_T_TYPE_DECL,
+          optional(token(keyword_ci("generic"))), // optional generic keyword
+          token(cident(PASCAL_T_IDENTIFIER)),     // type name
+          token(match("=")),                      // equals sign
+          type_definition,                        // type definition
+          type_hint_directive,                    // optional type hints
+          optional(token(match(";"))), // semicolon (optional for last decl)
+          NULL);
 
-    combinator_t* typed_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
-        token(match(":")),                          // colon
-        type_definition,                             // full type definitions (array, record, etc.)
-        var_hint_directive,                          // optional hint directive BEFORE initializer (FPC allows this)
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("=")),                       // optional initializer
-            lazy(var_expr_parser),                   // initializer expression
-            NULL
-        )),
-        absolute_clause,                             // optional absolute clause
-        var_hint_directive,                          // optional hint directive AFTER initializer
-        optional(token(match(";"))),                // optional semicolon
-        unit_var_linkage_clause,                    // optional public/external name clause
-        NULL
-    );
+  combinator_t *type_decl =
+      multi(new_combinator(), PASCAL_T_NONE,
+            generic_type_decl, // Try generic first (requires <...>)
+            regular_type_decl, // Fall back to regular (no <...>)
+            NULL);
 
-    combinator_t* inferred_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),          // single variable name
-        token(match(":=")),                         // assignment for inference
-        lazy(var_expr_parser),                      // initializer expression
-        optional(token(match(";"))),               // optional semicolon
-        NULL
-    );
+  combinator_t *type_section =
+      seq(new_combinator(), PASCAL_T_TYPE_SECTION,
+          token(keyword_ci("type")), // type keyword (with word boundary check)
+          many(type_decl),           // multiple type declarations
+          NULL);
 
-    combinator_t* inferred_var_decl_guarded = right(peek(make_inferred_var_prefix()), inferred_var_decl);
+  combinator_t *param_list = create_pascal_param_parser();
 
-    combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
-        inferred_var_decl_guarded,
-        typed_var_decl,
-        NULL
-    );
+  // Variable declaration for function/procedure local variables
+  combinator_t **var_expr_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *var_expr_parser = new_combinator();
+  init_pascal_expression_parser(var_expr_parser, NULL);
 
-    combinator_t* var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
-        token(keyword_ci("var")),                   // var keyword
-        many(var_decl),                            // multiple variable declarations
-        NULL
-    );
-    var_section->extra_to_free = var_expr_parser;
+  // Support optional 'absolute <identifier>' clause
+  combinator_t *absolute_clause = optional(seq(
+      new_combinator(), PASCAL_T_ABSOLUTE_CLAUSE, token(keyword_ci("absolute")),
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), NULL));
 
-    combinator_t* threadvar_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
-        token(keyword_ci("threadvar")),
-        many(typed_var_decl),
-        NULL
-    );
+  // Hint directives for variables: deprecated ['message'] | platform | library
+  combinator_t *var_hint_directive = optional(seq(
+      new_combinator(), PASCAL_T_NONE,
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")), token(keyword_ci("library")), NULL),
+      optional(
+          token(pascal_string(PASCAL_T_STRING))), // optional deprecated message
+      NULL));
 
-    keyword_dispatch_args_t* local_decl_args = create_keyword_dispatch(4);
-    size_t local_decl_index = 0;
-    register_keyword_entry(local_decl_args, 4, &local_decl_index, "var", var_section);
-    register_keyword_entry(local_decl_args, 4, &local_decl_index, "const", const_section);
-    register_keyword_entry(local_decl_args, 4, &local_decl_index, "type", type_section);
-    register_keyword_entry(local_decl_args, 4, &local_decl_index, "label", create_label_section());
-    local_decl_args->entry_count = local_decl_index;
+  // FPC linkage clause for unit-level variables: "public name 'alias'" or
+  // "external name 'alias'" This comes after the semicolon in patterns like:
+  // "var x: type; public name 'alias';"
+  combinator_t *unit_var_linkage_clause = optional(seq(
+      new_combinator(), PASCAL_T_NONE,
+      multi(
+          new_combinator(), PASCAL_T_NONE,
+          map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("public")),
+                  token(keyword_ci("name")),
+                  token(pascal_string(PASCAL_T_STRING)), NULL),
+              wrap_public_name_clause),
+          map(seq(new_combinator(), PASCAL_T_NONE,
+                  token(keyword_ci("external")),
+                  optional(seq(new_combinator(),
+                               PASCAL_T_NONE, // optional lib name (string or
+                                              // ident, but not 'name' keyword)
+                               pnot(peek(token(keyword_ci("name")))),
+                               multi(new_combinator(), PASCAL_T_NONE,
+                                     token(pascal_string(PASCAL_T_STRING)),
+                                     token(cident(PASCAL_T_IDENTIFIER)), NULL),
+                               NULL)),
+                  optional(seq(new_combinator(), PASCAL_T_NONE,
+                               token(keyword_ci("name")),
+                               token(pascal_string(PASCAL_T_STRING)), NULL)),
+                  NULL),
+              wrap_external_name_clause),
+          NULL),
+      token(match(";")), // trailing semicolon after linkage clause
+      NULL));
 
-    combinator_t* local_decl_dispatch = new_combinator();
-    local_decl_dispatch->type = COMB_KEYWORD_DISPATCH;
-    local_decl_dispatch->fn = keyword_dispatch_fn;
-    local_decl_dispatch->args = local_decl_args;
+  combinator_t *typed_var_decl =
+      seq(new_combinator(), PASCAL_T_VAR_DECL,
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)),
+                 token(match(","))), // variable name(s)
+          token(match(":")),         // colon
+          type_definition,    // full type definitions (array, record, etc.)
+          var_hint_directive, // optional hint directive BEFORE initializer (FPC
+                              // allows this)
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(match("=")),     // optional initializer
+                       lazy(var_expr_parser), // initializer expression
+                       NULL)),
+          absolute_clause,    // optional absolute clause
+          var_hint_directive, // optional hint directive AFTER initializer
+          optional(token(match(";"))), // optional semicolon
+          unit_var_linkage_clause,     // optional public/external name clause
+          NULL);
 
-    // Lazy reference for nested procedures/functions to allow var sections after them
-    combinator_t** nested_proc_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *nested_proc_ref = new_combinator();
-    combinator_t* lazy_nested_proc = lazy_owned(nested_proc_ref);
+  combinator_t *inferred_var_decl =
+      seq(new_combinator(), PASCAL_T_VAR_DECL,
+          token(cident(PASCAL_T_IDENTIFIER)), // single variable name
+          token(match(":=")),                 // assignment for inference
+          lazy(var_expr_parser),              // initializer expression
+          optional(token(match(";"))),        // optional semicolon
+          NULL);
 
-    // Local declarations OR nested functions - allows var sections after nested functions
-    combinator_t* local_decl_or_nested = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            trace("Calling lazy_nested_proc"),
-            lazy_nested_proc,
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            trace("Calling local_decl_dispatch"),
-            local_decl_dispatch,
-            NULL
-        ),
-        NULL
-    );
+  combinator_t *inferred_var_decl_guarded =
+      right(peek(make_inferred_var_prefix()), inferred_var_decl);
 
-    // asm...end block as a function body alternative to begin...end
-    combinator_t* asm_reg = multi(new_combinator(), PASCAL_T_NONE,
-        token(pascal_string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* asm_reglist = optional(between(
-        token(match("[")),
-        token(match("]")),
-        sep_by(asm_reg, token(match(",")))
-    ));
-    combinator_t* asm_function_body = seq(new_combinator(), PASCAL_T_ASM_BLOCK,
-        token(keyword_ci("asm")),
-        until(match("end"), PASCAL_T_NONE),
-        token(keyword_ci("end")),
-        asm_reglist,
-        NULL
-    );
+  combinator_t *var_decl =
+      multi(new_combinator(), PASCAL_T_NONE, inferred_var_decl_guarded,
+            typed_var_decl, NULL);
 
-    // Function/procedure body that can contain local declarations interspersed with nested functions
-    combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
-        trace("Enter function_body"),
-        many(local_decl_or_nested),
-        trace("Consumed local declarations, expecting begin/asm"),
-        multi(new_combinator(), PASCAL_T_NONE,
-            lazy(stmt_parser),                     // begin...end block
-            asm_function_body,                     // asm...end block
-            NULL
-        ),
-        trace("Exit function_body"),
-        NULL
-    );
-    set_combinator_name(function_body, "function_body");
+  combinator_t *var_section =
+      seq(new_combinator(), PASCAL_T_VAR_SECTION,
+          token(keyword_ci("var")), // var keyword
+          many(var_decl),           // multiple variable declarations
+          NULL);
+  var_section->extra_to_free = var_expr_parser;
 
-    // Routine directives like inline; overload; etc.
-    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),  // FPC RTL procedure directive
-        token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  combinator_t *threadvar_section =
+      seq(new_combinator(), PASCAL_T_VAR_SECTION,
+          token(keyword_ci("threadvar")), many(typed_var_decl), NULL);
 
-    // Extended external directive argument components
-    // Support string concatenation in external name: 'name' or 'name'+const1+const2
-    combinator_t* external_name_concat_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
+  keyword_dispatch_args_t *local_decl_args = create_keyword_dispatch(4);
+  size_t local_decl_index = 0;
+  register_keyword_entry(local_decl_args, 4, &local_decl_index, "var",
+                         var_section);
+  register_keyword_entry(local_decl_args, 4, &local_decl_index, "const",
+                         const_section);
+  register_keyword_entry(local_decl_args, 4, &local_decl_index, "type",
+                         type_section);
+  register_keyword_entry(local_decl_args, 4, &local_decl_index, "label",
+                         create_label_section());
+  local_decl_args->entry_count = local_decl_index;
 
-    combinator_t* external_name_clause = map(
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("name")),
-            external_name_concat_expr,
-            NULL
-        ),
-        wrap_external_name_clause
-    );
+  combinator_t *local_decl_dispatch = new_combinator();
+  local_decl_dispatch->type = COMB_KEYWORD_DISPATCH;
+  local_decl_dispatch->fn = keyword_dispatch_fn;
+  local_decl_dispatch->args = local_decl_args;
 
-    combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("index")),
-        token(integer(PASCAL_T_INTEGER)),
-        NULL
-    );
+  // Lazy reference for nested procedures/functions to allow var sections after
+  // them
+  combinator_t **nested_proc_ref =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *nested_proc_ref = new_combinator();
+  combinator_t *lazy_nested_proc = lazy_owned(nested_proc_ref);
 
-    combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
+  // Local declarations OR nested functions - allows var sections after nested
+  // functions
+  combinator_t *local_decl_or_nested = multi(
+      new_combinator(), PASCAL_T_NONE,
+      seq(new_combinator(), PASCAL_T_NONE, trace("Calling lazy_nested_proc"),
+          lazy_nested_proc, NULL),
+      seq(new_combinator(), PASCAL_T_NONE, trace("Calling local_decl_dispatch"),
+          local_decl_dispatch, NULL),
+      NULL);
+
+  // asm...end block as a function body alternative to begin...end
+  combinator_t *asm_reg = multi(new_combinator(), PASCAL_T_NONE,
+                                token(pascal_string(PASCAL_T_STRING)),
+                                token(cident(PASCAL_T_IDENTIFIER)), NULL);
+  combinator_t *asm_reglist =
+      optional(between(token(match("[")), token(match("]")),
+                       sep_by(asm_reg, token(match(",")))));
+  combinator_t *asm_function_body =
+      seq(new_combinator(), PASCAL_T_ASM_BLOCK, token(keyword_ci("asm")),
+          until(match("end"), PASCAL_T_NONE), token(keyword_ci("end")),
+          asm_reglist, NULL);
+
+  // Function/procedure body that can contain local declarations interspersed
+  // with nested functions
+  combinator_t *function_body =
+      seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
+          trace("Enter function_body"), many(local_decl_or_nested),
+          trace("Consumed local declarations, expecting begin/asm"),
+          multi(new_combinator(), PASCAL_T_NONE,
+                lazy(stmt_parser), // begin...end block
+                asm_function_body, // asm...end block
+                NULL),
+          trace("Exit function_body"), NULL);
+  set_combinator_name(function_body, "function_body");
+
+  // Routine directives like inline; overload; etc.
+  combinator_t *directive_keyword =
+      multi(new_combinator(), PASCAL_T_NONE,
+            token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser(
+                "rtlproc", PASCAL_T_IDENTIFIER)), // FPC RTL procedure directive
+            token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)), NULL);
+
+  // Extended external directive argument components
+  // Support string concatenation in external name: 'name' or
+  // 'name'+const1+const2
+  combinator_t *external_name_concat_expr =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
+          token(pascal_string(PASCAL_T_STRING)),
+          many(seq(new_combinator(), PASCAL_T_NONE, token(match("+")),
+                   token(cident(PASCAL_T_IDENTIFIER)), NULL)),
+          NULL);
+
+  combinator_t *external_name_clause =
+      map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("name")),
+              external_name_concat_expr, NULL),
+          wrap_external_name_clause);
+
+  combinator_t *external_index_clause =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("index")),
+          token(integer(PASCAL_T_INTEGER)), NULL);
+
+  combinator_t *extended_external_argument = seq(
+      new_combinator(), PASCAL_T_NONE,
+      multi(new_combinator(), PASCAL_T_NONE,
             token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        optional(external_name_clause),
-        optional(external_index_clause),
-        NULL
-    );
+            token(cident(PASCAL_T_IDENTIFIER)), NULL),
+      optional(external_name_clause), optional(external_index_clause), NULL);
 
-    combinator_t* external_name_only_argument = seq(new_combinator(), PASCAL_T_NONE,
-        external_name_clause,
-        optional(external_index_clause),
-        NULL
-    );
+  combinator_t *external_name_only_argument =
+      seq(new_combinator(), PASCAL_T_NONE, external_name_clause,
+          optional(external_index_clause), NULL);
 
-    combinator_t* directive_colon_argument = seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        NULL
-    );
-    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        directive_colon_argument,
-        external_name_only_argument,
-        extended_external_argument,                  // extended external arguments
-        token(pascal_string(PASCAL_T_STRING)),            // simple string argument
-        token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
-        NULL
-    ));
-
-    // FPC bracket directive syntax: [public, alias : 'name', nostackframe]
-    // Each directive can be: identifier or identifier : value
-    combinator_t* bracket_directive_value = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        NULL
-    ));
-    // Support FPC [external name 'foo'] syntax as a single directive item.
-    combinator_t* bracket_external_name_item = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(keyword_ci("external")),
-        token(keyword_ci("name")),
-        token(pascal_string(PASCAL_T_STRING)),
-        NULL
-    );
-
-    combinator_t* bracket_directive_item = multi(new_combinator(), PASCAL_T_NONE,
-        bracket_external_name_item,
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(cident(PASCAL_T_IDENTIFIER)),  // directive name like 'public', 'alias', 'nostackframe'
-            bracket_directive_value,              // optional : value
-            NULL
-        ),
-        NULL
-    );
-    // Required bracket directive (for internproc, internconst, etc.) - with semicolon
-    combinator_t* bracket_directive_required = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        sep_by(bracket_directive_item, token(match(","))),
-        token(match("]")),
-        token(match(";")),
-        NULL
-    );
-    set_combinator_name(bracket_directive_required, "bracket_directive_required");
-
-    // Optional-semicolon bracket directive for mixed directive lists
-    combinator_t* bracket_directive_optional = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        sep_by(bracket_directive_item, token(match(","))),
-        token(match("]")),
-        optional(token(match(";"))),
-        NULL
-    );
-    set_combinator_name(bracket_directive_optional, "bracket_directive_optional");
-
-    // Routine directives with proper argument support
-    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
-        directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
-
-    // Combined directives (standard directives AND bracket directives)
-    // This allows mixing them in any order: [public]; inline; [alias: '...'];
-    combinator_t* combined_routine_directives = many(multi(new_combinator(), PASCAL_T_NONE,
-        routine_directive,
-        bracket_directive_optional,
-        NULL
-    ));
-
-    // Header-only bracket directives: [internproc:N], [internconst:N], [compilerproc], etc.
-    // These indicate NO body follows. Calling convention directives like [cdecl] are NOT header-only.
-    combinator_t* internproc_directive = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("internproc")),
-            token(keyword_ci("internconst")),
-            token(keyword_ci("compilerproc")),
-            NULL
-        ),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            multi(new_combinator(), PASCAL_T_NONE,
+  combinator_t *directive_colon_argument =
+      seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+          multi(new_combinator(), PASCAL_T_NONE,
                 token(pascal_string(PASCAL_T_STRING)),
-                token(cident(PASCAL_T_IDENTIFIER)),
-                NULL
-            ),
-            NULL
-        )),
-        token(match("]")),
-        token(match(";")),
-        NULL
-    );
-    set_combinator_name(internproc_directive, "internproc_directive");
+                token(cident(PASCAL_T_IDENTIFIER)), NULL),
+          NULL);
+  combinator_t *directive_argument = optional(
+      multi(new_combinator(), PASCAL_T_NONE, directive_colon_argument,
+            external_name_only_argument,
+            extended_external_argument, // extended external arguments
+            token(pascal_string(PASCAL_T_STRING)), // simple string argument
+            token(cident(PASCAL_T_IDENTIFIER)),    // simple identifier argument
+            NULL));
 
-    // Standard routine directives (legacy list)
-    combinator_t* routine_directives = many(routine_directive);
+  // FPC bracket directive syntax: [public, alias : 'name', nostackframe]
+  // Each directive can be: identifier or identifier : value
+  combinator_t *bracket_directive_value =
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   multi(new_combinator(), PASCAL_T_NONE,
+                         token(pascal_string(PASCAL_T_STRING)),
+                         token(cident(PASCAL_T_IDENTIFIER)), NULL),
+                   NULL));
+  // Support FPC [external name 'foo'] syntax as a single directive item.
+  combinator_t *bracket_external_name_item =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
+          token(keyword_ci("external")), token(keyword_ci("name")),
+          token(pascal_string(PASCAL_T_STRING)), NULL);
 
-    // Routine directives allowed before a header-only external/forward directive.
-    // Exclude forward/external here so headeronly_directive remains required.
-    combinator_t* pre_headeronly_directive_keyword = multi(new_combinator(), PASCAL_T_IDENTIFIER,
-        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* pre_headeronly_directive = seq(new_combinator(), PASCAL_T_NONE,
-        pre_headeronly_directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
-    combinator_t* pre_headeronly_directives = many(pre_headeronly_directive);
-    
-    // A directive that indicates no body follows - either keyword-based or bracket-based.
-    // Keep this list narrow so directives like inline; don't swallow implementations.
-    combinator_t* headeronly_directive_keyword = multi(new_combinator(), PASCAL_T_IDENTIFIER,
-        token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* headeronly_bracket_external = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(match("[")),
-        token(keyword_ci("external")),
-        token(keyword_ci("name")),
-        token(pascal_string(PASCAL_T_STRING)),
-        token(match("]")),
-        token(match(";")),
-        NULL
-    );
-    combinator_t* headeronly_directive = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            headeronly_directive_keyword,
-            optional(directive_argument),
-            token(match(";")),
-            NULL
-        ),
-        headeronly_bracket_external,
-        internproc_directive,          // bracket directive like [internproc:value] that means NO body
-        NULL
-    );
-    set_combinator_name(headeronly_directive, "headeronly_directive");
+  combinator_t *bracket_directive_item = multi(
+      new_combinator(), PASCAL_T_NONE, bracket_external_name_item,
+      seq(new_combinator(), PASCAL_T_NONE,
+          token(cident(PASCAL_T_IDENTIFIER)), // directive name like 'public',
+                                              // 'alias', 'nostackframe'
+          bracket_directive_value,            // optional : value
+          NULL),
+      NULL);
+  // Required bracket directive (for internproc, internconst, etc.) - with
+  // semicolon
+  combinator_t *bracket_directive_required =
+      seq(new_combinator(), PASCAL_T_NONE, token(match("[")),
+          sep_by(bracket_directive_item, token(match(","))), token(match("]")),
+          token(match(";")), NULL);
+  set_combinator_name(bracket_directive_required, "bracket_directive_required");
 
-    // Directives that indicate no body should follow - preserve the directive keyword in AST
-    // combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
-    //     map(token(keyword_ci("forward")), map_forward_directive),
-    //     map(token(keyword_ci("external")), map_external_directive),
-    //     map(token(keyword_ci("assembler")), map_assembler_directive),
-    //     NULL
-    // );
+  // Optional-semicolon bracket directive for mixed directive lists
+  combinator_t *bracket_directive_optional =
+      seq(new_combinator(), PASCAL_T_NONE, token(match("[")),
+          sep_by(bracket_directive_item, token(match(","))), token(match("]")),
+          optional(token(match(";"))), NULL);
+  set_combinator_name(bracket_directive_optional, "bracket_directive_optional");
 
-    // Generic type parameters for routines (used by header-only and full declarations).
-    combinator_t* generic_type_params = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by1(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    );
-    set_combinator_name(generic_type_params, "generic_type_params");
+  // Routine directives with proper argument support
+  combinator_t *routine_directive =
+      seq(new_combinator(), PASCAL_T_NONE, directive_keyword,
+          directive_argument, token(match(";")), NULL);
 
-    // Forward/external/assembler/internproc declaration parsers for interface and implementation sections
-    // These match procedure/function headers with special directives and NO body
-    // Supports both keyword directives (forward;) and bracket directives ([internproc:value];)
-    combinator_t* headeronly_procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("procedure")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        optional(generic_type_params),              // generic procedure Foo<T>(...)
-        optional(param_list),
-        token(match(";")),
-        pre_headeronly_directives,                  // e.g. iocheck; cdecl; before external
-        headeronly_directive,                        // forward/external/[internproc:...] directive
-        many(multi(new_combinator(), PASCAL_T_NONE, routine_directive, bracket_directive_required, NULL)),
-        NULL
-    );
-    set_combinator_name(headeronly_procedure_decl, "headeronly_procedure_decl");
+  // Combined directives (standard directives AND bracket directives)
+  // This allows mixing them in any order: [public]; inline; [alias: '...'];
+  combinator_t *combined_routine_directives =
+      many(multi(new_combinator(), PASCAL_T_NONE, routine_directive,
+                 bracket_directive_optional, NULL));
 
-    combinator_t* headeronly_function_decl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("function")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        optional(generic_type_params),              // generic function Foo<T>(...): T
-        optional(param_list),
-        token(match(":")),
-        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
-        token(match(";")),
-        pre_headeronly_directives,                  // e.g. iocheck; cdecl; before external
-        headeronly_directive,                        // forward/external/[internproc:...] directive
-        many(multi(new_combinator(), PASCAL_T_NONE, routine_directive, bracket_directive_required, NULL)),
-        NULL
-    );
-    set_combinator_name(headeronly_function_decl, "headeronly_function_decl");
+  // Header-only bracket directives: [internproc:N], [internconst:N],
+  // [compilerproc], etc. These indicate NO body follows. Calling convention
+  // directives like [cdecl] are NOT header-only.
+  combinator_t *internproc_directive = seq(
+      new_combinator(), PASCAL_T_NONE, token(match("[")),
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("internproc")),
+            token(keyword_ci("internconst")), token(keyword_ci("compilerproc")),
+            NULL),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   multi(new_combinator(), PASCAL_T_NONE,
+                         token(pascal_string(PASCAL_T_STRING)),
+                         token(cident(PASCAL_T_IDENTIFIER)), NULL),
+                   NULL)),
+      token(match("]")), token(match(";")), NULL);
+  set_combinator_name(internproc_directive, "internproc_directive");
 
-    // Interface procedure/function headers that support both keyword directives (inline; forward;)
-    // and bracket directives ([internproc:value];) used by FPC.
-    // Allow missing trailing semicolon after the last directive, but do not
-    // consume the next declaration keyword as a directive argument.
-    combinator_t* interface_decl_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("procedure")),
-        token(keyword_ci("function")),
-        token(keyword_ci("constructor")),
-        token(keyword_ci("destructor")),
-        token(keyword_ci("operator")),
-        token(keyword_ci("type")),
-        token(keyword_ci("var")),
-        token(keyword_ci("const")),
-        token(keyword_ci("uses")),
-        token(keyword_ci("resourcestring")),
-        token(keyword_ci("label")),
-        token(keyword_ci("implementation")),
-        NULL
-    );
-    combinator_t* interface_directive_identifier = seq(new_combinator(), PASCAL_T_NONE,
-        pnot(peek(interface_decl_keyword)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* interface_directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        directive_colon_argument,
-        external_name_only_argument,
-        extended_external_argument,                  // extended external arguments
-        token(pascal_string(PASCAL_T_STRING)),            // simple string argument
-        interface_directive_identifier,              // simple identifier argument (guarded)
-        NULL
-    ));
-    combinator_t* extended_external_argument_no_ident = seq(new_combinator(), PASCAL_T_NONE,
-        token(pascal_string(PASCAL_T_STRING)),
-        optional(external_name_clause),
-        optional(external_index_clause),
-        NULL
-    );
-    combinator_t* interface_directive_argument_no_ident = optional(multi(new_combinator(), PASCAL_T_NONE,
-        directive_colon_argument,
-        external_name_only_argument,
-        extended_external_argument_no_ident,         // extended external arguments without identifiers
-        token(pascal_string(PASCAL_T_STRING)),            // simple string argument
-        NULL
-    ));
-    combinator_t* interface_routine_directive = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            directive_keyword,
-            interface_directive_argument,
-            token(match(";")),
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            directive_keyword,
-            interface_directive_argument_no_ident,
-            NULL
-        ),
-        NULL
-    );
-    combinator_t* interface_directive = multi(new_combinator(), PASCAL_T_NONE,
-        interface_routine_directive,
-        bracket_directive_required,    // FPC bracket directives like [internproc:value];
-        NULL
-    );
-    combinator_t* interface_directives = many(interface_directive);
-    set_combinator_name(interface_directives, "interface_directives");
-    combinator_t* interface_directives_required = seq(new_combinator(), PASCAL_T_NONE,
-        interface_directive,
-        interface_directives,
-        NULL
-    );
-    // Allow missing semicolon between header and directive (e.g. ")compilerproc;")
-    combinator_t* interface_header_tail = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(match(";")),
-            interface_directives,
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            interface_directives,
-            NULL
-        ),
-        interface_directives_required,
-        NULL
-    );
-    set_combinator_name(interface_header_tail, "interface_header_tail");
+  // Standard routine directives (legacy list)
+  combinator_t *routine_directives = many(routine_directive);
 
-    combinator_t* procedure_header = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(keyword_ci("procedure")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        param_list,
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            peek(directive_keyword),
-            NULL
-        )),
-        interface_header_tail,
-        NULL);
+  // Routine directives allowed before a header-only external/forward directive.
+  // Exclude forward/external here so headeronly_directive remains required.
+  combinator_t *pre_headeronly_directive_keyword =
+      multi(new_combinator(), PASCAL_T_IDENTIFIER,
+            token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)), NULL);
+  combinator_t *pre_headeronly_directive =
+      seq(new_combinator(), PASCAL_T_NONE, pre_headeronly_directive_keyword,
+          directive_argument, token(match(";")), NULL);
+  combinator_t *pre_headeronly_directives = many(pre_headeronly_directive);
 
-    combinator_t* function_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        token(keyword_ci("function")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        param_list,
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
-            NULL
-        )),
-        interface_header_tail,
-        NULL);
+  // A directive that indicates no body follows - either keyword-based or
+  // bracket-based. Keep this list narrow so directives like inline; don't
+  // swallow implementations.
+  combinator_t *headeronly_directive_keyword = multi(
+      new_combinator(), PASCAL_T_IDENTIFIER,
+      token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)), NULL);
+  combinator_t *headeronly_bracket_external =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR, token(match("[")),
+          token(keyword_ci("external")), token(keyword_ci("name")),
+          token(pascal_string(PASCAL_T_STRING)), token(match("]")),
+          token(match(";")), NULL);
+  combinator_t *headeronly_directive =
+      multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE, headeronly_directive_keyword,
+                optional(directive_argument), token(match(";")), NULL),
+            headeronly_bracket_external,
+            internproc_directive, // bracket directive like [internproc:value]
+                                  // that means NO body
+            NULL);
+  set_combinator_name(headeronly_directive, "headeronly_directive");
 
-    // Operator overload declaration (header-only) in interface section.
-    // Supports both ": ReturnType" and "ResultName: ReturnType" syntaxes.
-    combinator_t* operator_param_list = create_simple_param_list();
-    combinator_t* operator_result = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(cident(PASCAL_T_IDENTIFIER)),
-            token(match(":")),
-            token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
-            NULL
-        ),
-        NULL
-    );
-    combinator_t* operator_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        token(keyword_ci("operator")),
-        token(operator_name(PASCAL_T_IDENTIFIER)),
-        operator_param_list,
-        operator_result,
-        token(match(";")),
-        routine_directives,
-        NULL
-    );
+  // Directives that indicate no body should follow - preserve the directive
+  // keyword in AST combinator_t* no_body_directive = multi(new_combinator(),
+  // PASCAL_T_IDENTIFIER,
+  //     map(token(keyword_ci("forward")), map_forward_directive),
+  //     map(token(keyword_ci("external")), map_external_directive),
+  //     map(token(keyword_ci("assembler")), map_assembler_directive),
+  //     NULL
+  // );
 
-    // Generic procedure header: generic procedure ProcName<T>(param: T); inline; overload;
-    combinator_t* generic_procedure_header = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(keyword_ci("generic")),
-        token(keyword_ci("procedure")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        generic_type_params,
-        param_list,
-        interface_header_tail,
-        NULL
-    );
+  // Generic type parameters for routines (used by header-only and full
+  // declarations).
+  combinator_t *generic_type_params =
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by1(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL);
+  set_combinator_name(generic_type_params, "generic_type_params");
 
-    // Generic function header: generic function FuncName<T>(param: T): T; inline; overload;
-    combinator_t* generic_function_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        token(keyword_ci("generic")),
-        token(keyword_ci("function")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        generic_type_params,
-        param_list,
-        token(match(":")),
-        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
-        interface_header_tail,
-        NULL
-    );
+  // Forward/external/assembler/internproc declaration parsers for interface and
+  // implementation sections These match procedure/function headers with special
+  // directives and NO body Supports both keyword directives (forward;) and
+  // bracket directives ([internproc:value];)
+  combinator_t *headeronly_procedure_decl =
+      seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)),
+          optional(generic_type_params), // generic procedure Foo<T>(...)
+          optional(param_list), token(match(";")),
+          pre_headeronly_directives, // e.g. iocheck; cdecl; before external
+          headeronly_directive, // forward/external/[internproc:...] directive
+          many(multi(new_combinator(), PASCAL_T_NONE, routine_directive,
+                     bracket_directive_required, NULL)),
+          NULL);
+  set_combinator_name(headeronly_procedure_decl, "headeronly_procedure_decl");
 
-    // Combined generic header that handles both procedure and function
-    combinator_t* generic_header = multi(new_combinator(), PASCAL_T_NONE,
-        generic_procedure_header,
-        generic_function_header,
-        NULL
-    );
+  combinator_t *headeronly_function_decl =
+      seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)),
+          optional(generic_type_params), // generic function Foo<T>(...): T
+          optional(param_list), token(match(":")),
+          token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
+          token(match(";")),
+          pre_headeronly_directives, // e.g. iocheck; cdecl; before external
+          headeronly_directive, // forward/external/[internproc:...] directive
+          many(multi(new_combinator(), PASCAL_T_NONE, routine_directive,
+                     bracket_directive_required, NULL)),
+          NULL);
+  set_combinator_name(headeronly_function_decl, "headeronly_function_decl");
 
-    // Simple procedure implementation for unit (with required body)
-    combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)),
-        optional(generic_type_params),              // generic procedure Foo<T>(...)
-        optional(param_list), token(match(";")),
-        combined_routine_directives,  // Mixed standard and bracket directives
-        function_body, optional(token(match(";"))), NULL);
-    set_combinator_name(procedure_impl, "procedure_impl");
+  // Interface procedure/function headers that support both keyword directives
+  // (inline; forward;) and bracket directives ([internproc:value];) used by
+  // FPC. Allow missing trailing semicolon after the last directive, but do not
+  // consume the next declaration keyword as a directive argument.
+  combinator_t *interface_decl_keyword =
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("procedure")),
+            token(keyword_ci("function")), token(keyword_ci("constructor")),
+            token(keyword_ci("destructor")), token(keyword_ci("operator")),
+            token(keyword_ci("type")), token(keyword_ci("var")),
+            token(keyword_ci("const")), token(keyword_ci("uses")),
+            token(keyword_ci("resourcestring")), token(keyword_ci("label")),
+            token(keyword_ci("implementation")), NULL);
+  combinator_t *interface_directive_identifier =
+      seq(new_combinator(), PASCAL_T_NONE, pnot(peek(interface_decl_keyword)),
+          token(cident(PASCAL_T_IDENTIFIER)), NULL);
+  combinator_t *interface_directive_argument = optional(multi(
+      new_combinator(), PASCAL_T_NONE, directive_colon_argument,
+      external_name_only_argument,
+      extended_external_argument,            // extended external arguments
+      token(pascal_string(PASCAL_T_STRING)), // simple string argument
+      interface_directive_identifier, // simple identifier argument (guarded)
+      NULL));
+  combinator_t *extended_external_argument_no_ident = seq(
+      new_combinator(), PASCAL_T_NONE, token(pascal_string(PASCAL_T_STRING)),
+      optional(external_name_clause), optional(external_index_clause), NULL);
+  combinator_t *interface_directive_argument_no_ident = optional(
+      multi(new_combinator(), PASCAL_T_NONE, directive_colon_argument,
+            external_name_only_argument,
+            extended_external_argument_no_ident, // extended external arguments
+                                                 // without identifiers
+            token(pascal_string(PASCAL_T_STRING)), // simple string argument
+            NULL));
+  combinator_t *interface_routine_directive =
+      multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE, directive_keyword,
+                interface_directive_argument, token(match(";")), NULL),
+            seq(new_combinator(), PASCAL_T_NONE, directive_keyword,
+                interface_directive_argument_no_ident, NULL),
+            NULL);
+  combinator_t *interface_directive =
+      multi(new_combinator(), PASCAL_T_NONE, interface_routine_directive,
+            bracket_directive_required, // FPC bracket directives like
+                                        // [internproc:value];
+            NULL);
+  combinator_t *interface_directives = many(interface_directive);
+  set_combinator_name(interface_directives, "interface_directives");
+  combinator_t *interface_directives_required =
+      seq(new_combinator(), PASCAL_T_NONE, interface_directive,
+          interface_directives, NULL);
+  // Allow missing semicolon between header and directive (e.g.
+  // ")compilerproc;")
+  combinator_t *interface_header_tail =
+      multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE, token(match(";")),
+                interface_directives, NULL),
+            seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                interface_directives, NULL),
+            interface_directives_required, NULL);
+  set_combinator_name(interface_header_tail, "interface_header_tail");
 
-    // Helper for class-level generic type parameters in method implementations: ClassName<T>
-    // This captures the generic type parameters that appear after the class name
-    combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
-    combinator_t* method_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
+  combinator_t *procedure_header = seq(
+      new_combinator(), PASCAL_T_PROCEDURE_DECL, token(keyword_ci("procedure")),
+      token(cident(PASCAL_T_IDENTIFIER)), param_list,
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   peek(directive_keyword), NULL)),
+      interface_header_tail, NULL);
 
-    // Method implementations with qualified names:
-    //   Class.Method, Class<T>.Method, or Class.InnerType.Method (nested types)
-    combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),          // class name (or outer type)
-        class_generic_type_params,                   // optional generic type params for class
-        token(match(".")),                           // dot
-        token(cident(PASCAL_T_IDENTIFIER)),          // inner type or method name
-        many(right(token(match(".")),                // zero or more additional .Name segments
-                   token(cident(PASCAL_T_IDENTIFIER)))),  // for nested types like Class.Inner.Method
-        method_generic_type_params,                  // optional generic type params for method
-        NULL
-    );
+  combinator_t *function_header = seq(
+      new_combinator(), PASCAL_T_FUNCTION_DECL, token(keyword_ci("function")),
+      token(cident(PASCAL_T_IDENTIFIER)), param_list,
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
+                   NULL)),
+      interface_header_tail, NULL);
 
-    // Operator name with class qualification (Class.+ or Class<T>.+)
-    // Use sep_by1 for generic params so that <> is not consumed as an
-    // empty generic-params list when it is the not-equal operator name.
-    combinator_t* op_class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by1(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
-    combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
-        op_class_generic_type_params,                // optional generic type params for class
-        token(match(".")),                           // dot
-        token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name
-        NULL
-    );
+  // Operator overload declaration (header-only) in interface section.
+  // Supports both ": ReturnType" and "ResultName: ReturnType" syntaxes.
+  combinator_t *operator_param_list = create_simple_param_list();
+  combinator_t *operator_result =
+      multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)), NULL),
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(cident(PASCAL_T_IDENTIFIER)), token(match(":")),
+                token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)), NULL),
+            NULL);
+  combinator_t *operator_header = seq(
+      new_combinator(), PASCAL_T_FUNCTION_DECL, token(keyword_ci("operator")),
+      token(operator_name(PASCAL_T_IDENTIFIER)), operator_param_list,
+      operator_result, token(match(";")), routine_directives, NULL);
 
-    // Return type for functions: : type (allow constructed/generic types)
-    combinator_t* return_type_arg = token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
-    combinator_t* return_type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by1(return_type_arg, token(match(","))),
-        token(match(">")),
-        NULL
-    );
-    combinator_t* return_constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(create_generic_type_lookahead()),
-        return_type_arg_list,
-        NULL
-    );
-    combinator_t* return_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        array_type(PASCAL_T_ARRAY_TYPE),
-        set_type(PASCAL_T_SET),
-        pointer_type(PASCAL_T_POINTER_TYPE),
-        procedure_type(PASCAL_T_PROCEDURE_TYPE),
-        function_type(PASCAL_T_FUNCTION_TYPE),
-        range_type(PASCAL_T_RANGE_TYPE),
-        record_type(PASCAL_T_RECORD_TYPE),
-        return_constructed_type,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
-        token(match(":")),                           // colon
-        return_type_spec,
-        NULL
-    );
+  // Generic procedure header: generic procedure ProcName<T>(param: T); inline;
+  // overload;
+  combinator_t *generic_procedure_header = seq(
+      new_combinator(), PASCAL_T_PROCEDURE_DECL, token(keyword_ci("generic")),
+      token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)),
+      generic_type_params, param_list, interface_header_tail, NULL);
 
-    // Constructor implementation (with required body)
-    /* Use create_keyword_parser instead of keyword_ci so the "constructor"
-     * keyword text leaves an AST identifier node behind.  Without it, the
-     * parser folds constructor_impl and method_procedure_impl into
-     * indistinguishable PASCAL_T_METHOD_IMPL trees, which prevents downstream
-     * passes (e.g. convert_method_impl) from setting subprogram_data
-     * is_constructor and emitting the Self return-value epilogue. */
-    combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class modifier
-        token(create_keyword_parser("constructor", PASCAL_T_IDENTIFIER)),            // constructor keyword (preserved in AST)
-        method_name_with_class,                      // ClassName.MethodName
-        optional(param_list),                        // optional parameter list
-        token(match(";")),                           // semicolon
-        routine_directives,
-        function_body,                               // method body with local declarations
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
-    set_combinator_name(constructor_impl, "constructor_impl");
+  // Generic function header: generic function FuncName<T>(param: T): T; inline;
+  // overload;
+  combinator_t *generic_function_header = seq(
+      new_combinator(), PASCAL_T_FUNCTION_DECL, token(keyword_ci("generic")),
+      token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)),
+      generic_type_params, param_list, token(match(":")),
+      token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
+      interface_header_tail, NULL);
 
-    // Destructor implementation (with required body)
-    combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class modifier
-        token(create_keyword_parser("destructor", PASCAL_T_IDENTIFIER)),             // destructor keyword (preserved in AST)
-        method_name_with_class,                      // ClassName.MethodName
-        optional(param_list),                        // optional parameter list
-        token(match(";")),                           // semicolon
-        routine_directives,
-        function_body,                               // method body with local declarations
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
-    set_combinator_name(destructor_impl, "destructor_impl");
+  // Combined generic header that handles both procedure and function
+  combinator_t *generic_header =
+      multi(new_combinator(), PASCAL_T_NONE, generic_procedure_header,
+            generic_function_header, NULL);
 
-    // Helper for optional method type parameter list: <T, U>
-    combinator_t* constraint_kw_impl = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
-        token(keyword_ci("class")),
-        token(keyword_ci("record")),
-        token(keyword_ci("constructor")),
-        token(keyword_ci("interface")),
-        NULL
-    );
-    
-    combinator_t* type_constraint_impl = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        constraint_kw_impl,
-        NULL
-    ));
-    
-    combinator_t* type_param_impl = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        type_constraint_impl,
-        NULL
-    );
-    
-    combinator_t* method_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(type_param_impl, token(match(","))),
-        token(match(">")),
-        NULL
-    ));
+  // Simple procedure implementation for unit (with required body)
+  combinator_t *procedure_impl =
+      seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)),
+          optional(generic_type_params), // generic procedure Foo<T>(...)
+          optional(param_list), token(match(";")),
+          combined_routine_directives, // Mixed standard and bracket directives
+          function_body, optional(token(match(";"))), NULL);
+  set_combinator_name(procedure_impl, "procedure_impl");
 
-    // Method procedure implementation (with required body)
-    combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
-            token(keyword_ci("generic")),
-            NULL)),                                  // optional class/generic modifier
-        token(keyword_ci("procedure")),              // procedure keyword
-        method_name_with_class,                      // ClassName.MethodName
-        method_type_params,                          // optional type parameters <T, U>
-        optional(param_list),                        // optional parameter list
-        token(match(";")),                           // semicolon
-        combined_routine_directives,                 // mixed directives
-        function_body,                               // method body with local declarations
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
-    set_combinator_name(method_procedure_impl, "method_procedure_impl");
+  // Helper for class-level generic type parameters in method implementations:
+  // ClassName<T> This captures the generic type parameters that appear after
+  // the class name
+  combinator_t *class_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
+  combinator_t *method_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
 
-    // Method function implementation (with required body)
-    combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
-            token(keyword_ci("generic")),
-            NULL)),                                  // optional class/generic modifier
-        token(keyword_ci("function")),               // function keyword
-        method_name_with_class,                      // ClassName.MethodName
-        method_type_params,                          // optional type parameters <T, U>
-        optional(param_list),                        // optional parameter list
-        return_type,                                 // return type
-        token(match(";")),                           // semicolon
-        combined_routine_directives,                 // mixed directives
-        function_body,                               // method body with local declarations
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
-    set_combinator_name(method_function_impl, "method_function_impl");
+  // Method implementations with qualified names:
+  //   Class.Method, Class<T>.Method, or Class.InnerType.Method (nested types)
+  combinator_t *method_name_with_class = seq(
+      new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+      token(cident(PASCAL_T_IDENTIFIER)), // class name (or outer type)
+      class_generic_type_params, // optional generic type params for class
+      token(match(".")),         // dot
+      token(cident(PASCAL_T_IDENTIFIER)), // inner type or method name
+      many(right(token(match(".")), // zero or more additional .Name segments
+                 token(cident(PASCAL_T_IDENTIFIER)))), // for nested types like
+                                                       // Class.Inner.Method
+      method_generic_type_params, // optional generic type params for method
+      NULL);
 
-    // Simple function implementation for unit (with required body)
-    combinator_t* function_impl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)),
-        optional(generic_type_params),              // generic function Foo<T>(...): T
-        optional(param_list),
-        return_type, token(match(";")),
-        combined_routine_directives,  // Mixed standard and bracket directives
-        function_body, optional(token(match(";"))), NULL);
-    set_combinator_name(function_impl, "function_impl");
+  // Operator name with class qualification (Class.+ or Class<T>.+)
+  // Use sep_by1 for generic params so that <> is not consumed as an
+  // empty generic-params list when it is the not-equal operator name.
+  combinator_t *op_class_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by1(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
+  combinator_t *operator_name_with_class = seq(
+      new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+      token(cident(PASCAL_T_IDENTIFIER)), // class/record name
+      op_class_generic_type_params, // optional generic type params for class
+      token(match(".")),            // dot
+      token(operator_name(PASCAL_T_IDENTIFIER)), // operator symbol or name
+      NULL);
 
-    // Initialize the lazy nested procedure/function reference now that impls are defined
-    // This allows var sections to appear after nested functions in outer function bodies
-    combinator_t* nested_proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
-        headeronly_procedure_decl,
-        headeronly_function_decl,
-        procedure_impl,
-        function_impl,
-        NULL
-    );
-    free(*nested_proc_ref);  // Free placeholder combinator allocated at init
-    *nested_proc_ref = nested_proc_or_func;
+  // Return type for functions: : type (allow constructed/generic types)
+  combinator_t *return_type_arg =
+      token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
+  combinator_t *return_type_arg_list =
+      seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
+          sep_by1(return_type_arg, token(match(","))), token(match(">")), NULL);
+  combinator_t *return_constructed_type =
+      seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+          token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+          peek(create_generic_type_lookahead()), return_type_arg_list, NULL);
+  combinator_t *return_type_spec = multi(
+      new_combinator(), PASCAL_T_TYPE_SPEC, array_type(PASCAL_T_ARRAY_TYPE),
+      set_type(PASCAL_T_SET), pointer_type(PASCAL_T_POINTER_TYPE),
+      procedure_type(PASCAL_T_PROCEDURE_TYPE),
+      function_type(PASCAL_T_FUNCTION_TYPE), range_type(PASCAL_T_RANGE_TYPE),
+      record_type(PASCAL_T_RECORD_TYPE), return_constructed_type,
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), NULL);
+  combinator_t *return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
+                                  token(match(":")), // colon
+                                  return_type_spec, NULL);
 
-    // Class operator implementation (with required body)
-    combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("operator")),
-        operator_name_with_class,
-        optional(param_list),
-        optional(return_type),
-        token(match(";")),
-        routine_directives,
-        function_body,
-        optional(token(match(";"))),
-        NULL
-    );
-    set_combinator_name(class_operator_impl, "class_operator_impl");
+  // Constructor implementation (with required body)
+  /* Use create_keyword_parser instead of keyword_ci so the "constructor"
+   * keyword text leaves an AST identifier node behind.  Without it, the
+   * parser folds constructor_impl and method_procedure_impl into
+   * indistinguishable PASCAL_T_METHOD_IMPL trees, which prevents downstream
+   * passes (e.g. convert_method_impl) from setting subprogram_data
+   * is_constructor and emitting the Self return-value epilogue. */
+  combinator_t *constructor_impl =
+      seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+          optional(token(create_keyword_parser(
+              "class", PASCAL_T_IDENTIFIER))), // optional class modifier
+          token(create_keyword_parser(
+              "constructor",
+              PASCAL_T_IDENTIFIER)), // constructor keyword (preserved in AST)
+          method_name_with_class,    // ClassName.MethodName
+          optional(param_list),      // optional parameter list
+          token(match(";")),         // semicolon
+          routine_directives,
+          function_body,               // method body with local declarations
+          optional(token(match(";"))), // optional terminating semicolon
+          NULL);
+  set_combinator_name(constructor_impl, "constructor_impl");
 
-    // Standalone operator implementation (no class prefix): operator := (b: real48) d: double; ...
-    combinator_t* standalone_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(keyword_ci("operator")),
-        token(operator_name(PASCAL_T_IDENTIFIER)),
-        operator_param_list,
-        operator_result,
-        token(match(";")),
-        routine_directives,
-        function_body,
-        optional(token(match(";"))),
-        NULL
-    );
-    set_combinator_name(standalone_operator_impl, "standalone_operator_impl");
+  // Destructor implementation (with required body)
+  combinator_t *destructor_impl =
+      seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+          optional(token(create_keyword_parser(
+              "class", PASCAL_T_IDENTIFIER))), // optional class modifier
+          token(create_keyword_parser(
+              "destructor",
+              PASCAL_T_IDENTIFIER)), // destructor keyword (preserved in AST)
+          method_name_with_class,    // ClassName.MethodName
+          optional(param_list),      // optional parameter list
+          token(match(";")),         // semicolon
+          routine_directives,
+          function_body,               // method body with local declarations
+          optional(token(match(";"))), // optional terminating semicolon
+          NULL);
+  set_combinator_name(destructor_impl, "destructor_impl");
 
-    combinator_t* operator_impl = multi(new_combinator(), PASCAL_T_NONE,
-        class_operator_impl,
-        standalone_operator_impl,
-        NULL
-    );
+  // Helper for optional method type parameter list: <T, U>
+  combinator_t *constraint_kw_impl = multi(
+      new_combinator(), PASCAL_T_TYPE_CONSTRAINT, token(keyword_ci("class")),
+      token(keyword_ci("record")), token(keyword_ci("constructor")),
+      token(keyword_ci("interface")), NULL);
 
-    // Module-level property declaration for interface section (FPC extension)
-    // Syntax: property Name[Index: Type]: Type read ReadFunc [write WriteFunc];
-    // Example from baseunix.pp: property errno: cint read fpgeterrno write fpseterrno;
-    combinator_t* interface_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
-        between(
-            token(match("[")),
-            token(match("]")),
-            sep_by(seq(new_combinator(), PASCAL_T_PARAM,
-                sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-                token(match(":")),
-                type_name(PASCAL_T_IDENTIFIER),
-                NULL
-            ), token(match(";")))
-        ),
-        NULL
-    ));
-    combinator_t* interface_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        token(keyword_ci("property")),
-        token(cident(PASCAL_T_IDENTIFIER)), // property name
-        interface_property_indexer,
-        token(match(":")),
-        token(cident(PASCAL_T_IDENTIFIER)), // type name (simple identifier)
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
-            NULL
-        )),
-        token(match(";")),
-        NULL
-    );
+  combinator_t *type_constraint_impl =
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   constraint_kw_impl, NULL));
 
-    // Interface section declarations: uses, const, type, procedure/function headers
-    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(11);
-    size_t interface_entry_index = 0;
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "uses", uses_section);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "const", const_section);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "resourcestring", resourcestring_section);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "type", type_section);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "threadvar", threadvar_section);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "var", var_section);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "procedure", procedure_header);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "function", function_header);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "property", interface_property_decl);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "operator", operator_header);
-    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "generic", generic_header);
-    interface_dispatch_args->entry_count = interface_entry_index;
+  combinator_t *type_param_impl =
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+          token(cident(PASCAL_T_IDENTIFIER)), type_constraint_impl, NULL);
 
-    combinator_t* interface_declaration = new_combinator();
-    interface_declaration->type = COMB_KEYWORD_DISPATCH;
-    interface_declaration->fn = keyword_dispatch_fn;
-    interface_declaration->args = interface_dispatch_args;
+  combinator_t *method_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(type_param_impl, token(match(","))), token(match(">")), NULL));
 
-    combinator_t* interface_declarations = many(interface_declaration);
-    
-    combinator_t* procedure_definitions = multi(new_combinator(), PASCAL_T_NONE,
-        headeronly_procedure_decl,
-        method_procedure_impl,
-        procedure_impl,
-        NULL
-    );
-    set_combinator_name(procedure_definitions, "procedure_definition_choice");
+  // Method procedure implementation (with required body)
+  combinator_t *method_procedure_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(multi(new_combinator(), PASCAL_T_NONE,
+                     token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+                     token(keyword_ci("generic")),
+                     NULL)),          // optional class/generic modifier
+      token(keyword_ci("procedure")), // procedure keyword
+      method_name_with_class,         // ClassName.MethodName
+      method_type_params,             // optional type parameters <T, U>
+      optional(param_list),           // optional parameter list
+      token(match(";")),              // semicolon
+      combined_routine_directives,    // mixed directives
+      function_body,                  // method body with local declarations
+      optional(token(match(";"))),    // optional terminating semicolon
+      NULL);
+  set_combinator_name(method_procedure_impl, "method_procedure_impl");
 
-    combinator_t* function_definitions = multi(new_combinator(), PASCAL_T_NONE,
-        headeronly_function_decl,
-        method_function_impl,
-        function_impl,
-        NULL
-    );
-    set_combinator_name(function_definitions, "function_definition_choice");
+  // Method function implementation (with required body)
+  combinator_t *method_function_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(multi(new_combinator(), PASCAL_T_NONE,
+                     token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+                     token(keyword_ci("generic")),
+                     NULL)),         // optional class/generic modifier
+      token(keyword_ci("function")), // function keyword
+      method_name_with_class,        // ClassName.MethodName
+      method_type_params,            // optional type parameters <T, U>
+      optional(param_list),          // optional parameter list
+      return_type,                   // return type
+      token(match(";")),             // semicolon
+      combined_routine_directives,   // mixed directives
+      function_body,                 // method body with local declarations
+      optional(token(match(";"))),   // optional terminating semicolon
+      NULL);
+  set_combinator_name(method_function_impl, "method_function_impl");
 
-    keyword_dispatch_args_t* implementation_dispatch_args = create_keyword_dispatch(13);
-    size_t implementation_entry_index = 0;
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "uses", uses_section);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "const", const_section);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "resourcestring", resourcestring_section);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "type", type_section);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "threadvar", threadvar_section);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "var", var_section);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "constructor", constructor_impl);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "destructor", destructor_impl);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "procedure", procedure_definitions);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "function", function_definitions);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "operator", operator_impl);
+  // Simple function implementation for unit (with required body)
+  combinator_t *function_impl =
+      seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)),
+          optional(generic_type_params), // generic function Foo<T>(...): T
+          optional(param_list), return_type, token(match(";")),
+          combined_routine_directives, // Mixed standard and bracket directives
+          function_body, optional(token(match(";"))), NULL);
+  set_combinator_name(function_impl, "function_impl");
 
-    combinator_t* implementation_definition = new_combinator();
-    implementation_definition->type = COMB_KEYWORD_DISPATCH;
-    implementation_definition->fn = keyword_dispatch_fn;
-    implementation_definition->args = implementation_dispatch_args;
-    set_combinator_name(implementation_definition, "implementation_definition_dispatch");
+  // Initialize the lazy nested procedure/function reference now that impls are
+  // defined This allows var sections to appear after nested functions in outer
+  // function bodies
+  combinator_t *nested_proc_or_func =
+      multi(new_combinator(), PASCAL_T_NONE, headeronly_procedure_decl,
+            headeronly_function_decl, procedure_impl, function_impl, NULL);
+  free(*nested_proc_ref); // Free placeholder combinator allocated at init
+  *nested_proc_ref = nested_proc_or_func;
 
-    combinator_t** implementation_definition_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *implementation_definition_ref = implementation_definition;
-    implementation_definition->extra_to_free = implementation_definition_ref;
-    combinator_t* generic_prefixed_definition = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("generic")),
-        lazy(implementation_definition_ref),
-        NULL
-    );
-    combinator_t* class_prefixed_definition = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("class")),
-        lazy(implementation_definition_ref),
-        NULL
-    );
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "generic", generic_prefixed_definition);
-    register_keyword_entry(implementation_dispatch_args, 13, &implementation_entry_index, "class", class_prefixed_definition);
-    implementation_dispatch_args->entry_count = implementation_entry_index;
+  // Class operator implementation (with required body)
+  combinator_t *class_operator_impl =
+      seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(keyword_ci("operator")), operator_name_with_class,
+          optional(param_list), optional(return_type), token(match(";")),
+          routine_directives, function_body, optional(token(match(";"))), NULL);
+  set_combinator_name(class_operator_impl, "class_operator_impl");
 
-    combinator_t* implementation_definitions = many(implementation_definition);
-    set_combinator_name(implementation_definitions, "implementation_definitions");
+  // Standalone operator implementation (no class prefix): operator := (b:
+  // real48) d: double; ...
+  combinator_t *standalone_operator_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+      token(keyword_ci("operator")), token(operator_name(PASCAL_T_IDENTIFIER)),
+      operator_param_list, operator_result, token(match(";")),
+      routine_directives, function_body, optional(token(match(";"))), NULL);
+  set_combinator_name(standalone_operator_impl, "standalone_operator_impl");
 
-    combinator_t* interface_section = seq(new_combinator(), PASCAL_T_INTERFACE_SECTION,
-        token(keyword_ci("interface")),
-        interface_declarations,
-        NULL);
-    set_combinator_name(interface_section, "interface_section");
+  combinator_t *operator_impl =
+      multi(new_combinator(), PASCAL_T_NONE, class_operator_impl,
+            standalone_operator_impl, NULL);
 
-    combinator_t* implementation_section = seq(new_combinator(), PASCAL_T_IMPLEMENTATION_SECTION,
-        token(keyword_ci("implementation")),
-        implementation_definitions,
-        NULL);
-    set_combinator_name(implementation_section, "implementation_section");
+  // Module-level property declaration for interface section (FPC extension)
+  // Syntax: property Name[Index: Type]: Type read ReadFunc [write WriteFunc];
+  // Example from baseunix.pp: property errno: cint read fpgeterrno write
+  // fpseterrno;
+  combinator_t *interface_property_indexer =
+      optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
+                   between(token(match("[")), token(match("]")),
+                           sep_by(seq(new_combinator(), PASCAL_T_PARAM,
+                                      sep_by(token(cident(PASCAL_T_IDENTIFIER)),
+                                             token(match(","))),
+                                      token(match(":")),
+                                      type_name(PASCAL_T_IDENTIFIER), NULL),
+                                  token(match(";")))),
+                   NULL));
+  combinator_t *interface_property_decl = seq(
+      new_combinator(), PASCAL_T_PROPERTY_DECL, token(keyword_ci("property")),
+      token(cident(PASCAL_T_IDENTIFIER)), // property name
+      interface_property_indexer, token(match(":")),
+      token(cident(PASCAL_T_IDENTIFIER)), // type name (simple identifier)
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("read")),
+                   token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+                   NULL)),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("write")),
+                   token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+                   NULL)),
+      token(match(";")), NULL);
 
-    // Extend the sequence with optional exports/initialization/finalization sections and the final end.
-    combinator_t* exports_end_delim = token(match(";"));
-    combinator_t* exports_body = until(exports_end_delim, PASCAL_T_NONE);
-    combinator_t* exports_section = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("exports")),
-        exports_body,
-        exports_end_delim,
-        NULL
-    ));
+  // Interface section declarations: uses, const, type, procedure/function
+  // headers
+  keyword_dispatch_args_t *interface_dispatch_args =
+      create_keyword_dispatch(11);
+  size_t interface_entry_index = 0;
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "uses", uses_section);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "const", const_section);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "resourcestring", resourcestring_section);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "type", type_section);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "threadvar", threadvar_section);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "var", var_section);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "procedure", procedure_header);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "function", function_header);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "property", interface_property_decl);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "operator", operator_header);
+  register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index,
+                         "generic", generic_header);
+  interface_dispatch_args->entry_count = interface_entry_index;
 
-    
-    
-    combinator_t* initialization_section = optional(seq(new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
-        token(keyword_ci("initialization")),
-        make_stmt_list_parser(stmt_parser),
-        NULL
-    ));
+  combinator_t *interface_declaration = new_combinator();
+  interface_declaration->type = COMB_KEYWORD_DISPATCH;
+  interface_declaration->fn = keyword_dispatch_fn;
+  interface_declaration->args = interface_dispatch_args;
 
-    combinator_t* finalization_section = optional(seq(new_combinator(), PASCAL_T_FINALIZATION_SECTION,
-        token(keyword_ci("finalization")),
-        make_stmt_list_parser(stmt_parser),
-        NULL
-    ));
+  combinator_t *interface_declarations = many(interface_declaration);
 
-    combinator_t* legacy_initialization_block = optional(seq(new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
-        token(keyword_ci("begin")),
-        make_stmt_list_parser(stmt_parser),
-        NULL
-    ));
+  combinator_t *procedure_definitions =
+      multi(new_combinator(), PASCAL_T_NONE, headeronly_procedure_decl,
+            method_procedure_impl, procedure_impl, NULL);
+  set_combinator_name(procedure_definitions, "procedure_definition_choice");
 
-    combinator_t* unit_semicolon_delim = token(match(";"));
-    combinator_t* unit_directives = map(until(unit_semicolon_delim, PASCAL_T_NONE), discard_ast);
+  combinator_t *function_definitions =
+      multi(new_combinator(), PASCAL_T_NONE, headeronly_function_decl,
+            method_function_impl, function_impl, NULL);
+  set_combinator_name(function_definitions, "function_definition_choice");
 
-    seq(*p, PASCAL_T_UNIT_DECL,
-        token(keyword_ci("unit")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        unit_directives,
-        token(match(";")),
-        interface_section,
-        implementation_section,
-        exports_section,
-        initialization_section,
-        finalization_section,
-        legacy_initialization_block,
-        token(keyword_ci("end")),
-        token(match(".")),
-        NULL
-    );
+  keyword_dispatch_args_t *implementation_dispatch_args =
+      create_keyword_dispatch(13);
+  size_t implementation_entry_index = 0;
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "uses", uses_section);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "const", const_section);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "resourcestring",
+                         resourcestring_section);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "type", type_section);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "threadvar",
+                         threadvar_section);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "var", var_section);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "constructor",
+                         constructor_impl);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "destructor",
+                         destructor_impl);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "procedure",
+                         procedure_definitions);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "function",
+                         function_definitions);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "operator",
+                         operator_impl);
 
-    (*p)->extra_to_free = stmt_parser;
+  combinator_t *implementation_definition = new_combinator();
+  implementation_definition->type = COMB_KEYWORD_DISPATCH;
+  implementation_definition->fn = keyword_dispatch_fn;
+  implementation_definition->args = implementation_dispatch_args;
+  set_combinator_name(implementation_definition,
+                      "implementation_definition_dispatch");
+
+  combinator_t **implementation_definition_ref =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *implementation_definition_ref = implementation_definition;
+  implementation_definition->extra_to_free = implementation_definition_ref;
+  combinator_t *generic_prefixed_definition =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("generic")),
+          lazy(implementation_definition_ref), NULL);
+  combinator_t *class_prefixed_definition =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("class")),
+          lazy(implementation_definition_ref), NULL);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "generic",
+                         generic_prefixed_definition);
+  register_keyword_entry(implementation_dispatch_args, 13,
+                         &implementation_entry_index, "class",
+                         class_prefixed_definition);
+  implementation_dispatch_args->entry_count = implementation_entry_index;
+
+  combinator_t *implementation_definitions = many(implementation_definition);
+  set_combinator_name(implementation_definitions, "implementation_definitions");
+
+  combinator_t *interface_section =
+      seq(new_combinator(), PASCAL_T_INTERFACE_SECTION,
+          token(keyword_ci("interface")), interface_declarations, NULL);
+  set_combinator_name(interface_section, "interface_section");
+
+  combinator_t *implementation_section = seq(
+      new_combinator(), PASCAL_T_IMPLEMENTATION_SECTION,
+      token(keyword_ci("implementation")), implementation_definitions, NULL);
+  set_combinator_name(implementation_section, "implementation_section");
+
+  // Extend the sequence with optional exports/initialization/finalization
+  // sections and the final end.
+  combinator_t *exports_end_delim = token(match(";"));
+  combinator_t *exports_body = until(exports_end_delim, PASCAL_T_NONE);
+  combinator_t *exports_section = optional(
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("exports")),
+          exports_body, exports_end_delim, NULL));
+
+  combinator_t *initialization_section =
+      optional(seq(new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
+                   token(keyword_ci("initialization")),
+                   make_stmt_list_parser(stmt_parser), NULL));
+
+  combinator_t *finalization_section =
+      optional(seq(new_combinator(), PASCAL_T_FINALIZATION_SECTION,
+                   token(keyword_ci("finalization")),
+                   make_stmt_list_parser(stmt_parser), NULL));
+
+  combinator_t *legacy_initialization_block = optional(seq(
+      new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
+      token(keyword_ci("begin")), make_stmt_list_parser(stmt_parser), NULL));
+
+  combinator_t *unit_semicolon_delim = token(match(";"));
+  combinator_t *unit_directives =
+      map(until(unit_semicolon_delim, PASCAL_T_NONE), discard_ast);
+
+  seq(*p, PASCAL_T_UNIT_DECL, token(keyword_ci("unit")),
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), unit_directives,
+      token(match(";")), interface_section, implementation_section,
+      exports_section, initialization_section, finalization_section,
+      legacy_initialization_block, token(keyword_ci("end")), token(match(".")),
+      NULL);
+
+  (*p)->extra_to_free = stmt_parser;
 }
 
-// Custom parser for directive keywords - matches identifiers and validates they are directive keywords
-// This is needed because cdecl, external, etc. are context-sensitive keywords, not reserved keywords
-// Pascal Procedure/Function Declaration Parser
-void init_pascal_procedure_parser(combinator_t** p) {
-    // Create statement parser for procedure/function bodies
-    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser = new_combinator();
-    init_pascal_statement_parser(stmt_parser);
+// Custom parser for directive keywords - matches identifiers and validates they
+// are directive keywords This is needed because cdecl, external, etc. are
+// context-sensitive keywords, not reserved keywords Pascal Procedure/Function
+// Declaration Parser
+void init_pascal_procedure_parser(combinator_t **p) {
+  // Create statement parser for procedure/function bodies
+  combinator_t **stmt_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *stmt_parser = new_combinator();
+  init_pascal_statement_parser(stmt_parser);
 
-    // Return type: : type (for functions)
-    combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
-        token(match(":")),                       // colon
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // return type (allow unit-qualified)
-        NULL
-    );
+  // Return type: : type (for functions)
+  combinator_t *return_type =
+      seq(new_combinator(), PASCAL_T_RETURN_TYPE,
+          token(match(":")), // colon
+          token(pascal_qualified_identifier(
+              PASCAL_T_IDENTIFIER)), // return type (allow unit-qualified)
+          NULL);
 
-    // Procedure declaration: procedure name [(params)] ; [directive;]* body
-    combinator_t* procedure_param_list = create_simple_param_list();
-    
-    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("register")),
-        token(keyword_ci("export")),
-        token(keyword_ci("external")),
-        token(keyword_ci("weakexternal")),
-        token(keyword_ci("assembler")),
-        token(keyword_ci("far")),
-        token(keyword_ci("near")),
-        token(keyword_ci("platform")),
-        token(keyword_ci("deprecated")),
-        token(keyword_ci("library")),
-        token(keyword_ci("experimental")),
-        token(keyword_ci("local")),
-        token(keyword_ci("forward")),
-        NULL
-    );
+  // Procedure declaration: procedure name [(params)] ; [directive;]* body
+  combinator_t *procedure_param_list = create_simple_param_list();
 
-    // Extended external directive argument components
-    // Support string concatenation in external name: 'name' or 'name'+const1+const2
-    combinator_t* external_name_concat_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
+  combinator_t *directive_keyword =
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("inline")),
+            token(keyword_ci("overload")), token(keyword_ci("cdecl")),
+            token(keyword_ci("stdcall")), token(keyword_ci("register")),
+            token(keyword_ci("export")), token(keyword_ci("external")),
+            token(keyword_ci("weakexternal")), token(keyword_ci("assembler")),
+            token(keyword_ci("far")), token(keyword_ci("near")),
+            token(keyword_ci("platform")), token(keyword_ci("deprecated")),
+            token(keyword_ci("library")), token(keyword_ci("experimental")),
+            token(keyword_ci("local")), token(keyword_ci("forward")), NULL);
 
-    combinator_t* external_name_clause = map(
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("name")),
-            external_name_concat_expr,
-            NULL
-        ),
-        wrap_external_name_clause
-    );
+  // Extended external directive argument components
+  // Support string concatenation in external name: 'name' or
+  // 'name'+const1+const2
+  combinator_t *external_name_concat_expr =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
+          token(pascal_string(PASCAL_T_STRING)),
+          many(seq(new_combinator(), PASCAL_T_NONE, token(match("+")),
+                   token(cident(PASCAL_T_IDENTIFIER)), NULL)),
+          NULL);
 
-    combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("index")),
-        token(integer(PASCAL_T_INTEGER)),
-        NULL
-    );
+  combinator_t *external_name_clause =
+      map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("name")),
+              external_name_concat_expr, NULL),
+          wrap_external_name_clause);
 
-    combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
+  combinator_t *external_index_clause =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("index")),
+          token(integer(PASCAL_T_INTEGER)), NULL);
+
+  combinator_t *extended_external_argument = seq(
+      new_combinator(), PASCAL_T_NONE,
+      multi(new_combinator(), PASCAL_T_NONE,
             token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        optional(external_name_clause),
-        optional(external_index_clause),
-        NULL
-    );
+            token(cident(PASCAL_T_IDENTIFIER)), NULL),
+      optional(external_name_clause), optional(external_index_clause), NULL);
 
-    combinator_t* external_name_only_argument = seq(new_combinator(), PASCAL_T_NONE,
-        external_name_clause,
-        optional(external_index_clause),
-        NULL
-    );
+  combinator_t *external_name_only_argument =
+      seq(new_combinator(), PASCAL_T_NONE, external_name_clause,
+          optional(external_index_clause), NULL);
 
-    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        external_name_only_argument,
-        extended_external_argument,                  // extended external arguments
-        token(pascal_string(PASCAL_T_STRING)),       // simple string argument
-        token(cident(PASCAL_T_IDENTIFIER)),          // simple identifier argument
-        NULL
-    ));
+  combinator_t *directive_argument = optional(
+      multi(new_combinator(), PASCAL_T_NONE, external_name_only_argument,
+            extended_external_argument, // extended external arguments
+            token(pascal_string(PASCAL_T_STRING)), // simple string argument
+            token(cident(PASCAL_T_IDENTIFIER)),    // simple identifier argument
+            NULL));
 
-    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-        directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
+  combinator_t *routine_directive =
+      seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE, directive_keyword,
+          directive_argument, token(match(";")), NULL);
 
-    combinator_t* routine_directives = many(routine_directive);
-    
-    combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(match("procedure")),               // procedure keyword
-        token(cident(PASCAL_T_IDENTIFIER)),      // procedure name
-        procedure_param_list,                    // optional parameter list
-        token(match(";")),                       // semicolon ending signature
-        routine_directives,                      // optional directive list
-        optional(lazy(stmt_parser)),             // optional procedure body (for external/forward)
-        optional(token(match(";"))),             // optional terminating semicolon
-        NULL
-    );
+  combinator_t *routine_directives = many(routine_directive);
 
-    // Function declaration: function name [(params)] : return_type ; [directive;]* body
-    combinator_t* function_param_list = create_simple_param_list();
-    combinator_t* function_decl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        token(match("function")),                // function keyword
-        token(cident(PASCAL_T_IDENTIFIER)),      // function name
-        function_param_list,                     // optional parameter list
-        return_type,                             // return type
-        token(match(";")),                       // semicolon ending signature
-        routine_directives,                      // optional directive list
-        optional(lazy(stmt_parser)),             // optional function body (for external/forward)
-        optional(token(match(";"))),             // optional terminating semicolon
-        NULL
-    );
+  combinator_t *procedure_decl =
+      seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+          token(match("procedure")),          // procedure keyword
+          token(cident(PASCAL_T_IDENTIFIER)), // procedure name
+          procedure_param_list,               // optional parameter list
+          token(match(";")),                  // semicolon ending signature
+          routine_directives,                 // optional directive list
+          optional(lazy(
+              stmt_parser)), // optional procedure body (for external/forward)
+          optional(token(match(";"))), // optional terminating semicolon
+          NULL);
 
-    // Main procedure parser: try function or procedure declaration
-    multi(*p, PASCAL_T_NONE,
-        function_decl,                           // function declarations first
-        procedure_decl,                          // procedure declarations second
-        NULL
-    );
+  // Function declaration: function name [(params)] : return_type ;
+  // [directive;]* body
+  combinator_t *function_param_list = create_simple_param_list();
+  combinator_t *function_decl =
+      seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+          token(match("function")),           // function keyword
+          token(cident(PASCAL_T_IDENTIFIER)), // function name
+          function_param_list,                // optional parameter list
+          return_type,                        // return type
+          token(match(";")),                  // semicolon ending signature
+          routine_directives,                 // optional directive list
+          optional(lazy(
+              stmt_parser)), // optional function body (for external/forward)
+          optional(token(match(";"))), // optional terminating semicolon
+          NULL);
 
-    (*p)->extra_to_free = stmt_parser;
+  // Main procedure parser: try function or procedure declaration
+  multi(*p, PASCAL_T_NONE,
+        function_decl,  // function declarations first
+        procedure_decl, // procedure declarations second
+        NULL);
+
+  (*p)->extra_to_free = stmt_parser;
 }
 
-// Pascal Method Implementation Parser - for constructor/destructor/procedure implementations
-void init_pascal_method_implementation_parser(combinator_t** p) {
-    // Create statement parser for method bodies
-    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser = new_combinator();
-    init_pascal_statement_parser(stmt_parser);
+// Pascal Method Implementation Parser - for constructor/destructor/procedure
+// implementations
+void init_pascal_method_implementation_parser(combinator_t **p) {
+  // Create statement parser for method bodies
+  combinator_t **stmt_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *stmt_parser = new_combinator();
+  init_pascal_statement_parser(stmt_parser);
 
-    // Simple function body - just the statement block (no local declarations for simplicity)
-    combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
-        lazy(stmt_parser),                         // main statement block
-        NULL
-    );
-    set_combinator_name(function_body, "function_body");
+  // Simple function body - just the statement block (no local declarations for
+  // simplicity)
+  combinator_t *function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
+                                    lazy(stmt_parser), // main statement block
+                                    NULL);
+  set_combinator_name(function_body, "function_body");
 
-    // Directive keyword for routine directives
-    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  // Directive keyword for routine directives
+  combinator_t *directive_keyword = multi(
+      new_combinator(), PASCAL_T_NONE,
+      token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)), NULL);
 
-    // Simple directive argument (optional string or identifier)
-    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        token(pascal_string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    ));
+  // Simple directive argument (optional string or identifier)
+  combinator_t *directive_argument = optional(multi(
+      new_combinator(), PASCAL_T_NONE, token(pascal_string(PASCAL_T_STRING)),
+      token(cident(PASCAL_T_IDENTIFIER)), NULL));
 
-    // Routine directive with semicolon
-    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
-        directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
+  // Routine directive with semicolon
+  combinator_t *routine_directive =
+      seq(new_combinator(), PASCAL_T_NONE, directive_keyword,
+          directive_argument, token(match(";")), NULL);
 
-    // Combined routine directives (zero or more)
-    combinator_t* combined_routine_directives = many(routine_directive);
+  // Combined routine directives (zero or more)
+  combinator_t *combined_routine_directives = many(routine_directive);
 
-    // Helper for class-level generic type parameters in method implementations: ClassName<T>
-    combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
-    combinator_t* method_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
+  // Helper for class-level generic type parameters in method implementations:
+  // ClassName<T>
+  combinator_t *class_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
+  combinator_t *method_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
 
-    // Method name with class: ClassName.MethodName, ClassName<T>.MethodName,
-    // or ClassName.InnerType.MethodName (nested types)
-    combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),      // class name (or outer type)
-        class_generic_type_params,               // optional generic type params for class
-        token(match(".")),                       // dot
-        token(cident(PASCAL_T_IDENTIFIER)),      // inner type or method name
-        many(right(token(match(".")),            // zero or more additional .Name segments
-                   token(cident(PASCAL_T_IDENTIFIER)))),  // for nested types
-        method_generic_type_params,              // optional generic type params for method
-        NULL
-    );
+  // Method name with class: ClassName.MethodName, ClassName<T>.MethodName,
+  // or ClassName.InnerType.MethodName (nested types)
+  combinator_t *method_name_with_class = seq(
+      new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+      token(cident(PASCAL_T_IDENTIFIER)), // class name (or outer type)
+      class_generic_type_params, // optional generic type params for class
+      token(match(".")),         // dot
+      token(cident(PASCAL_T_IDENTIFIER)), // inner type or method name
+      many(right(token(match(".")), // zero or more additional .Name segments
+                 token(cident(PASCAL_T_IDENTIFIER)))), // for nested types
+      method_generic_type_params, // optional generic type params for method
+      NULL);
 
-    // Constructor implementation (with required body)
-    combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),    // optional class modifier
-        token(keyword_ci("constructor")),        // constructor keyword
-        method_name_with_class,                  // ClassName.MethodName
-        create_simple_param_list(),              // optional parameter list
-        token(match(";")),                       // semicolon
-        combined_routine_directives,             // mixed directives
-        function_body,                               // method body with local declarations
-        optional(token(match(";"))),             // optional terminating semicolon
-        NULL
-    );
-    set_combinator_name(constructor_impl, "constructor_impl");
+  // Constructor implementation (with required body)
+  combinator_t *constructor_impl =
+      seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
+          optional(token(create_keyword_parser(
+              "class", PASCAL_T_IDENTIFIER))), // optional class modifier
+          token(keyword_ci("constructor")),    // constructor keyword
+          method_name_with_class,              // ClassName.MethodName
+          create_simple_param_list(),          // optional parameter list
+          token(match(";")),                   // semicolon
+          combined_routine_directives,         // mixed directives
+          function_body,               // method body with local declarations
+          optional(token(match(";"))), // optional terminating semicolon
+          NULL);
+  set_combinator_name(constructor_impl, "constructor_impl");
 
-    // Destructor implementation (with required body)
-    combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),    // optional class modifier
-        token(keyword_ci("destructor")),         // destructor keyword
-        method_name_with_class,                  // ClassName.MethodName
-        create_simple_param_list(),              // optional parameter list
-        token(match(";")),                       // semicolon
-        combined_routine_directives,             // mixed directives
-        function_body,                               // method body with local declarations
-        optional(token(match(";"))),             // optional terminating semicolon
-        NULL
-    );
-    set_combinator_name(destructor_impl, "destructor_impl");
+  // Destructor implementation (with required body)
+  combinator_t *destructor_impl =
+      seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
+          optional(token(create_keyword_parser(
+              "class", PASCAL_T_IDENTIFIER))), // optional class modifier
+          token(keyword_ci("destructor")),     // destructor keyword
+          method_name_with_class,              // ClassName.MethodName
+          create_simple_param_list(),          // optional parameter list
+          token(match(";")),                   // semicolon
+          combined_routine_directives,         // mixed directives
+          function_body,               // method body with local declarations
+          optional(token(match(";"))), // optional terminating semicolon
+          NULL);
+  set_combinator_name(destructor_impl, "destructor_impl");
 
-    // Procedure implementation: procedure ClassName.MethodName[(params)]; body
-    combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(keyword_ci("procedure")),          // procedure keyword
-        method_name_with_class,                  // ClassName.MethodName
-        create_simple_param_list(),              // optional parameter list
-        token(match(";")),                       // semicolon
-        combined_routine_directives,             // mixed directives
-        function_body,                           // method body with local declarations
-        optional(token(match(";"))),             // optional terminating semicolon
-        NULL
-    );
+  // Procedure implementation: procedure ClassName.MethodName[(params)]; body
+  combinator_t *procedure_impl =
+      seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+          token(keyword_ci("procedure")), // procedure keyword
+          method_name_with_class,         // ClassName.MethodName
+          create_simple_param_list(),     // optional parameter list
+          token(match(";")),              // semicolon
+          combined_routine_directives,    // mixed directives
+          function_body,                  // method body with local declarations
+          optional(token(match(";"))),    // optional terminating semicolon
+          NULL);
 
-    // Method implementation parser: constructor, destructor, or procedure implementation
-    multi(*p, PASCAL_T_NONE,
-        constructor_impl,
-        destructor_impl,
-        procedure_impl,
-        NULL
-    );
+  // Method implementation parser: constructor, destructor, or procedure
+  // implementation
+  multi(*p, PASCAL_T_NONE, constructor_impl, destructor_impl, procedure_impl,
+        NULL);
 
-    (*p)->extra_to_free = stmt_parser;
+  (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Complete Program Parser - for full Pascal programs
-void init_pascal_complete_program_parser(combinator_t** p) {
-    // Create procedure/function parsers for use in complete program
-    // Need to create a modified procedure parser that supports var parameters
-    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser = new_combinator();
-    init_pascal_statement_parser(stmt_parser);
+void init_pascal_complete_program_parser(combinator_t **p) {
+  // Create procedure/function parsers for use in complete program
+  // Need to create a modified procedure parser that supports var parameters
+  combinator_t **stmt_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *stmt_parser = new_combinator();
+  init_pascal_statement_parser(stmt_parser);
 
-    // Use `between` to parse the content inside `begin` and `end`, then `map` to wrap it.
-    combinator_t* main_block_content_parser = main_block_content(stmt_parser);
-    combinator_t* main_block_body = between(
-        token(keyword_ci("begin")),
-        token(keyword_ci("end")),
-        main_block_content_parser
-    );
-    combinator_t* main_block = map(main_block_body, build_main_block_ast);
+  // Use `between` to parse the content inside `begin` and `end`, then `map` to
+  // wrap it.
+  combinator_t *main_block_content_parser = main_block_content(stmt_parser);
+  combinator_t *main_block_body =
+      between(token(keyword_ci("begin")), token(keyword_ci("end")),
+              main_block_content_parser);
+  combinator_t *main_block = map(main_block_body, build_main_block_ast);
 
-    // Program parameter list: (identifier, identifier, ...)
-    combinator_t* program_param = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* program_param_list = optional(map(
-        between(
-            token(match("(")),
-            token(match(")")),
-            sep_by(program_param, token(match(",")))
-        ),
-        wrap_program_params
-    ));
+  // Program parameter list: (identifier, identifier, ...)
+  combinator_t *program_param = token(cident(PASCAL_T_IDENTIFIER));
+  combinator_t *program_param_list =
+      optional(map(between(token(match("(")), token(match(")")),
+                           sep_by(program_param, token(match(",")))),
+                   wrap_program_params));
 
-    // Enhanced Variable declaration: var1, var2, var3 : type;
-    combinator_t* var_identifier_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    
-    // Constructed type parser for generic types like TFoo<Integer>
-    // Peek to ensure this looks like a generic type before committing
-    // This prevents parsing '<>' (not-equal operator) as an empty generic type
-    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by1(type_arg, token(match(","))),  // Require at least one type argument
-        token(match(">")),
-        NULL
-    );
-    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        optional(token(keyword_ci("specialize"))),      // optional specialize keyword
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(create_generic_type_lookahead()),          // Lookahead to ensure '< identifier' pattern
-        type_arg_list,                                  // Now parse the full type argument list
-        NULL
-    );
+  // Enhanced Variable declaration: var1, var2, var3 : type;
+  combinator_t *var_identifier_list =
+      sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
 
-    /* Distinct type parser for programs: "type <typename>" with optional codepage parameter.
-     * Example: UTF8String = type AnsiString(CP_UTF8); */
-    combinator_t* distinct_type_codepage_param_prog = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match("(")),
-        token(cident(PASCAL_T_IDENTIFIER)),  /* codepage constant name */
-        token(match(")")),
-        NULL
-    ));
-    combinator_t* distinct_type_target_prog = multi(new_combinator(), PASCAL_T_NONE,
-        pointer_type(PASCAL_T_POINTER_TYPE),                    /* type ^TFoo */
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),/* type Unit.TFoo */
-        token(cident(PASCAL_T_IDENTIFIER)),                     /* type TFoo */
-        NULL
-    );
-    combinator_t* distinct_type_spec_prog = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
-        token(keyword_ci("type")),
-        distinct_type_target_prog,
-        distinct_type_codepage_param_prog,  /* optional (CODEPAGE) */
-        NULL
-    );
-    
-    /* Distinct type from range: "type 0..$10ffff" creates a distinct type from a subrange */
-    combinator_t* distinct_type_range_spec_prog = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
-        token(keyword_ci("type")),
-        range_type(PASCAL_T_RANGE_TYPE),  /* reuse the range parser */
-        NULL
-    );
+  // Constructed type parser for generic types like TFoo<Integer>
+  // Peek to ensure this looks like a generic type before committing
+  // This prevents parsing '<>' (not-equal operator) as an empty generic type
+  combinator_t *type_arg = token(cident(PASCAL_T_TYPE_ARG));
+  combinator_t *type_arg_list =
+      seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST, token(match("<")),
+          sep_by1(type_arg,
+                  token(match(","))), // Require at least one type argument
+          token(match(">")), NULL);
+  combinator_t *constructed_type = seq(
+      new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+      optional(token(keyword_ci("specialize"))), // optional specialize keyword
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+      peek(create_generic_type_lookahead()), // Lookahead to ensure '<
+                                             // identifier' pattern
+      type_arg_list, // Now parse the full type argument list
+      NULL);
 
-    combinator_t* helper_body = optional(create_helper_body_parser());
-    combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("type")),
-        token(keyword_ci("record")),
-        token(keyword_ci("class")),
-        NULL
-    );
-    combinator_t* helper_base_type_ref_prog = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        type_name(PASCAL_T_IDENTIFIER),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  /* Distinct type parser for programs: "type <typename>" with optional codepage
+   * parameter. Example: UTF8String = type AnsiString(CP_UTF8); */
+  combinator_t *distinct_type_codepage_param_prog = optional(
+      seq(new_combinator(), PASCAL_T_NONE, token(match("(")),
+          token(cident(PASCAL_T_IDENTIFIER)), /* codepage constant name */
+          token(match(")")), NULL));
+  combinator_t *distinct_type_target_prog =
+      multi(new_combinator(), PASCAL_T_NONE,
+            pointer_type(PASCAL_T_POINTER_TYPE), /* type ^TFoo */
+            token(pascal_qualified_identifier(
+                PASCAL_T_IDENTIFIER)),          /* type Unit.TFoo */
+            token(cident(PASCAL_T_IDENTIFIER)), /* type TFoo */
+            NULL);
+  combinator_t *distinct_type_spec_prog =
+      seq(new_combinator(), PASCAL_T_DISTINCT_TYPE, token(keyword_ci("type")),
+          distinct_type_target_prog,
+          distinct_type_codepage_param_prog, /* optional (CODEPAGE) */
+          NULL);
 
-    combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
-        helper_kind,
-        token(keyword_ci("helper")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("(")),
-            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-            token(match(")")),
-            NULL
-        )),
-        token(keyword_ci("for")),
-        helper_base_type_ref_prog,
-        helper_body,
-        token(keyword_ci("end")),
-        NULL
-    ), mark_type_helper_record);
+  /* Distinct type from range: "type 0..$10ffff" creates a distinct type from a
+   * subrange */
+  combinator_t *distinct_type_range_spec_prog =
+      seq(new_combinator(), PASCAL_T_DISTINCT_TYPE, token(keyword_ci("type")),
+          range_type(PASCAL_T_RANGE_TYPE), /* reuse the range parser */
+          NULL);
 
-    combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        /* Prefer explicit helper syntax first so "type helper for X" is not
-         * consumed by the generic distinct-type parser. */
-        type_helper_type,                               // type helpers (e.g., type helper for Integer)
-        distinct_type_spec_prog,                        // distinct types like "type Double" or "type ^TFoo"
-        distinct_type_range_spec_prog,                  // distinct types from range like "type 0..$10ffff"
-        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
-        interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
-        class_of_type(PASCAL_T_CLASS_OF_TYPE),          // class reference types like "class of TObject" (must be before class_type)
-        class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
-        record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
-        object_type(PASCAL_T_OBJECT_TYPE),              // legacy object types like object ... end
-        enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
-        array_type(PASCAL_T_ARRAY_TYPE),                // array types like ARRAY[0..9] OF integer
-        procedure_type(PASCAL_T_PROCEDURE_TYPE),        // procedure types like procedure(x: Integer)
-        function_type(PASCAL_T_FUNCTION_TYPE),          // function types like function(y: Real): Boolean
-        set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
-        file_type(PASCAL_T_FILE_TYPE),                  // file types like file of Integer
-        pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
-        range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
-        type_name(PASCAL_T_IDENTIFIER),                 // built-in types
-        constructed_type,                               // constructed types like TFoo<Integer> (try before plain identifiers)
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),  // unit-qualified types like foo.bar
-        token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),  // custom types with optional [size]
-        NULL
-    );
+  combinator_t *helper_body = optional(create_helper_body_parser());
+  combinator_t *helper_kind =
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("type")),
+            token(keyword_ci("record")), token(keyword_ci("class")), NULL);
+  combinator_t *helper_base_type_ref_prog = multi(
+      new_combinator(), PASCAL_T_TYPE_SPEC, type_name(PASCAL_T_IDENTIFIER),
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+      token(cident(PASCAL_T_IDENTIFIER)), NULL);
 
-    combinator_t** program_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *program_expr_parser = new_combinator();
-    init_pascal_expression_parser(program_expr_parser, NULL);
+  combinator_t *type_helper_type = map(
+      seq(new_combinator(), PASCAL_T_RECORD_TYPE, helper_kind,
+          token(keyword_ci("helper")),
+          optional(seq(new_combinator(), PASCAL_T_NONE, token(match("(")),
+                       token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+                       token(match(")")), NULL)),
+          token(keyword_ci("for")), helper_base_type_ref_prog, helper_body,
+          token(keyword_ci("end")), NULL),
+      mark_type_helper_record);
 
-    // Support optional 'absolute <identifier>' clause
-    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_ABSOLUTE_CLAUSE,
-        token(keyword_ci("absolute")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        NULL
-    ));
+  combinator_t *type_spec = multi(
+      new_combinator(), PASCAL_T_TYPE_SPEC,
+      /* Prefer explicit helper syntax first so "type helper for X" is not
+       * consumed by the generic distinct-type parser. */
+      type_helper_type,        // type helpers (e.g., type helper for Integer)
+      distinct_type_spec_prog, // distinct types like "type Double" or "type
+                               // ^TFoo"
+      distinct_type_range_spec_prog, // distinct types from range like "type
+                                     // 0..$10ffff"
+      reference_to_type(
+          PASCAL_T_REFERENCE_TO_TYPE), // reference to procedure/function
+      interface_type(
+          PASCAL_T_INTERFACE_TYPE), // interface types like interface ... end
+      class_of_type(
+          PASCAL_T_CLASS_OF_TYPE),       // class reference types like "class of
+                                         // TObject" (must be before class_type)
+      class_type(PASCAL_T_CLASS_TYPE),   // class types like class ... end
+      record_type(PASCAL_T_RECORD_TYPE), // record types like record ... end
+      object_type(
+          PASCAL_T_OBJECT_TYPE), // legacy object types like object ... end
+      enumerated_type(PASCAL_T_ENUMERATED_TYPE), // enumerated types like
+                                                 // (Value1, Value2, Value3)
+      array_type(
+          PASCAL_T_ARRAY_TYPE), // array types like ARRAY[0..9] OF integer
+      procedure_type(PASCAL_T_PROCEDURE_TYPE), // procedure types like
+                                               // procedure(x: Integer)
+      function_type(PASCAL_T_FUNCTION_TYPE), // function types like function(y:
+                                             // Real): Boolean
+      set_type(PASCAL_T_SET),        // set types like set of TAsmSehDirective
+      file_type(PASCAL_T_FILE_TYPE), // file types like file of Integer
+      pointer_type(PASCAL_T_POINTER_TYPE), // pointer types like ^TMyObject
+      range_type(PASCAL_T_RANGE_TYPE),     // range types like -1..1
+      type_name(PASCAL_T_IDENTIFIER),      // built-in types
+      constructed_type, // constructed types like TFoo<Integer> (try before
+                        // plain identifiers)
+      token(pascal_qualified_identifier(
+          PASCAL_T_IDENTIFIER)), // unit-qualified types like foo.bar
+      token(pascal_identifier_with_subscript(
+          PASCAL_T_IDENTIFIER)), // custom types with optional [size]
+      NULL);
 
-    // Hint directives for variables: deprecated ['message'] | platform | library
-    combinator_t* var_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("deprecated")),
-            token(keyword_ci("platform")),
-            token(keyword_ci("library")),
-            NULL
-        ),
-        optional(token(pascal_string(PASCAL_T_STRING))),  // optional deprecated message
-        NULL
-    ));
+  combinator_t **program_expr_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *program_expr_parser = new_combinator();
+  init_pascal_expression_parser(program_expr_parser, NULL);
 
-    // Support 'external name <string>' clause for variables (FPC bootstrap compatibility)
-    // FPC syntax: var x: type; external name 'symbol'; (note: semicolon before external)
-    // Support string concatenation: external name 'symbol'+const1+const2
-    combinator_t* var_external_name_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
+  // Support optional 'absolute <identifier>' clause
+  combinator_t *absolute_clause = optional(seq(
+      new_combinator(), PASCAL_T_ABSOLUTE_CLAUSE, token(keyword_ci("absolute")),
+      token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), NULL));
 
-    combinator_t* var_external_name_clause = map(
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("external")),
-            token(keyword_ci("name")),
-            var_external_name_expr,
-            NULL
-        ),
-        wrap_external_name_clause
-    );
+  // Hint directives for variables: deprecated ['message'] | platform | library
+  combinator_t *var_hint_directive = optional(seq(
+      new_combinator(), PASCAL_T_NONE,
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")), token(keyword_ci("library")), NULL),
+      optional(
+          token(pascal_string(PASCAL_T_STRING))), // optional deprecated message
+      NULL));
 
-    // Support 'public name <string>' clause for variables (FPC bootstrap compatibility)
-    combinator_t* var_public_name_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
+  // Support 'external name <string>' clause for variables (FPC bootstrap
+  // compatibility) FPC syntax: var x: type; external name 'symbol'; (note:
+  // semicolon before external) Support string concatenation: external name
+  // 'symbol'+const1+const2
+  combinator_t *var_external_name_expr =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
+          token(pascal_string(PASCAL_T_STRING)),
+          many(seq(new_combinator(), PASCAL_T_NONE, token(match("+")),
+                   token(cident(PASCAL_T_IDENTIFIER)), NULL)),
+          NULL);
 
-    combinator_t* var_public_name_clause = map(
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("public")),
-            token(keyword_ci("name")),
-            var_public_name_expr,
-            NULL
-        ),
-        wrap_public_name_clause
-    );
+  combinator_t *var_external_name_clause =
+      map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("external")),
+              token(keyword_ci("name")), var_external_name_expr, NULL),
+          wrap_external_name_clause);
 
-    // Combined variable modifier clause (external name or public name)
-    // In FPC syntax, these come after a semicolon: "var x: type; external name 'foo';"
-    combinator_t* var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            var_external_name_clause,
-            var_public_name_clause,
-            NULL
-        ),
-        token(match(";")),  // trailing semicolon after linkage clause
-        NULL
-    ));
+  // Support 'public name <string>' clause for variables (FPC bootstrap
+  // compatibility)
+  combinator_t *var_public_name_expr =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
+          token(pascal_string(PASCAL_T_STRING)),
+          many(seq(new_combinator(), PASCAL_T_NONE, token(match("+")),
+                   token(cident(PASCAL_T_IDENTIFIER)), NULL)),
+          NULL);
 
-    combinator_t* typed_program_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
-        var_identifier_list,                            // multiple variable names
-        token(match(":")),                              // colon
-        type_spec,                                      // type specification
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("=")),                          // optional initializer
-            lazy(program_expr_parser),                  // initializer expression
-            NULL
-        )),
-        absolute_clause,                                // optional absolute clause
-        var_hint_directive,                             // optional hint directive
-        token(match(";")),                              // semicolon (before optional linkage clause)
-        var_linkage_clause,                             // optional external/public name clause (with its own ;)
-        NULL
-    );
+  combinator_t *var_public_name_clause =
+      map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("public")),
+              token(keyword_ci("name")), var_public_name_expr, NULL),
+          wrap_public_name_clause);
 
-    combinator_t* inferred_program_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),             // single variable name
-        token(match(":=")),                            // assignment for inference
-        lazy(program_expr_parser),                      // initializer expression
-        token(match(";")),                              // semicolon
-        NULL
-    );
+  // Combined variable modifier clause (external name or public name)
+  // In FPC syntax, these come after a semicolon: "var x: type; external name
+  // 'foo';"
+  combinator_t *var_linkage_clause = optional(
+      seq(new_combinator(), PASCAL_T_NONE,
+          multi(new_combinator(), PASCAL_T_NONE, var_external_name_clause,
+                var_public_name_clause, NULL),
+          token(match(";")), // trailing semicolon after linkage clause
+          NULL));
 
-    combinator_t* inferred_program_var_guarded = right(peek(make_inferred_var_prefix()), inferred_program_var_decl);
+  combinator_t *typed_program_var_decl =
+      seq(new_combinator(), PASCAL_T_VAR_DECL,
+          var_identifier_list, // multiple variable names
+          token(match(":")),   // colon
+          type_spec,           // type specification
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(match("=")),         // optional initializer
+                       lazy(program_expr_parser), // initializer expression
+                       NULL)),
+          absolute_clause,    // optional absolute clause
+          var_hint_directive, // optional hint directive
+          token(match(";")),  // semicolon (before optional linkage clause)
+          var_linkage_clause, // optional external/public name clause (with its
+                              // own ;)
+          NULL);
 
-    combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
-        inferred_program_var_guarded,
-        typed_program_var_decl,
-        NULL
-    );
+  combinator_t *inferred_program_var_decl =
+      seq(new_combinator(), PASCAL_T_VAR_DECL,
+          token(cident(PASCAL_T_IDENTIFIER)), // single variable name
+          token(match(":=")),                 // assignment for inference
+          lazy(program_expr_parser),          // initializer expression
+          token(match(";")),                  // semicolon
+          NULL);
 
-    // Var section: var var_decl var_decl ...
-    combinator_t* var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
-        token(keyword_ci("var")),                       // var keyword (with word boundary check)
-        commit(many(var_decl)),                              // multiple variable declarations
-        NULL
-    );
-    var_section->extra_to_free = program_expr_parser;
+  combinator_t *inferred_program_var_guarded =
+      right(peek(make_inferred_var_prefix()), inferred_program_var_decl);
 
-    // Type constraint parser: T: class, T: record, T: constructor, T: interface, or T: SomeUnit.TType
-    combinator_t* constraint_keyword_prog = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
-        token(keyword_ci("class")),
-        token(keyword_ci("record")),
-        token(keyword_ci("constructor")),
-        token(keyword_ci("interface")),
-        NULL
-    );
-    combinator_t* constraint_item_prog = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
-        constraint_keyword_prog,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    
-    combinator_t* type_constraint_prog = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        sep_by(constraint_item_prog, token(match(","))),
-        NULL
-    ));
-    
-    // Type parameter with optional constraint: T or T: class
-    combinator_t* type_param_with_constraint_prog = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        type_constraint_prog,
-        NULL
-    );
-    
-    // Type parameter list parser: <T, U, V> or <T: class, U: record>
-    combinator_t* type_param_sep_prog = multi(new_combinator(), PASCAL_T_NONE,
-        token(match(",")),
-        token(match(";")),
-        NULL
-    );
-    combinator_t* type_param_list_required_prog = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(type_param_with_constraint_prog, type_param_sep_prog),
-        token(match(">")),
-        NULL
-    );
+  combinator_t *var_decl =
+      multi(new_combinator(), PASCAL_T_NONE, inferred_program_var_guarded,
+            typed_program_var_decl, NULL);
 
-    // Generic type declaration: TFoo<T> = class ...
-    // This requires the angle brackets with type parameters
-    // Allow optional routine directives (e.g., stdcall) after subroutine types
-    combinator_t* type_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("register")),
-        token(keyword_ci("safecall")),
-        token(keyword_ci("pascal")),
-        token(keyword_ci("export")),
-        token(keyword_ci("external")),
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        NULL
-    );
-    combinator_t* type_directive = seq(new_combinator(), PASCAL_T_NONE,
-        type_directive_keyword,
-        optional(token(pascal_string(PASCAL_T_STRING))),
-        NULL
-    );
-    combinator_t* type_directives = many(type_directive);
-    combinator_t* generic_type_decl_prog = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
-        optional(token(keyword_ci("generic"))),      // optional generic keyword
-        token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        type_param_list_required_prog,                // type parameters (REQUIRED - has angle brackets)
-        token(match("=")),                           // equals sign
-        type_spec,                                    // type specification
-        type_directives,
-        token(match(";")),                           // semicolon
-        NULL
-    );
-    generic_type_decl_prog = right(peek(make_generic_type_prefix()), generic_type_decl_prog);
+  // Var section: var var_decl var_decl ...
+  combinator_t *var_section =
+      seq(new_combinator(), PASCAL_T_VAR_SECTION,
+          token(keyword_ci("var")), // var keyword (with word boundary check)
+          commit(many(var_decl)),   // multiple variable declarations
+          NULL);
+  var_section->extra_to_free = program_expr_parser;
 
-    // Regular type declaration: TFoo = Integer
-    combinator_t* regular_type_decl_prog = seq(new_combinator(), PASCAL_T_TYPE_DECL,
-        optional(token(keyword_ci("generic"))),      // optional generic keyword
-        token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        token(match("=")),                           // equals sign
-        type_spec,                                    // type specification
-        type_directives,
-        token(match(";")),                           // semicolon
-        NULL
-    );
+  // Type constraint parser: T: class, T: record, T: constructor, T: interface,
+  // or T: SomeUnit.TType
+  combinator_t *constraint_keyword_prog = multi(
+      new_combinator(), PASCAL_T_TYPE_CONSTRAINT, token(keyword_ci("class")),
+      token(keyword_ci("record")), token(keyword_ci("constructor")),
+      token(keyword_ci("interface")), NULL);
+  combinator_t *constraint_item_prog =
+      multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT, constraint_keyword_prog,
+            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), NULL);
 
-    combinator_t* type_decl = multi(new_combinator(), PASCAL_T_NONE,
-        generic_type_decl_prog,     // Try generic first (requires <...>)
-        regular_type_decl_prog,     // Fall back to regular (no <...>)
-        NULL
-    );
+  combinator_t *type_constraint_prog =
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   sep_by(constraint_item_prog, token(match(","))), NULL));
 
-    // Type section: type type_decl type_decl ...
-    combinator_t* type_section = seq(new_combinator(), PASCAL_T_TYPE_SECTION,
-        token(keyword_ci("type")),                      // type keyword (with word boundary check)
-        commit(many(type_decl)),                             // multiple type declarations
-        NULL
-    );
+  // Type parameter with optional constraint: T or T: class
+  combinator_t *type_param_with_constraint_prog =
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+          token(cident(PASCAL_T_IDENTIFIER)), type_constraint_prog, NULL);
 
-    // Uses section: uses unit1, unit2, unit3;
-    combinator_t* uses_unit = token(pascal_qualified_identifier(PASCAL_T_USES_UNIT));
-    combinator_t* uses_section = seq(new_combinator(), PASCAL_T_USES_SECTION,
-        token(keyword_ci("uses")),                      // uses keyword (with word boundary check)
-        sep_by(uses_unit, token(match(","))),        // unit names separated by commas
-        token(match(";")),                           // semicolon
-        NULL
-    );
+  // Type parameter list parser: <T, U, V> or <T: class, U: record>
+  combinator_t *type_param_sep_prog =
+      multi(new_combinator(), PASCAL_T_NONE, token(match(",")),
+            token(match(";")), NULL);
+  combinator_t *type_param_list_required_prog =
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(type_param_with_constraint_prog, type_param_sep_prog),
+          token(match(">")), NULL);
 
-    // Const section: const name : type = value; ...
-    // Reuse the expression parser so program-level constants support the
-    // complete expression grammar instead of a limited subset.
-    combinator_t** program_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *program_const_expr_parser = new_combinator();
-    init_pascal_expression_parser(program_const_expr_parser, NULL);
+  // Generic type declaration: TFoo<T> = class ...
+  // This requires the angle brackets with type parameters
+  // Allow optional routine directives (e.g., stdcall) after subroutine types
+  combinator_t *type_directive_keyword =
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("stdcall")),
+            token(keyword_ci("cdecl")), token(keyword_ci("register")),
+            token(keyword_ci("safecall")), token(keyword_ci("pascal")),
+            token(keyword_ci("export")), token(keyword_ci("external")),
+            token(keyword_ci("inline")), token(keyword_ci("overload")), NULL);
+  combinator_t *type_directive =
+      seq(new_combinator(), PASCAL_T_NONE, type_directive_keyword,
+          optional(token(pascal_string(PASCAL_T_STRING))), NULL);
+  combinator_t *type_directives = many(type_directive);
+  combinator_t *generic_type_decl_prog =
+      seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
+          optional(token(keyword_ci("generic"))), // optional generic keyword
+          token(cident(PASCAL_T_IDENTIFIER)),     // type name
+          type_param_list_required_prog, // type parameters (REQUIRED - has
+                                         // angle brackets)
+          token(match("=")),             // equals sign
+          type_spec,                     // type specification
+          type_directives,
+          token(match(";")), // semicolon
+          NULL);
+  generic_type_decl_prog =
+      right(peek(make_generic_type_prefix()), generic_type_decl_prog);
 
-    combinator_t* const_value = lazy(program_const_expr_parser);
+  // Regular type declaration: TFoo = Integer
+  combinator_t *regular_type_decl_prog =
+      seq(new_combinator(), PASCAL_T_TYPE_DECL,
+          optional(token(keyword_ci("generic"))), // optional generic keyword
+          token(cident(PASCAL_T_IDENTIFIER)),     // type name
+          token(match("=")),                      // equals sign
+          type_spec,                              // type specification
+          type_directives,
+          token(match(";")), // semicolon
+          NULL);
 
-    // Hint directives for constants: deprecated, platform, library
-    // Pattern: deprecated ['message'] | platform | library
-    combinator_t* program_const_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("deprecated")),
-            token(keyword_ci("platform")),
-            token(keyword_ci("library")),
-            token(keyword_ci("experimental")),
-            token(keyword_ci("unimplemented")),
-            NULL
-        ),
-        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message for deprecated
-        NULL
-    ));
+  combinator_t *type_decl =
+      multi(new_combinator(), PASCAL_T_NONE,
+            generic_type_decl_prog, // Try generic first (requires <...>)
+            regular_type_decl_prog, // Fall back to regular (no <...>)
+            NULL);
 
-    combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),          // constant name
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),                       // colon
-            type_spec,
-            NULL
-        )),
-        token(match("=")),                           // equals
-        const_value,
-        program_const_hint_directive,                // optional: deprecated, platform, library
-        token(match(";")),                           // semicolon
-        NULL
-    );
+  // Type section: type type_decl type_decl ...
+  combinator_t *type_section =
+      seq(new_combinator(), PASCAL_T_TYPE_SECTION,
+          token(keyword_ci("type")), // type keyword (with word boundary check)
+          commit(many(type_decl)),   // multiple type declarations
+          NULL);
 
-    combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
-        token(keyword_ci("const")),                     // const keyword (with word boundary check)
-        commit(many(const_decl)),                        // multiple const declarations
-        NULL
-    );
-    const_section->extra_to_free = program_const_expr_parser;
+  // Uses section: uses unit1, unit2, unit3;
+  combinator_t *uses_unit =
+      token(pascal_qualified_identifier(PASCAL_T_USES_UNIT));
+  combinator_t *uses_section = seq(
+      new_combinator(), PASCAL_T_USES_SECTION,
+      token(keyword_ci("uses")), // uses keyword (with word boundary check)
+      sep_by(uses_unit, token(match(","))), // unit names separated by commas
+      token(match(";")),                    // semicolon
+      NULL);
 
-    // Return type: : type (for functions)
-    // Support complex types like arrays, sets, pointers, etc., not just simple identifiers
-    combinator_t* return_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        array_type(PASCAL_T_ARRAY_TYPE),
-        set_type(PASCAL_T_SET),
-        range_type(PASCAL_T_RANGE_TYPE),
-        pointer_type(PASCAL_T_POINTER_TYPE),
-        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
-        record_type(PASCAL_T_RECORD_TYPE),
-        procedure_type(PASCAL_T_PROCEDURE_TYPE),
-        function_type(PASCAL_T_FUNCTION_TYPE),
-        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),  // allow unit-qualified return types
-        NULL
-    );
-    
-    combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
-        token(match(":")),                           // colon
-        return_type_spec,                            // comprehensive type specification
-        NULL
-    );
+  // Const section: const name : type = value; ...
+  // Reuse the expression parser so program-level constants support the
+  // complete expression grammar instead of a limited subset.
+  combinator_t **program_const_expr_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *program_const_expr_parser = new_combinator();
+  init_pascal_expression_parser(program_const_expr_parser, NULL);
 
-    // Function body parser: handles local sections followed by begin-end block
-    // This is different from statement parsing - functions can have local declarations
+  combinator_t *const_value = lazy(program_const_expr_parser);
 
-    // Local VAR section - reuse the existing var_section parser
-    combinator_t* local_var_section = var_section;
+  // Hint directives for constants: deprecated, platform, library
+  // Pattern: deprecated ['message'] | platform | library
+  combinator_t *program_const_hint_directive = optional(
+      seq(new_combinator(), PASCAL_T_NONE,
+          multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("deprecated")), token(keyword_ci("platform")),
+                token(keyword_ci("library")), token(keyword_ci("experimental")),
+                token(keyword_ci("unimplemented")), NULL),
+          optional(token(pascal_string(
+              PASCAL_T_STRING))), // optional message for deprecated
+          NULL));
 
-    // Create a specialized function body parser that avoids circular references
-    // This parser handles the most common function body patterns without full recursive complexity
+  combinator_t *const_decl = seq(
+      new_combinator(), PASCAL_T_CONST_DECL,
+      token(cident(PASCAL_T_IDENTIFIER)), // constant name
+      optional(seq(new_combinator(), PASCAL_T_NONE,
+                   token(match(":")), // colon
+                   type_spec, NULL)),
+      token(match("=")), // equals
+      const_value,
+      program_const_hint_directive, // optional: deprecated, platform, library
+      token(match(";")),            // semicolon
+      NULL);
 
-    // Function body for standalone parsing (no terminating semicolon)
-    // Function body that can contain nested function/procedure declarations
-    combinator_t** nested_proc_or_func = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *nested_proc_or_func = new_combinator();
+  combinator_t *const_section = seq(
+      new_combinator(), PASCAL_T_CONST_SECTION,
+      token(keyword_ci("const")), // const keyword (with word boundary check)
+      commit(many(const_decl)),   // multiple const declarations
+      NULL);
+  const_section->extra_to_free = program_const_expr_parser;
 
-    // Forward declaration for nested functions - these will refer to working_function and working_procedure below
-    combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
+  // Return type: : type (for functions)
+  // Support complex types like arrays, sets, pointers, etc., not just simple
+  // identifiers
+  combinator_t *return_type_spec = multi(
+      new_combinator(), PASCAL_T_TYPE_SPEC, array_type(PASCAL_T_ARRAY_TYPE),
+      set_type(PASCAL_T_SET), range_type(PASCAL_T_RANGE_TYPE),
+      pointer_type(PASCAL_T_POINTER_TYPE),
+      enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+      record_type(PASCAL_T_RECORD_TYPE),
+      procedure_type(PASCAL_T_PROCEDURE_TYPE),
+      function_type(PASCAL_T_FUNCTION_TYPE),
+      reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
+      token(pascal_qualified_identifier(
+          PASCAL_T_IDENTIFIER)), // allow unit-qualified return types
+      NULL);
 
-    // Local-only resourcestring and threadvar sections (routine scope tolerance)
-    /* Create expression parser for local resourcestring values first */
-    combinator_t** local_var_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *local_var_expr_parser = new_combinator();
-    init_pascal_expression_parser(local_var_expr_parser, NULL);
-    
-    /* Resourcestring now uses full expression parser to support concatenation */
-    combinator_t* local_resourcestring_value = lazy(local_var_expr_parser);
-    combinator_t* local_resourcestring_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),
-        token(match("=")),
-        local_resourcestring_value,
-        token(match(";")),
-        NULL
-    );
-    combinator_t* local_resourcestring_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
-        token(keyword_ci("resourcestring")),
-        many(local_resourcestring_decl),
-        NULL
-    );
-    combinator_t* local_threadvar_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(":")),
-        type_spec,
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("=")),
-            lazy(local_var_expr_parser),
-            NULL
-        )),
-        optional(token(match(";"))),
-        NULL
-    );
-    combinator_t* local_threadvar_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
-        token(keyword_ci("threadvar")),
-        many(local_threadvar_decl),
-        NULL
-    );
-    local_threadvar_section->extra_to_free = local_var_expr_parser;
+  combinator_t *return_type =
+      seq(new_combinator(), PASCAL_T_RETURN_TYPE,
+          token(match(":")), // colon
+          return_type_spec,  // comprehensive type specification
+          NULL);
 
-    // Allow local CONST/TYPE/VAR sections to be interspersed with nested function/procedure declarations
-    combinator_t* local_declaration_or_nested_function = multi(new_combinator(), PASCAL_T_NONE,
-        create_label_section(),
-        const_section,
-        local_resourcestring_section,
-        local_threadvar_section,
-        type_section,
-        local_var_section,
-        seq(new_combinator(), PASCAL_T_NONE,
-            trace("Checking for nested function decl"),
-            nested_function_decl,
-            trace("Parsed nested function decl"),
-            NULL
-        ),
-        NULL
-    );
+  // Function body parser: handles local sections followed by begin-end block
+  // This is different from statement parsing - functions can have local
+  // declarations
 
-    // asm...end block as a function body alternative to begin...end
-    combinator_t* program_asm_body = seq(new_combinator(), PASCAL_T_ASM_BLOCK,
-        token(keyword_ci("asm")),
-        until(match("end"), PASCAL_T_NONE),
-        token(keyword_ci("end")),
-        NULL
-    );
+  // Local VAR section - reuse the existing var_section parser
+  combinator_t *local_var_section = var_section;
 
-    combinator_t* nested_function_body = seq(new_combinator(), PASCAL_T_NONE,
-        many(local_declaration_or_nested_function), // zero or more local sections or nested functions
-        multi(new_combinator(), PASCAL_T_NONE,
-            lazy(stmt_parser),                      // begin-end block handled by statement parser
-            program_asm_body,                       // asm...end block (assembler functions)
-            NULL
-        ),
-        NULL
-    );
+  // Create a specialized function body parser that avoids circular references
+  // This parser handles the most common function body patterns without full
+  // recursive complexity
 
-    // Use the nested function body parser for complete programs to support nested functions
-    combinator_t* program_function_body = nested_function_body;
+  // Function body for standalone parsing (no terminating semicolon)
+  // Function body that can contain nested function/procedure declarations
+  combinator_t **nested_proc_or_func =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *nested_proc_or_func = new_combinator();
 
-    // Create a method body parser that supports local var sections and nested functions
-    // Methods DO support nested functions in FPC/Delphi, contrary to prior comment
-    combinator_t* method_body = seq(new_combinator(), PASCAL_T_NONE,
-        many(local_declaration_or_nested_function),  // zero or more local sections or nested functions
-        lazy(stmt_parser),                           // begin-end block handled by statement parser
-        NULL
-    );
+  // Forward declaration for nested functions - these will refer to
+  // working_function and working_procedure below
+  combinator_t *nested_function_decl = lazy_owned(nested_proc_or_func);
 
-    // Create simple working function and procedure parsers based on the nested version
-    // These work because they use the recursive statement parser for bodies
+  // Local-only resourcestring and threadvar sections (routine scope tolerance)
+  /* Create expression parser for local resourcestring values first */
+  combinator_t **local_var_expr_parser =
+      (combinator_t **)safe_malloc(sizeof(combinator_t *));
+  *local_var_expr_parser = new_combinator();
+  init_pascal_expression_parser(local_var_expr_parser, NULL);
 
-    // Routine directives like inline; overload; forward; etc.
-    // Use custom parser for directive keywords since they are context-sensitive, not reserved
-    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+  /* Resourcestring now uses full expression parser to support concatenation */
+  combinator_t *local_resourcestring_value = lazy(local_var_expr_parser);
+  combinator_t *local_resourcestring_decl = seq(
+      new_combinator(), PASCAL_T_CONST_DECL, token(cident(PASCAL_T_IDENTIFIER)),
+      token(match("=")), local_resourcestring_value, token(match(";")), NULL);
+  combinator_t *local_resourcestring_section =
+      seq(new_combinator(), PASCAL_T_CONST_SECTION,
+          token(keyword_ci("resourcestring")), many(local_resourcestring_decl),
+          NULL);
+  combinator_t *local_threadvar_decl =
+      seq(new_combinator(), PASCAL_T_VAR_DECL,
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(":")), type_spec,
+          optional(seq(new_combinator(), PASCAL_T_NONE, token(match("=")),
+                       lazy(local_var_expr_parser), NULL)),
+          optional(token(match(";"))), NULL);
+  combinator_t *local_threadvar_section =
+      seq(new_combinator(), PASCAL_T_VAR_SECTION,
+          token(keyword_ci("threadvar")), many(local_threadvar_decl), NULL);
+  local_threadvar_section->extra_to_free = local_var_expr_parser;
 
-    // Extended external directive argument components
-    // Support string concatenation in external name: 'name' or 'name'+const1+const2
-    combinator_t* external_name_concat_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
+  // Allow local CONST/TYPE/VAR sections to be interspersed with nested
+  // function/procedure declarations
+  combinator_t *local_declaration_or_nested_function = multi(
+      new_combinator(), PASCAL_T_NONE, create_label_section(), const_section,
+      local_resourcestring_section, local_threadvar_section, type_section,
+      local_var_section,
+      seq(new_combinator(), PASCAL_T_NONE,
+          trace("Checking for nested function decl"), nested_function_decl,
+          trace("Parsed nested function decl"), NULL),
+      NULL);
 
-    combinator_t* external_name_clause = map(
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("name")),
-            external_name_concat_expr,
-            NULL
-        ),
-        wrap_external_name_clause
-    );
+  // asm...end block as a function body alternative to begin...end
+  combinator_t *program_asm_body =
+      seq(new_combinator(), PASCAL_T_ASM_BLOCK, token(keyword_ci("asm")),
+          until(match("end"), PASCAL_T_NONE), token(keyword_ci("end")), NULL);
 
-    combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("index")),
-        token(integer(PASCAL_T_INTEGER)),
-        NULL
-    );
+  combinator_t *nested_function_body = seq(
+      new_combinator(), PASCAL_T_NONE,
+      many(local_declaration_or_nested_function), // zero or more local sections
+                                                  // or nested functions
+      multi(new_combinator(), PASCAL_T_NONE,
+            lazy(stmt_parser), // begin-end block handled by statement parser
+            program_asm_body,  // asm...end block (assembler functions)
+            NULL),
+      NULL);
 
-    combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
-        multi(new_combinator(), PASCAL_T_NONE,
+  // Use the nested function body parser for complete programs to support nested
+  // functions
+  combinator_t *program_function_body = nested_function_body;
+
+  // Create a method body parser that supports local var sections and nested
+  // functions Methods DO support nested functions in FPC/Delphi, contrary to
+  // prior comment
+  combinator_t *method_body = seq(
+      new_combinator(), PASCAL_T_NONE,
+      many(local_declaration_or_nested_function), // zero or more local sections
+                                                  // or nested functions
+      lazy(stmt_parser), // begin-end block handled by statement parser
+      NULL);
+
+  // Create simple working function and procedure parsers based on the nested
+  // version These work because they use the recursive statement parser for
+  // bodies
+
+  // Routine directives like inline; overload; forward; etc.
+  // Use custom parser for directive keywords since they are context-sensitive,
+  // not reserved
+  combinator_t *directive_keyword =
+      multi(new_combinator(), PASCAL_T_NONE,
+            token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)), NULL);
+
+  // Extended external directive argument components
+  // Support string concatenation in external name: 'name' or
+  // 'name'+const1+const2
+  combinator_t *external_name_concat_expr =
+      seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
+          token(pascal_string(PASCAL_T_STRING)),
+          many(seq(new_combinator(), PASCAL_T_NONE, token(match("+")),
+                   token(cident(PASCAL_T_IDENTIFIER)), NULL)),
+          NULL);
+
+  combinator_t *external_name_clause =
+      map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("name")),
+              external_name_concat_expr, NULL),
+          wrap_external_name_clause);
+
+  combinator_t *external_index_clause =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("index")),
+          token(integer(PASCAL_T_INTEGER)), NULL);
+
+  combinator_t *extended_external_argument = seq(
+      new_combinator(), PASCAL_T_NONE,
+      multi(new_combinator(), PASCAL_T_NONE,
             token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        optional(external_name_clause),
-        optional(external_index_clause),
-        NULL
-    );
+            token(cident(PASCAL_T_IDENTIFIER)), NULL),
+      optional(external_name_clause), optional(external_index_clause), NULL);
 
-    combinator_t* external_name_only_argument = seq(new_combinator(), PASCAL_T_NONE,
-        external_name_clause,
-        optional(external_index_clause),
-        NULL
-    );
+  combinator_t *external_name_only_argument =
+      seq(new_combinator(), PASCAL_T_NONE, external_name_clause,
+          optional(external_index_clause), NULL);
 
-    combinator_t* directive_colon_argument = seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        NULL
-    );
-    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        directive_colon_argument,
-        external_name_only_argument,
-        extended_external_argument,                  // extended external arguments (try first)
-        token(pascal_string(PASCAL_T_STRING)),      // simple string argument
-        token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
-        NULL
-    ));
-
-    // Routine directives with proper argument support
-    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
-        directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
-
-    combinator_t* program_routine_directives = many(routine_directive);
-
-    // Routine directives that still allow an implementation body (exclude forward/external)
-    // Note: assembler IS included - assembler functions have asm...end bodies
-    combinator_t* impl_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("register")),
-        token(keyword_ci("cppdecl")),
-        token(keyword_ci("mwpascal")),
-        token(keyword_ci("export")),
-        token(keyword_ci("far")),
-        token(keyword_ci("near")),
-        token(keyword_ci("static")),
-        token(keyword_ci("public")),
-        token(keyword_ci("platform")),
-        token(keyword_ci("deprecated")),
-        token(keyword_ci("library")),
-        token(keyword_ci("local")),
-        token(keyword_ci("noreturn")),
-        token(keyword_ci("iocheck")),
-        token(keyword_ci("assembler")),
-        token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* implementation_routine_directive = seq(new_combinator(), PASCAL_T_NONE,
-        impl_directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
-    // FPC bracket directive syntax for program-level procedures: [public, alias : 'name', nostackframe]
-    // Each directive can be: identifier or identifier : value
-    combinator_t* prog_bracket_directive_value = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match(":")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        ),
-        NULL
-    ));
-
-    combinator_t* prog_bracket_directive_item = seq(new_combinator(), PASCAL_T_NONE,
-        token(cident(PASCAL_T_IDENTIFIER)),  // directive name like 'public', 'alias', 'nostackframe'
-        prog_bracket_directive_value,         // optional : value
-        NULL
-    );
-
-    // Required bracket directive with semicolon
-    combinator_t* prog_bracket_directive_required = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        sep_by(prog_bracket_directive_item, token(match(","))),
-        token(match("]")),
-        token(match(";")),
-        NULL
-    );
-
-    // Combined implementation routine directives (standard directives AND bracket directives)
-    combinator_t* combined_impl_directive = multi(new_combinator(), PASCAL_T_NONE,
-        implementation_routine_directive,
-        prog_bracket_directive_required,
-        NULL
-    );
-    combinator_t* implementation_routine_directives = many(combined_impl_directive);
-
-    // Directives that indicate no body should follow - preserve the directive keyword in AST
-    // combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
-    //     map(token(keyword_ci("forward")), map_forward_directive),
-    //     map(token(keyword_ci("external")), map_external_directive),
-    //     map(token(keyword_ci("assembler")), map_assembler_directive),
-    //     NULL
-    // );
-
-    // [internproc:value]; bracket directive (header-only, no body)
-    combinator_t* prog_internproc_directive = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("internproc")),
-            token(keyword_ci("internconst")),
-            token(keyword_ci("compilerproc")),
-            NULL
-        ),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            multi(new_combinator(), PASCAL_T_NONE,
+  combinator_t *directive_colon_argument =
+      seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+          multi(new_combinator(), PASCAL_T_NONE,
                 token(pascal_string(PASCAL_T_STRING)),
-                token(cident(PASCAL_T_IDENTIFIER)),
-                NULL
-            ),
-            NULL
-        )),
-        token(match("]")),
-        token(match(";")),
-        NULL
-    );
+                token(cident(PASCAL_T_IDENTIFIER)), NULL),
+          NULL);
+  combinator_t *directive_argument = optional(multi(
+      new_combinator(), PASCAL_T_NONE, directive_colon_argument,
+      external_name_only_argument,
+      extended_external_argument, // extended external arguments (try first)
+      token(pascal_string(PASCAL_T_STRING)), // simple string argument
+      token(cident(PASCAL_T_IDENTIFIER)),    // simple identifier argument
+      NULL));
 
-    // A header-only directive is either a standard keyword directive or a bracket [internproc] directive
-    combinator_t* headeronly_or_bracket_directive = multi(new_combinator(), PASCAL_T_NONE,
-        routine_directive,
-        prog_internproc_directive,
-        NULL
-    );
+  // Routine directives with proper argument support
+  combinator_t *routine_directive =
+      seq(new_combinator(), PASCAL_T_NONE, directive_keyword,
+          directive_argument, token(match(";")), NULL);
 
-    // Header-only declaration parsers - these match procedure/function with forward/external/[internproc] directive and NO body
-    combinator_t* headeronly_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
-        token(keyword_ci("procedure")),               // procedure keyword
-        token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
-        optional(create_simple_param_list()),         // optional parameter list
-        token(match(";")),                           // semicolon after signature
-        headeronly_or_bracket_directive,              // forward/external/[internproc] directive
-        many(headeronly_or_bracket_directive),        // additional directives (overload, etc.)
-        NULL
-    );
+  combinator_t *program_routine_directives = many(routine_directive);
 
-    combinator_t* headeronly_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
-        token(keyword_ci("function")),               // function keyword
-        token(cident(PASCAL_T_IDENTIFIER)),          // function name
-        optional(create_simple_param_list()),         // optional parameter list
-        token(match(":")),                           // colon before return type
-        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)), // return type (allow unit-qualified)
-        token(match(";")),                           // semicolon after signature
-        headeronly_or_bracket_directive,              // forward/external/[internproc] directive
-        many(headeronly_or_bracket_directive),        // additional directives (overload, etc.)
-        NULL
-    );
+  // Routine directives that still allow an implementation body (exclude
+  // forward/external) Note: assembler IS included - assembler functions have
+  // asm...end bodies
+  combinator_t *impl_directive_keyword = multi(
+      new_combinator(), PASCAL_T_NONE, token(keyword_ci("inline")),
+      token(keyword_ci("overload")), token(keyword_ci("cdecl")),
+      token(keyword_ci("stdcall")), token(keyword_ci("register")),
+      token(keyword_ci("cppdecl")), token(keyword_ci("mwpascal")),
+      token(keyword_ci("export")), token(keyword_ci("far")),
+      token(keyword_ci("near")), token(keyword_ci("static")),
+      token(keyword_ci("public")), token(keyword_ci("platform")),
+      token(keyword_ci("deprecated")), token(keyword_ci("library")),
+      token(keyword_ci("local")), token(keyword_ci("noreturn")),
+      token(keyword_ci("iocheck")), token(keyword_ci("assembler")),
+      token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)), NULL);
+  combinator_t *implementation_routine_directive =
+      seq(new_combinator(), PASCAL_T_NONE, impl_directive_keyword,
+          directive_argument, token(match(";")), NULL);
+  // FPC bracket directive syntax for program-level procedures: [public, alias :
+  // 'name', nostackframe] Each directive can be: identifier or identifier :
+  // value
+  combinator_t *prog_bracket_directive_value =
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   multi(new_combinator(), PASCAL_T_NONE,
+                         token(pascal_string(PASCAL_T_STRING)),
+                         token(cident(PASCAL_T_IDENTIFIER)), NULL),
+                   NULL));
 
-    // Working function parser: function name [(params)] : return_type ; [directives] body ;
-    // Does NOT support forward (that's handled by forward_function)
-    combinator_t* working_function_param_list = create_simple_param_list();
-    // Guard: implementation must not start if there's a forward/external/[internproc] directive
-    // in the upcoming directive sequence (not just the immediate next token)
-    // This handles cases like: function foo: Integer; cdecl; external libc;
-    // Note: assembler is NOT included here - assembler functions have asm...end bodies
-    combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("forward")),
-        token(keyword_ci("external")),
-        token(keyword_ci("weakexternal")),
-        NULL
-    );
+  combinator_t *prog_bracket_directive_item =
+      seq(new_combinator(), PASCAL_T_NONE,
+          token(cident(PASCAL_T_IDENTIFIER)), // directive name like 'public',
+                                              // 'alias', 'nostackframe'
+          prog_bracket_directive_value,       // optional : value
+          NULL);
 
-    // Bracket [internproc/internconst/compilerproc] also means no body
-    combinator_t* bracket_no_body = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        multi(new_combinator(), PASCAL_T_NONE,
-            peek(token(keyword_ci("internproc"))),
-            peek(token(keyword_ci("internconst"))),
-            peek(token(keyword_ci("compilerproc"))),
-            NULL
-        ),
-        NULL
-    );
+  // Required bracket directive with semicolon
+  combinator_t *prog_bracket_directive_required =
+      seq(new_combinator(), PASCAL_T_NONE, token(match("[")),
+          sep_by(prog_bracket_directive_item, token(match(","))),
+          token(match("]")), token(match(";")), NULL);
 
-    // Check if there's a sequence of directives containing a no-body directive
-    // Pattern: [directive; directive; ...] no_body_directive
-    // OR: [directive; directive; ...] [internproc:...]
-    combinator_t* has_no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NONE,
-            many(seq(new_combinator(), PASCAL_T_NONE,
-                pnot(peek(no_body_directive)),  // Not a no-body directive
-                directive_keyword,
-                directive_argument,
-                token(match(";")),
-                NULL
-            )),
-            peek(no_body_directive),  // Ends with a no-body directive
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            many(seq(new_combinator(), PASCAL_T_NONE,
-                pnot(peek(bracket_no_body)),  // Not a bracket no-body directive
-                directive_keyword,
-                directive_argument,
-                token(match(";")),
-                NULL
-            )),
-            peek(bracket_no_body),  // Ends with [internproc/...]
-            NULL
-        ),
-        NULL
-    );
+  // Combined implementation routine directives (standard directives AND bracket
+  // directives)
+  combinator_t *combined_impl_directive =
+      multi(new_combinator(), PASCAL_T_NONE, implementation_routine_directive,
+            prog_bracket_directive_required, NULL);
+  combinator_t *implementation_routine_directives =
+      many(combined_impl_directive);
 
-    combinator_t* forbid_no_body = pnot(has_no_body_directive);
+  // Directives that indicate no body should follow - preserve the directive
+  // keyword in AST combinator_t* program_no_body_directive =
+  // multi(new_combinator(), PASCAL_T_IDENTIFIER,
+  //     map(token(keyword_ci("forward")), map_forward_directive),
+  //     map(token(keyword_ci("external")), map_external_directive),
+  //     map(token(keyword_ci("assembler")), map_assembler_directive),
+  //     NULL
+  // );
 
-    // Generic type parameter list for program-level functions (e.g., <T, U>)
-    combinator_t* prog_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
+  // [internproc:value]; bracket directive (header-only, no body)
+  combinator_t *prog_internproc_directive = seq(
+      new_combinator(), PASCAL_T_NONE, token(match("[")),
+      multi(new_combinator(), PASCAL_T_NONE, token(keyword_ci("internproc")),
+            token(keyword_ci("internconst")), token(keyword_ci("compilerproc")),
+            NULL),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(match(":")),
+                   multi(new_combinator(), PASCAL_T_NONE,
+                         token(pascal_string(PASCAL_T_STRING)),
+                         token(cident(PASCAL_T_IDENTIFIER)), NULL),
+                   NULL)),
+      token(match("]")), token(match(";")), NULL);
 
-    combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        trace("Enter working_function"),
-        optional(token(keyword_ci("generic"))),      // optional generic keyword
-        token(keyword_ci("function")),               // function keyword (with word boundary check)
-        token(cident(PASCAL_T_IDENTIFIER)),          // function name
-        prog_generic_type_params,                    // optional generic type params <T>
-        working_function_param_list,                 // optional parameter list
-        return_type,                                 // return type
-        token(match(";")),                           // semicolon after signature
-        forbid_no_body,                              // do not match implementation if header-only directive follows
-        implementation_routine_directives,           // directives allowed alongside an implementation
-        program_function_body,                       // function body (required for non-forward declarations)
-        optional(token(match(";"))),                 // optional terminating semicolon after function body
-        trace("Exit working_function"),
-        NULL
-    );
+  // A header-only directive is either a standard keyword directive or a bracket
+  // [internproc] directive
+  combinator_t *headeronly_or_bracket_directive =
+      multi(new_combinator(), PASCAL_T_NONE, routine_directive,
+            prog_internproc_directive, NULL);
 
-    // Working procedure parser: procedure name [(params)] ; [directives] body ;
-    // Does NOT support forward (that's handled by forward_procedure)
-    combinator_t* working_procedure_param_list = create_simple_param_list();
-    // Generic type parameter list for program-level procedures (separate instance)
-    combinator_t* prog_proc_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
-    combinator_t* working_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(keyword_ci("generic"))),      // optional generic keyword
-        token(keyword_ci("procedure")),                // procedure keyword (case-insensitive)
-        token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
-        prog_proc_generic_type_params,               // optional generic type params <T>
-        working_procedure_param_list,               // optional parameter list
-        token(match(";")),                           // semicolon after signature
-        forbid_no_body,
-        implementation_routine_directives,
-        program_function_body,                       // procedure body (required for non-forward declarations)
-        optional(token(match(";"))),                 // optional terminating semicolon after procedure body
-        NULL
-    );
+  // Header-only declaration parsers - these match procedure/function with
+  // forward/external/[internproc] directive and NO body
+  combinator_t *headeronly_procedure =
+      seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+          optional(token(create_keyword_parser(
+              "class", PASCAL_T_IDENTIFIER))),  // optional class keyword
+          token(keyword_ci("procedure")),       // procedure keyword
+          token(cident(PASCAL_T_IDENTIFIER)),   // procedure name
+          optional(create_simple_param_list()), // optional parameter list
+          token(match(";")),                    // semicolon after signature
+          headeronly_or_bracket_directive,      // forward/external/[internproc]
+                                                // directive
+          many(headeronly_or_bracket_directive), // additional directives
+                                                 // (overload, etc.)
+          NULL);
 
-    // Object Pascal method implementations (constructor/destructor/procedure with class.method syntax)
-    // These are Object Pascal extensions, not standard Pascal
-    
-    // Helper for class-level generic type parameters in method implementations: ClassName<T>
-    combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
-    combinator_t* method_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
-        NULL
-    ));
+  combinator_t *headeronly_function =
+      seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+          optional(token(create_keyword_parser(
+              "class", PASCAL_T_IDENTIFIER))),  // optional class keyword
+          token(keyword_ci("function")),        // function keyword
+          token(cident(PASCAL_T_IDENTIFIER)),   // function name
+          optional(create_simple_param_list()), // optional parameter list
+          token(match(":")),                    // colon before return type
+          token(pascal_qualified_identifier(
+              PASCAL_T_RETURN_TYPE)),      // return type (allow unit-qualified)
+          token(match(";")),               // semicolon after signature
+          headeronly_or_bracket_directive, // forward/external/[internproc]
+                                           // directive
+          many(headeronly_or_bracket_directive), // additional directives
+                                                 // (overload, etc.)
+          NULL);
 
-    combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),          // class name (or outer type)
-        class_generic_type_params,                   // optional generic type params for class
-        token(match(".")),                           // dot
-        token(cident(PASCAL_T_IDENTIFIER)),          // inner type or method name
-        many(right(token(match(".")),                // zero or more additional .Name segments
-                   token(cident(PASCAL_T_IDENTIFIER)))),  // for nested types
-        method_generic_type_params,                  // optional generic type params for method
-        NULL
-    );
+  // Working function parser: function name [(params)] : return_type ;
+  // [directives] body ; Does NOT support forward (that's handled by
+  // forward_function)
+  combinator_t *working_function_param_list = create_simple_param_list();
+  // Guard: implementation must not start if there's a
+  // forward/external/[internproc] directive in the upcoming directive sequence
+  // (not just the immediate next token) This handles cases like: function foo:
+  // Integer; cdecl; external libc; Note: assembler is NOT included here -
+  // assembler functions have asm...end bodies
+  combinator_t *no_body_directive = multi(
+      new_combinator(), PASCAL_T_NONE, token(keyword_ci("forward")),
+      token(keyword_ci("external")), token(keyword_ci("weakexternal")), NULL);
 
-    combinator_t* constructor_param_list = create_simple_param_list();
-    combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
-        token(create_keyword_parser("constructor", PASCAL_T_IDENTIFIER)),  // constructor keyword (preserved in AST so convert_method_impl can detect it)
-        method_name_with_class,                      // ClassName.MethodName
-        constructor_param_list,                      // optional parameter list
-        token(match(";")),                           // semicolon
-        program_routine_directives,                  // routine directives (inline, overload, etc.)
-        method_body,                                 // method body with var section support
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
+  // Bracket [internproc/internconst/compilerproc] also means no body
+  combinator_t *bracket_no_body =
+      seq(new_combinator(), PASCAL_T_NONE, token(match("[")),
+          multi(new_combinator(), PASCAL_T_NONE,
+                peek(token(keyword_ci("internproc"))),
+                peek(token(keyword_ci("internconst"))),
+                peek(token(keyword_ci("compilerproc"))), NULL),
+          NULL);
 
-    combinator_t* destructor_param_list = create_simple_param_list();
-    combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        token(create_keyword_parser("destructor", PASCAL_T_IDENTIFIER)),   // destructor keyword (preserved in AST)
-        method_name_with_class,                      // ClassName.MethodName
-        destructor_param_list,                       // optional parameter list
-        token(match(";")),                           // semicolon
-        program_routine_directives,                  // routine directives (inline, overload, etc.)
-        method_body,                                 // method body with var section support
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
+  // Check if there's a sequence of directives containing a no-body directive
+  // Pattern: [directive; directive; ...] no_body_directive
+  // OR: [directive; directive; ...] [internproc:...]
+  combinator_t *has_no_body_directive = multi(
+      new_combinator(), PASCAL_T_NONE,
+      seq(new_combinator(), PASCAL_T_NONE,
+          many(seq(new_combinator(), PASCAL_T_NONE,
+                   pnot(peek(no_body_directive)), // Not a no-body directive
+                   directive_keyword, directive_argument, token(match(";")),
+                   NULL)),
+          peek(no_body_directive), // Ends with a no-body directive
+          NULL),
+      seq(new_combinator(), PASCAL_T_NONE,
+          many(seq(
+              new_combinator(), PASCAL_T_NONE,
+              pnot(peek(bracket_no_body)), // Not a bracket no-body directive
+              directive_keyword, directive_argument, token(match(";")), NULL)),
+          peek(bracket_no_body), // Ends with [internproc/...]
+          NULL),
+      NULL);
 
-    combinator_t* method_procedure_param_list = create_simple_param_list();
-    combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
-            token(keyword_ci("generic")),
-            NULL)),                                  // optional class/generic keyword
-        token(keyword_ci("procedure")),              // procedure keyword (with word boundary check)
-        method_name_with_class,                      // ClassName.MethodName
-        method_procedure_param_list,                 // optional parameter list
-        token(match(";")),                           // semicolon
-        program_routine_directives,                  // routine directives (inline, overload, etc.)
-        method_body,                                 // method body with var section support
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
+  combinator_t *forbid_no_body = pnot(has_no_body_directive);
 
-    combinator_t* method_function_param_list = create_simple_param_list();
-    combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
-            token(keyword_ci("generic")),
-            NULL)),                                  // optional class/generic keyword
-        token(keyword_ci("function")),               // function keyword (with word boundary check)
-        method_name_with_class,                      // ClassName.MethodName
-        method_function_param_list,                  // optional parameter list
-        return_type,                                 // return type
-        token(match(";")),                           // semicolon
-        program_routine_directives,                  // routine directives (inline, overload, etc.)
-        method_body,                                 // method body with var section support
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
+  // Generic type parameter list for program-level functions (e.g., <T, U>)
+  combinator_t *prog_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
 
-    // Operator name with class qualification (Class.+ or Class.Add)
-    combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
-        token(match(".")),                           // dot
-        token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name
-        NULL
-    );
+  combinator_t *working_function = seq(
+      new_combinator(), PASCAL_T_FUNCTION_DECL, trace("Enter working_function"),
+      optional(token(keyword_ci("generic"))), // optional generic keyword
+      token(keyword_ci(
+          "function")), // function keyword (with word boundary check)
+      token(cident(PASCAL_T_IDENTIFIER)), // function name
+      prog_generic_type_params,           // optional generic type params <T>
+      working_function_param_list,        // optional parameter list
+      return_type,                        // return type
+      token(match(";")),                  // semicolon after signature
+      forbid_no_body, // do not match implementation if header-only directive
+                      // follows
+      implementation_routine_directives, // directives allowed alongside an
+                                         // implementation
+      program_function_body, // function body (required for non-forward
+                             // declarations)
+      optional(token(
+          match(";"))), // optional terminating semicolon after function body
+      trace("Exit working_function"), NULL);
 
-    combinator_t* operator_param_list = create_simple_param_list();
-    
-    // Standalone operator implementation (no class prefix): operator + (const a, b: TMyInt): TMyInt;
-    // Used for FPC-style operator overloading at unit level
-    combinator_t* standalone_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
-        token(keyword_ci("operator")),               // operator keyword
-        operator_name(PASCAL_T_IDENTIFIER),          // operator symbol or name (no class prefix)
-        operator_param_list,                         // parameter list
-        optional(return_type),                       // optional return type (Initialize/Finalize)
-        token(match(";")),                           // semicolon
-        program_routine_directives,                  // routine directives (inline, overload, etc.)
-        method_body,                                 // method body with var section support
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
-    
-    combinator_t* operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),  // optional class keyword
-        token(keyword_ci("operator")),               // operator keyword
-        operator_name_with_class,                    // ClassName.OperatorName
-        operator_param_list,                         // parameter list
-        optional(return_type),                       // optional return type (Initialize/Finalize)
-        token(match(";")),                           // semicolon
-        program_routine_directives,                  // routine directives (inline, overload, etc.)
-        method_body,                                 // method body with var section support
-        optional(token(match(";"))),                 // optional terminating semicolon
-        NULL
-    );
+  // Working procedure parser: procedure name [(params)] ; [directives] body ;
+  // Does NOT support forward (that's handled by forward_procedure)
+  combinator_t *working_procedure_param_list = create_simple_param_list();
+  // Generic type parameter list for program-level procedures (separate
+  // instance)
+  combinator_t *prog_proc_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
+  combinator_t *working_procedure = seq(
+      new_combinator(), PASCAL_T_PROCEDURE_DECL,
+      optional(token(keyword_ci("generic"))), // optional generic keyword
+      token(keyword_ci("procedure")), // procedure keyword (case-insensitive)
+      token(cident(PASCAL_T_IDENTIFIER)), // procedure name
+      prog_proc_generic_type_params,      // optional generic type params <T>
+      working_procedure_param_list,       // optional parameter list
+      token(match(";")),                  // semicolon after signature
+      forbid_no_body, implementation_routine_directives,
+      program_function_body, // procedure body (required for non-forward
+                             // declarations)
+      optional(token(
+          match(";"))), // optional terminating semicolon after procedure body
+      NULL);
 
-    // Header-only Object Pascal methods (no body): procedure/function ClassName.Method [(params)] [: type] ; directives ;
-    combinator_t* headeronly_method_procedure = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        token(keyword_ci("procedure")),
-        method_name_with_class,
-        method_procedure_param_list,
-        token(match(";")),
-        program_routine_directives,
-        NULL
-    );
+  // Object Pascal method implementations (constructor/destructor/procedure with
+  // class.method syntax) These are Object Pascal extensions, not standard
+  // Pascal
 
-    combinator_t* headeronly_method_function = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        token(keyword_ci("function")),
-        method_name_with_class,
-        operator_param_list,
-        return_type,
-        token(match(";")),
-        program_routine_directives,
-        NULL
-    );
+  // Helper for class-level generic type parameters in method implementations:
+  // ClassName<T>
+  combinator_t *class_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
+  combinator_t *method_generic_type_params = optional(
+      seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST, token(match("<")),
+          sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+          token(match(">")), NULL));
 
-    // Object Pascal method implementations and header-only variants
-    combinator_t* method_impl = multi(new_combinator(), PASCAL_T_NONE,
-        constructor_impl,
-        destructor_impl,
-        procedure_impl,
-        method_function_impl,
-        headeronly_method_procedure,
-        headeronly_method_function,
-        operator_impl,
-        NULL
-    );
+  combinator_t *method_name_with_class = seq(
+      new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+      token(cident(PASCAL_T_IDENTIFIER)), // class name (or outer type)
+      class_generic_type_params, // optional generic type params for class
+      token(match(".")),         // dot
+      token(cident(PASCAL_T_IDENTIFIER)), // inner type or method name
+      many(right(token(match(".")), // zero or more additional .Name segments
+                 token(cident(PASCAL_T_IDENTIFIER)))), // for nested types
+      method_generic_type_params, // optional generic type params for method
+      NULL);
 
-    // Standard Pascal procedure or function definitions
-    // Prefer implementations first so that headers with routine directives
-    // (e.g., stdcall; cdecl; inline;) followed by a body are parsed as bodies,
-    // not mistaken for header-only declarations.
-    combinator_t* proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
-        working_function,                            // function implementations
-        working_procedure,                           // procedure implementations
-        headeronly_function,                         // forward/external/assembler function declarations
-        headeronly_procedure,                        // forward/external/assembler procedure declarations
-        NULL
-    );
+  combinator_t *constructor_param_list = create_simple_param_list();
+  combinator_t *constructor_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+      token(create_keyword_parser(
+          "constructor",
+          PASCAL_T_IDENTIFIER)),  // constructor keyword (preserved in AST so
+                                  // convert_method_impl can detect it)
+      method_name_with_class,     // ClassName.MethodName
+      constructor_param_list,     // optional parameter list
+      token(match(";")),          // semicolon
+      program_routine_directives, // routine directives (inline, overload, etc.)
+      method_body,                // method body with var section support
+      optional(token(match(";"))), // optional terminating semicolon
+      NULL);
 
-    // Combined Pascal and Object Pascal declarations
-    combinator_t* all_declarations = multi(new_combinator(), PASCAL_T_NONE,
-        proc_or_func,                                // standard Pascal procedures/functions
-        method_impl,                                 // Object Pascal method implementations
-        standalone_operator_impl,                       // standalone operator implementations
-        NULL
-    );
+  combinator_t *destructor_param_list = create_simple_param_list();
+  combinator_t *destructor_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      token(create_keyword_parser(
+          "destructor",
+          PASCAL_T_IDENTIFIER)),  // destructor keyword (preserved in AST)
+      method_name_with_class,     // ClassName.MethodName
+      destructor_param_list,      // optional parameter list
+      token(match(";")),          // semicolon
+      program_routine_directives, // routine directives (inline, overload, etc.)
+      method_body,                // method body with var section support
+      optional(token(match(";"))), // optional terminating semicolon
+      NULL);
 
-    // Set up the nested function parser to point to the working function/procedure parsers
-    // This allows nested function/procedure declarations within function bodies
-    // Nested functions can also have forward/external/assembler declarations
-    multi(*nested_proc_or_func, PASCAL_T_NONE,
-        working_function,                            // nested function implementations
-        working_procedure,                           // nested procedure implementations
-        headeronly_function,                         // forward/external/assembler nested function declarations
-        headeronly_procedure,                        // forward/external/assembler nested procedure declarations
-        NULL
-    );
+  combinator_t *method_procedure_param_list = create_simple_param_list();
+  combinator_t *procedure_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(multi(new_combinator(), PASCAL_T_NONE,
+                     token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+                     token(keyword_ci("generic")),
+                     NULL)), // optional class/generic keyword
+      token(keyword_ci(
+          "procedure")),      // procedure keyword (with word boundary check)
+      method_name_with_class, // ClassName.MethodName
+      method_procedure_param_list, // optional parameter list
+      token(match(";")),           // semicolon
+      program_routine_directives, // routine directives (inline, overload, etc.)
+      method_body,                // method body with var section support
+      optional(token(match(";"))), // optional terminating semicolon
+      NULL);
 
-    // Module-level property declaration (FPC extension)
-    // Syntax: property Name[Index: Type]: Type read ReadFunc [write WriteFunc];
-    // Example from system.pp: property cmdline:PAnsiChar read get_cmdline;
-    combinator_t* module_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
-        between(
-            token(match("[")),
-            token(match("]")),
-            sep_by(seq(new_combinator(), PASCAL_T_PARAM,
-                sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-                token(match(":")),
-                type_name(PASCAL_T_IDENTIFIER),
-                NULL
-            ), token(match(";")))
-        ),
-        NULL
-    ));
-    combinator_t* module_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        token(keyword_ci("property")),
-        token(cident(PASCAL_T_IDENTIFIER)), // property name
-        module_property_indexer,
-        token(match(":")),
-        type_name(PASCAL_T_IDENTIFIER), // type name (simple identifier)
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
-            NULL
-        )),
-        token(match(";")),
-        NULL
-    );
+  combinator_t *method_function_param_list = create_simple_param_list();
+  combinator_t *method_function_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(multi(new_combinator(), PASCAL_T_NONE,
+                     token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+                     token(keyword_ci("generic")),
+                     NULL)), // optional class/generic keyword
+      token(keyword_ci(
+          "function")),           // function keyword (with word boundary check)
+      method_name_with_class,     // ClassName.MethodName
+      method_function_param_list, // optional parameter list
+      return_type,                // return type
+      token(match(";")),          // semicolon
+      program_routine_directives, // routine directives (inline, overload, etc.)
+      method_body,                // method body with var section support
+      optional(token(match(";"))), // optional terminating semicolon
+      NULL);
 
-    // Allow const/type/var sections to be interspersed with procedure/function declarations
-    // Parse them in a single many() to avoid backtracking issues
-    // Try declaration sections first (they have distinctive keywords), then procedures/functions
-    // Try procedures/functions first to avoid the main block 'begin' being
-    // misinterpreted from within a routine when routine directives are present.
-    // Then handle declaration sections.
-    combinator_t* generic_prefixed_declaration = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("generic")),
-        all_declarations,
-        NULL
-    );
+  // Operator name with class qualification (Class.+ or Class.Add)
+  combinator_t *operator_name_with_class =
+      seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+          token(cident(PASCAL_T_IDENTIFIER)),        // class/record name
+          token(match(".")),                         // dot
+          token(operator_name(PASCAL_T_IDENTIFIER)), // operator symbol or name
+          NULL);
 
-    combinator_t* declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
-        generic_prefixed_declaration,   // generic procedure/function declarations
-        all_declarations,   // Procedures/functions (keywords "procedure", "function", etc.)
-        create_label_section(),    // Label declarations
-        const_section,      // const
-        local_resourcestring_section,   // resourcestring (FPC extension, treated like const)
-        type_section,       // type
-        var_section,        // var
-        module_property_decl, // Module-level property declarations (FPC extension)
-        NULL
-    );
+  combinator_t *operator_param_list = create_simple_param_list();
 
-    // Support optional "program" or "library" header so unit-less Pascal files can be parsed.
-    combinator_t* program_header = multi(new_combinator(), PASCAL_T_PROGRAM_HEADER,
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("program")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            program_param_list,
-            token(match(";")),
-            NULL
-        ),
-        seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("library")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            token(match(";")),
-            NULL
-        ),
-        NULL
-    );
+  // Standalone operator implementation (no class prefix): operator + (const a,
+  // b: TMyInt): TMyInt; Used for FPC-style operator overloading at unit level
+  combinator_t *standalone_operator_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(token(create_keyword_parser(
+          "class", PASCAL_T_IDENTIFIER))), // optional class keyword
+      token(keyword_ci("operator")),       // operator keyword
+      operator_name(
+          PASCAL_T_IDENTIFIER),   // operator symbol or name (no class prefix)
+      operator_param_list,        // parameter list
+      optional(return_type),      // optional return type (Initialize/Finalize)
+      token(match(";")),          // semicolon
+      program_routine_directives, // routine directives (inline, overload, etc.)
+      method_body,                // method body with var section support
+      optional(token(match(";"))), // optional terminating semicolon
+      NULL);
 
-    // Optional exports section (useful for libraries)
-    combinator_t* prog_exports_end = token(match(";"));
-    combinator_t* prog_exports_body = until(prog_exports_end, PASCAL_T_NONE);
-    combinator_t* exports_section_prog = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("exports")),
-        prog_exports_body,
-        prog_exports_end,
-        NULL
-    ));
+  combinator_t *operator_impl = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL,
+      optional(token(create_keyword_parser(
+          "class", PASCAL_T_IDENTIFIER))), // optional class keyword
+      token(keyword_ci("operator")),       // operator keyword
+      operator_name_with_class,            // ClassName.OperatorName
+      operator_param_list,                 // parameter list
+      optional(return_type),      // optional return type (Initialize/Finalize)
+      token(match(";")),          // semicolon
+      program_routine_directives, // routine directives (inline, overload, etc.)
+      method_body,                // method body with var section support
+      optional(token(match(";"))), // optional terminating semicolon
+      NULL);
 
-    combinator_t* final_period = token(match("."));
+  // Header-only Object Pascal methods (no body): procedure/function
+  // ClassName.Method [(params)] [: type] ; directives ;
+  combinator_t *headeronly_method_procedure = seq(
+      new_combinator(), PASCAL_T_METHOD_IMPL, token(keyword_ci("procedure")),
+      method_name_with_class, method_procedure_param_list, token(match(";")),
+      program_routine_directives, NULL);
 
-    // Complete program: optional header; optional uses clause; declarations/sections interspersed; optional exports; optional main block.
-    seq(*p, PASCAL_T_PROGRAM_DECL,
-        optional(program_header),                    // optional "program" header
-        optional(uses_section),                      // optional uses clause
-        many(declaration_or_section),                // const/type/var sections and procedures/functions in any order
-        exports_section_prog,                        // optional exports section (for libraries)
-        optional(main_block),                        // optional main program block
-        final_period,
-        NULL
-    );
+  combinator_t *headeronly_method_function =
+      seq(new_combinator(), PASCAL_T_METHOD_IMPL, token(keyword_ci("function")),
+          method_name_with_class, operator_param_list, return_type,
+          token(match(";")), program_routine_directives, NULL);
 
-    (*p)->extra_to_free = stmt_parser;
+  // Object Pascal method implementations and header-only variants
+  combinator_t *method_impl =
+      multi(new_combinator(), PASCAL_T_NONE, constructor_impl, destructor_impl,
+            procedure_impl, method_function_impl, headeronly_method_procedure,
+            headeronly_method_function, operator_impl, NULL);
+
+  // Standard Pascal procedure or function definitions
+  // Prefer implementations first so that headers with routine directives
+  // (e.g., stdcall; cdecl; inline;) followed by a body are parsed as bodies,
+  // not mistaken for header-only declarations.
+  combinator_t *proc_or_func = multi(
+      new_combinator(), PASCAL_T_NONE,
+      working_function,     // function implementations
+      working_procedure,    // procedure implementations
+      headeronly_function,  // forward/external/assembler function declarations
+      headeronly_procedure, // forward/external/assembler procedure declarations
+      NULL);
+
+  // Combined Pascal and Object Pascal declarations
+  combinator_t *all_declarations =
+      multi(new_combinator(), PASCAL_T_NONE,
+            proc_or_func,             // standard Pascal procedures/functions
+            method_impl,              // Object Pascal method implementations
+            standalone_operator_impl, // standalone operator implementations
+            NULL);
+
+  // Set up the nested function parser to point to the working
+  // function/procedure parsers This allows nested function/procedure
+  // declarations within function bodies Nested functions can also have
+  // forward/external/assembler declarations
+  multi(*nested_proc_or_func, PASCAL_T_NONE,
+        working_function,     // nested function implementations
+        working_procedure,    // nested procedure implementations
+        headeronly_function,  // forward/external/assembler nested function
+                              // declarations
+        headeronly_procedure, // forward/external/assembler nested procedure
+                              // declarations
+        NULL);
+
+  // Module-level property declaration (FPC extension)
+  // Syntax: property Name[Index: Type]: Type read ReadFunc [write WriteFunc];
+  // Example from system.pp: property cmdline:PAnsiChar read get_cmdline;
+  combinator_t *module_property_indexer =
+      optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
+                   between(token(match("[")), token(match("]")),
+                           sep_by(seq(new_combinator(), PASCAL_T_PARAM,
+                                      sep_by(token(cident(PASCAL_T_IDENTIFIER)),
+                                             token(match(","))),
+                                      token(match(":")),
+                                      type_name(PASCAL_T_IDENTIFIER), NULL),
+                                  token(match(";")))),
+                   NULL));
+  combinator_t *module_property_decl = seq(
+      new_combinator(), PASCAL_T_PROPERTY_DECL, token(keyword_ci("property")),
+      token(cident(PASCAL_T_IDENTIFIER)), // property name
+      module_property_indexer, token(match(":")),
+      type_name(PASCAL_T_IDENTIFIER), // type name (simple identifier)
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("read")),
+                   token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+                   NULL)),
+      optional(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("write")),
+                   token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+                   NULL)),
+      token(match(";")), NULL);
+
+  // Allow const/type/var sections to be interspersed with procedure/function
+  // declarations Parse them in a single many() to avoid backtracking issues Try
+  // declaration sections first (they have distinctive keywords), then
+  // procedures/functions Try procedures/functions first to avoid the main block
+  // 'begin' being misinterpreted from within a routine when routine directives
+  // are present. Then handle declaration sections.
+  combinator_t *generic_prefixed_declaration =
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("generic")),
+          all_declarations, NULL);
+
+  combinator_t *declaration_or_section = multi(
+      new_combinator(), PASCAL_T_NONE,
+      generic_prefixed_declaration, // generic procedure/function declarations
+      all_declarations,       // Procedures/functions (keywords "procedure",
+                              // "function", etc.)
+      create_label_section(), // Label declarations
+      const_section,          // const
+      local_resourcestring_section, // resourcestring (FPC extension, treated
+                                    // like const)
+      type_section,                 // type
+      var_section,                  // var
+      module_property_decl,         // Module-level property declarations (FPC
+                                    // extension)
+      NULL);
+
+  // Support optional "program" or "library" header so unit-less Pascal files
+  // can be parsed.
+  combinator_t *program_header =
+      multi(new_combinator(), PASCAL_T_PROGRAM_HEADER,
+            seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("program")),
+                token(cident(PASCAL_T_IDENTIFIER)), program_param_list,
+                token(match(";")), NULL),
+            seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("library")),
+                token(cident(PASCAL_T_IDENTIFIER)), token(match(";")), NULL),
+            NULL);
+
+  // Optional exports section (useful for libraries)
+  combinator_t *prog_exports_end = token(match(";"));
+  combinator_t *prog_exports_body = until(prog_exports_end, PASCAL_T_NONE);
+  combinator_t *exports_section_prog = optional(
+      seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("exports")),
+          prog_exports_body, prog_exports_end, NULL));
+
+  combinator_t *final_period = token(match("."));
+
+  // Complete program: optional header; optional uses clause;
+  // declarations/sections interspersed; optional exports; optional main block.
+  seq(*p, PASCAL_T_PROGRAM_DECL,
+      optional(program_header),     // optional "program" header
+      optional(uses_section),       // optional uses clause
+      many(declaration_or_section), // const/type/var sections and
+                                    // procedures/functions in any order
+      exports_section_prog,         // optional exports section (for libraries)
+      optional(main_block),         // optional main program block
+      final_period, NULL);
+
+  (*p)->extra_to_free = stmt_parser;
 }

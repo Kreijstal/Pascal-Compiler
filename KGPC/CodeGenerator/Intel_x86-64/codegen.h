@@ -35,7 +35,8 @@
 
     NOTES:
         - Add arguments, then locals, then temps
-        - Function return "variable" pushed to x stack portion (SemCheck makes sure there's no issues)
+        - Function return "variable" pushed to x stack portion (SemCheck makes
+   sure there's no issues)
 
     GENERAL PURPOSE REGISTERS:
         - RAX
@@ -52,8 +53,8 @@
         - RCX used for base pointer chasing (var in different scope)
 
     ARGUMENT CONVENTIONS:
-        The first is placed in rdi, the second in rsi, the third in rdx, and then rcx, r8 and r9.
-        All future arguments placed on the stack
+        The first is placed in rdi, the second in rsi, the third in rdx, and
+   then rcx, r8 and r9. All future arguments placed on the stack
 
     STACK MANAGEMENT:
         A stack management structure will be utilized (see stackmng.h)
@@ -70,17 +71,19 @@
             - Register stack of free general-purpose registers
 
     INSTRUCTION LAYOUT:
-        The first section of instructions for a function is known as the "prologue."
-        This section performs gcc standard stack management first, then allocates needed stack
-        space.
+        The first section of instructions for a function is known as the
+   "prologue." This section performs gcc standard stack management first, then
+   allocates needed stack space.
 
-        The next section is the body which consists of the desired user functionality of the
-        function.
+        The next section is the body which consists of the desired user
+   functionality of the function.
 
-        The final section is the epilogue which performs required gcc function exiting standards
+        The final section is the epilogue which performs required gcc function
+   exiting standards
 
     OUTPUT:
-        Output is written as a gcc assembly file (.s). Assembly is then assembled using gcc.
+        Output is written as a gcc assembly file (.s). Assembly is then
+   assembled using gcc.
 
         The write builtin currently only takes integer types and has the
             label LC0 with %d\n. The function call is "call kgpc_printf"
@@ -112,29 +115,24 @@ extern int g_stack_home_space_bytes;
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
-static inline int codegen_target_is_windows(void)
-{
-    return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
+static inline int codegen_target_is_windows(void) {
+  return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
 }
 
 /* Use .globl for class vars and aliases that need external linkage. */
-static inline const char *codegen_weak_or_globl(void)
-{
-    return ".globl";
-}
+static inline const char *codegen_weak_or_globl(void) { return ".globl"; }
 
-static inline const char *codegen_readonly_section_directive(void)
-{
-    return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
+static inline const char *codegen_readonly_section_directive(void) {
+  return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\""
+                                     : "\t.section\t.rodata";
 }
 
 /* Return the directive to switch back to the current text section.
  * With --function-sections, each function is in its own .text.funcname section;
- * use .previous to return to it after a .rodata detour instead of the bare .text
- * which would incorrectly place code in the default .text section. */
-static inline const char *codegen_text_section_resume(void)
-{
-    return function_sections_flag() ? "\t.previous" : "\t.text";
+ * use .previous to return to it after a .rodata detour instead of the bare
+ * .text which would incorrectly place code in the default .text section. */
+static inline const char *codegen_text_section_resume(void) {
+  return function_sections_flag() ? "\t.previous" : "\t.text";
 }
 
 /* ---------------------------------------------------------------------------
@@ -145,36 +143,37 @@ static inline const char *codegen_text_section_resume(void)
  * strip that prefix must use these helpers instead of open-coding strstr.
  * ---------------------------------------------------------------------------*/
 
-/* Returns 1 if the mangled name has a unit-qualification prefix ("$$" present). */
-static inline int mangled_id_has_unit_prefix(const char *mangled_id)
-{
-    return mangled_id != NULL && strstr(mangled_id, "$$") != NULL;
+/* Returns 1 if the mangled name has a unit-qualification prefix ("$$" present).
+ */
+static inline int mangled_id_has_unit_prefix(const char *mangled_id) {
+  return mangled_id != NULL && strstr(mangled_id, "$$") != NULL;
 }
 
 /* Returns a pointer to the base name (after "$$"), or the original string if
  * there is no unit prefix.  Never returns NULL when the input is non-NULL. */
-static inline const char *mangled_id_get_base(const char *mangled_id)
-{
-    if (mangled_id == NULL)
-        return NULL;
-    const char *sep = strstr(mangled_id, "$$");
-    return sep != NULL ? sep + 2 : mangled_id;
+static inline const char *mangled_id_get_base(const char *mangled_id) {
+  if (mangled_id == NULL)
+    return NULL;
+  const char *sep = strstr(mangled_id, "$$");
+  return sep != NULL ? sep + 2 : mangled_id;
 }
 
-void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
+void codegen_sanitize_identifier_for_label(const char *value, char *buffer,
+                                           size_t size);
 
 /* Build the unit-qualified storage key "<unit>_$_<bare>" for a unit-defined
  * variable.  Returns a malloc'd string the caller must free, or NULL when
  * the variable is not associated with a registered unit. */
-char *codegen_make_unit_qualified_key(int source_unit_index, const char *bare_id);
+char *codegen_make_unit_qualified_key(int source_unit_index,
+                                      const char *bare_id);
 
 #define NORMAL_JMP -1
 
 /* Unsigned relop variants for jb/jbe/ja/jae instead of jl/jle/jg/jge */
-#define LT_U  100
-#define LE_U  101
-#define GT_U  102
-#define GE_U  103
+#define LT_U 100
+#define LE_U 101
+#define GT_U 102
+#define GE_U 103
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -186,48 +185,59 @@ char *codegen_make_unit_qualified_key(int source_unit_index, const char *bare_id
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../compilation_context.h"
 
-void codegen_common_enum_typeinfo_label(const char *type_id, char *buffer, size_t size);
-void codegen_common_record_typeinfo_label(const char *type_id, char *buffer, size_t size);
-void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
-    char *buffer, size_t size);
+void codegen_common_enum_typeinfo_label(const char *type_id, char *buffer,
+                                        size_t size);
+void codegen_common_record_typeinfo_label(const char *type_id, char *buffer,
+                                          size_t size);
+void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab,
+                                               const char *type_id,
+                                               char *buffer, size_t size);
 
 typedef struct CodeGenContext CodeGenContext;
 
-static inline int codegen_align_to(int value, int alignment)
-{
-    if (alignment <= 0)
-        return value;
-    int remainder = value % alignment;
-    if (remainder == 0)
-        return value;
-    return value + (alignment - remainder);
+static inline int codegen_align_to(int value, int alignment) {
+  if (alignment <= 0)
+    return value;
+  int remainder = value % alignment;
+  if (remainder == 0)
+    return value;
+  return value + (alignment - remainder);
 }
 
-ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *target);
+ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list,
+                                           const char *target);
 const char *codegen_subprogram_emission_symbol(HashNode_t *cand);
 int codegen_has_available_subprogram_label(const char *label);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
-    const struct RecordType *record, const char *fallback_class_label,
-    const char *iface_name, const char *method_name);
+                                              const struct RecordType *record,
+                                              const char *fallback_class_label,
+                                              const char *iface_name,
+                                              const char *method_name);
 typedef ListNode_t *(*CodegenCallArgSpillFn)(ListNode_t *inst_list,
-    int *int_offsets, int *xmm_offsets);
+                                             int *int_offsets,
+                                             int *xmm_offsets);
 typedef ListNode_t *(*CodegenCallArgRestoreFn)(ListNode_t *inst_list,
-    const int *int_offsets, const int *xmm_offsets);
-ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
-    CodeGenContext *ctx, const struct RecordType *class_record,
-    const char *class_type_id, Register_t *instance_reg);
-ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
-    CodeGenContext *ctx, const char *self_reg, const char *iface_name,
-    int vmt_index, const char *label_prefix, const char *target_slot_label,
-    int preserve_indirect_call_regs, CodegenCallArgSpillFn spill_fn,
-    CodegenCallArgRestoreFn restore_fn);
+                                               const int *int_offsets,
+                                               const int *xmm_offsets);
+ListNode_t *codegen_emit_interface_vtable_slot_init(
+    ListNode_t *inst_list, CodeGenContext *ctx,
+    const struct RecordType *class_record, const char *class_type_id,
+    Register_t *instance_reg);
+ListNode_t *codegen_emit_interface_dispatch(
+    ListNode_t *inst_list, CodeGenContext *ctx, const char *self_reg,
+    const char *iface_name, int vmt_index, const char *label_prefix,
+    const char *target_slot_label, int preserve_indirect_call_regs,
+    CodegenCallArgSpillFn spill_fn, CodegenCallArgRestoreFn restore_fn);
 const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
-    const struct Expression *expr, char **owned_target_out);
+                                                 const struct Expression *expr,
+                                                 char **owned_target_out);
 KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
-    const struct Expression *expr, HashNode_t **resolved_node_out);
+                                             const struct Expression *expr,
+                                             HashNode_t **resolved_node_out);
 int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
-    const char *owner_class_name, const char *method_name,
-    KgpcType *call_type);
+                                      const char *owner_class_name,
+                                      const char *method_name,
+                                      KgpcType *call_type);
 HashNode_t *codegen_find_owner_unit_symbol(CodeGenContext *ctx, const char *id);
 
 /*
@@ -237,17 +247,14 @@ HashNode_t *codegen_find_owner_unit_symbol(CodeGenContext *ctx, const char *id);
  * invariant violations are fixed at the source instead of being masked.
  * Do not downgrade these to debug-only assert() or warning paths.
  */
-#define KGPC_COMPILER_HARD_ASSERT(cond, fmt, ...)                                \
-    do                                                                            \
-    {                                                                             \
-        if (!(cond))                                                              \
-        {                                                                         \
-            fprintf(stderr,                                                        \
-                "FATAL: compiler invariant failed at %s:%d: " fmt "\n",          \
-                __FILE__, __LINE__, ##__VA_ARGS__);                               \
-            abort();                                                              \
-        }                                                                         \
-    } while (0)
+#define KGPC_COMPILER_HARD_ASSERT(cond, fmt, ...)                              \
+  do {                                                                         \
+    if (!(cond)) {                                                             \
+      fprintf(stderr, "FATAL: compiler invariant failed at %s:%d: " fmt "\n",  \
+              __FILE__, __LINE__, ##__VA_ARGS__);                              \
+      abort();                                                                 \
+    }                                                                          \
+  } while (0)
 
 /*
     The context for the code generator.
@@ -255,159 +262,168 @@ HashNode_t *codegen_find_owner_unit_symbol(CodeGenContext *ctx, const char *id);
     allowing for a more modular and re-entrant design.
 */
 typedef struct {
-    ListNode_t *statements;
+  ListNode_t *statements;
 } CodeGenFinallyFrame;
 
 typedef struct {
-    char *label;
-    int finally_depth;
+  char *label;
+  int finally_depth;
 } CodeGenExceptFrame;
 
 typedef struct {
-    char *label;
-    char *continue_label;
-    int finally_depth;
+  char *label;
+  char *continue_label;
+  int finally_depth;
 } CodeGenLoopFrame;
 
 typedef struct {
-    struct Expression *context_expr;
-    struct RecordType *record_type;
+  struct Expression *context_expr;
+  struct RecordType *record_type;
 } CodeGenWithContext;
 
 typedef struct CodeGenContext {
-    int label_counter;
-    int write_label_counter;
-    FILE *output_file;
-    SymTab_t *symtab;
-    CompilationContext *comp_ctx;
-    kgpc_target_abi_t target_abi;
-    int had_error;
-    CodeGenLoopFrame *loop_frames;
-    int loop_depth;
-    int loop_capacity;
-    CodeGenFinallyFrame *finally_stack;
-    int finally_depth;
-    int finally_capacity;
-    CodeGenExceptFrame *except_frames;
-    int except_depth;
-    int except_capacity;
-    int global_data_counter;
-    /* Lexical nesting depth for static links:
-     * 0 = top-level (main program or unit)
-     * 1 = nested in top-level
-     * 2 = nested in nested procedure, etc.
-     */
-    int lexical_depth;
-    int current_subprogram_lexical_depth;
-    const char *current_subprogram_id;
-    const char *current_subprogram_mangled;
-    const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
-    const char *current_subprogram_result_name;   /* Explicit Pascal result variable alias (NULL if none) */
-    const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
-    const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
-    int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
-    ListNode_t *current_subprogram_args;
-    /* Variable declarations of the current subprogram/program body, so
-     * STMT_EXIT and the implicit epilogue can find managed locals (e.g.
-     * dynamic arrays) needing finalization before the frame is torn down. */
-    ListNode_t *current_subprogram_declarations;
-    StackNode_t *current_return_slot;
-    KgpcType *current_return_type;
-    ListNode_t *static_link_procs;
+  int label_counter;
+  int write_label_counter;
+  FILE *output_file;
+  SymTab_t *symtab;
+  CompilationContext *comp_ctx;
+  kgpc_target_abi_t target_abi;
+  int had_error;
+  CodeGenLoopFrame *loop_frames;
+  int loop_depth;
+  int loop_capacity;
+  CodeGenFinallyFrame *finally_stack;
+  int finally_depth;
+  int finally_capacity;
+  CodeGenExceptFrame *except_frames;
+  int except_depth;
+  int except_capacity;
+  int global_data_counter;
+  /* Lexical nesting depth for static links:
+   * 0 = top-level (main program or unit)
+   * 1 = nested in top-level
+   * 2 = nested in nested procedure, etc.
+   */
+  int lexical_depth;
+  int current_subprogram_lexical_depth;
+  const char *current_subprogram_id;
+  const char *current_subprogram_mangled;
+  const char *current_subprogram_method_name; /* Bare method name (NULL for
+                                                 non-methods) */
+  const char *current_subprogram_result_name; /* Explicit Pascal result variable
+                                                 alias (NULL if none) */
+  const char *current_subprogram_owner_class; /* Innermost owning class name
+                                                 (NULL for non-methods) */
+  const char *current_subprogram_owner_class_full;  /* Full dotted class path
+                                                       (NULL if non-nested) */
+  int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram
+                                                       is a class
+                                                       function/procedure (Self
+                                                       = VMT ptr) */
+  ListNode_t *current_subprogram_args;
+  /* Variable declarations of the current subprogram/program body, so
+   * STMT_EXIT and the implicit epilogue can find managed locals (e.g.
+   * dynamic arrays) needing finalization before the frame is torn down. */
+  ListNode_t *current_subprogram_declarations;
+  StackNode_t *current_return_slot;
+  KgpcType *current_return_type;
+  ListNode_t *static_link_procs;
 
-    /* Flag indicating current function returns a dynamic array.
-     * When true, exit statements must call kgpc_dynarray_clone_descriptor. */
-    int returns_dynamic_array;
-    int dynamic_array_descriptor_size;
+  /* Flag indicating current function returns a dynamic array.
+   * When true, exit statements must call kgpc_dynarray_clone_descriptor. */
+  int returns_dynamic_array;
+  int dynamic_array_descriptor_size;
 
-    /* Record/ShortString return via SRET (caller-allocated buffer pointer).
-     * When current_record_return_slot is non-NULL the function uses SRET:
-     * the caller's destination buffer pointer is saved at
-     * `current_record_return_slot->offset` from %rbp.  EXIT must memcpy the
-     * local Result (current_return_slot) to that buffer instead of loading
-     * the first qword into %rax.  current_record_return_size is the number
-     * of bytes to copy (matches the size emitted by the regular epilogue). */
-    StackNode_t *current_record_return_slot;
-    long long current_record_return_size;
+  /* Record/ShortString return via SRET (caller-allocated buffer pointer).
+   * When current_record_return_slot is non-NULL the function uses SRET:
+   * the caller's destination buffer pointer is saved at
+   * `current_record_return_slot->offset` from %rbp.  EXIT must memcpy the
+   * local Result (current_return_slot) to that buffer instead of loading
+   * the first qword into %rax.  current_record_return_size is the number
+   * of bytes to copy (matches the size emitted by the regular epilogue). */
+  StackNode_t *current_record_return_slot;
+  long long current_record_return_size;
 
-    /* Cached static link traversal for the current expression. */
-    Register_t *static_link_reg;
-    int static_link_reg_level;
-    StackNode_t *static_link_spill_slot;
-    int pending_stack_arg_bytes;
-    ListNode_t *emitted_subprograms;
-    FILE *cache_output; /* When populating codegen cache: unit function sections written here */
-    CodeGenWithContext *with_stack;
-    int with_depth;
-    int with_capacity;
+  /* Cached static link traversal for the current expression. */
+  Register_t *static_link_reg;
+  int static_link_reg_level;
+  StackNode_t *static_link_spill_slot;
+  int pending_stack_arg_bytes;
+  ListNode_t *emitted_subprograms;
+  FILE *cache_output; /* When populating codegen cache: unit function sections
+                         written here */
+  CodeGenWithContext *with_stack;
+  int with_depth;
+  int with_capacity;
 
-    /* Asm parameter substitution for nostackframe functions.
-       When is_nostackframe is set, asm blocks substitute param names with ABI registers. */
-    int is_nostackframe;
-    int asm_param_count;
-    struct {
-        const char *name;   /* Pascal parameter name */
-        int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
-        int size_bytes;     /* Parameter size: 1,2,4,8 (0 = unknown → 64-bit) */
-    } asm_params[16];
+  /* Asm parameter substitution for nostackframe functions.
+     When is_nostackframe is set, asm blocks substitute param names with ABI
+     registers. */
+  int is_nostackframe;
+  int asm_param_count;
+  struct {
+    const char *name; /* Pascal parameter name */
+    int reg_index;    /* SysV ABI register index (0=%rdi,1=%rsi,...) */
+    int size_bytes;   /* Parameter size: 1,2,4,8 (0 = unknown → 64-bit) */
+  } asm_params[16];
 
-    /* Callee-saved register save slot offsets (from %rbp).
-       Set to 0 when not used (e.g. nostackframe functions). */
-    int callee_save_rbx_offset;
-    int callee_save_r12_offset;
-    int callee_save_r13_offset;
-    int callee_save_r14_offset;
-    int callee_save_r15_offset;
+  /* Callee-saved register save slot offsets (from %rbp).
+     Set to 0 when not used (e.g. nostackframe functions). */
+  int callee_save_rbx_offset;
+  int callee_save_r12_offset;
+  int callee_save_r13_offset;
+  int callee_save_r14_offset;
+  int callee_save_r15_offset;
 
-    /* Label to jump to after an 'on' exception handler body executes.
-       Set by codegen_try_except, read by codegen_on_exception. */
-    const char *on_except_after_label;
+  /* Label to jump to after an 'on' exception handler body executes.
+     Set by codegen_try_except, read by codegen_on_exception. */
+  const char *on_except_after_label;
 
-    /* Virtual register ID counter — reset to 0 at each function entry. */
-    int next_vreg_id;
+  /* Virtual register ID counter — reset to 0 at each function entry. */
+  int next_vreg_id;
 
-    /* Set to 1 when performing whole-program codegen (codegen()),
-     * 0 when performing direct unit codegen (codegen_unit()).
-     * Used to guard symtab-fallback passes that are only safe at link time. */
-    int is_whole_program;
+  /* Set to 1 when performing whole-program codegen (codegen()),
+   * 0 when performing direct unit codegen (codegen_unit()).
+   * Used to guard symtab-fallback passes that are only safe at link time. */
+  int is_whole_program;
 
-    /* Pending releases of class instances produced by constructor calls used
-     * as transient sub-expressions.  Each entry records the rbp offset of
-     * the stack slot that holds the freshly constructed instance pointer;
-     * after the enclosing statement finishes, codegen emits a
-     * kgpc_release_class_temp(slot) for every entry, then clears the list.
-     *
-     * Ownership semantics:
-     * - The expr_tree.c constructor allocation site pushes the slot when
-     *   it allocates.  This is BEFORE the constructor's own call instruction.
-     * - After every EXPR_FUNCTION_CALL in expr_tree.c, entries pushed
-     *   during ARGUMENT evaluation (i.e. above the snapshot taken right
-     *   after this call's own push, if any) are discarded — they were
-     *   passed to the callee which may have taken ownership (e.g.
-     *   `TFoo.Create(TBar.Create(...))` stores TBar as a field).
-     * - At codegen_stmt boundaries the list is flushed via emitted
-     *   kgpc_release_class_temp calls.
-     * - When a statement's top-level expression takes ownership (var/field
-     *   assignment, raise statement), the dispatcher pops the topmost
-     *   entry that the constructor's allocation pushed for itself. */
-    int *pending_ctor_temp_offsets;
-    int pending_ctor_temp_count;
-    int pending_ctor_temp_capacity;
+  /* Pending releases of class instances produced by constructor calls used
+   * as transient sub-expressions.  Each entry records the rbp offset of
+   * the stack slot that holds the freshly constructed instance pointer;
+   * after the enclosing statement finishes, codegen emits a
+   * kgpc_release_class_temp(slot) for every entry, then clears the list.
+   *
+   * Ownership semantics:
+   * - The expr_tree.c constructor allocation site pushes the slot when
+   *   it allocates.  This is BEFORE the constructor's own call instruction.
+   * - After every EXPR_FUNCTION_CALL in expr_tree.c, entries pushed
+   *   during ARGUMENT evaluation (i.e. above the snapshot taken right
+   *   after this call's own push, if any) are discarded — they were
+   *   passed to the callee which may have taken ownership (e.g.
+   *   `TFoo.Create(TBar.Create(...))` stores TBar as a field).
+   * - At codegen_stmt boundaries the list is flushed via emitted
+   *   kgpc_release_class_temp calls.
+   * - When a statement's top-level expression takes ownership (var/field
+   *   assignment, raise statement), the dispatcher pops the topmost
+   *   entry that the constructor's allocation pushed for itself. */
+  int *pending_ctor_temp_offsets;
+  int pending_ctor_temp_count;
+  int pending_ctor_temp_capacity;
 
-    /* Stack-offsets of dynarray temporaries produced by argument-marshalling
-     * (kgpc_dynarray_assign_from_temp into a `dynarray_arg` slot).  These
-     * slots own their element-data buffer for the lifetime of the function
-     * call site, but are never reachable through a user-declared variable,
-     * so the regular codegen_emit_managed_local_cleanup walk over
-     * declarations would never finalize them.  The function epilogue (and
-     * STMT_EXIT) walks this array and emits kgpc_dynarray_finalize_local
-     * for each slot to release the buffer before the frame is torn down.
-     *
-     * Idempotent: the runtime helper tolerates zeroed descriptors, so
-     * slots reused across iterations clean up cleanly. */
-    int *managed_dynarray_temp_offsets;
-    int managed_dynarray_temp_count;
-    int managed_dynarray_temp_capacity;
+  /* Stack-offsets of dynarray temporaries produced by argument-marshalling
+   * (kgpc_dynarray_assign_from_temp into a `dynarray_arg` slot).  These
+   * slots own their element-data buffer for the lifetime of the function
+   * call site, but are never reachable through a user-declared variable,
+   * so the regular codegen_emit_managed_local_cleanup walk over
+   * declarations would never finalize them.  The function epilogue (and
+   * STMT_EXIT) walks this array and emits kgpc_dynarray_finalize_local
+   * for each slot to release the buffer before the frame is torn down.
+   *
+   * Idempotent: the runtime helper tolerates zeroed descriptors, so
+   * slots reused across iterations clean up cleanly. */
+  int *managed_dynarray_temp_offsets;
+  int managed_dynarray_temp_count;
+  int managed_dynarray_temp_capacity;
 } CodeGenContext;
 
 /* Generates a label */
@@ -417,11 +433,12 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab,
-             CompilationContext *comp_ctx);
+void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx,
+             SymTab_t *symtab, CompilationContext *comp_ctx);
 
 /* Entry function for unit compilation */
-void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx,
+                  SymTab_t *symtab);
 
 ListNode_t *add_inst(ListNode_t *, const char *);
 void add_inst_invalidate_cache(void);
@@ -440,11 +457,11 @@ void add_inst_invalidate_cache(void);
  * The resulting ListNode_t has type LIST_IR_INST.
  * add_inst() is unchanged and continues to produce LIST_STRING nodes. */
 ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
-                        Register_t **defs, int n_defs,
-                        Register_t **uses, int n_uses,
-                        const char *fmt, ...);
+                        Register_t **defs, int n_defs, Register_t **uses,
+                        int n_uses, const char *fmt, ...);
 
-ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
+ListNode_t *gencode_jmp(int type, int inverse, char *label,
+                        ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);
 void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab);
@@ -458,16 +475,20 @@ void codegen_report_warning(const CodeGenContext *ctx, const char *fmt, ...);
 int codegen_had_error(const CodeGenContext *ctx);
 
 /* Convert a KgpcType to a legacy type tag.
- * This provides a centralized mapping from the new type system to the legacy tags
- * used throughout the code generator. */
+ * This provides a centralized mapping from the new type system to the legacy
+ * tags used throughout the code generator. */
 int codegen_tag_from_kgpc(const KgpcType *type);
 
 /* Lexical depth management for static links */
 int codegen_get_lexical_depth(const CodeGenContext *ctx);
 int codegen_is_nested_context(const CodeGenContext *ctx);
-void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_name, int lexical_depth);
-int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name);
-int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth);
+void codegen_register_static_link_proc(CodeGenContext *ctx,
+                                       const char *mangled_name,
+                                       int lexical_depth);
+int codegen_proc_requires_static_link(const CodeGenContext *ctx,
+                                      const char *mangled_name);
+int codegen_proc_static_link_depth(const CodeGenContext *ctx,
+                                   const char *mangled_name, int *out_depth);
 void codegen_destroy_static_link_procs(CodeGenContext *ctx);
 
 void codegen_reset_static_link_cache(CodeGenContext *ctx);
@@ -478,12 +499,15 @@ void codegen_reset_static_link_cache(CodeGenContext *ctx);
 void codegen_invalidate_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
-Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);
+Register_t *codegen_acquire_static_link(CodeGenContext *ctx,
+                                        ListNode_t **inst_list,
+                                        int levels_to_traverse);
 
 /* Pending constructor-result temp tracking.  See the comment on the
  * pending_ctor_temp_* fields in CodeGenContext. */
 void codegen_push_pending_ctor_temp(CodeGenContext *ctx, int rbp_offset);
-ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx, ListNode_t *inst_list);
+ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx,
+                                             ListNode_t *inst_list);
 void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx);
 
 /* Track a dynamic-array temporary slot (e.g. a `dynarray_arg` produced by
@@ -493,12 +517,13 @@ void codegen_destroy_pending_ctor_temps(CodeGenContext *ctx);
  * via `leaq -N(%rbp), ...`).  Duplicate offsets are coalesced. */
 void codegen_track_managed_dynarray_temp(CodeGenContext *ctx, int rbp_offset);
 ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
-    ListNode_t *inst_list);
+                                                       ListNode_t *inst_list);
 void codegen_destroy_managed_dynarray_temps(CodeGenContext *ctx);
 
-char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
-                       CompilationContext *comp_ctx);
-void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
+char *codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
+                      CompilationContext *comp_ctx);
+void codegen_function_locals(ListNode_t *, CodeGenContext *ctx,
+                             SymTab_t *symtab);
 
 /* Emit per-variable cleanup for managed dynamic-array locals/globals
  * declared in `declarations`.  For each declaration whose type contains
@@ -508,17 +533,22 @@ void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab
  * each dynarray descriptor.  Safe to invoke at function epilogue and from
  * STMT_EXIT — the helper is idempotent on already-cleared descriptors. */
 ListNode_t *codegen_emit_managed_local_cleanup(ListNode_t *inst_list,
-    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
+                                               ListNode_t *declarations,
+                                               CodeGenContext *ctx,
+                                               SymTab_t *symtab);
 ListNode_t *codegen_emit_managed_global_cleanup(ListNode_t *inst_list,
-    ListNode_t *declarations, CodeGenContext *ctx, SymTab_t *symtab);
+                                                ListNode_t *declarations,
+                                                CodeGenContext *ctx,
+                                                SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_procedure(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_function(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
-void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx,
+                              SymTab_t *symtab);
 ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *,
-    CodeGenContext *ctx, SymTab_t *symtab, int arg_start_index);
-
+                                         CodeGenContext *ctx, SymTab_t *symtab,
+                                         int arg_start_index);
 
 #endif

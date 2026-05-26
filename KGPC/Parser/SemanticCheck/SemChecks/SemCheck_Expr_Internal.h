@@ -45,34 +45,35 @@
 #include "../../../format_arg.h"
 #include "../../../unit_registry.h"
 
-HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
-    const struct TypeRef *type_ref, const char *type_id);
-HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
-    const struct TypeRef *type_ref, const char *type_id);
+HashNode_t *semcheck_find_preferred_type_node_with_ref(
+    SymTab_t *symtab, const struct TypeRef *type_ref, const char *type_id);
+HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(
+    SymTab_t *symtab, const struct TypeRef *type_ref, const char *type_id);
 HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
-    const char *type_id, const char *owner_full, const char *owner_outer);
+                                                   const char *type_id,
+                                                   const char *owner_full,
+                                                   const char *owner_outer);
 KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
-    struct Expression *expr, int *owned_out);
-int semcheck_class_type_ids_compatible(SymTab_t *symtab,
-    const char *formal_id, const char *actual_id);
-struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
-    struct RecordType *record_info);
-static inline int semcheck_method_is_declared_constructor(SymTab_t *symtab,
-    struct RecordType *record_info, const char *method_name)
-{
-    if (symtab == NULL || record_info == NULL || method_name == NULL)
-        return 0;
-
-    for (struct RecordType *search = record_info; search != NULL;
-         search = semcheck_lookup_parent_record(symtab, search))
-    {
-        struct MethodTemplate *tmpl =
-            from_cparser_get_method_template(search, method_name);
-        if (tmpl != NULL)
-            return tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR;
-    }
-
+                                            struct Expression *expr,
+                                            int *owned_out);
+int semcheck_class_type_ids_compatible(SymTab_t *symtab, const char *formal_id,
+                                       const char *actual_id);
+struct RecordType *
+semcheck_lookup_parent_record(SymTab_t *symtab, struct RecordType *record_info);
+static inline int semcheck_method_is_declared_constructor(
+    SymTab_t *symtab, struct RecordType *record_info, const char *method_name) {
+  if (symtab == NULL || record_info == NULL || method_name == NULL)
     return 0;
+
+  for (struct RecordType *search = record_info; search != NULL;
+       search = semcheck_lookup_parent_record(symtab, search)) {
+    struct MethodTemplate *tmpl =
+        from_cparser_get_method_template(search, method_name);
+    if (tmpl != NULL)
+      return tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR;
+  }
+
+  return 0;
 }
 
 /*===========================================================================
@@ -81,15 +82,15 @@ static inline int semcheck_method_is_declared_constructor(SymTab_t *symtab,
 
 /* Entry for the with context stack */
 typedef struct WithContextEntry {
-    struct Expression *context_expr;
-    struct RecordType *record_type;
+  struct Expression *context_expr;
+  struct RecordType *record_type;
 } WithContextEntry;
 
 /* Entry for type helper registry */
 typedef struct TypeHelperEntry {
-    char *base_type_id;
-    int base_type_tag;
-    struct RecordType *helper_record;
+  char *base_type_id;
+  int base_type_tag;
+  struct RecordType *helper_record;
 } TypeHelperEntry;
 
 /*===========================================================================
@@ -110,38 +111,39 @@ extern ListNode_t *type_helper_entries;
 
 /**
  * LEGACY WRAPPER - Use semcheck_expr_with_type() for new code.
- * 
+ *
  * This function is deprecated and should be replaced with either:
  * 1. semcheck_expr_with_type() - returns KgpcType* via output parameter
  * 2. semcheck_expr_main() - same, but more verbose signature
- * 
+ *
  * After calling this function, the expression's resolved_kgpc_type field
  * contains the full type information. The integer type_return is just
  * a lossy conversion of that type.
- * 
+ *
  * Migration pattern:
  *   OLD: semcheck_expr_legacy_tag(&tag, symtab, expr, scope, mutating);
  *        if (tag == INT_TYPE) ...
- * 
+ *
  *   NEW: semcheck_expr_with_type(&type, symtab, expr, scope, mutating);
  *        if (kgpc_type_is_integer(type)) ...
  */
 static inline int semcheck_expr_legacy_tag(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev, int mutating)
-{
-    KgpcType *resolved = NULL;
-    int result = semcheck_expr_main(symtab, expr, max_scope_lev, mutating, &resolved);
-    if (type_return != NULL)
-        *type_return = semcheck_tag_from_kgpc(resolved);
-    return result;
+                                           struct Expression *expr,
+                                           int max_scope_lev, int mutating) {
+  KgpcType *resolved = NULL;
+  int result =
+      semcheck_expr_main(symtab, expr, max_scope_lev, mutating, &resolved);
+  if (type_return != NULL)
+    *type_return = semcheck_tag_from_kgpc(resolved);
+  return result;
 }
 
 /**
  * Semantic check an expression and return its KgpcType.
- * 
+ *
  * This is the preferred API for new code. The returned type is owned by the
  * expression (expr->resolved_kgpc_type) and should not be freed by the caller.
- * 
+ *
  * @param out_type Output parameter for the resolved type (may be NULL)
  * @param symtab Symbol table
  * @param expr Expression to check
@@ -150,9 +152,9 @@ static inline int semcheck_expr_legacy_tag(int *type_return, SymTab_t *symtab,
  * @return Error count (0 on success)
  */
 static inline int semcheck_expr_with_type(KgpcType **out_type, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev, int mutating)
-{
-    return semcheck_expr_main(symtab, expr, max_scope_lev, mutating, out_type);
+                                          struct Expression *expr,
+                                          int max_scope_lev, int mutating) {
+  return semcheck_expr_main(symtab, expr, max_scope_lev, mutating, out_type);
 }
 
 /* Verifies a type is an INT_TYPE or REAL_TYPE */
@@ -168,8 +170,10 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 int types_numeric_compatible(int lhs, int rhs);
 
 /* Coerce char and string operands for comparison */
-void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
-                                          int *type_second, struct Expression *expr2);
+void semcheck_coerce_char_string_operands(int *type_first,
+                                          struct Expression *expr1,
+                                          int *type_second,
+                                          struct Expression *expr2);
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
 /* Check if expression is char-like (single char or char type) */
@@ -189,56 +193,60 @@ void semcheck_promote_pointer_expr_to_string(struct Expression *expr);
  *===========================================================================*/
 
 /* Variable identifier semantic check */
-int semcheck_varid(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
+                   int max_scope_lev, int mutating);
 
 /* Array access semantic check */
-int semcheck_arrayaccess(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_arrayaccess(int *type_return, SymTab_t *symtab,
+                         struct Expression *expr, int max_scope_lev,
+                         int mutating);
 
 /* Record access semantic check */
-int semcheck_recordaccess(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_recordaccess(int *type_return, SymTab_t *symtab,
+                          struct Expression *expr, int max_scope_lev,
+                          int mutating);
 
 /* Function call semantic check */
-int semcheck_funccall(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_funccall(int *type_return, SymTab_t *symtab,
+                      struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Relational operator semantic check */
-int semcheck_relop(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_relop(int *type_return, SymTab_t *symtab, struct Expression *expr,
+                   int max_scope_lev, int mutating);
 
 /* Sign term semantic check */
-int semcheck_signterm(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_signterm(int *type_return, SymTab_t *symtab,
+                      struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Addition operator semantic check */
-int semcheck_addop(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_addop(int *type_return, SymTab_t *symtab, struct Expression *expr,
+                   int max_scope_lev, int mutating);
 
 /* Multiplication operator semantic check */
-int semcheck_mulop(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_mulop(int *type_return, SymTab_t *symtab, struct Expression *expr,
+                   int max_scope_lev, int mutating);
 
 /* Typecast semantic check */
-int semcheck_typecast(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_typecast(int *type_return, SymTab_t *symtab,
+                      struct Expression *expr, int max_scope_lev, int mutating);
 
 /* IS expression semantic check */
-int semcheck_is_expr(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_is_expr(int *type_return, SymTab_t *symtab,
+                     struct Expression *expr, int max_scope_lev, int mutating);
 
 /* AS expression semantic check */
-int semcheck_as_expr(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_as_expr(int *type_return, SymTab_t *symtab,
+                     struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Pointer dereference semantic check */
-int semcheck_pointer_deref(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_pointer_deref(int *type_return, SymTab_t *symtab,
+                           struct Expression *expr, int max_scope_lev,
+                           int mutating);
 
 /* Address-of operator semantic check */
-int semcheck_addressof(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_addressof(int *type_return, SymTab_t *symtab,
+                       struct Expression *expr, int max_scope_lev,
+                       int mutating);
 
 /*===========================================================================
  * Pointer/Array Info Helpers
@@ -248,22 +256,26 @@ int semcheck_addressof(int *type_return,
 void semcheck_clear_pointer_info(struct Expression *expr);
 
 /* Set pointer info on expression */
-void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id);
+void semcheck_set_pointer_info(struct Expression *expr, int subtype,
+                               const char *type_id);
 
 /* Clear array info from expression */
 void semcheck_clear_array_info(struct Expression *expr);
 
 /* Set array info from KgpcType */
-void semcheck_set_array_info_from_kgpctype(struct Expression *expr, SymTab_t *symtab,
-    KgpcType *array_type, int line_num);
+void semcheck_set_array_info_from_kgpctype(struct Expression *expr,
+                                           SymTab_t *symtab,
+                                           KgpcType *array_type, int line_num);
 
 /* Set array info from TypeAlias */
-void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symtab,
-    struct TypeAlias *alias, int line_num);
+void semcheck_set_array_info_from_alias(struct Expression *expr,
+                                        SymTab_t *symtab,
+                                        struct TypeAlias *alias, int line_num);
 
 /* Set array info from HashNode */
-void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *symtab,
-    HashNode_t *node, int line_num);
+void semcheck_set_array_info_from_hashnode(struct Expression *expr,
+                                           SymTab_t *symtab, HashNode_t *node,
+                                           int line_num);
 
 /*===========================================================================
  * Function Call Helpers
@@ -276,16 +288,18 @@ void semcheck_reset_function_call_cache(struct Expression *expr);
 char *semcheck_dup_function_call_target_symbol(HashNode_t *target);
 
 /* Set function call target on expression */
-void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target);
+void semcheck_set_function_call_target(struct Expression *expr,
+                                       HashNode_t *target);
 void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
-    SymTab_t *symtab);
+                                                   SymTab_t *symtab);
 
 /* Set call KgpcType on function call expression */
 void semcheck_expr_set_call_kgpc_type(struct Expression *expr, KgpcType *type,
-    int owns_existing);
+                                      int owns_existing);
 
 /* Set resolved KgpcType on expression (shared/retained) */
-void semcheck_expr_set_resolved_kgpc_type_shared(struct Expression *expr, KgpcType *type);
+void semcheck_expr_set_resolved_kgpc_type_shared(struct Expression *expr,
+                                                 KgpcType *type);
 
 /*===========================================================================
  * Type Resolution Helpers
@@ -296,9 +310,10 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id);
 
 /* Resolve a type identifier to a type tag */
 int resolve_type_identifier(int *out_type, SymTab_t *symtab,
-    const char *type_id, int line_num);
+                            const char *type_id, int line_num);
 int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
-    const char *type_id, const struct TypeRef *type_ref, int line_num);
+                                const char *type_id,
+                                const struct TypeRef *type_ref, int line_num);
 
 /* Get type name from type tag (display only — not for symbol table lookups) */
 const char *semcheck_type_tag_name(int type_tag);
@@ -328,55 +343,61 @@ struct TypeAlias *get_type_alias_from_node(HashNode_t *node);
 int node_is_record_type(HashNode_t *node);
 
 /* Lookup record type by type_id */
-struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab,
+                                               const char *type_id);
 
 /* Lookup parent record in class hierarchy */
-struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
-    struct RecordType *record_info);
+struct RecordType *
+semcheck_lookup_parent_record(SymTab_t *symtab, struct RecordType *record_info);
 
 /* Find property in class hierarchy */
-struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
-    struct RecordType *record_info, const char *property_name,
-    struct RecordType **owner_out);
+struct ClassProperty *
+semcheck_find_class_property(SymTab_t *symtab, struct RecordType *record_info,
+                             const char *property_name,
+                             struct RecordType **owner_out);
 
 /* Find field in class hierarchy */
 struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
-    struct RecordType *record_info, const char *field_name,
-    struct RecordType **owner_out);
+                                              struct RecordType *record_info,
+                                              const char *field_name,
+                                              struct RecordType **owner_out);
 
 /* Find field in class hierarchy (including hidden fields) */
-struct RecordField *semcheck_find_class_field_including_hidden(SymTab_t *symtab,
-    struct RecordType *record_info, const char *field_name,
+struct RecordField *semcheck_find_class_field_including_hidden(
+    SymTab_t *symtab, struct RecordType *record_info, const char *field_name,
     struct RecordType **owner_out);
 
 /* Cheap metadata-only gate for speculative method lookup. */
 int semcheck_record_may_have_method_name(SymTab_t *symtab,
-    struct RecordType *record_info, const char *method_name);
+                                         struct RecordType *record_info,
+                                         const char *method_name);
 
 /* Find method in class hierarchy */
 HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
-    struct RecordType *record_info, const char *method_name,
-    struct RecordType **owner_out);
+                                       struct RecordType *record_info,
+                                       const char *method_name,
+                                       struct RecordType **owner_out);
 
 /* Walk a Tree_t parameter list and return an owned TypeRef** array (one entry
  * per declared parameter name, cloning each param's type_ref).  Writes the
  * count to *out_count.  Returns NULL with *out_count=0 when the list is
  * empty.  Caller frees with param_types_free(). */
 struct TypeRef **semcheck_param_types_from_params(ListNode_t *params,
-    int skip_first_param, int *out_count);
+                                                  int skip_first_param,
+                                                  int *out_count);
 
 /* Collect all method overloads across the full class hierarchy.
  * Walks from start_record up through parent classes, collecting
  * all overloads of the named method into a single list.
  * Detects cyclic hierarchies explicitly and enforces a hard depth bound. */
-ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
-    struct RecordType *start_record, const char *method_name);
+ListNode_t *semcheck_collect_hierarchy_method_overloads(
+    SymTab_t *symtab, struct RecordType *start_record, const char *method_name);
 
 /* Merge new_candidates into *existing by pointer-identity dedup.
  * Nodes from new_candidates already in *existing are freed;
  * unique nodes are appended.  After the call, new_candidates is consumed. */
 void semcheck_merge_candidate_lists_dedup(ListNode_t **existing,
-    ListNode_t *new_candidates);
+                                          ListNode_t *new_candidates);
 
 /* Get type name from expression (for operator overloading) */
 const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab);
@@ -386,13 +407,16 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab);
  *===========================================================================*/
 
 /* Get type info from a class property */
-int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *property,
-    int line_num, int *type_out, struct RecordType **record_out);
+int semcheck_property_type_info(SymTab_t *symtab,
+                                struct ClassProperty *property, int line_num,
+                                int *type_out, struct RecordType **record_out);
 
 /* Transform expression to property getter call */
-int semcheck_transform_property_getter_call(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating,
-    HashNode_t *method_node, struct RecordType *owner_record);
+int semcheck_transform_property_getter_call(int *type_return, SymTab_t *symtab,
+                                            struct Expression *expr,
+                                            int max_scope_lev, int mutating,
+                                            HashNode_t *method_node,
+                                            struct RecordType *owner_record);
 
 /*===========================================================================
  * Array/Record Constructor Helpers
@@ -403,17 +427,23 @@ int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
 
 /* Typecheck an array literal */
 int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
-    int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
+                                     int max_scope_lev, int expected_type,
+                                     const char *expected_type_id,
+                                     int line_num);
 
 /* Typecheck a record constructor */
-int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *symtab,
-    int max_scope_lev, struct RecordType *record_type, int line_num);
+int semcheck_typecheck_record_constructor(struct Expression *expr,
+                                          SymTab_t *symtab, int max_scope_lev,
+                                          struct RecordType *record_type,
+                                          int line_num);
 
 /* Get record type from declaration */
-struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t *symtab);
+struct RecordType *semcheck_record_type_from_decl(Tree_t *decl,
+                                                  SymTab_t *symtab);
 
 /* Get expected KgpcType for a record field */
-KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField *field);
+KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab,
+                                            struct RecordField *field);
 
 /*===========================================================================
  * With Context Helpers
@@ -424,108 +454,121 @@ int ensure_with_capacity(void);
 
 /* Resolve record type for with statement */
 struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
-    struct Expression *context_expr, int expr_type, int line_num);
+                                                struct Expression *context_expr,
+                                                int expr_type, int line_num);
 
 /*===========================================================================
  * Builtin Call Helpers
  *===========================================================================*/
 
 /* Free function call arguments, preserving one expression */
-void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr);
+void semcheck_free_call_args(ListNode_t *args,
+                             struct Expression *preserve_expr);
 
 /* Replace function call with integer literal */
-void semcheck_replace_call_with_integer_literal(struct Expression *expr, long long value);
+void semcheck_replace_call_with_integer_literal(struct Expression *expr,
+                                                long long value);
 
 /* Prepare dynamic array High() call */
 int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev, struct Expression *array_expr);
+                                        struct Expression *expr,
+                                        int max_scope_lev,
+                                        struct Expression *array_expr);
 
 /*===========================================================================
  * Builtin Functions (used by SemCheck_Expr_Builtins.c)
  *===========================================================================*/
 
 int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                            struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                          struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                            struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                            struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                          struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                              struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                           struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev, int is_succ);
+                              struct Expression *expr, int max_scope_lev,
+                              int is_succ);
 int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev, int is_high);
+                             struct Expression *expr, int max_scope_lev,
+                             int is_high);
 int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                             struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                              struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                            struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_bitsizeof(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                               struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                                   struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev, const char *display_name,
-    const char *mangled_name, int result_type);
+                                struct Expression *expr, int max_scope_lev,
+                                const char *display_name,
+                                const char *mangled_name, int result_type);
 int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                             struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                           struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                          struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                            struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                           struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                             struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                              struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_new_func(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                              struct Expression *expr, int max_scope_lev);
 
 /*===========================================================================
  * Miscellaneous Internal Helpers
  *===========================================================================*/
 
 /* Try to reinterpret a function call as a typecast */
-int semcheck_try_reinterpret_as_typecast(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev);
+int semcheck_try_reinterpret_as_typecast(int *type_return, SymTab_t *symtab,
+                                         struct Expression *expr,
+                                         int max_scope_lev);
 
 /* Reinterpret typecast as call (for Create constructors) */
 int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
+                                          struct Expression *expr,
+                                          int max_scope_lev);
 
 /* Try indexed property getter */
-int semcheck_try_indexed_property_getter(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_try_indexed_property_getter(int *type_return, SymTab_t *symtab,
+                                         struct Expression *expr,
+                                         int max_scope_lev, int mutating);
 
 /* Mangle helper const ID */
-char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *field_id);
+char *semcheck_mangle_helper_const_id(const char *helper_type_id,
+                                      const char *field_id);
 
 /* Debug helper */
-void semcheck_debug_expr_brief(const struct Expression *expr, const char *label);
+void semcheck_debug_expr_brief(const struct Expression *expr,
+                               const char *label);
 
 #endif /* SEM_CHECK_EXPR_INTERNAL_H */

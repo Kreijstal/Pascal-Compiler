@@ -4,20 +4,22 @@
 #include "parser.h"
 #include "combinators.h"
 
-extern ast_t* ast_nil;
+extern ast_t *ast_nil;
 
 // Helper function to create parameter parser (reduces code duplication)
-combinator_t* create_pascal_param_parser(void);
+combinator_t *create_pascal_param_parser(void);
 
-// Helper function to create operator name parser (supports both symbols and names)
-combinator_t* operator_name(tag_t tag);
+// Helper function to create operator name parser (supports both symbols and
+// names)
+combinator_t *operator_name(tag_t tag);
 
-// Helper function to create generic type lookahead (checks for '< identifier' pattern)
-combinator_t* create_generic_type_lookahead(void);
+// Helper function to create generic type lookahead (checks for '< identifier'
+// pattern)
+combinator_t *create_generic_type_lookahead(void);
 
-void init_pascal_procedure_parser(combinator_t** p);
-void init_pascal_method_implementation_parser(combinator_t** p);
-void init_pascal_complete_program_parser(combinator_t** p);
-void init_pascal_unit_parser(combinator_t** p);
+void init_pascal_procedure_parser(combinator_t **p);
+void init_pascal_method_implementation_parser(combinator_t **p);
+void init_pascal_complete_program_parser(combinator_t **p);
+void init_pascal_unit_parser(combinator_t **p);
 
 #endif // PASCAL_DECLARATION_H

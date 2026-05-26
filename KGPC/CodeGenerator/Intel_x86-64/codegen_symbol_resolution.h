@@ -15,14 +15,14 @@
 #define CG_COLLISION_BUCKETS 256
 
 typedef struct CgCollisionEntry {
-    char *mangled_id;
-    int first_unit_index;
-    int is_colliding;
-    struct CgCollisionEntry *next;
+  char *mangled_id;
+  int first_unit_index;
+  int is_colliding;
+  struct CgCollisionEntry *next;
 } CgCollisionEntry;
 
 typedef struct {
-    CgCollisionEntry *buckets[CG_COLLISION_BUCKETS];
+  CgCollisionEntry *buckets[CG_COLLISION_BUCKETS];
 } CgCollisionMap;
 
 void cg_collision_destroy(CgCollisionMap *map);
@@ -33,7 +33,8 @@ void cg_collision_destroy(CgCollisionMap *map);
 
 int codegen_runtime_owns_exported_symbol(const char *symbol);
 
-void codegen_collect_mangled_collisions(ListNode_t *sub_list, CgCollisionMap *map);
+void codegen_collect_mangled_collisions(ListNode_t *sub_list,
+                                        CgCollisionMap *map);
 void codegen_apply_collision_prefixes(ListNode_t *sub_list, SymTab_t *symtab,
                                       const CgCollisionMap *map);
 

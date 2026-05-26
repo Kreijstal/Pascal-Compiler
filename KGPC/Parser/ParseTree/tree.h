@@ -20,214 +20,245 @@ typedef struct Tree Tree_t;
 struct HashNode;
 
 /* Enum for readability */
-enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
-    TREE_CONST_DECL, TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC,
-    TREE_TYPE_DECL, TREE_UNIT};
+enum TreeType {
+  TREE_PROGRAM_TYPE,
+  TREE_SUBPROGRAM,
+  TREE_VAR_DECL,
+  TREE_ARR_DECL,
+  TREE_CONST_DECL,
+  TREE_STATEMENT_TYPE,
+  TREE_SUBPROGRAM_PROC,
+  TREE_SUBPROGRAM_FUNC,
+  TREE_TYPE_DECL,
+  TREE_UNIT
+};
 
-typedef struct Tree
-{
-    int line_num;
-    int source_index;
-    int type;
-    union tree_data
-    {
-        /* Program Variables */
-        struct Program
-        {
-            char *program_id;
+typedef struct Tree {
+  int line_num;
+  int source_index;
+  int type;
+  union tree_data {
+    /* Program Variables */
+    struct Program {
+      char *program_id;
 
-            ListNode_t *args_char;
-            ListNode_t *uses_units;
-            ListNode_t *label_declaration;
-            ListNode_t *const_declaration;
-            ListNode_t *var_declaration;
-            ListNode_t *type_declaration;
-            ListNode_t *subprograms;
-            struct Statement *body_statement;
-            ListNode_t *finalization_statements; /* List of Statement* from units, stored in reverse order */
-        } program_data;
+      ListNode_t *args_char;
+      ListNode_t *uses_units;
+      ListNode_t *label_declaration;
+      ListNode_t *const_declaration;
+      ListNode_t *var_declaration;
+      ListNode_t *type_declaration;
+      ListNode_t *subprograms;
+      struct Statement *body_statement;
+      ListNode_t *finalization_statements; /* List of Statement* from units,
+                                              stored in reverse order */
+    } program_data;
 
-        /* Pascal unit */
-        struct Unit
-        {
-            char *unit_id;
-            ListNode_t *interface_uses;
-            ListNode_t *interface_const_decls;
-            ListNode_t *interface_type_decls;
-            ListNode_t *interface_var_decls;
-            ListNode_t *implementation_uses;
-            ListNode_t *implementation_const_decls;
-            ListNode_t *implementation_type_decls;
-            ListNode_t *implementation_var_decls;
-            ListNode_t *subprograms;
-            struct Statement *initialization;
-            struct Statement *finalization;
-        } unit_data;
+    /* Pascal unit */
+    struct Unit {
+      char *unit_id;
+      ListNode_t *interface_uses;
+      ListNode_t *interface_const_decls;
+      ListNode_t *interface_type_decls;
+      ListNode_t *interface_var_decls;
+      ListNode_t *implementation_uses;
+      ListNode_t *implementation_const_decls;
+      ListNode_t *implementation_type_decls;
+      ListNode_t *implementation_var_decls;
+      ListNode_t *subprograms;
+      struct Statement *initialization;
+      struct Statement *finalization;
+    } unit_data;
 
-        /* A type declaration */
-        struct TypeDecl
-        {
-            char *id;
-            enum TypeDeclKind kind;
-            struct KgpcType *kgpc_type;
-            int suppress_codegen;
-            int defined_in_unit;
-            int unit_is_public;
-            int source_unit_index; /* Unit registry index (0 = local/unknown) */
-            union
-            {
-                struct
-                {
-                    int start;
-                    int end;
-                } range;
-                struct RecordType *record;
-                struct TypeAlias alias;
-                struct GenericDecl generic;
-            } info;
-        } type_decl_data;
+    /* A type declaration */
+    struct TypeDecl {
+      char *id;
+      enum TypeDeclKind kind;
+      struct KgpcType *kgpc_type;
+      int suppress_codegen;
+      int defined_in_unit;
+      int unit_is_public;
+      int source_unit_index; /* Unit registry index (0 = local/unknown) */
+      union {
+        struct {
+          int start;
+          int end;
+        } range;
+        struct RecordType *record;
+        struct TypeAlias alias;
+        struct GenericDecl generic;
+      } info;
+    } type_decl_data;
 
-        /* A subprogram */
-        struct Subprogram
-        {
-            /* FUNCTION or PROCEDURE */
-            enum TreeType sub_type;
-            char *id;
-            char *mangled_id;
-            ListNode_t *args_var;
-            ListNode_t *const_declarations;
-            ListNode_t *label_declarations;
-            ListNode_t *type_declarations;
-            int return_type; /* Should be -1 for PROCEDURE */
-            char *return_type_id;
-            struct TypeRef *return_type_ref;
-            struct TypeAlias *inline_return_type;  /* For inline complex return types like array of string */
-            int cname_flag;
-            char *cname_override;
-            int overload_flag;
-            int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
-            int is_nested; /* 1 if this subprogram is nested (non-method) */
-            int requires_static_link;  /* 1 if this function needs to RECEIVE a static link from caller */
-            int has_nested_requiring_link;  /* 1 if this function has nested children that need static links */
-            int defined_in_unit;
-            int unit_is_public; /* 1 if declared in interface section, 0 if implementation only */
-            int source_unit_index; /* Unit registry index (0 = local/unknown) */
+    /* A subprogram */
+    struct Subprogram {
+      /* FUNCTION or PROCEDURE */
+      enum TreeType sub_type;
+      char *id;
+      char *mangled_id;
+      ListNode_t *args_var;
+      ListNode_t *const_declarations;
+      ListNode_t *label_declarations;
+      ListNode_t *type_declarations;
+      int return_type; /* Should be -1 for PROCEDURE */
+      char *return_type_id;
+      struct TypeRef *return_type_ref;
+      struct TypeAlias *inline_return_type; /* For inline complex return types
+                                               like array of string */
+      int cname_flag;
+      char *cname_override;
+      int overload_flag;
+      int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in
+                            program, etc. */
+      int is_nested;     /* 1 if this subprogram is nested (non-method) */
+      int requires_static_link; /* 1 if this function needs to RECEIVE a static
+                                   link from caller */
+      int has_nested_requiring_link; /* 1 if this function has nested children
+                                        that need static links */
+      int defined_in_unit;
+      int unit_is_public;    /* 1 if declared in interface section, 0 if
+                                implementation only */
+      int source_unit_index; /* Unit registry index (0 = local/unknown) */
 
-            ListNode_t *declarations;
-            ListNode_t *subprograms;
-            struct Statement *statement_list;
-            int is_used;
-            char **generic_type_params;   /* Generic type parameter names (e.g., ["T"]) */
-            int num_generic_type_params;  /* Number of generic type parameters */
-            int is_generic_template;      /* 1 if this is an unspecialized generic template (not emitted by codegen) */
-            struct ast_t *generic_template_ast; /* AST template for generic subprogram cloning */
-            int generic_template_source_offset; /* source buffer offset active when template was saved */
-            char *result_var_name;        /* Named result variable (e.g., "dest" in operator :=(src) dest: Type) */
-            char *method_name;            /* Bare method name (NULL for non-methods) */
-            char *owner_class;            /* Innermost owning class name (NULL for non-methods) */
-            char *owner_class_full;       /* Full dotted class path for nested classes, e.g. "TOuter.TInner" (NULL for non-methods or non-nested) */
-            char *owner_class_outer;      /* Outer class path for nested classes, e.g. "TOuter" for "TOuter.TInner" (NULL if not nested) */
-            int is_constructor;           /* 1 if declared with constructor */
-            int is_static_method;         /* 1 if method is static (no implicit Self) */
-            int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
-            int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
-            int is_operator;              /* 1 if declared with operator keyword (class operator, global operator) */
-            char *internproc_id;          /* FPC [INTERNPROC: name] identifier (e.g. "fpc_in_Rewrite_TypedFile") */
-            char *internconst_id;         /* FPC [INTERNCONST: name] identifier (e.g. "fpc_in_const_ptr") */
-            int is_nested_scope;          /* 1 if nested inside another function (mangled as parent$child) */
-            struct HashNode *cached_predecl_node; /* Cached predeclaration match for semcheck Pass 2 */
-        } subprogram_data;
+      ListNode_t *declarations;
+      ListNode_t *subprograms;
+      struct Statement *statement_list;
+      int is_used;
+      char *
+          *generic_type_params; /* Generic type parameter names (e.g., ["T"]) */
+      int num_generic_type_params; /* Number of generic type parameters */
+      int is_generic_template; /* 1 if this is an unspecialized generic template
+                                  (not emitted by codegen) */
+      struct ast_t *generic_template_ast; /* AST template for generic subprogram
+                                             cloning */
+      int generic_template_source_offset; /* source buffer offset active when
+                                             template was saved */
+      char *result_var_name; /* Named result variable (e.g., "dest" in operator
+                                :=(src) dest: Type) */
+      char *method_name;     /* Bare method name (NULL for non-methods) */
+      char
+          *owner_class; /* Innermost owning class name (NULL for non-methods) */
+      char *owner_class_full; /* Full dotted class path for nested classes, e.g.
+                                 "TOuter.TInner" (NULL for non-methods or
+                                 non-nested) */
+      char *owner_class_outer; /* Outer class path for nested classes, e.g.
+                                  "TOuter" for "TOuter.TInner" (NULL if not
+                                  nested) */
+      int is_constructor;      /* 1 if declared with constructor */
+      int is_static_method;    /* 1 if method is static (no implicit Self) */
+      int nostackframe; /* 1 if declared with nostackframe directive (skip
+                           prologue/epilogue) */
+      int is_varargs; /* 1 if declared with varargs directive (C-style variadic)
+                       */
+      int is_operator; /* 1 if declared with operator keyword (class operator,
+                          global operator) */
+      char *internproc_id;  /* FPC [INTERNPROC: name] identifier (e.g.
+                               "fpc_in_Rewrite_TypedFile") */
+      char *internconst_id; /* FPC [INTERNCONST: name] identifier (e.g.
+                               "fpc_in_const_ptr") */
+      int is_nested_scope;  /* 1 if nested inside another function (mangled as
+                               parent$child) */
+      struct HashNode *cached_predecl_node; /* Cached predeclaration match for
+                                               semcheck Pass 2 */
+    } subprogram_data;
 
-        /* A variable declaration */
-        /* Also used for variable arguments */
-        struct Var
-        {
-            ListNode_t *ids;
-            int type; /* Int, or real */
-            char *type_id;
-            struct TypeRef *type_ref;
-            int is_var_param;
-            int is_const_param;
-            int is_untyped_param;
-            int inferred_type;
-            struct Statement *initializer;
-            int is_typed_const;
-            int has_static_storage;
-            int static_storage_emitted;
-            char *static_label;
-            int static_init_emitted; /* set when a typed-const record's storage
-                                      * has been initialised statically in .data,
-                                      * so the runtime field-by-field init can be
-                                      * skipped (avoids clobbering C-side constructor
-                                      * overrides of fields like MemoryManager.*) */
-            int currency_scaled;
-            struct RecordType *inline_record_type;  /* For inline record declarations */
-            struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */
-            struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
-            int defined_in_unit;
-            int unit_is_public;
-            int source_unit_index;   /* Unit registry index (0 = local/program) */
-            char *cname_override;    /* External/public name alias (FPC bootstrap) */
-            int is_external;         /* True if declared with 'external name' */
-            char *absolute_target;   /* Absolute alias target name, if any */
-            char *absolute_base_id;  /* Base identifier for absolute targets */
-            char *absolute_field_id; /* Field identifier for absolute targets */
-        } var_decl_data;
+    /* A variable declaration */
+    /* Also used for variable arguments */
+    struct Var {
+      ListNode_t *ids;
+      int type; /* Int, or real */
+      char *type_id;
+      struct TypeRef *type_ref;
+      int is_var_param;
+      int is_const_param;
+      int is_untyped_param;
+      int inferred_type;
+      struct Statement *initializer;
+      int is_typed_const;
+      int has_static_storage;
+      int static_storage_emitted;
+      char *static_label;
+      int static_init_emitted; /* set when a typed-const record's storage
+                                * has been initialised statically in .data,
+                                * so the runtime field-by-field init can be
+                                * skipped (avoids clobbering C-side constructor
+                                * overrides of fields like MemoryManager.*) */
+      int currency_scaled;
+      struct RecordType
+          *inline_record_type; /* For inline record declarations */
+      struct TypeAlias
+          *inline_type_alias; /* For inline complex aliases (file of T, etc.) */
+      struct KgpcType
+          *cached_kgpc_type; /* Retained type info for codegen fallback */
+      int defined_in_unit;
+      int unit_is_public;
+      int source_unit_index;   /* Unit registry index (0 = local/program) */
+      char *cname_override;    /* External/public name alias (FPC bootstrap) */
+      int is_external;         /* True if declared with 'external name' */
+      char *absolute_target;   /* Absolute alias target name, if any */
+      char *absolute_base_id;  /* Base identifier for absolute targets */
+      char *absolute_field_id; /* Field identifier for absolute targets */
+    } var_decl_data;
 
-        /* An array declaration */
-        /* Also used for array arguments */
-        struct Array
-        {
-            ListNode_t *ids;
-            int type; /* Int, or real */
-            char *type_id;
-            struct TypeRef *type_ref;
-            struct RecordType *inline_record_type;  /* Inline record element type */
-            struct KgpcType *element_kgpc_type;    /* Pre-built element type for nested arrays */
+    /* An array declaration */
+    /* Also used for array arguments */
+    struct Array {
+      ListNode_t *ids;
+      int type; /* Int, or real */
+      char *type_id;
+      struct TypeRef *type_ref;
+      struct RecordType *inline_record_type; /* Inline record element type */
+      struct KgpcType
+          *element_kgpc_type; /* Pre-built element type for nested arrays */
 
-            int s_range;
-            int e_range;
-            char *range_str;  /* Original range string (e.g., "1..N") for constant resolution */
-            char *range_start_str; /* Symbolic lower bound (e.g., "1"), NULL if not parsed */
-            char *range_end_str;   /* Symbolic upper bound (e.g., "N"), NULL if not parsed */
-            struct Statement *initializer;
-            int is_typed_const;
-            int is_shortstring;
-            int has_static_storage;
-            int static_storage_emitted;
-            char *static_label;
-            char *init_guard_label;
-            int defined_in_unit;
-            int unit_is_public;
-            int source_unit_index;   /* Unit registry index (0 = local/program) */
-            char *unresolved_index_type;  /* Deferred enum index type name, resolved after all units load */
-            ListNode_t *array_dimensions;  /* Multi-dim range strings, e.g. ["1..3", "1..4"] */
-        } arr_decl_data;
+      int s_range;
+      int e_range;
+      char *range_str; /* Original range string (e.g., "1..N") for constant
+                          resolution */
+      char *range_start_str; /* Symbolic lower bound (e.g., "1"), NULL if not
+                                parsed */
+      char *range_end_str;   /* Symbolic upper bound (e.g., "N"), NULL if not
+                                parsed */
+      struct Statement *initializer;
+      int is_typed_const;
+      int is_shortstring;
+      int has_static_storage;
+      int static_storage_emitted;
+      char *static_label;
+      char *init_guard_label;
+      int defined_in_unit;
+      int unit_is_public;
+      int source_unit_index;       /* Unit registry index (0 = local/program) */
+      char *unresolved_index_type; /* Deferred enum index type name, resolved
+                                      after all units load */
+      ListNode_t *
+          array_dimensions; /* Multi-dim range strings, e.g. ["1..3", "1..4"] */
+    } arr_decl_data;
 
-        /* A constant declaration */
-        struct Const
-        {
-            char *id;
-            char *type_id;
-            struct TypeRef *type_ref;
-            struct Expression *value;
-            int defined_in_unit;
-            int unit_is_public;
-            int source_unit_index;   /* Unit registry index (0 = local/program) */
-        } const_decl_data;
+    /* A constant declaration */
+    struct Const {
+      char *id;
+      char *type_id;
+      struct TypeRef *type_ref;
+      struct Expression *value;
+      int defined_in_unit;
+      int unit_is_public;
+      int source_unit_index; /* Unit registry index (0 = local/program) */
+    } const_decl_data;
 
-        /* A single statement (Can be made up of multiple statements) */
-        /* See "tree_types.h" for details */
-        struct Statement *statement_data;
+    /* A single statement (Can be made up of multiple statements) */
+    /* See "tree_types.h" for details */
+    struct Statement *statement_data;
 
-    } tree_data;
+  } tree_data;
 } Tree_t;
 
 /* GLOBAL TREE */
 extern Tree_t *parse_tree;
 
 /* WARNING: Copies are NOT made. Make sure given pointers are safe! */
-/* WARNING: Destroying the tree WILL free given pointers. Do not reference after free! */
+/* WARNING: Destroying the tree WILL free given pointers. Do not reference after
+ * free! */
 
 /* NOTE: tree_print and destroy_tree implicitely call stmt and expr functions */
 /* Tree printing */
@@ -243,93 +274,123 @@ void destroy_tree(Tree_t *tree);
 void destroy_stmt(struct Statement *stmt);
 void destroy_expr(struct Expression *expr);
 void destroy_record_type(struct RecordType *record_type);
-struct MethodTemplate *clone_method_template_detached(const struct MethodTemplate *method);
+struct MethodTemplate *
+clone_method_template_detached(const struct MethodTemplate *method);
 struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
-    ListNode_t *labels, ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement);
+                   ListNode_t *labels, ListNode_t *const_decl,
+                   ListNode_t *var_decl, ListNode_t *type_decl,
+                   ListNode_t *subprograms,
+                   struct Statement *compound_statement);
 
-Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
-    ListNode_t *interface_const_decls, ListNode_t *interface_type_decls,
-    ListNode_t *interface_var_decls, ListNode_t *implementation_uses,
-    ListNode_t *implementation_const_decls,
-    ListNode_t *implementation_type_decls,
-    ListNode_t *implementation_var_decls, ListNode_t *subprograms,
-    struct Statement *initialization, struct Statement *finalization);
+Tree_t *
+mk_unit(int line_num, char *id, ListNode_t *interface_uses,
+        ListNode_t *interface_const_decls, ListNode_t *interface_type_decls,
+        ListNode_t *interface_var_decls, ListNode_t *implementation_uses,
+        ListNode_t *implementation_const_decls,
+        ListNode_t *implementation_type_decls,
+        ListNode_t *implementation_var_decls, ListNode_t *subprograms,
+        struct Statement *initialization, struct Statement *finalization);
 
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
-Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end);
+Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type,
+                         char *type_id, int start, int end);
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
-Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement,
-    int cname_flag, int overload_flag);
+Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args,
+                     ListNode_t *const_decl, ListNode_t *label_decl,
+                     ListNode_t *type_decl, ListNode_t *var_decl,
+                     ListNode_t *subprograms,
+                     struct Statement *compound_statement, int cname_flag,
+                     int overload_flag);
 
-Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement,
-    int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag);
+Tree_t *mk_function(int line_num, char *id, ListNode_t *args,
+                    ListNode_t *const_decl, ListNode_t *label_decl,
+                    ListNode_t *type_decl, ListNode_t *var_decl,
+                    ListNode_t *subprograms,
+                    struct Statement *compound_statement, int return_type,
+                    char *return_type_id, struct TypeAlias *inline_return_type,
+                    int cname_flag, int overload_flag);
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
-    int is_var_param, int inferred_type, struct Statement *initializer,
-    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias,
-    char *absolute_target);
+                   int is_var_param, int inferred_type,
+                   struct Statement *initializer,
+                   struct RecordType *inline_record_type,
+                   struct TypeAlias *inline_type_alias, char *absolute_target);
 
-Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    char *range_str, struct Statement *initializer, struct RecordType *inline_record_type);
+Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id,
+                     int start, int end, char *range_str,
+                     struct Statement *initializer,
+                     struct RecordType *inline_record_type);
 
-Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value);
+Tree_t *mk_constdecl(int line_num, char *id, char *type_id,
+                     struct Expression *value);
 
 /* Statement routines */
-struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var, struct Expression *expr);
+struct Statement *mk_varassign(int line_num, int col_num,
+                               struct Expression *var, struct Expression *expr);
 struct Statement *mk_label(int line_num, char *label, struct Statement *stmt);
 struct Statement *mk_goto(int line_num, char *label);
 
-struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args);
-struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr);
+struct Statement *mk_procedurecall(int line_num, char *id,
+                                   ListNode_t *expr_args);
+struct Statement *mk_exprstmt(int line_num, int col_num,
+                              struct Expression *expr);
 
-struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statement);
+struct Statement *mk_compoundstatement(int line_num,
+                                       ListNode_t *compound_statement);
 
-struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct Statement *if_stmt,
+struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop,
+                            struct Statement *if_stmt,
                             struct Statement *else_stmt);
 
 struct Statement *mk_while(int line_num, struct Expression *eval_relop,
-                            struct Statement *while_stmt);
+                           struct Statement *while_stmt);
 
 struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
                             struct Expression *until_expr);
 
-struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struct Expression *to,
-                               struct Statement *do_for, int is_downto);
+struct Statement *mk_forassign(int line_num, struct Statement *for_assign,
+                               struct Expression *to, struct Statement *do_for,
+                               int is_downto);
 
-struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Expression *to,
-                              struct Statement *do_for, int is_downto);
+struct Statement *mk_forvar(int line_num, struct Expression *for_var,
+                            struct Expression *to, struct Statement *do_for,
+                            int is_downto);
 
-struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Expression *collection,
-                             struct Statement *do_stmt);
+struct Statement *mk_for_in(int line_num, struct Expression *loop_var,
+                            struct Expression *collection,
+                            struct Statement *do_stmt);
 
-struct Statement *mk_asmblock(int line_num, char *code, enum AsmSyntaxMode syntax_mode);
+struct Statement *mk_asmblock(int line_num, char *code,
+                              enum AsmSyntaxMode syntax_mode);
 
 struct Statement *mk_exit(int line_num);
-struct Statement *mk_exit_with_value(int line_num, struct Expression *return_expr);
+struct Statement *mk_exit_with_value(int line_num,
+                                     struct Expression *return_expr);
 
 struct Statement *mk_break(int line_num);
 struct Statement *mk_continue(int line_num);
 
-struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt);
+struct Statement *mk_case(int line_num, struct Expression *selector,
+                          ListNode_t *branches, struct Statement *else_stmt);
 
-struct Statement *mk_with(int line_num, struct Expression *context, struct Statement *body);
+struct Statement *mk_with(int line_num, struct Expression *context,
+                          struct Statement *body);
 
-struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts);
+struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts,
+                                ListNode_t *finally_stmts);
 
-struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
-                               char *exception_var_name, char *exception_type_name);
+struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts,
+                               ListNode_t *except_stmts,
+                               char *exception_var_name,
+                               char *exception_type_name);
 
 struct Statement *mk_on_exception(int line_num, char *exception_var_name,
-                                  char *exception_type_name, struct Statement *handler_stmt);
+                                  char *exception_type_name,
+                                  struct Statement *handler_stmt);
 
 struct Statement *mk_raise(int line_num, struct Expression *expr);
 
@@ -337,23 +398,29 @@ struct Statement *mk_inherited(int line_num, struct Expression *expr);
 
 /* Expression routines */
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
-                                struct Expression *right);
+                            struct Expression *right);
 
 struct Expression *mk_signterm(int line_num, struct Expression *sign_term);
 
-struct Expression *mk_addop(int line_num, int type, struct Expression *left, struct Expression *right);
+struct Expression *mk_addop(int line_num, int type, struct Expression *left,
+                            struct Expression *right);
 
-struct Expression *mk_mulop(int line_num, int type, struct Expression *left, struct Expression *right);
+struct Expression *mk_mulop(int line_num, int type, struct Expression *left,
+                            struct Expression *right);
 
 struct Expression *mk_varid(int line_num, char *id);
 
-struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, struct Expression *index_expr);
+struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr,
+                                  struct Expression *index_expr);
 
-struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr, char *field_id);
+struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr,
+                                   char *field_id);
 
-struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_expr);
+struct Expression *mk_pointer_deref(int line_num,
+                                    struct Expression *pointer_expr);
 
-struct Expression *mk_array_literal(int line_num, ListNode_t *elements, int element_count);
+struct Expression *mk_array_literal(int line_num, ListNode_t *elements,
+                                    int element_count);
 
 struct Expression *mk_addressof(int line_num, struct Expression *expr);
 
@@ -369,25 +436,30 @@ struct Expression *mk_bool(int line_num, int value);
 
 struct Expression *mk_nil(int line_num);
 
-struct SetElement *mk_set_element(struct Expression *lower, struct Expression *upper);
+struct SetElement *mk_set_element(struct Expression *lower,
+                                  struct Expression *upper);
 void destroy_set_element(struct SetElement *element);
-struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elements, int is_constant);
-struct Expression *mk_record_constructor(int line_num, ListNode_t *fields, int field_count);
+struct Expression *mk_set(int line_num, unsigned int bitmask,
+                          ListNode_t *elements, int is_constant);
+struct Expression *mk_record_constructor(int line_num, ListNode_t *fields,
+                                         int field_count);
 
-struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
-    struct Expression *expr);
+struct Expression *mk_typecast(int line_num, int target_type,
+                               char *target_type_id, struct Expression *expr);
 
-struct Expression *mk_is(int line_num, struct Expression *expr,
-    int target_type, char *target_type_id);
+struct Expression *mk_is(int line_num, struct Expression *expr, int target_type,
+                         char *target_type_id);
 
-struct Expression *mk_as(int line_num, struct Expression *expr,
-    int target_type, char *target_type_id);
+struct Expression *mk_as(int line_num, struct Expression *expr, int target_type,
+                         char *target_type_id);
 
-struct Expression *mk_anonymous_function(int line_num, char *generated_name, 
-    ListNode_t *parameters, int return_type, char *return_type_id, struct Statement *body);
+struct Expression *mk_anonymous_function(int line_num, char *generated_name,
+                                         ListNode_t *parameters,
+                                         int return_type, char *return_type_id,
+                                         struct Statement *body);
 
 struct Expression *mk_anonymous_procedure(int line_num, char *generated_name,
-    ListNode_t *parameters, struct Statement *body);
-
+                                          ListNode_t *parameters,
+                                          struct Statement *body);
 
 #endif

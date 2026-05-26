@@ -18,49 +18,63 @@ int from_cparser_get_error_count(void);
 /* Forward declaration for symbol table - avoid circular dependency */
 struct SymTab;
 
-/* Forward declarations for TypeRef-array helpers used in struct fields below. */
+/* Forward declarations for TypeRef-array helpers used in struct fields below.
+ */
 struct TypeRef;
 void param_types_free(struct TypeRef **types, int count);
 struct TypeRef **param_types_clone(struct TypeRef *const *src, int count);
 
 /* Method binding information */
 typedef struct {
-    char *class_name;
-    char *method_name;
-    int is_virtual;
-    int is_override;
-    int is_static;         /* 1 if method is static (no Self parameter) */
-    int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
-    int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
-    struct TypeRef **param_types; /* Structural parameter types (one entry per declared parameter) */
-    int param_types_count; /* Number of entries in param_types (-1 if unknown) */
+  char *class_name;
+  char *method_name;
+  int is_virtual;
+  int is_override;
+  int is_static;       /* 1 if method is static (no Self parameter) */
+  int is_class_method; /* 1 if declared with 'class' keyword (Self = VMT
+                          pointer) */
+  int param_count; /* Number of explicit parameters (excludes implicit Self), -1
+                      if unknown */
+  struct TypeRef **param_types; /* Structural parameter types (one entry per
+                                   declared parameter) */
+  int param_types_count; /* Number of entries in param_types (-1 if unknown) */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
  * This is used by the semantic checker to build type information.
  * Returns NULL if the type cannot be converted.
- * The caller owns the returned KgpcType and must free it with destroy_kgpc_type().
+ * The caller owns the returned KgpcType and must free it with
+ * destroy_kgpc_type().
  */
-KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab);
+KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec,
+                                        struct SymTab *symtab);
 
-/* Build a procedure type from a method template (used for interface method declarations). */
-KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method_template,
-    struct RecordType *record, struct SymTab *symtab);
+/* Build a procedure type from a method template (used for interface method
+ * declarations). */
+KgpcType *
+from_cparser_method_template_to_proctype(struct MethodTemplate *method_template,
+                                         struct RecordType *record,
+                                         struct SymTab *symtab);
 
 /* Get method information for a class.
  * Returns a list of ClassMethodBinding for the given class.
  * Caller should NOT free the returned list - it's owned by the parser.
  */
-void get_class_methods(const char *class_name, ListNode_t **methods_out, int *count_out);
+void get_class_methods(const char *class_name, ListNode_t **methods_out,
+                       int *count_out);
 
 /* Check if a method is declared as static (no Self parameter).
  * Returns 1 if static, 0 otherwise.
  */
-int from_cparser_is_method_static(const char *class_name, const char *method_name);
-int from_cparser_is_method_class_method(const char *class_name, const char *method_name);
-int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name);
+int from_cparser_is_method_static(const char *class_name,
+                                  const char *method_name);
+int from_cparser_is_method_class_method(const char *class_name,
+                                        const char *method_name);
+int from_cparser_is_method_nonstatic_class_method(const char *class_name,
+                                                  const char *method_name);
 int from_cparser_is_type_helper(const char *helper_id);
-int from_cparser_class_has_method_name(const char *class_name, const char *method_name);
+int from_cparser_class_has_method_name(const char *class_name,
+                                       const char *method_name);
 
 /* Check if a method is virtual (needs VMT dispatch).
  * Returns 1 iff at least one overload matching the given signature is virtual
@@ -69,8 +83,8 @@ int from_cparser_class_has_method_name(const char *class_name, const char *metho
  * (not the call site's actual arg count) so calls that omit trailing default
  * parameters still match the right overload.
  */
-int from_cparser_is_method_virtual_with_types(const char *class_name, const char *method_name,
-    int param_count,
+int from_cparser_is_method_virtual_with_types(
+    const char *class_name, const char *method_name, int param_count,
     struct TypeRef *const *param_types, int param_types_count);
 
 void from_cparser_enable_pending_specializations(void);
@@ -82,28 +96,35 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree);
 
 /* Get the method template AST for a class method declaration.
  * Returns the params_ast from the method template, or NULL if not found.
- * This is used to copy default parameter values from class declarations to implementations.
+ * This is used to copy default parameter values from class declarations to
+ * implementations.
  */
-struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name);
+struct MethodTemplate *
+from_cparser_get_method_template(struct RecordType *record,
+                                 const char *method_name);
 
-/* Convert a method template params AST into a parameter list (Tree_t var decls).
- * Returns a list of Tree_t* (LIST_TREE) or NULL if no params. */
+/* Convert a method template params AST into a parameter list (Tree_t var
+ * decls). Returns a list of Tree_t* (LIST_TREE) or NULL if no params. */
 ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
 
 /* Register a method template with the class method binding system.
  * This is used by the semantic checker to ensure method templates are findable.
  */
-void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static, int param_count);
+void from_cparser_register_method_template(const char *class_name,
+                                           const char *method_name,
+                                           int is_virtual, int is_override,
+                                           int is_static, int param_count);
 
-/* Count the number of named parameters in a params AST (PARAM or PARAM_LIST). */
+/* Count the number of named parameters in a params AST (PARAM or PARAM_LIST).
+ */
 int from_cparser_count_params_ast(struct ast_t *params_ast);
 
 /* Find all class names that have a method with the given name.
  * Returns a list of class names (caller must free each string and the list).
  * Sets *count_out to the number of classes found.
  */
-ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *count_out);
+ListNode_t *from_cparser_find_classes_with_method(const char *method_name,
+                                                  int *count_out);
 
 /* Convert an AST expression node to an Expression structure.
  * This is used internally and also needed for copying default parameter values.

@@ -27,46 +27,46 @@ typedef struct List ListNode_t;
 #define IR_MAX_USES 4
 
 typedef struct IrInst {
-    /* pre-formatted assembly text — identical to the string stored by
-     * add_inst().  Owned by this struct; freed by ir_inst_free(). */
-    char *text;
+  /* pre-formatted assembly text — identical to the string stored by
+   * add_inst().  Owned by this struct; freed by ir_inst_free(). */
+  char *text;
 
-    /* def/use metadata (pure annotation, no effect on code generation) */
-    Register_t *defs[IR_MAX_DEFS];
-    int         n_defs;
-    Register_t *uses[IR_MAX_USES];
-    int         n_uses;
+  /* def/use metadata (pure annotation, no effect on code generation) */
+  Register_t *defs[IR_MAX_DEFS];
+  int n_defs;
+  Register_t *uses[IR_MAX_USES];
+  int n_uses;
 
-    /* When non-zero, this instance owns its Register_t objects (used by
-     * ir_parse() which creates synthetic register nodes). */
-    int owns_regs;
+  /* When non-zero, this instance owns its Register_t objects (used by
+   * ir_parse() which creates synthetic register nodes). */
+  int owns_regs;
 
-    /* Template fields for future virtual-register substitution.
-     * tmpl is a format string like "\tmovq\t%0, %1\n" where %N refers to
-     * vreg_ids[N].  When tmpl is NULL the instruction is emitted verbatim
-     * from text.  ir_emit_function() substitutes physical register names
-     * and writes the result back into text. */
-    char *tmpl;                                        /* format template; NULL = no substitution */
-    int   vreg_ids[IR_MAX_DEFS + IR_MAX_USES];         /* which vreg_id maps to %0, %1, ... */
-    int   n_placeholders;
+  /* Template fields for future virtual-register substitution.
+   * tmpl is a format string like "\tmovq\t%0, %1\n" where %N refers to
+   * vreg_ids[N].  When tmpl is NULL the instruction is emitted verbatim
+   * from text.  ir_emit_function() substitutes physical register names
+   * and writes the result back into text. */
+  char *tmpl; /* format template; NULL = no substitution */
+  int vreg_ids[IR_MAX_DEFS +
+               IR_MAX_USES]; /* which vreg_id maps to %0, %1, ... */
+  int n_placeholders;
 
-    /* Physical register name copies for each placeholder, in the same order
-     * as vreg_ids[].  Copied from the Register_t at add_inst_du() time so
-     * that ir_emit_function() does not need to dereference the borrowed
-     * defs[]/uses[] pointers (which may have been freed by reset_reg_stack()
-     * when nested subprograms are codegen'd before ir_emit_function runs).
-     * Fixed-size inline buffers avoid heap allocation overhead for pp.pas-
-     * scale compilations (hundreds of thousands of add_inst_du calls). */
+  /* Physical register name copies for each placeholder, in the same order
+   * as vreg_ids[].  Copied from the Register_t at add_inst_du() time so
+   * that ir_emit_function() does not need to dereference the borrowed
+   * defs[]/uses[] pointers (which may have been freed by reset_reg_stack()
+   * when nested subprograms are codegen'd before ir_emit_function runs).
+   * Fixed-size inline buffers avoid heap allocation overhead for pp.pas-
+   * scale compilations (hundreds of thousands of add_inst_du calls). */
 #define IR_REG_NAME_BUF 12
-    char reg_names_64[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
-    char reg_names_32[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
+  char reg_names_64[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
+  char reg_names_32[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
 } IrInst_t;
 
 /* Allocate and initialise a new IrInst_t.
  * text is strdup'd.  The defs/uses arrays are filled from the supplied
  * pointers.  owns_regs is set to 0 (borrowed pointers). */
-IrInst_t *ir_inst_new(const char *text,
-                      Register_t **defs, int n_defs,
+IrInst_t *ir_inst_new(const char *text, Register_t **defs, int n_defs,
                       Register_t **uses, int n_uses);
 
 /* Free an IrInst_t.  If owns_regs is set, frees the Register_t objects

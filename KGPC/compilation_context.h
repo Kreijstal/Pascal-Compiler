@@ -21,29 +21,30 @@
 
 /* A single loaded-unit record. */
 typedef struct {
-    Tree_t *unit_tree;   /* The parsed unit AST (owned by the context) */
-    int     unit_idx;    /* Unit registry index (1-based) */
-    char   *source_path; /* Source file path (owned, may be NULL) */
+  Tree_t *unit_tree; /* The parsed unit AST (owned by the context) */
+  int unit_idx;      /* Unit registry index (1-based) */
+  char *source_path; /* Source file path (owned, may be NULL) */
 } LoadedUnit;
 
 /* The compilation context owns all per-compilation state that is not
  * specific to a single pass (semantic analysis, code generation, etc.). */
 typedef struct CompilationContext {
-    /* --- Loaded units (in dependency / load order) --- */
-    LoadedUnit *loaded_units;
-    int         loaded_unit_count;
-    int         loaded_unit_capacity;
+  /* --- Loaded units (in dependency / load order) --- */
+  LoadedUnit *loaded_units;
+  int loaded_unit_count;
+  int loaded_unit_capacity;
 
-    /* --- Include files resolved during preprocessing (for cache keys) --- */
-    char      **include_files;
-    int         include_file_count;
-    int         include_file_capacity;
+  /* --- Include files resolved during preprocessing (for cache keys) --- */
+  char **include_files;
+  int include_file_count;
+  int include_file_capacity;
 
-    /* --- Symbol table / scope tree (created early, survives until cleanup) --- */
-    SymTab_t   *symtab;
+  /* --- Symbol table / scope tree (created early, survives until cleanup) ---
+   */
+  SymTab_t *symtab;
 
-    /* --- Program AST (not owned; the caller manages its lifetime) --- */
-    Tree_t     *program;
+  /* --- Program AST (not owned; the caller manages its lifetime) --- */
+  Tree_t *program;
 } CompilationContext;
 
 /* Initialise a zero-filled context.  Does NOT allocate the symtab. */
@@ -57,13 +58,13 @@ void compilation_context_destroy(CompilationContext *ctx);
  * of `unit_tree`.
  * Returns true on success, false on allocation failure (unit_tree is NOT
  * freed on failure; the caller retains ownership and must clean up). */
-bool compilation_context_add_unit(CompilationContext *ctx,
-                                  Tree_t *unit_tree, int unit_idx);
+bool compilation_context_add_unit(CompilationContext *ctx, Tree_t *unit_tree,
+                                  int unit_idx);
 
 /* Record include files resolved during preprocessing (for cache key).
  * Returns true if all files were recorded, false if any allocation failed. */
 bool compilation_context_add_include_files(CompilationContext *ctx,
-                                            const char *const *files, int count);
+                                           const char *const *files, int count);
 
 /* Look up a loaded unit by its registry index.
  * Returns NULL if not found. */

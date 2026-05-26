@@ -9,8 +9,8 @@
 #include <stdbool.h>
 
 typedef enum {
-    KGPC_TARGET_ABI_SYSTEM_V = 0,
-    KGPC_TARGET_ABI_WINDOWS = 1,
+  KGPC_TARGET_ABI_SYSTEM_V = 0,
+  KGPC_TARGET_ABI_WINDOWS = 1,
 } kgpc_target_abi_t;
 
 /* Debug flags - can be enabled at compile time or runtime */
@@ -74,7 +74,8 @@ typedef enum {
 #endif
 
 /* Macro to check debug flag (compile-time or runtime) */
-#define DEBUG_FLAG(name) (KGPC_DEBUG_##name || getenv("KGPC_DEBUG_" #name) != NULL)
+#define DEBUG_FLAG(name)                                                       \
+  (KGPC_DEBUG_##name || getenv("KGPC_DEBUG_" #name) != NULL)
 
 void set_nonlocal_flag(void);
 void set_o1_flag(void);

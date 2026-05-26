@@ -1,7 +1,7 @@
 /*
  * KgpcType.h
  * First-class type system for the Kreijstal Gwinn Pascal Compiler
- * 
+ *
  * This module provides a unified type representation that replaces the
  * scattered type system (VarType enum, TypeAlias struct, various flags).
  * All type information is now contained in a single KgpcType structure.
@@ -25,125 +25,131 @@ struct HashNode;
 enum VarType;
 
 typedef enum {
-    KGPC_FLOAT_ABI_NONE = 0,
-    KGPC_FLOAT_ABI_SSE = 1,
-    KGPC_FLOAT_ABI_X87 = 2
+  KGPC_FLOAT_ABI_NONE = 0,
+  KGPC_FLOAT_ABI_SSE = 1,
+  KGPC_FLOAT_ABI_X87 = 2
 } KgpcFloatAbiClass;
 
 typedef enum {
-    KGPC_STRING_STORAGE_NONE = 0,
-    KGPC_STRING_STORAGE_SHORTSTRING,
-    KGPC_STRING_STORAGE_MANAGED_ANSI,
-    KGPC_STRING_STORAGE_MANAGED_WIDE,
-    KGPC_STRING_STORAGE_CHAR_ARRAY
+  KGPC_STRING_STORAGE_NONE = 0,
+  KGPC_STRING_STORAGE_SHORTSTRING,
+  KGPC_STRING_STORAGE_MANAGED_ANSI,
+  KGPC_STRING_STORAGE_MANAGED_WIDE,
+  KGPC_STRING_STORAGE_CHAR_ARRAY
 } KgpcStringStorageKind;
 
 // Defines what kind of type we are dealing with.
 typedef enum {
-    TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
-    TYPE_KIND_POINTER,
-    TYPE_KIND_ARRAY,
-    TYPE_KIND_RECORD,
-    TYPE_KIND_PROCEDURE,
-    TYPE_KIND_ARRAY_OF_CONST
+  TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
+  TYPE_KIND_POINTER,
+  TYPE_KIND_ARRAY,
+  TYPE_KIND_RECORD,
+  TYPE_KIND_PROCEDURE,
+  TYPE_KIND_ARRAY_OF_CONST
 } KgpcTypeKind;
 
 // --- Detailed Information for Complex Types ---
 
 // For TYPE_KIND_PROCEDURE
 typedef struct {
-    // A list of Tree_t* nodes, where each node is a TREE_VAR_DECL representing a parameter.
-    // This reuses the existing, well-understood structure for parameter declarations.
-    ListNode_t *params;
-    int owns_params;
+  // A list of Tree_t* nodes, where each node is a TREE_VAR_DECL representing a
+  // parameter. This reuses the existing, well-understood structure for
+  // parameter declarations.
+  ListNode_t *params;
+  int owns_params;
 
-    // For functions, this points to the return type.
-    // For procedures, this is NULL.
-    KgpcType *return_type;
-    struct Tree *definition;  /* AST node for procedure/function (if available) */
-    char *return_type_id;     /* Cached identifier used for return type lookup */
-    /* 1 if this procedure type was declared with "of object" — i.e. it is
-     * a method pointer (TMethod = { code: pointer; data: pointer; }, 16 bytes
-     * on 64-bit).  When set, sizeof returns 16 and the indirect-call site
-     * loads Self from the data slot before calling code. */
-    int is_method_pointer;
+  // For functions, this points to the return type.
+  // For procedures, this is NULL.
+  KgpcType *return_type;
+  struct Tree *definition; /* AST node for procedure/function (if available) */
+  char *return_type_id;    /* Cached identifier used for return type lookup */
+  /* 1 if this procedure type was declared with "of object" — i.e. it is
+   * a method pointer (TMethod = { code: pointer; data: pointer; }, 16 bytes
+   * on 64-bit).  When set, sizeof returns 16 and the indirect-call site
+   * loads Self from the data slot before calling code. */
+  int is_method_pointer;
 } ProcedureTypeInfo;
 
 // For TYPE_KIND_ARRAY
 typedef struct {
-    KgpcType *element_type;
-    int start_index;
-    int end_index;
-    // Deferred resolution: store element type ID if element_type is NULL
-    char *element_type_id;
+  KgpcType *element_type;
+  int start_index;
+  int end_index;
+  // Deferred resolution: store element type ID if element_type is NULL
+  char *element_type_id;
 } ArrayTypeInfo;
 
 typedef struct {
-    int dim_count;
-    long long dim_sizes[10];
-    long long dim_lowers[10];
-    long long dim_uppers[10];
-    long long strides[10];
-    long long element_size;
-    long long total_size;
+  int dim_count;
+  long long dim_sizes[10];
+  long long dim_lowers[10];
+  long long dim_uppers[10];
+  long long strides[10];
+  long long element_size;
+  long long total_size;
 } KgpcArrayDimensionInfo;
 
 typedef struct {
-    int element_size;
+  int element_size;
 } ArrayOfConstTypeInfo;
 
 // The main, unified type structure.
 struct KgpcType {
-    KgpcTypeKind kind;
-    int size_in_bytes;      // To be calculated and filled in by the semantic checker.
-    int alignment_in_bytes; // For future architecture support.
-    int ref_count;
-    size_t live_index;
+  KgpcTypeKind kind;
+  int size_in_bytes; // To be calculated and filled in by the semantic checker.
+  int alignment_in_bytes; // For future architecture support.
+  int ref_count;
+  size_t live_index;
 
-    /* When 1 and kind == TYPE_KIND_RECORD, the wrapped record_info is owned
-     * by this KgpcType and must be destroyed on teardown. Default 0 means
-     * record_info is owned by the AST (the typical case). */
-    int owns_record_info;
+  /* When 1 and kind == TYPE_KIND_RECORD, the wrapped record_info is owned
+   * by this KgpcType and must be destroyed on teardown. Default 0 means
+   * record_info is owned by the AST (the typical case). */
+  int owns_record_info;
 
-    // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
-    // This is owned by the AST, not by KgpcType, so should not be freed.
-    struct TypeAlias *type_alias;
+  // Optional type alias metadata - points to TypeAlias if this type was
+  // declared via a type alias. This is owned by the AST, not by KgpcType, so
+  // should not be freed.
+  struct TypeAlias *type_alias;
 
-    // A union to hold the specific details of the type.
-    union {
-        int primitive_type_tag; // For TYPE_KIND_PRIMITIVE (e.g., INT_TYPE, REAL_TYPE from type_tags.h)
-        KgpcType *points_to;     // For TYPE_KIND_POINTER
-        ArrayTypeInfo array_info;
-        ProcedureTypeInfo proc_info;
-        struct RecordType *record_info; // For TYPE_KIND_RECORD
-        ArrayOfConstTypeInfo array_of_const_info;
-    } info;
+  // A union to hold the specific details of the type.
+  union {
+    int primitive_type_tag; // For TYPE_KIND_PRIMITIVE (e.g., INT_TYPE,
+                            // REAL_TYPE from type_tags.h)
+    KgpcType *points_to;    // For TYPE_KIND_POINTER
+    ArrayTypeInfo array_info;
+    ProcedureTypeInfo proc_info;
+    struct RecordType *record_info; // For TYPE_KIND_RECORD
+    ArrayOfConstTypeInfo array_of_const_info;
+  } info;
 };
 
 // --- Type System API ---
 
 // Constructor functions
-KgpcType* create_primitive_type(int primitive_tag);
-KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size);
-KgpcType* create_pointer_type(KgpcType *points_to);
-KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type);
-KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_index);
-KgpcType* create_array_of_const_type(void);
-KgpcType* create_record_type(struct RecordType *record_info);
+KgpcType *create_primitive_type(int primitive_tag);
+KgpcType *create_primitive_type_with_size(int primitive_tag, int storage_size);
+KgpcType *create_pointer_type(KgpcType *points_to);
+KgpcType *create_procedure_type(ListNode_t *params, KgpcType *return_type);
+KgpcType *create_array_type(KgpcType *element_type, int start_index,
+                            int end_index);
+KgpcType *create_array_of_const_type(void);
+KgpcType *create_record_type(struct RecordType *record_info);
 /* Like create_record_type, but the resulting KgpcType takes ownership of
  * record_info and will destroy it when released. Use this when the
  * record_info is a fresh allocation (e.g. clone_record_type) that no AST
  * node references — otherwise the record leaks. */
-KgpcType* create_record_type_owned(struct RecordType *record_info);
-KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *type);
+KgpcType *create_record_type_owned(struct RecordType *record_info);
+KgpcType *kgpc_type_clone_shallow_owned(const KgpcType *type);
 
 /* Create KgpcType from TypeAlias structure
  * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
  * Returns NULL if conversion fails (e.g., unresolvable type reference)
- * symtab is used to resolve type references (target_type_id, element_type_id, etc.)
+ * symtab is used to resolve type references (target_type_id, element_type_id,
+ * etc.)
  */
-KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab,
-    int defined_in_unit);
+KgpcType *create_kgpc_type_from_type_alias(struct TypeAlias *alias,
+                                           struct SymTab *symtab,
+                                           int defined_in_unit);
 
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_kgpc_type(KgpcType *type);
@@ -152,21 +158,24 @@ void kgpc_type_release(KgpcType *type);
 void kgpc_type_cleanup_remaining(void);
 
 // Utility functions
-int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, struct SymTab *symtab);
-const char* kgpc_type_to_string(KgpcType *type); // For debugging
+int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
+                                        struct SymTab *symtab);
+const char *kgpc_type_to_string(KgpcType *type); // For debugging
 
-/* Helper function to resolve KgpcType from a parameter Tree_t node (TREE_VAR_DECL)
- * Returns NULL if type cannot be resolved.
- * If owns_type is not NULL, it will be set to 1 if caller owns the returned type (must free it),
- * or 0 if the type is a reference (must not free it).
+/* Helper function to resolve KgpcType from a parameter Tree_t node
+ * (TREE_VAR_DECL) Returns NULL if type cannot be resolved. If owns_type is not
+ * NULL, it will be set to 1 if caller owns the returned type (must free it), or
+ * 0 if the type is a reference (must not free it).
  */
-KgpcType* resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type);
+KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
+                                    int *owns_type);
 
 // --- Helper Functions for Accessing Type Information ---
 
 /* Get the size in bytes of a type.
  * Returns the size, or -1 if size cannot be determined.
- * For records and arrays, computes the full size including all fields/elements. */
+ * For records and arrays, computes the full size including all fields/elements.
+ */
 long long kgpc_type_sizeof(KgpcType *type);
 
 /* Check if a type is an array type. */
@@ -209,7 +218,7 @@ int kgpc_type_get_array_bounds(KgpcType *type, int *start_out, int *end_out);
 
 /* Get the record info from a record type.
  * Returns NULL if not a record type. */
-struct RecordType* kgpc_type_get_record(KgpcType *type);
+struct RecordType *kgpc_type_get_record(KgpcType *type);
 
 /* Get the primitive type tag from a primitive type.
  * Returns the tag, or -1 if not a primitive type. */
@@ -217,39 +226,43 @@ int kgpc_type_get_primitive_tag(KgpcType *type);
 
 /* Get the element type of an array.
  * Returns NULL if not an array type. */
-KgpcType* kgpc_type_get_array_element_type(KgpcType *type);
+KgpcType *kgpc_type_get_array_element_type(KgpcType *type);
 
 /* Get the element type of an array, resolving deferred types if needed.
  * If the element_type is NULL but element_type_id is set, tries to resolve it.
  * Returns NULL if not an array or if resolution fails. */
-KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, struct SymTab *symtab);
+KgpcType *kgpc_type_get_array_element_type_resolved(KgpcType *type,
+                                                    struct SymTab *symtab);
 
 /* For pointer types with unresolved PRIMITIVE(RECORD_TYPE) pointees, try to
  * resolve the actual record type through the symbol table.  Patches the
  * pointer's points_to in place on success (like the array element resolver).
  * Returns the (possibly updated) points_to, or NULL. */
-KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, struct SymTab *symtab);
+KgpcType *kgpc_type_resolve_pointer_pointee(KgpcType *type,
+                                            struct SymTab *symtab);
 
 /* Get formal parameters from a procedure/function type.
  * Returns NULL if not a procedure type. */
-ListNode_t* kgpc_type_get_procedure_params(KgpcType *type);
+ListNode_t *kgpc_type_get_procedure_params(KgpcType *type);
 
 /* Get return type from a function type.
  * Returns NULL if not a function or if it's a procedure (no return type). */
-KgpcType* kgpc_type_get_return_type(KgpcType *type);
+KgpcType *kgpc_type_get_return_type(KgpcType *type);
 
 /* Check if an array type is a dynamic/open array.
  * Returns 1 if it is a dynamic array, 0 otherwise. */
 int kgpc_type_is_dynamic_array(const KgpcType *type);
 
 /* Get element size in bytes for an array type.
- * Returns the element size, or -1 if not an array or size cannot be determined. */
+ * Returns the element size, or -1 if not an array or size cannot be determined.
+ */
 long long kgpc_type_get_array_element_size(KgpcType *type);
 
 /* Compute dimension information for multi-dimensional arrays.
- * Handles both nested KgpcType objects and array_dimensions metadata from TypeAlias.
- * Returns 0 on success, -1 if not an array. */
-int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, KgpcArrayDimensionInfo *info);
+ * Handles both nested KgpcType objects and array_dimensions metadata from
+ * TypeAlias. Returns 0 on success, -1 if not an array. */
+int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab,
+                                       KgpcArrayDimensionInfo *info);
 
 /* Get element size for an array-of-const helper structure (TVarRec). */
 long long kgpc_type_get_array_of_const_element_size(KgpcType *type);
@@ -261,11 +274,11 @@ long long kgpc_type_get_array_of_const_element_size(KgpcType *type);
  * additional information beyond VarType and will return NULL - caller must use
  * appropriate create_*_type() function instead.
  * Returns a new KgpcType that caller owns, or NULL for complex types. */
-KgpcType* kgpc_type_from_var_type(enum VarType var_type);
+KgpcType *kgpc_type_from_var_type(enum VarType var_type);
 
 /* Get the type alias metadata from a KgpcType.
  * Returns NULL if no type alias metadata is attached. */
-struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type);
+struct TypeAlias *kgpc_type_get_type_alias(KgpcType *type);
 
 /* Set the type alias metadata on a KgpcType.
  * The TypeAlias is owned by the AST, not by KgpcType. */
@@ -280,7 +293,8 @@ int kgpc_type_is_pointer(const KgpcType *type);
 int kgpc_type_is_set(const KgpcType *type);
 
 /* For pointer types, get the type tag of what it points to.
- * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex. */
+ * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex.
+ */
 int kgpc_type_get_pointer_subtype_tag(KgpcType *type);
 
 /* Check if a KgpcType requires qword (64-bit) operations.
@@ -294,9 +308,10 @@ int kgpc_type_uses_qword(KgpcType *type);
 int kgpc_type_is_signed(const KgpcType *type);
 
 /* Check if a KgpcType represents an unsigned integer type.
- * Returns 1 only for explicitly unsigned types (Byte, Word, LongWord/DWord/Cardinal, QWord,
- * and subrange types with range_start >= 0).
- * NOT defined as !kgpc_type_is_signed — record/pointer/etc. types return 0 from both. */
+ * Returns 1 only for explicitly unsigned types (Byte, Word,
+ * LongWord/DWord/Cardinal, QWord, and subrange types with range_start >= 0).
+ * NOT defined as !kgpc_type_is_signed — record/pointer/etc. types return 0 from
+ * both. */
 int kgpc_type_is_unsigned(const KgpcType *type);
 
 /* Check if a KgpcType matches a specific legacy type tag.
@@ -314,23 +329,24 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to);
 /* Check if two pointer types are compatible. */
 int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b);
 
-/* Build the function return type from inline alias/type-id/primitive specification.
- * This consolidates the logic used by semantic checking for both forward declarations
- * and full definitions. */
-KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
-                                        struct HashNode *resolved_type_node,
-                                        int primitive_tag,
-                                        struct SymTab *symtab);
+/* Build the function return type from inline alias/type-id/primitive
+ * specification. This consolidates the logic used by semantic checking for both
+ * forward declarations and full definitions. */
+KgpcType *kgpc_type_build_function_return(struct TypeAlias *inline_alias,
+                                          struct HashNode *resolved_type_node,
+                                          int primitive_tag,
+                                          struct SymTab *symtab);
 
 /* Check if a type identified by name uses 64-bit operations.
- * This resolves the type by name through the symbol table, then checks if it uses qword.
- * Returns 1 if the type uses 64-bit operations, 0 otherwise.
- * If symtab is NULL or type cannot be resolved, uses heuristics based on naming conventions
- * (e.g., names starting with 'P' followed by uppercase letter are likely pointers). */
+ * This resolves the type by name through the symbol table, then checks if it
+ * uses qword. Returns 1 if the type uses 64-bit operations, 0 otherwise. If
+ * symtab is NULL or type cannot be resolved, uses heuristics based on naming
+ * conventions (e.g., names starting with 'P' followed by uppercase letter are
+ * likely pointers). */
 int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab);
 
-/* Convert a legacy type tag (INT_TYPE, REAL_TYPE, etc.) to a human-readable string.
- * Returns a static string, no need to free. */
-const char* type_tag_to_string(int type_tag);
+/* Convert a legacy type tag (INT_TYPE, REAL_TYPE, etc.) to a human-readable
+ * string. Returns a static string, no need to free. */
+const char *type_tag_to_string(int type_tag);
 
 #endif // KGPC_TYPE_H

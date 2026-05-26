@@ -53,96 +53,87 @@ typedef long long ssize_t;
 #endif
 
 /* File opening */
-int fpOpen(const char *path, int flags)
-{
+int fpOpen(const char *path, int flags) {
 #ifdef _WIN32
-    const char *wpath = translate_unix_path(path);
-    int wflags = translate_flags(flags);
-    return _open(wpath, wflags);
+  const char *wpath = translate_unix_path(path);
+  int wflags = translate_flags(flags);
+  return _open(wpath, wflags);
 #else
-    return open(path, flags);
+  return open(path, flags);
 #endif
 }
 
-int fpOpen_i_i_i(const char *path, int flags, int mode)
-{
+int fpOpen_i_i_i(const char *path, int flags, int mode) {
 #ifdef _WIN32
-    const char *wpath = translate_unix_path(path);
-    int wflags = translate_flags(flags);
-    return _open(wpath, wflags, mode);
+  const char *wpath = translate_unix_path(path);
+  int wflags = translate_flags(flags);
+  return _open(wpath, wflags, mode);
 #else
-    return open(path, flags, (mode_t)mode);
+  return open(path, flags, (mode_t)mode);
 #endif
 }
 
 /* File closing */
-int fpClose(int fd)
-{
+int fpClose(int fd) {
 #ifdef _WIN32
-    return _close(fd);
+  return _close(fd);
 #else
-    return close(fd);
+  return close(fd);
 #endif
 }
 
-int fpClose_i(int fd)
-{
+int fpClose_i(int fd) {
 #ifdef _WIN32
-    return _close(fd);
+  return _close(fd);
 #else
-    return close(fd);
+  return close(fd);
 #endif
 }
 
 /* Reading and writing */
-ssize_t fpRead(int fd, void *buf, size_t count)
-{
+ssize_t fpRead(int fd, void *buf, size_t count) {
 #ifdef _WIN32
-    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
-    return (ssize_t)_read(fd, buf, safe_count);
+  unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+  return (ssize_t)_read(fd, buf, safe_count);
 #else
-    return read(fd, buf, count);
+  return read(fd, buf, count);
 #endif
 }
 
-ssize_t fpWrite(int fd, const void *buf, size_t count)
-{
+ssize_t fpWrite(int fd, const void *buf, size_t count) {
 #ifdef _WIN32
-    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
-    return (ssize_t)_write(fd, buf, safe_count);
+  unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+  return (ssize_t)_write(fd, buf, safe_count);
 #else
-    return write(fd, buf, count);
+  return write(fd, buf, count);
 #endif
 }
 
 /* Directory and seek */
-char *fpGetCwd(char *path, size_t len)
-{
-    if (path == NULL || len == 0)
-        return NULL;
+char *fpGetCwd(char *path, size_t len) {
+  if (path == NULL || len == 0)
+    return NULL;
 #ifdef _WIN32
-    return _getcwd(path, (int)len);
+  return _getcwd(path, (int)len);
 #else
-    return getcwd(path, len);
+  return getcwd(path, len);
 #endif
 }
 
-off_t fplSeek(int fd, off_t offset, int whence)
-{
+off_t fplSeek(int fd, off_t offset, int whence) {
 #ifdef _WIN32
-    return (off_t)_lseeki64(fd, (__int64)offset, whence);
+  return (off_t)_lseeki64(fd, (__int64)offset, whence);
 #else
-    return lseek(fd, offset, whence);
+  return lseek(fd, offset, whence);
 #endif
 }
 
 /* Permissions */
-int fpchmod(const char *path, int mode)
-{
+int fpchmod(const char *path, int mode) {
 #ifdef _WIN32
-    return _chmod(path, mode);
+  return _chmod(path, mode);
 #else
-    return chmod(path, (mode_t)mode);
+  return chmod(path, (mode_t)mode);
 #endif
 }
 
@@ -150,7 +141,8 @@ int fpchmod(const char *path, int mode)
  * fpsigaction — wrapper for libc sigaction(2).
  *
  * FPCSource/rtl/unix/baseunix.pp declares this as:
- *   function fpsigaction(signum: cint; act, oldact: psigactionrec): cint; external;
+ *   function fpsigaction(signum: cint; act, oldact: psigactionrec): cint;
+ * external;
  *
  * "external" with no name string means the Pascal identifier becomes the
  * link-time symbol.  KGPC's runtime does not export "fpsigaction" anywhere
@@ -175,15 +167,15 @@ int fpchmod(const char *path, int mode)
  */
 #ifdef _WIN32
 #include <errno.h>
-int fpsigaction(int signum, void *act, void *oldact)
-{
-    (void)signum; (void)act; (void)oldact;
-    errno = ENOSYS;
-    return -1;
+int fpsigaction(int signum, void *act, void *oldact) {
+  (void)signum;
+  (void)act;
+  (void)oldact;
+  errno = ENOSYS;
+  return -1;
 }
 #else
-int fpsigaction(int signum, struct sigaction *act, struct sigaction *oldact)
-{
-    return sigaction(signum, act, oldact);
+int fpsigaction(int signum, struct sigaction *act, struct sigaction *oldact) {
+  return sigaction(signum, act, oldact);
 }
 #endif

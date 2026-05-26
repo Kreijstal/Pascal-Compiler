@@ -12,7 +12,8 @@
 
 /* Flag for turning on non-local variable chasing */
 /* Set with '-non-local' */
-/* Non-local access is required by RTL/bootstrap units; keep it enabled by default. */
+/* Non-local access is required by RTL/bootstrap units; keep it enabled by
+ * default. */
 int FLAG_NON_LOCAL_CHASING = 1;
 
 /* Flag for turning on optimizations */
@@ -31,10 +32,12 @@ static int FLAG_COMPILE_SYSTEM_UNIT = 0;
 /* Flag for enabling goto statements (FPC -Sg flag) */
 static int FLAG_GOTO_ENABLED = 0;
 
-/* Flag for emitting each function in its own .text section (for linker --gc-sections) */
+/* Flag for emitting each function in its own .text section (for linker
+ * --gc-sections) */
 static int FLAG_FUNCTION_SECTIONS = 0;
 
-/* Flag for skipping unit codegen (only emit program code; units come from cached .o) */
+/* Flag for skipping unit codegen (only emit program code; units come from
+ * cached .o) */
 static int FLAG_SKIP_UNIT_CODEGEN = 0;
 
 /* Flag indicating we're populating the codegen cache (cache miss).
@@ -48,183 +51,95 @@ static kgpc_target_abi_t FLAG_TARGET_ABI =
     KGPC_TARGET_ABI_SYSTEM_V;
 #endif
 
-void set_nonlocal_flag(void)
-{
-    FLAG_NON_LOCAL_CHASING = 1;
-}
-void set_o1_flag(void)
-{
-    if(FLAG_OPTIMIZE < 1)
-        FLAG_OPTIMIZE = 1;
+void set_nonlocal_flag(void) { FLAG_NON_LOCAL_CHASING = 1; }
+void set_o1_flag(void) {
+  if (FLAG_OPTIMIZE < 1)
+    FLAG_OPTIMIZE = 1;
 }
 
-void set_o2_flag(void)
-{
-    if(FLAG_OPTIMIZE < 2)
-        FLAG_OPTIMIZE = 2;
+void set_o2_flag(void) {
+  if (FLAG_OPTIMIZE < 2)
+    FLAG_OPTIMIZE = 2;
 }
 
-void set_parse_only_flag(void)
-{
-    FLAG_PARSE_ONLY = 1;
-}
+void set_parse_only_flag(void) { FLAG_PARSE_ONLY = 1; }
 
-void set_time_passes_flag(void)
-{
-    FLAG_TIME_PASSES = 1;
-}
+void set_time_passes_flag(void) { FLAG_TIME_PASSES = 1; }
 
-void set_asm_debug_flag(void)
-{
-    FLAG_ASM_DEBUG_COMMENTS = 1;
-}
+void set_asm_debug_flag(void) { FLAG_ASM_DEBUG_COMMENTS = 1; }
 
-void set_disable_dce_flag(void)
-{
-    FLAG_DISABLE_DCE = 1;
-}
+void set_disable_dce_flag(void) { FLAG_DISABLE_DCE = 1; }
 
-void set_stdlib_loaded_flag(int loaded)
-{
-    FLAG_STDLIB_LOADED = loaded ? 1 : 0;
-}
-bool set_dump_ast_path(const char *path)
-{
-    if (FLAG_DUMP_AST_PATH != NULL)
-    {
-        free(FLAG_DUMP_AST_PATH);
-        FLAG_DUMP_AST_PATH = NULL;
+void set_stdlib_loaded_flag(int loaded) { FLAG_STDLIB_LOADED = loaded ? 1 : 0; }
+bool set_dump_ast_path(const char *path) {
+  if (FLAG_DUMP_AST_PATH != NULL) {
+    free(FLAG_DUMP_AST_PATH);
+    FLAG_DUMP_AST_PATH = NULL;
+  }
+
+  if (path != NULL) {
+    FLAG_DUMP_AST_PATH = strdup(path);
+    if (FLAG_DUMP_AST_PATH == NULL) {
+      fprintf(stderr, "ERROR: Unable to allocate memory for dump-ast path.\n");
+      return false;
     }
-
-    if (path != NULL)
-    {
-        FLAG_DUMP_AST_PATH = strdup(path);
-        if (FLAG_DUMP_AST_PATH == NULL)
-        {
-            fprintf(stderr, "ERROR: Unable to allocate memory for dump-ast path.\n");
-            return false;
-        }
-    }
-    return true;
+  }
+  return true;
 }
 
-void set_target_windows_flag(void)
-{
-    FLAG_TARGET_ABI = KGPC_TARGET_ABI_WINDOWS;
+void set_target_windows_flag(void) {
+  FLAG_TARGET_ABI = KGPC_TARGET_ABI_WINDOWS;
 }
 
-void set_target_sysv_flag(void)
-{
-    FLAG_TARGET_ABI = KGPC_TARGET_ABI_SYSTEM_V;
+void set_target_sysv_flag(void) { FLAG_TARGET_ABI = KGPC_TARGET_ABI_SYSTEM_V; }
+
+int nonlocal_flag(void) { return FLAG_NON_LOCAL_CHASING; }
+int optimize_flag(void) { return FLAG_OPTIMIZE; }
+
+int parse_only_flag(void) { return FLAG_PARSE_ONLY; }
+
+int time_passes_flag(void) { return FLAG_TIME_PASSES; }
+
+int asm_debug_flag(void) { return FLAG_ASM_DEBUG_COMMENTS; }
+
+int disable_dce_flag(void) { return FLAG_DISABLE_DCE; }
+
+int stdlib_loaded_flag(void) { return FLAG_STDLIB_LOADED; }
+
+const char *dump_ast_path(void) { return FLAG_DUMP_AST_PATH; }
+
+void clear_dump_ast_path(void) {
+  if (FLAG_DUMP_AST_PATH != NULL) {
+    free(FLAG_DUMP_AST_PATH);
+    FLAG_DUMP_AST_PATH = NULL;
+  }
 }
 
-int nonlocal_flag(void)
-{
-    return FLAG_NON_LOCAL_CHASING;
-}
-int optimize_flag(void)
-{
-    return FLAG_OPTIMIZE;
+int target_windows_flag(void) {
+  return FLAG_TARGET_ABI == KGPC_TARGET_ABI_WINDOWS;
 }
 
-int parse_only_flag(void)
-{
-    return FLAG_PARSE_ONLY;
-}
+kgpc_target_abi_t current_target_abi(void) { return FLAG_TARGET_ABI; }
 
-int time_passes_flag(void)
-{
-    return FLAG_TIME_PASSES;
-}
+void set_compile_system_unit_flag(void) { FLAG_COMPILE_SYSTEM_UNIT = 1; }
 
-int asm_debug_flag(void)
-{
-    return FLAG_ASM_DEBUG_COMMENTS;
-}
+void set_goto_enabled_flag(void) { FLAG_GOTO_ENABLED = 1; }
 
-int disable_dce_flag(void)
-{
-    return FLAG_DISABLE_DCE;
-}
+int compile_system_unit_flag(void) { return FLAG_COMPILE_SYSTEM_UNIT; }
 
-int stdlib_loaded_flag(void)
-{
-    return FLAG_STDLIB_LOADED;
-}
+int goto_enabled_flag(void) { return FLAG_GOTO_ENABLED; }
 
-const char *dump_ast_path(void)
-{
-    return FLAG_DUMP_AST_PATH;
-}
+void set_function_sections_flag(void) { FLAG_FUNCTION_SECTIONS = 1; }
 
-void clear_dump_ast_path(void)
-{
-    if (FLAG_DUMP_AST_PATH != NULL)
-    {
-        free(FLAG_DUMP_AST_PATH);
-        FLAG_DUMP_AST_PATH = NULL;
-    }
-}
+void clear_function_sections_flag(void) { FLAG_FUNCTION_SECTIONS = 0; }
 
-int target_windows_flag(void)
-{
-    return FLAG_TARGET_ABI == KGPC_TARGET_ABI_WINDOWS;
-}
+int function_sections_flag(void) { return FLAG_FUNCTION_SECTIONS; }
 
-kgpc_target_abi_t current_target_abi(void)
-{
-    return FLAG_TARGET_ABI;
-}
+void set_skip_unit_codegen_flag(void) { FLAG_SKIP_UNIT_CODEGEN = 1; }
 
-void set_compile_system_unit_flag(void)
-{
-    FLAG_COMPILE_SYSTEM_UNIT = 1;
-}
+void clear_skip_unit_codegen_flag(void) { FLAG_SKIP_UNIT_CODEGEN = 0; }
 
-void set_goto_enabled_flag(void)
-{
-    FLAG_GOTO_ENABLED = 1;
-}
-
-int compile_system_unit_flag(void)
-{
-    return FLAG_COMPILE_SYSTEM_UNIT;
-}
-
-int goto_enabled_flag(void)
-{
-    return FLAG_GOTO_ENABLED;
-}
-
-void set_function_sections_flag(void)
-{
-    FLAG_FUNCTION_SECTIONS = 1;
-}
-
-void clear_function_sections_flag(void)
-{
-    FLAG_FUNCTION_SECTIONS = 0;
-}
-
-int function_sections_flag(void)
-{
-    return FLAG_FUNCTION_SECTIONS;
-}
-
-void set_skip_unit_codegen_flag(void)
-{
-    FLAG_SKIP_UNIT_CODEGEN = 1;
-}
-
-void clear_skip_unit_codegen_flag(void)
-{
-    FLAG_SKIP_UNIT_CODEGEN = 0;
-}
-
-int skip_unit_codegen_flag(void)
-{
-    return FLAG_SKIP_UNIT_CODEGEN;
-}
+int skip_unit_codegen_flag(void) { return FLAG_SKIP_UNIT_CODEGEN; }
 
 /* Flag for --dump-ir-after=def-use: dump IR with def/use annotations to stderr
  * after each function's code generation. */
@@ -238,47 +153,20 @@ static int FLAG_DUMP_IR_CFG = 0;
  * after each function's code generation. */
 static int FLAG_DUMP_IR_LIVENESS = 0;
 
-void set_codegen_cache_miss_flag(void)
-{
-    FLAG_CODEGEN_CACHE_MISS = 1;
-}
+void set_codegen_cache_miss_flag(void) { FLAG_CODEGEN_CACHE_MISS = 1; }
 
-void clear_codegen_cache_miss_flag(void)
-{
-    FLAG_CODEGEN_CACHE_MISS = 0;
-}
+void clear_codegen_cache_miss_flag(void) { FLAG_CODEGEN_CACHE_MISS = 0; }
 
-int codegen_cache_miss_flag(void)
-{
-    return FLAG_CODEGEN_CACHE_MISS;
-}
+int codegen_cache_miss_flag(void) { return FLAG_CODEGEN_CACHE_MISS; }
 
-void set_dump_ir_flag(void)
-{
-    FLAG_DUMP_IR = 1;
-}
+void set_dump_ir_flag(void) { FLAG_DUMP_IR = 1; }
 
-int dump_ir_flag(void)
-{
-    return FLAG_DUMP_IR;
-}
+int dump_ir_flag(void) { return FLAG_DUMP_IR; }
 
-void set_dump_ir_cfg_flag(void)
-{
-    FLAG_DUMP_IR_CFG = 1;
-}
+void set_dump_ir_cfg_flag(void) { FLAG_DUMP_IR_CFG = 1; }
 
-int dump_ir_cfg_flag(void)
-{
-    return FLAG_DUMP_IR_CFG;
-}
+int dump_ir_cfg_flag(void) { return FLAG_DUMP_IR_CFG; }
 
-void set_dump_ir_liveness_flag(void)
-{
-    FLAG_DUMP_IR_LIVENESS = 1;
-}
+void set_dump_ir_liveness_flag(void) { FLAG_DUMP_IR_LIVENESS = 1; }
 
-int dump_ir_liveness_flag(void)
-{
-    return FLAG_DUMP_IR_LIVENESS;
-}
+int dump_ir_liveness_flag(void) { return FLAG_DUMP_IR_LIVENESS; }

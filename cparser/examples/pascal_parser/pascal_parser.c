@@ -16,111 +16,129 @@
 #endif
 #endif
 #if defined(_WIN32) && !defined(HAVE_STRNDUP)
-static char* strndup(const char* s, size_t n)
-{
-    size_t len = 0;
-    while (len < n && s[len] != '\0')
-        len++;
-    char* result = (char*)malloc(len + 1);
-    if (result) { memcpy(result, s, len); result[len] = '\0'; }
-    return result;
+static char *strndup(const char *s, size_t n) {
+  size_t len = 0;
+  while (len < n && s[len] != '\0')
+    len++;
+  char *result = (char *)malloc(len + 1);
+  if (result) {
+    memcpy(result, s, len);
+    result[len] = '\0';
+  }
+  return result;
 }
 #endif
 
 // --- Forward Declarations ---
-extern ast_t* ast_nil;  // From parser.c
+extern ast_t *ast_nil; // From parser.c
 
 /* Check if comment starts with #line directive and parse it.
  * Format: {#line <number> "<filename>"}
  * Returns true if directive was found and processed. */
 static bool try_parse_line_directive(input_t *in) {
-    int pos = in->start;
-    int length = in->length;
-    const char *buffer = in->buffer;
+  int pos = in->start;
+  int length = in->length;
+  const char *buffer = in->buffer;
 
-    /* Must start with {#line */
-    if (pos + 6 >= length) return false;
-    if (buffer[pos] != '{') return false;
-    if (buffer[pos + 1] != '#') return false;
-    if (strncasecmp(&buffer[pos + 2], "line", 4) != 0) return false;
-    if (!isspace((unsigned char)buffer[pos + 6])) return false;
+  /* Must start with {#line */
+  if (pos + 6 >= length)
+    return false;
+  if (buffer[pos] != '{')
+    return false;
+  if (buffer[pos + 1] != '#')
+    return false;
+  if (strncasecmp(&buffer[pos + 2], "line", 4) != 0)
+    return false;
+  if (!isspace((unsigned char)buffer[pos + 6]))
+    return false;
 
-    /* Parse: {#line <number> "<filename>"} */
-    pos += 6;
+  /* Parse: {#line <number> "<filename>"} */
+  pos += 6;
 
-    /* Skip whitespace */
-    while (pos < length && isspace((unsigned char)buffer[pos]) && buffer[pos] != '}') {
-        pos++;
+  /* Skip whitespace */
+  while (pos < length && isspace((unsigned char)buffer[pos]) &&
+         buffer[pos] != '}') {
+    pos++;
+  }
+
+  /* Parse line number */
+  int line_num = 0;
+  while (pos < length && isdigit((unsigned char)buffer[pos])) {
+    line_num = line_num * 10 + (buffer[pos] - '0');
+    pos++;
+  }
+
+  if (line_num == 0)
+    return false; /* No valid line number */
+
+  /* Skip whitespace */
+  while (pos < length && isspace((unsigned char)buffer[pos]) &&
+         buffer[pos] != '}') {
+    pos++;
+  }
+
+  /* Parse optional filename in quotes */
+  if (pos < length && buffer[pos] == '"') {
+    pos++; /* Skip opening quote */
+    int fname_start = pos;
+    while (pos < length && buffer[pos] != '"')
+      pos++;
+    int fname_len = pos - fname_start;
+    if (fname_len > 0) {
+      free(in->source_filename);
+      in->source_filename = strndup(&buffer[fname_start], fname_len);
     }
+    if (pos < length && buffer[pos] == '"')
+      pos++; /* Skip closing quote */
+  }
 
-    /* Parse line number */
-    int line_num = 0;
-    while (pos < length && isdigit((unsigned char)buffer[pos])) {
-        line_num = line_num * 10 + (buffer[pos] - '0');
-        pos++;
-    }
+  /* Find closing } */
+  while (pos < length && buffer[pos] != '}') {
+    pos++;
+  }
 
-    if (line_num == 0) return false; /* No valid line number */
+  if (pos >= length || buffer[pos] != '}')
+    return false;
 
-    /* Skip whitespace */
-    while (pos < length && isspace((unsigned char)buffer[pos]) && buffer[pos] != '}') {
-        pos++;
-    }
+  /* Consume the directive (including trailing newline if present) */
+  in->start = pos + 1; /* past the closing } */
 
-    /* Parse optional filename in quotes */
-    if (pos < length && buffer[pos] == '"') {
-        pos++;  /* Skip opening quote */
-        int fname_start = pos;
-        while (pos < length && buffer[pos] != '"') pos++;
-        int fname_len = pos - fname_start;
-        if (fname_len > 0) {
-            free(in->source_filename);
-            in->source_filename = strndup(&buffer[fname_start], fname_len);
-        }
-        if (pos < length && buffer[pos] == '"') pos++;  /* Skip closing quote */
-    }
-
-    /* Find closing } */
-    while (pos < length && buffer[pos] != '}') {
-        pos++;
-    }
-
-    if (pos >= length || buffer[pos] != '}') return false;
-
-    /* Consume the directive (including trailing newline if present) */
-    in->start = pos + 1;  /* past the closing } */
-
-    /* Skip the newline after the directive - the NEXT line is line_num */
+  /* Skip the newline after the directive - the NEXT line is line_num */
+  if (in->start < length && buffer[in->start] == '\n') {
+    in->start++;
+  } else if (in->start < length && buffer[in->start] == '\r') {
+    in->start++;
     if (in->start < length && buffer[in->start] == '\n') {
-        in->start++;
-    } else if (in->start < length && buffer[in->start] == '\r') {
-        in->start++;
-        if (in->start < length && buffer[in->start] == '\n') {
-            in->start++;
-        }
+      in->start++;
     }
+  }
 
-    /* Update base values for computing source line from position */
-    in->source_line_base = line_num;
-    in->source_line_base_pos = in->start;
-    in->line = line_num;  /* Also update line for backwards compatibility */
-    in->col = 1;
+  /* Update base values for computing source line from position */
+  in->source_line_base = line_num;
+  in->source_line_base_pos = in->start;
+  in->line = line_num; /* Also update line for backwards compatibility */
+  in->col = 1;
 
-    return true;
+  return true;
 }
 
-// --- Helper: advance input position from old_pos to new_pos, updating line/col ---
-static void advance_input_pos(input_t* in, int old_pos, int new_pos) {
-    const char* buf = in->buffer;
-    int line = in->line;
-    int col = in->col;
-    for (int i = old_pos; i < new_pos; i++) {
-        if (buf[i] == '\n') { line++; col = 1; }
-        else { col++; }
+// --- Helper: advance input position from old_pos to new_pos, updating line/col
+// ---
+static void advance_input_pos(input_t *in, int old_pos, int new_pos) {
+  const char *buf = in->buffer;
+  int line = in->line;
+  int col = in->col;
+  for (int i = old_pos; i < new_pos; i++) {
+    if (buf[i] == '\n') {
+      line++;
+      col = 1;
+    } else {
+      col++;
     }
-    in->start = new_pos;
-    in->line = line;
-    in->col = col;
+  }
+  in->start = new_pos;
+  in->line = line;
+  in->col = col;
 }
 
 // --- Helper Functions ---
@@ -129,427 +147,608 @@ static void advance_input_pos(input_t* in, int old_pos, int new_pos) {
 /* Cache: last position where layout was already consumed.
  * If layout is called at this same position, it's a no-op. */
 static int g_layout_clean_pos = -1;
-static const char* g_layout_clean_buf = NULL;
+static const char *g_layout_clean_buf = NULL;
 
-static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) {
-    (void)args;
-    (void)parser_name;
-    const char* buf = in->buffer;
-    int pos = in->start;
-    int len = in->length;
+static ParseResult pascal_layout_fn(input_t *in, void *args,
+                                    char *parser_name) {
+  (void)args;
+  (void)parser_name;
+  const char *buf = in->buffer;
+  int pos = in->start;
+  int len = in->length;
 
-    /* Fast path: if we already consumed layout at this position, skip entirely */
-    if (pos == g_layout_clean_pos && buf == g_layout_clean_buf) {
-        return make_success(ast_nil);
-    }
-
-    for (;;) {
-        /* Skip whitespace in bulk */
-        while (pos < len && isspace((unsigned char)buf[pos])) {
-            pos++;
-        }
-        if (pos >= len) break;
-
-        char c = buf[pos];
-
-        if (c == '{') {
-            /* Check for #line directive first — need to update input state for it */
-            advance_input_pos(in, in->start, pos);
-            if (try_parse_line_directive(in)) {
-                pos = in->start;  /* directive advanced the position */
-                continue;
-            }
-            /* Normal { } comment */
-            pos++; /* consume '{' */
-            int depth = 1;
-            while (pos < len && depth > 0) {
-                if (buf[pos] == '{') depth++;
-                else if (buf[pos] == '}') depth--;
-                pos++;
-            }
-            continue;
-        }
-
-        if (c == '(' && (pos + 1) < len && buf[pos + 1] == '*') {
-            pos += 2; /* consume '(' '*' */
-            int depth = 1;
-            while (pos < len && depth > 0) {
-                if (buf[pos] == '(' && (pos + 1) < len && buf[pos + 1] == '*') {
-                    pos += 2; depth++; continue;
-                }
-                if (buf[pos] == '*' && (pos + 1) < len && buf[pos + 1] == ')') {
-                    pos += 2; depth--; continue;
-                }
-                pos++;
-            }
-            continue;
-        }
-
-        if (c == '/' && (pos + 1) < len && buf[pos + 1] == '/') {
-            pos += 2; /* consume '//' */
-            while (pos < len && buf[pos] != '\n' && buf[pos] != '\r') {
-                pos++;
-            }
-            if (pos < len) pos++; /* consume newline */
-            continue;
-        }
-
-        /* Not whitespace or comment — done */
-        break;
-    }
-
-    /* Bulk update line/col from old position to new position */
-    if (pos != in->start) {
-        advance_input_pos(in, in->start, pos);
-    }
-    /* Mark this position as layout-clean so redundant calls are no-ops */
-    g_layout_clean_pos = in->start;
-    g_layout_clean_buf = buf;
+  /* Fast path: if we already consumed layout at this position, skip entirely */
+  if (pos == g_layout_clean_pos && buf == g_layout_clean_buf) {
     return make_success(ast_nil);
+  }
+
+  for (;;) {
+    /* Skip whitespace in bulk */
+    while (pos < len && isspace((unsigned char)buf[pos])) {
+      pos++;
+    }
+    if (pos >= len)
+      break;
+
+    char c = buf[pos];
+
+    if (c == '{') {
+      /* Check for #line directive first — need to update input state for it */
+      advance_input_pos(in, in->start, pos);
+      if (try_parse_line_directive(in)) {
+        pos = in->start; /* directive advanced the position */
+        continue;
+      }
+      /* Normal { } comment */
+      pos++; /* consume '{' */
+      int depth = 1;
+      while (pos < len && depth > 0) {
+        if (buf[pos] == '{')
+          depth++;
+        else if (buf[pos] == '}')
+          depth--;
+        pos++;
+      }
+      continue;
+    }
+
+    if (c == '(' && (pos + 1) < len && buf[pos + 1] == '*') {
+      pos += 2; /* consume '(' '*' */
+      int depth = 1;
+      while (pos < len && depth > 0) {
+        if (buf[pos] == '(' && (pos + 1) < len && buf[pos + 1] == '*') {
+          pos += 2;
+          depth++;
+          continue;
+        }
+        if (buf[pos] == '*' && (pos + 1) < len && buf[pos + 1] == ')') {
+          pos += 2;
+          depth--;
+          continue;
+        }
+        pos++;
+      }
+      continue;
+    }
+
+    if (c == '/' && (pos + 1) < len && buf[pos + 1] == '/') {
+      pos += 2; /* consume '//' */
+      while (pos < len && buf[pos] != '\n' && buf[pos] != '\r') {
+        pos++;
+      }
+      if (pos < len)
+        pos++; /* consume newline */
+      continue;
+    }
+
+    /* Not whitespace or comment — done */
+    break;
+  }
+
+  /* Bulk update line/col from old position to new position */
+  if (pos != in->start) {
+    advance_input_pos(in, in->start, pos);
+  }
+  /* Mark this position as layout-clean so redundant calls are no-ops */
+  g_layout_clean_pos = in->start;
+  g_layout_clean_buf = buf;
+  return make_success(ast_nil);
 }
 
-static combinator_t* pascal_layout_parser(void) {
-    combinator_t* comb = new_combinator();
-    comb->type = P_LAYOUT;
-    comb->fn = pascal_layout_fn;
-    comb->args = NULL;
-    comb->name = strdup("pascal_layout");
-    return comb;
+static combinator_t *pascal_layout_parser(void) {
+  combinator_t *comb = new_combinator();
+  comb->type = P_LAYOUT;
+  comb->fn = pascal_layout_fn;
+  comb->args = NULL;
+  comb->name = strdup("pascal_layout");
+  return comb;
 }
 
 // Renamed token parser with better Pascal-aware whitespace handling
-combinator_t* pascal_token(combinator_t* p) {
-    combinator_t* leading = pascal_layout_parser();
-    combinator_t* trailing = pascal_layout_parser();
-    return right(leading, left(p, trailing));
+combinator_t *pascal_token(combinator_t *p) {
+  combinator_t *leading = pascal_layout_parser();
+  combinator_t *trailing = pascal_layout_parser();
+  return right(leading, left(p, trailing));
 }
 
 // Backward compatibility: keep old token() function name for existing code
-combinator_t* token(combinator_t* p) {
-    return pascal_token(p);
-}
+combinator_t *token(combinator_t *p) { return pascal_token(p); }
 
-static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char* parser_name) {
-    prim_args* pargs = (prim_args*)args;
-    InputState state;
-    save_input_state(in, &state);
+static ParseResult pascal_qualified_identifier_fn(input_t *in, void *args,
+                                                  char *parser_name) {
+  prim_args *pargs = (prim_args *)args;
+  InputState state;
+  save_input_state(in, &state);
 
-    char c = read1(in);
-    unsigned char uc = (unsigned char)c;
+  char c = read1(in);
+  unsigned char uc = (unsigned char)c;
 
-    if (c == EOF || !(c == '_' || isalpha(uc) || uc >= 0x80)) {
-        restore_input_state(in, &state);
-        return make_failure_static(in, "Expected identifier");
+  if (c == EOF || !(c == '_' || isalpha(uc) || uc >= 0x80)) {
+    restore_input_state(in, &state);
+    return make_failure_static(in, "Expected identifier");
+  }
+
+  /* Build the normalized identifier text (without whitespace around dots)
+   * in a dynamic buffer.  This handles "unit . Type" -> "unit.Type". */
+  size_t buf_cap = 64;
+  size_t buf_len = 0;
+  char *buf = (char *)safe_malloc(buf_cap);
+
+#define QID_APPEND(ch)                                                         \
+  do {                                                                         \
+    if (buf_len + 1 >= buf_cap) {                                              \
+      buf_cap *= 2;                                                            \
+      char *tmp = (char *)realloc(buf, buf_cap);                               \
+      if (!tmp) {                                                              \
+        free(buf);                                                             \
+        abort();                                                               \
+      }                                                                        \
+      buf = tmp;                                                               \
+    }                                                                          \
+    buf[buf_len++] = (ch);                                                     \
+  } while (0)
+
+  while (true) {
+    InputState after_segment;
+    while (c != EOF) {
+      uc = (unsigned char)c;
+      if (isalnum(uc) || c == '_' || uc >= 0x80) {
+        QID_APPEND(c);
+        save_input_state(in, &after_segment);
+        c = read1(in);
+        continue;
+      }
+      break;
     }
 
-    /* Build the normalized identifier text (without whitespace around dots)
-     * in a dynamic buffer.  This handles "unit . Type" -> "unit.Type". */
-    size_t buf_cap = 64;
-    size_t buf_len = 0;
-    char *buf = (char *)safe_malloc(buf_cap);
+    /* after_segment now holds the position right after the last
+     * identifier character (before 'c' was read). */
 
-    #define QID_APPEND(ch) do { \
-        if (buf_len + 1 >= buf_cap) { \
-            buf_cap *= 2; \
-            char *tmp = (char *)realloc(buf, buf_cap); \
-            if (!tmp) { free(buf); abort(); } \
-            buf = tmp; \
-        } \
-        buf[buf_len++] = (ch); \
-    } while (0)
+    /* Skip optional horizontal whitespace before potential dot. */
+    while (c == ' ' || c == '\t') {
+      c = read1(in);
+    }
 
-    while (true) {
-        InputState after_segment;
-        while (c != EOF) {
-            uc = (unsigned char)c;
-            if (isalnum(uc) || c == '_' || uc >= 0x80) {
-                QID_APPEND(c);
-                save_input_state(in, &after_segment);
-                c = read1(in);
-                continue;
-            }
-            break;
-        }
-
-        /* after_segment now holds the position right after the last
-         * identifier character (before 'c' was read). */
-
-        /* Skip optional horizontal whitespace before potential dot. */
-        while (c == ' ' || c == '\t') {
-            c = read1(in);
-        }
-
-        if (c == '.') {
-            char next = read1(in);
-            /* Skip optional horizontal whitespace after dot. */
-            while (next == ' ' || next == '\t') {
-                next = read1(in);
-            }
-            unsigned char unext = (unsigned char)next;
-            if (next == EOF || (next != '_' && !isalpha(unext) && !(unext >= 0x80))) {
-                /* Not a qualified identifier continuation — the dot is not part
-                 * of this identifier.  Backtrack to just after the last complete
-                 * identifier segment. */
-                restore_input_state(in, &after_segment);
-                break;
-            }
-            QID_APPEND('.');
-            c = next;
-            continue;
-        }
-
-        /* Not a dot — backtrack to just after the last identifier segment. */
+    if (c == '.') {
+      char next = read1(in);
+      /* Skip optional horizontal whitespace after dot. */
+      while (next == ' ' || next == '\t') {
+        next = read1(in);
+      }
+      unsigned char unext = (unsigned char)next;
+      if (next == EOF || (next != '_' && !isalpha(unext) && !(unext >= 0x80))) {
+        /* Not a qualified identifier continuation — the dot is not part
+         * of this identifier.  Backtrack to just after the last complete
+         * identifier segment. */
         restore_input_state(in, &after_segment);
         break;
+      }
+      QID_APPEND('.');
+      c = next;
+      continue;
     }
 
-    #undef QID_APPEND
+    /* Not a dot — backtrack to just after the last identifier segment. */
+    restore_input_state(in, &after_segment);
+    break;
+  }
 
-    buf[buf_len] = '\0';
+#undef QID_APPEND
 
-    ast_t* ast = new_ast();
-    ast->typ = pargs->tag;
-    ast->sym = sym_lookup(buf);
-    free(buf);
-    ast->child = NULL;
-    ast->next = NULL;
-    set_ast_position(ast, in);
+  buf[buf_len] = '\0';
 
-    return make_success(ast);
+  ast_t *ast = new_ast();
+  ast->typ = pargs->tag;
+  ast->sym = sym_lookup(buf);
+  free(buf);
+  ast->child = NULL;
+  ast->next = NULL;
+  set_ast_position(ast, in);
+
+  return make_success(ast);
 }
 
-combinator_t* pascal_qualified_identifier(tag_t tag) {
-    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
-    args->tag = tag;
-    combinator_t* comb = new_combinator();
-    comb->type = P_CIDENT;
-    comb->fn = pascal_qualified_identifier_fn;
-    comb->args = args;
-    return comb;
+combinator_t *pascal_qualified_identifier(tag_t tag) {
+  prim_args *args = (prim_args *)safe_malloc(sizeof(prim_args));
+  args->tag = tag;
+  combinator_t *comb = new_combinator();
+  comb->type = P_CIDENT;
+  comb->fn = pascal_qualified_identifier_fn;
+  comb->args = args;
+  return comb;
 }
 
-static ParseResult trace_fn(input_t* in, void* args, char* parser_name) {
-    char* msg = (char*)args;
-    // Log only if env var is set
-    if (getenv("KGPC_DEBUG_TRACE") != NULL) {
-        FILE* f = fopen("/tmp/parser_trace.log", "a");
-        if (f) {
-            fprintf(f, "TRACE: %s at line %d, col %d, next: '%.10s'\n", 
-                    msg, in ? in->line : 0, in ? in->col : 0, 
-                    (in && in->buffer) ? in->buffer + in->start : "NULL");
-            fclose(f);
-        }
+static ParseResult trace_fn(input_t *in, void *args, char *parser_name) {
+  char *msg = (char *)args;
+  // Log only if env var is set
+  if (getenv("KGPC_DEBUG_TRACE") != NULL) {
+    FILE *f = fopen("/tmp/parser_trace.log", "a");
+    if (f) {
+      fprintf(f, "TRACE: %s at line %d, col %d, next: '%.10s'\n", msg,
+              in ? in->line : 0, in ? in->col : 0,
+              (in && in->buffer) ? in->buffer + in->start : "NULL");
+      fclose(f);
     }
-    return make_success(ast_nil);
+  }
+  return make_success(ast_nil);
 }
 
-combinator_t* trace(const char* msg) {
-    combinator_t* comb = new_combinator();
-    comb->fn = trace_fn;
-    comb->args = strdup(msg);
-    return comb;
+combinator_t *trace(const char *msg) {
+  combinator_t *comb = new_combinator();
+  comb->fn = trace_fn;
+  comb->args = strdup(msg);
+  return comb;
 }
 
-const char* pascal_tag_to_string(tag_t tag) {
-    switch (tag) {
-        case PASCAL_T_NONE: return "NONE";
-        case PASCAL_T_INTEGER: return "INTEGER";
-        case PASCAL_T_REAL: return "REAL";
-        case PASCAL_T_IDENTIFIER: return "IDENTIFIER";
-        case PASCAL_T_STRING: return "STRING";
-        case PASCAL_T_NIL: return "NIL";
-        case PASCAL_T_CHAR: return "CHAR";
-        case PASCAL_T_CHAR_CODE: return "CHAR_CODE";
-        case PASCAL_T_BOOLEAN: return "BOOLEAN";
-        case PASCAL_T_ADD: return "ADD";
-        case PASCAL_T_SUB: return "SUB";
-        case PASCAL_T_MUL: return "MUL";
-        case PASCAL_T_DIV: return "DIV";
-        case PASCAL_T_INTDIV: return "INTDIV";
-        case PASCAL_T_MOD: return "MOD";
-        case PASCAL_T_POWER: return "POWER";
-        case PASCAL_T_NEG: return "NEG";
-        case PASCAL_T_POS: return "POS";
-        case PASCAL_T_EQ: return "EQ";
-        case PASCAL_T_NE: return "NE";
-        case PASCAL_T_LT: return "LT";
-        case PASCAL_T_GT: return "GT";
-        case PASCAL_T_LE: return "LE";
-        case PASCAL_T_GE: return "GE";
-        case PASCAL_T_AND: return "AND";
-        case PASCAL_T_OR: return "OR";
-        case PASCAL_T_NOT: return "NOT";
-        case PASCAL_T_XOR: return "XOR";
-        case PASCAL_T_SHL: return "SHL";
-        case PASCAL_T_SHR: return "SHR";
-        case PASCAL_T_ROL: return "ROL";
-        case PASCAL_T_ROR: return "ROR";
-        case PASCAL_T_ADDR: return "ADDR";
-        case PASCAL_T_DEREF: return "DEREF";
-        case PASCAL_T_RANGE: return "RANGE";
-        case PASCAL_T_SET: return "SET";
-        case PASCAL_T_IN: return "IN";
-        case PASCAL_T_SET_UNION: return "SET_UNION";
-        case PASCAL_T_SET_INTERSECT: return "SET_INTERSECT";
-        case PASCAL_T_SET_DIFF: return "SET_DIFF";
-        case PASCAL_T_SET_SYM_DIFF: return "SET_SYM_DIFF";
-        case PASCAL_T_IS: return "IS";
-        case PASCAL_T_AS: return "AS";
-        case PASCAL_T_TYPECAST: return "TYPECAST";
-        case PASCAL_T_FUNC_CALL: return "FUNC_CALL";
-        case PASCAL_T_ARRAY_ACCESS: return "ARRAY_ACCESS";
-        case PASCAL_T_MEMBER_ACCESS: return "MEMBER_ACCESS";
-        case PASCAL_T_ARG_LIST: return "ARG_LIST";
-        case PASCAL_T_TUPLE: return "TUPLE";
-        case PASCAL_T_RECORD_CONSTRUCTOR: return "RECORD_CONSTRUCTOR";
-        case PASCAL_T_PROCEDURE_DECL: return "PROCEDURE_DECL";
-        case PASCAL_T_FUNCTION_DECL: return "FUNCTION_DECL";
-        case PASCAL_T_FUNCTION_BODY: return "FUNCTION_BODY";
-        case PASCAL_T_PARAM_LIST: return "PARAM_LIST";
-        case PASCAL_T_PARAM: return "PARAM";
-        case PASCAL_T_DEFAULT_VALUE: return "DEFAULT_VALUE";
-        case PASCAL_T_RETURN_TYPE: return "RETURN_TYPE";
-        case PASCAL_T_ASSIGNMENT: return "ASSIGNMENT";
-        case PASCAL_T_STATEMENT: return "STATEMENT";
-        case PASCAL_T_STATEMENT_LIST: return "STATEMENT_LIST";
-        case PASCAL_T_IF_STMT: return "IF_STMT";
-        case PASCAL_T_THEN: return "THEN";
-        case PASCAL_T_ELSE: return "ELSE";
-        case PASCAL_T_BEGIN_BLOCK: return "BEGIN_BLOCK";
-        case PASCAL_T_END_BLOCK: return "END_BLOCK";
-        case PASCAL_T_FOR_STMT: return "FOR_STMT";
-        case PASCAL_T_FOR_IN_STMT: return "FOR_IN_STMT";
-        case PASCAL_T_WHILE_STMT: return "WHILE_STMT";
-        case PASCAL_T_REPEAT_STMT: return "REPEAT_STMT";
-        case PASCAL_T_WITH_STMT: return "WITH_STMT";
-        case PASCAL_T_WITH_CONTEXTS: return "WITH_CONTEXTS";
-        case PASCAL_T_LABEL_STMT: return "LABEL_STMT";
-        case PASCAL_T_GOTO_STMT: return "GOTO_STMT";
-        case PASCAL_T_DO: return "DO";
-        case PASCAL_T_TO: return "TO";
-        case PASCAL_T_DOWNTO: return "DOWNTO";
-        case PASCAL_T_CASE_STMT: return "CASE_STMT";
-        case PASCAL_T_CASE_BRANCH: return "CASE_BRANCH";
-        case PASCAL_T_CASE_LABEL: return "CASE_LABEL";
-        case PASCAL_T_CASE_LABEL_LIST: return "CASE_LABEL_LIST";
-        case PASCAL_T_OF: return "OF";
-        case PASCAL_T_ASM_BLOCK: return "ASM_BLOCK";
-        // Exception handling types
-        case PASCAL_T_TRY_BLOCK: return "TRY_BLOCK";
-        case PASCAL_T_FINALLY_BLOCK: return "FINALLY_BLOCK";
-        case PASCAL_T_EXCEPT_BLOCK: return "EXCEPT_BLOCK";
-        case PASCAL_T_RAISE_STMT: return "RAISE_STMT";
-        case PASCAL_T_INHERITED_STMT: return "INHERITED_STMT";
-        case PASCAL_T_EXIT_STMT: return "EXIT_STMT";
-        case PASCAL_T_BREAK_STMT: return "BREAK_STMT";
-        case PASCAL_T_CONTINUE_STMT: return "CONTINUE_STMT";
-        case PASCAL_T_ON_CLAUSE: return "ON_CLAUSE";
-        case PASCAL_T_PROGRAM_DECL: return "PROGRAM_DECL";
-        case PASCAL_T_PROGRAM_HEADER: return "PROGRAM_HEADER";
-        case PASCAL_T_PROGRAM_PARAMS: return "PROGRAM_PARAMS";
-        case PASCAL_T_LABEL_SECTION: return "LABEL_SECTION";
-        case PASCAL_T_VAR_SECTION: return "VAR_SECTION";
-        case PASCAL_T_VAR_DECL: return "VAR_DECL";
-        case PASCAL_T_TYPE_SPEC: return "TYPE_SPEC";
-        case PASCAL_T_MAIN_BLOCK: return "MAIN_BLOCK";
-        // New enhanced parser types
-        case PASCAL_T_COMPILER_DIRECTIVE: return "COMPILER_DIRECTIVE";
-        case PASCAL_T_EXTERNAL_NAME: return "EXTERNAL_NAME";
-        case PASCAL_T_EXTERNAL_NAME_EXPR: return "EXTERNAL_NAME_EXPR";
-        case PASCAL_T_PUBLIC_NAME: return "PUBLIC_NAME";
-        case PASCAL_T_ABSOLUTE_CLAUSE: return "ABSOLUTE_CLAUSE";
-        case PASCAL_T_COMMENT: return "COMMENT";
-        case PASCAL_T_TYPE_SECTION: return "TYPE_SECTION";
-        case PASCAL_T_TYPE_DECL: return "TYPE_DECL";
-        case PASCAL_T_RANGE_TYPE: return "RANGE_TYPE";
-        case PASCAL_T_POINTER_TYPE: return "POINTER_TYPE";
-        case PASCAL_T_ARRAY_TYPE: return "ARRAY_TYPE";
-        case PASCAL_T_FILE_TYPE: return "FILE_TYPE";
-        case PASCAL_T_RECORD_TYPE: return "RECORD_TYPE";
-        case PASCAL_T_OBJECT_TYPE: return "OBJECT_TYPE";
-        case PASCAL_T_PROCEDURE_TYPE: return "PROCEDURE_TYPE";
-        case PASCAL_T_FUNCTION_TYPE: return "FUNCTION_TYPE";
-        case PASCAL_T_REFERENCE_TO_TYPE: return "REFERENCE_TO_TYPE";
-        case PASCAL_T_ANONYMOUS_FUNCTION: return "ANONYMOUS_FUNCTION";
-        case PASCAL_T_ANONYMOUS_PROCEDURE: return "ANONYMOUS_PROCEDURE";
-        case PASCAL_T_ENUMERATED_TYPE: return "ENUMERATED_TYPE";
-        case PASCAL_T_CLASS_TYPE: return "CLASS_TYPE";
-        case PASCAL_T_CLASS_OF_TYPE: return "CLASS_OF_TYPE";
-        case PASCAL_T_INTERFACE_TYPE: return "INTERFACE_TYPE";
-        case PASCAL_T_DISTINCT_TYPE: return "DISTINCT_TYPE";
-        // Generic type tags
-        case PASCAL_T_GENERIC_TYPE_DECL: return "GENERIC_TYPE_DECL";
-        case PASCAL_T_TYPE_PARAM_LIST: return "TYPE_PARAM_LIST";
-        case PASCAL_T_TYPE_PARAM: return "TYPE_PARAM";
-        case PASCAL_T_TYPE_CONSTRAINT: return "TYPE_CONSTRAINT";
-        case PASCAL_T_CONSTRUCTED_TYPE: return "CONSTRUCTED_TYPE";
-        case PASCAL_T_TYPE_ARG_LIST: return "TYPE_ARG_LIST";
-        case PASCAL_T_TYPE_ARG: return "TYPE_ARG";
-        case PASCAL_T_GENERIC_METHOD: return "GENERIC_METHOD";
-        case PASCAL_T_GENERIC_PROCEDURE_TYPE: return "GENERIC_PROCEDURE_TYPE";
-        case PASCAL_T_GENERIC_FUNCTION_TYPE: return "GENERIC_FUNCTION_TYPE";
-        case PASCAL_T_NESTED_TYPE_SECTION: return "NESTED_TYPE_SECTION";
-        case PASCAL_T_CLASS_MEMBER: return "CLASS_MEMBER";
-        case PASCAL_T_ACCESS_MODIFIER: return "ACCESS_MODIFIER";
-        case PASCAL_T_CLASS_BODY: return "CLASS_BODY";
-        case PASCAL_T_PRIVATE_SECTION: return "PRIVATE_SECTION";
-        case PASCAL_T_PUBLIC_SECTION: return "PUBLIC_SECTION";
-        case PASCAL_T_PROTECTED_SECTION: return "PROTECTED_SECTION";
-        case PASCAL_T_PUBLISHED_SECTION: return "PUBLISHED_SECTION";
-        case PASCAL_T_FIELD_DECL: return "FIELD_DECL";
-        case PASCAL_T_VARIANT_TAG: return "VARIANT_TAG";
-        case PASCAL_T_VARIANT_BRANCH: return "VARIANT_BRANCH";
-        case PASCAL_T_VARIANT_PART: return "VARIANT_PART";
-        case PASCAL_T_METHOD_DECL: return "METHOD_DECL";
-        case PASCAL_T_METHOD_IMPL: return "METHOD_IMPL";
-        case PASCAL_T_METHOD_DIRECTIVE: return "METHOD_DIRECTIVE";
-        case PASCAL_T_QUALIFIED_IDENTIFIER: return "QUALIFIED_IDENTIFIER";
-        case PASCAL_T_PROPERTY_DECL: return "PROPERTY_DECL";
-        case PASCAL_T_CONSTRUCTOR_DECL: return "CONSTRUCTOR_DECL";
-        case PASCAL_T_DESTRUCTOR_DECL: return "DESTRUCTOR_DECL";
-        // Uses clause types
-        case PASCAL_T_USES_SECTION: return "USES_SECTION";
-        case PASCAL_T_USES_UNIT: return "USES_UNIT";
-        // Const section types
-        case PASCAL_T_CONST_SECTION: return "CONST_SECTION";
-        case PASCAL_T_CONST_DECL: return "CONST_DECL";
-        // Unit-related types
-        case PASCAL_T_UNIT_DECL: return "UNIT_DECL";
-        case PASCAL_T_INTERFACE_SECTION: return "INTERFACE_SECTION";
-        case PASCAL_T_IMPLEMENTATION_SECTION: return "IMPLEMENTATION_SECTION";
-        case PASCAL_T_INITIALIZATION_SECTION: return "INITIALIZATION_SECTION";
-        case PASCAL_T_FINALIZATION_SECTION: return "FINALIZATION_SECTION";
-        // Field width specifier
-        case PASCAL_T_FIELD_WIDTH: return "FIELD_WIDTH";
-        case PASCAL_T_INTERFACE_GUID: return "INTERFACE_GUID";
-        case PASCAL_T_DEFAULT_PROPERTY: return "DEFAULT_PROPERTY";
-        case PASCAL_T_OF_OBJECT: return "OF_OBJECT";
-        default:
-            fprintf(stderr, "FATAL: Unknown Pascal AST node type: %d in %s at %s:%d\n", tag, __func__, __FILE__, __LINE__);
-            abort();
-    }
+const char *pascal_tag_to_string(tag_t tag) {
+  switch (tag) {
+  case PASCAL_T_NONE:
+    return "NONE";
+  case PASCAL_T_INTEGER:
+    return "INTEGER";
+  case PASCAL_T_REAL:
+    return "REAL";
+  case PASCAL_T_IDENTIFIER:
+    return "IDENTIFIER";
+  case PASCAL_T_STRING:
+    return "STRING";
+  case PASCAL_T_NIL:
+    return "NIL";
+  case PASCAL_T_CHAR:
+    return "CHAR";
+  case PASCAL_T_CHAR_CODE:
+    return "CHAR_CODE";
+  case PASCAL_T_BOOLEAN:
+    return "BOOLEAN";
+  case PASCAL_T_ADD:
+    return "ADD";
+  case PASCAL_T_SUB:
+    return "SUB";
+  case PASCAL_T_MUL:
+    return "MUL";
+  case PASCAL_T_DIV:
+    return "DIV";
+  case PASCAL_T_INTDIV:
+    return "INTDIV";
+  case PASCAL_T_MOD:
+    return "MOD";
+  case PASCAL_T_POWER:
+    return "POWER";
+  case PASCAL_T_NEG:
+    return "NEG";
+  case PASCAL_T_POS:
+    return "POS";
+  case PASCAL_T_EQ:
+    return "EQ";
+  case PASCAL_T_NE:
+    return "NE";
+  case PASCAL_T_LT:
+    return "LT";
+  case PASCAL_T_GT:
+    return "GT";
+  case PASCAL_T_LE:
+    return "LE";
+  case PASCAL_T_GE:
+    return "GE";
+  case PASCAL_T_AND:
+    return "AND";
+  case PASCAL_T_OR:
+    return "OR";
+  case PASCAL_T_NOT:
+    return "NOT";
+  case PASCAL_T_XOR:
+    return "XOR";
+  case PASCAL_T_SHL:
+    return "SHL";
+  case PASCAL_T_SHR:
+    return "SHR";
+  case PASCAL_T_ROL:
+    return "ROL";
+  case PASCAL_T_ROR:
+    return "ROR";
+  case PASCAL_T_ADDR:
+    return "ADDR";
+  case PASCAL_T_DEREF:
+    return "DEREF";
+  case PASCAL_T_RANGE:
+    return "RANGE";
+  case PASCAL_T_SET:
+    return "SET";
+  case PASCAL_T_IN:
+    return "IN";
+  case PASCAL_T_SET_UNION:
+    return "SET_UNION";
+  case PASCAL_T_SET_INTERSECT:
+    return "SET_INTERSECT";
+  case PASCAL_T_SET_DIFF:
+    return "SET_DIFF";
+  case PASCAL_T_SET_SYM_DIFF:
+    return "SET_SYM_DIFF";
+  case PASCAL_T_IS:
+    return "IS";
+  case PASCAL_T_AS:
+    return "AS";
+  case PASCAL_T_TYPECAST:
+    return "TYPECAST";
+  case PASCAL_T_FUNC_CALL:
+    return "FUNC_CALL";
+  case PASCAL_T_ARRAY_ACCESS:
+    return "ARRAY_ACCESS";
+  case PASCAL_T_MEMBER_ACCESS:
+    return "MEMBER_ACCESS";
+  case PASCAL_T_ARG_LIST:
+    return "ARG_LIST";
+  case PASCAL_T_TUPLE:
+    return "TUPLE";
+  case PASCAL_T_RECORD_CONSTRUCTOR:
+    return "RECORD_CONSTRUCTOR";
+  case PASCAL_T_PROCEDURE_DECL:
+    return "PROCEDURE_DECL";
+  case PASCAL_T_FUNCTION_DECL:
+    return "FUNCTION_DECL";
+  case PASCAL_T_FUNCTION_BODY:
+    return "FUNCTION_BODY";
+  case PASCAL_T_PARAM_LIST:
+    return "PARAM_LIST";
+  case PASCAL_T_PARAM:
+    return "PARAM";
+  case PASCAL_T_DEFAULT_VALUE:
+    return "DEFAULT_VALUE";
+  case PASCAL_T_RETURN_TYPE:
+    return "RETURN_TYPE";
+  case PASCAL_T_ASSIGNMENT:
+    return "ASSIGNMENT";
+  case PASCAL_T_STATEMENT:
+    return "STATEMENT";
+  case PASCAL_T_STATEMENT_LIST:
+    return "STATEMENT_LIST";
+  case PASCAL_T_IF_STMT:
+    return "IF_STMT";
+  case PASCAL_T_THEN:
+    return "THEN";
+  case PASCAL_T_ELSE:
+    return "ELSE";
+  case PASCAL_T_BEGIN_BLOCK:
+    return "BEGIN_BLOCK";
+  case PASCAL_T_END_BLOCK:
+    return "END_BLOCK";
+  case PASCAL_T_FOR_STMT:
+    return "FOR_STMT";
+  case PASCAL_T_FOR_IN_STMT:
+    return "FOR_IN_STMT";
+  case PASCAL_T_WHILE_STMT:
+    return "WHILE_STMT";
+  case PASCAL_T_REPEAT_STMT:
+    return "REPEAT_STMT";
+  case PASCAL_T_WITH_STMT:
+    return "WITH_STMT";
+  case PASCAL_T_WITH_CONTEXTS:
+    return "WITH_CONTEXTS";
+  case PASCAL_T_LABEL_STMT:
+    return "LABEL_STMT";
+  case PASCAL_T_GOTO_STMT:
+    return "GOTO_STMT";
+  case PASCAL_T_DO:
+    return "DO";
+  case PASCAL_T_TO:
+    return "TO";
+  case PASCAL_T_DOWNTO:
+    return "DOWNTO";
+  case PASCAL_T_CASE_STMT:
+    return "CASE_STMT";
+  case PASCAL_T_CASE_BRANCH:
+    return "CASE_BRANCH";
+  case PASCAL_T_CASE_LABEL:
+    return "CASE_LABEL";
+  case PASCAL_T_CASE_LABEL_LIST:
+    return "CASE_LABEL_LIST";
+  case PASCAL_T_OF:
+    return "OF";
+  case PASCAL_T_ASM_BLOCK:
+    return "ASM_BLOCK";
+  // Exception handling types
+  case PASCAL_T_TRY_BLOCK:
+    return "TRY_BLOCK";
+  case PASCAL_T_FINALLY_BLOCK:
+    return "FINALLY_BLOCK";
+  case PASCAL_T_EXCEPT_BLOCK:
+    return "EXCEPT_BLOCK";
+  case PASCAL_T_RAISE_STMT:
+    return "RAISE_STMT";
+  case PASCAL_T_INHERITED_STMT:
+    return "INHERITED_STMT";
+  case PASCAL_T_EXIT_STMT:
+    return "EXIT_STMT";
+  case PASCAL_T_BREAK_STMT:
+    return "BREAK_STMT";
+  case PASCAL_T_CONTINUE_STMT:
+    return "CONTINUE_STMT";
+  case PASCAL_T_ON_CLAUSE:
+    return "ON_CLAUSE";
+  case PASCAL_T_PROGRAM_DECL:
+    return "PROGRAM_DECL";
+  case PASCAL_T_PROGRAM_HEADER:
+    return "PROGRAM_HEADER";
+  case PASCAL_T_PROGRAM_PARAMS:
+    return "PROGRAM_PARAMS";
+  case PASCAL_T_LABEL_SECTION:
+    return "LABEL_SECTION";
+  case PASCAL_T_VAR_SECTION:
+    return "VAR_SECTION";
+  case PASCAL_T_VAR_DECL:
+    return "VAR_DECL";
+  case PASCAL_T_TYPE_SPEC:
+    return "TYPE_SPEC";
+  case PASCAL_T_MAIN_BLOCK:
+    return "MAIN_BLOCK";
+  // New enhanced parser types
+  case PASCAL_T_COMPILER_DIRECTIVE:
+    return "COMPILER_DIRECTIVE";
+  case PASCAL_T_EXTERNAL_NAME:
+    return "EXTERNAL_NAME";
+  case PASCAL_T_EXTERNAL_NAME_EXPR:
+    return "EXTERNAL_NAME_EXPR";
+  case PASCAL_T_PUBLIC_NAME:
+    return "PUBLIC_NAME";
+  case PASCAL_T_ABSOLUTE_CLAUSE:
+    return "ABSOLUTE_CLAUSE";
+  case PASCAL_T_COMMENT:
+    return "COMMENT";
+  case PASCAL_T_TYPE_SECTION:
+    return "TYPE_SECTION";
+  case PASCAL_T_TYPE_DECL:
+    return "TYPE_DECL";
+  case PASCAL_T_RANGE_TYPE:
+    return "RANGE_TYPE";
+  case PASCAL_T_POINTER_TYPE:
+    return "POINTER_TYPE";
+  case PASCAL_T_ARRAY_TYPE:
+    return "ARRAY_TYPE";
+  case PASCAL_T_FILE_TYPE:
+    return "FILE_TYPE";
+  case PASCAL_T_RECORD_TYPE:
+    return "RECORD_TYPE";
+  case PASCAL_T_OBJECT_TYPE:
+    return "OBJECT_TYPE";
+  case PASCAL_T_PROCEDURE_TYPE:
+    return "PROCEDURE_TYPE";
+  case PASCAL_T_FUNCTION_TYPE:
+    return "FUNCTION_TYPE";
+  case PASCAL_T_REFERENCE_TO_TYPE:
+    return "REFERENCE_TO_TYPE";
+  case PASCAL_T_ANONYMOUS_FUNCTION:
+    return "ANONYMOUS_FUNCTION";
+  case PASCAL_T_ANONYMOUS_PROCEDURE:
+    return "ANONYMOUS_PROCEDURE";
+  case PASCAL_T_ENUMERATED_TYPE:
+    return "ENUMERATED_TYPE";
+  case PASCAL_T_CLASS_TYPE:
+    return "CLASS_TYPE";
+  case PASCAL_T_CLASS_OF_TYPE:
+    return "CLASS_OF_TYPE";
+  case PASCAL_T_INTERFACE_TYPE:
+    return "INTERFACE_TYPE";
+  case PASCAL_T_DISTINCT_TYPE:
+    return "DISTINCT_TYPE";
+  // Generic type tags
+  case PASCAL_T_GENERIC_TYPE_DECL:
+    return "GENERIC_TYPE_DECL";
+  case PASCAL_T_TYPE_PARAM_LIST:
+    return "TYPE_PARAM_LIST";
+  case PASCAL_T_TYPE_PARAM:
+    return "TYPE_PARAM";
+  case PASCAL_T_TYPE_CONSTRAINT:
+    return "TYPE_CONSTRAINT";
+  case PASCAL_T_CONSTRUCTED_TYPE:
+    return "CONSTRUCTED_TYPE";
+  case PASCAL_T_TYPE_ARG_LIST:
+    return "TYPE_ARG_LIST";
+  case PASCAL_T_TYPE_ARG:
+    return "TYPE_ARG";
+  case PASCAL_T_GENERIC_METHOD:
+    return "GENERIC_METHOD";
+  case PASCAL_T_GENERIC_PROCEDURE_TYPE:
+    return "GENERIC_PROCEDURE_TYPE";
+  case PASCAL_T_GENERIC_FUNCTION_TYPE:
+    return "GENERIC_FUNCTION_TYPE";
+  case PASCAL_T_NESTED_TYPE_SECTION:
+    return "NESTED_TYPE_SECTION";
+  case PASCAL_T_CLASS_MEMBER:
+    return "CLASS_MEMBER";
+  case PASCAL_T_ACCESS_MODIFIER:
+    return "ACCESS_MODIFIER";
+  case PASCAL_T_CLASS_BODY:
+    return "CLASS_BODY";
+  case PASCAL_T_PRIVATE_SECTION:
+    return "PRIVATE_SECTION";
+  case PASCAL_T_PUBLIC_SECTION:
+    return "PUBLIC_SECTION";
+  case PASCAL_T_PROTECTED_SECTION:
+    return "PROTECTED_SECTION";
+  case PASCAL_T_PUBLISHED_SECTION:
+    return "PUBLISHED_SECTION";
+  case PASCAL_T_FIELD_DECL:
+    return "FIELD_DECL";
+  case PASCAL_T_VARIANT_TAG:
+    return "VARIANT_TAG";
+  case PASCAL_T_VARIANT_BRANCH:
+    return "VARIANT_BRANCH";
+  case PASCAL_T_VARIANT_PART:
+    return "VARIANT_PART";
+  case PASCAL_T_METHOD_DECL:
+    return "METHOD_DECL";
+  case PASCAL_T_METHOD_IMPL:
+    return "METHOD_IMPL";
+  case PASCAL_T_METHOD_DIRECTIVE:
+    return "METHOD_DIRECTIVE";
+  case PASCAL_T_QUALIFIED_IDENTIFIER:
+    return "QUALIFIED_IDENTIFIER";
+  case PASCAL_T_PROPERTY_DECL:
+    return "PROPERTY_DECL";
+  case PASCAL_T_CONSTRUCTOR_DECL:
+    return "CONSTRUCTOR_DECL";
+  case PASCAL_T_DESTRUCTOR_DECL:
+    return "DESTRUCTOR_DECL";
+  // Uses clause types
+  case PASCAL_T_USES_SECTION:
+    return "USES_SECTION";
+  case PASCAL_T_USES_UNIT:
+    return "USES_UNIT";
+  // Const section types
+  case PASCAL_T_CONST_SECTION:
+    return "CONST_SECTION";
+  case PASCAL_T_CONST_DECL:
+    return "CONST_DECL";
+  // Unit-related types
+  case PASCAL_T_UNIT_DECL:
+    return "UNIT_DECL";
+  case PASCAL_T_INTERFACE_SECTION:
+    return "INTERFACE_SECTION";
+  case PASCAL_T_IMPLEMENTATION_SECTION:
+    return "IMPLEMENTATION_SECTION";
+  case PASCAL_T_INITIALIZATION_SECTION:
+    return "INITIALIZATION_SECTION";
+  case PASCAL_T_FINALIZATION_SECTION:
+    return "FINALIZATION_SECTION";
+  // Field width specifier
+  case PASCAL_T_FIELD_WIDTH:
+    return "FIELD_WIDTH";
+  case PASCAL_T_INTERFACE_GUID:
+    return "INTERFACE_GUID";
+  case PASCAL_T_DEFAULT_PROPERTY:
+    return "DEFAULT_PROPERTY";
+  case PASCAL_T_OF_OBJECT:
+    return "OF_OBJECT";
+  default:
+    fprintf(stderr, "FATAL: Unknown Pascal AST node type: %d in %s at %s:%d\n",
+            tag, __func__, __FILE__, __LINE__);
+    abort();
+  }
 }
 
-static void print_ast_recursive(ast_t* ast, int depth) {
-    if (ast == NULL || ast == ast_nil) return;
-    for (int i = 0; i < depth; i++) printf("  ");
-    printf("(%s", pascal_tag_to_string(ast->typ));
-    if (ast->sym) printf(" %s", ast->sym->name);
+static void print_ast_recursive(ast_t *ast, int depth) {
+  if (ast == NULL || ast == ast_nil)
+    return;
+  for (int i = 0; i < depth; i++)
+    printf("  ");
+  printf("(%s", pascal_tag_to_string(ast->typ));
+  if (ast->sym)
+    printf(" %s", ast->sym->name);
 
-    ast_t* child = ast->child;
-    if (child) {
-        printf("\n");
-        print_ast_recursive(child, depth + 1);
-    }
-    printf(")");
-
-    if (ast->next) {
-        printf("\n");
-        print_ast_recursive(ast->next, depth);
-    }
-}
-
-void print_pascal_ast(ast_t* ast) {
-    print_ast_recursive(ast, 0);
+  ast_t *child = ast->child;
+  if (child) {
     printf("\n");
+    print_ast_recursive(child, depth + 1);
+  }
+  printf(")");
+
+  if (ast->next) {
+    printf("\n");
+    print_ast_recursive(ast->next, depth);
+  }
+}
+
+void print_pascal_ast(ast_t *ast) {
+  print_ast_recursive(ast, 0);
+  printf("\n");
 }

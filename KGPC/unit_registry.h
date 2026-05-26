@@ -6,8 +6,8 @@
 #ifndef KGPC_UNIT_REGISTRY_H
 #define KGPC_UNIT_REGISTRY_H
 
-/* Register a unit name and return its index (1-based). Returns existing index if already registered.
- * Returns 0 on failure (NULL name or registry full). */
+/* Register a unit name and return its index (1-based). Returns existing index
+ * if already registered. Returns 0 on failure (NULL name or registry full). */
 int unit_registry_add(const char *name);
 
 /* Look up a unit name by index. Returns NULL for index 0 or out-of-range. */
@@ -20,7 +20,8 @@ int unit_registry_contains(const char *name);
 void unit_registry_add_dep(int unit_idx, int dep_idx);
 
 /* Record that unit_idx has an interface (public) dependency on dep_idx.
- * Also records as a general dependency (calls unit_registry_add_dep internally). */
+ * Also records as a general dependency (calls unit_registry_add_dep
+ * internally). */
 void unit_registry_add_iface_dep(int unit_idx, int dep_idx);
 
 /* Check if dep_idx is a direct dependency of unit_idx. */

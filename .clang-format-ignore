@@ -1,0 +1,3 @@
+# Vendored / upstream-tracked C files we do NOT want clang-format
+# touching, so they stay diff-clean against their upstream sources.
+cparser/acutest.h

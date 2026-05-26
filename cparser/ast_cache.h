@@ -24,17 +24,17 @@
 
 #define AST_CACHE_VERSION 2
 
-/* Save a parsed AST tree and its preprocessed source buffer to a binary cache file.
- * Returns true on success. */
+/* Save a parsed AST tree and its preprocessed source buffer to a binary cache
+ * file. Returns true on success. */
 bool ast_cache_save(const char *cache_path, const ast_t *root,
                     const char *preprocessed_buf, size_t preprocessed_len);
 
-/* Load a cached AST tree and preprocessed source buffer from a binary cache file.
- * On success, *out_root is set to the deserialized AST (caller must free),
- * *out_buf is set to a malloc'd copy of the preprocessed source,
+/* Load a cached AST tree and preprocessed source buffer from a binary cache
+ * file. On success, *out_root is set to the deserialized AST (caller must
+ * free), *out_buf is set to a malloc'd copy of the preprocessed source,
  * *out_len is set to the preprocessed source length, and returns true.
  * On failure, returns false and sets outputs to NULL/0. */
-bool ast_cache_load(const char *cache_path, ast_t **out_root,
-                    char **out_buf, size_t *out_len);
+bool ast_cache_load(const char *cache_path, ast_t **out_root, char **out_buf,
+                    size_t *out_len);
 
 #endif /* AST_CACHE_H */

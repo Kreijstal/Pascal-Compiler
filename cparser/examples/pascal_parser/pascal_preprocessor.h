@@ -10,32 +10,33 @@ PascalPreprocessor *pascal_preprocessor_create(void);
 void pascal_preprocessor_free(PascalPreprocessor *pp);
 
 bool pascal_preprocessor_define(PascalPreprocessor *pp, const char *symbol);
-bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol, const char *value);
-/* Define a compile-time constant available for {$if} evaluation but NOT for text replacement */
-bool pascal_preprocessor_define_const(PascalPreprocessor *pp, const char *symbol, const char *value);
+bool pascal_preprocessor_define_macro(PascalPreprocessor *pp,
+                                      const char *symbol, const char *value);
+/* Define a compile-time constant available for {$if} evaluation but NOT for
+ * text replacement */
+bool pascal_preprocessor_define_const(PascalPreprocessor *pp,
+                                      const char *symbol, const char *value);
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol);
-bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *symbol);
+bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp,
+                                    const char *symbol);
 
 /* Add a directory to search for include files */
-bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp, const char *path);
-void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp, bool flatten_only);
+bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp,
+                                          const char *path);
+void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp,
+                                          bool flatten_only);
 
-char *pascal_preprocess_buffer(PascalPreprocessor *pp,
-                               const char *filename,
-                               const char *input,
-                               size_t length,
-                               size_t *out_length,
-                               char **error_message);
+char *pascal_preprocess_buffer(PascalPreprocessor *pp, const char *filename,
+                               const char *input, size_t length,
+                               size_t *out_length, char **error_message);
 
-char *pascal_preprocess_file(PascalPreprocessor *pp,
-                             const char *filename,
-                             size_t *out_length,
-                             char **error_message);
+char *pascal_preprocess_file(PascalPreprocessor *pp, const char *filename,
+                             size_t *out_length, char **error_message);
 
 /* Get the list of files that were included during preprocessing.
  * Returns the count; *out_files points to an internal array of paths. */
 size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
-                                               const char *const **out_files);
+                                              const char *const **out_files);
 
 /* Returns true if {$ASMMODE INTEL} was the last asmmode directive seen. */
 bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp);

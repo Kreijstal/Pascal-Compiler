@@ -9,9 +9,11 @@ void parser_error_report(const char *message, const char *yytext, int yyleng);
  * file_path: path to source file
  * error_line: line number where error occurred
  * error_col: column number where error occurred (0 if unknown)
- * num_context_lines: number of lines to show before and after the error line (default 2)
+ * num_context_lines: number of lines to show before and after the error line
+ * (default 2)
  */
-void print_source_context(const char *file_path, int error_line, int error_col, int num_context_lines);
+void print_source_context(const char *file_path, int error_line, int error_col,
+                          int num_context_lines);
 int print_source_context_from_buffer(const char *buffer, size_t length,
                                      int error_line, int error_col,
                                      int num_context_lines);
@@ -21,7 +23,7 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
  * source_offset: byte offset in buffer (-1 to fall back to line-based search)
  */
 int print_source_context_at_offset(const char *buffer, size_t length,
-                                   int source_offset, int error_line, int error_col,
-                                   int num_context_lines);
+                                   int source_offset, int error_line,
+                                   int error_col, int num_context_lines);
 
 #endif

@@ -14,23 +14,22 @@
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/type_tags.h"
 
-
 typedef struct expr_node expr_node_t;
 
-typedef struct expr_node
-{
-    int label;
+typedef struct expr_node {
+  int label;
 
-    expr_node_t *left_expr;
-    expr_node_t *right_expr;
+  expr_node_t *left_expr;
+  expr_node_t *right_expr;
 
-    struct Expression *expr;
-    Register_t *reg;
-    StackNode_t *spill_slot;
+  struct Expression *expr;
+  Register_t *reg;
+  StackNode_t *spill_slot;
 } expr_node_t;
 
 expr_node_t *build_expr_tree(struct Expression *);
-ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
+ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list,
+                              CodeGenContext *ctx, Register_t *target_reg);
 int expr_tree_is_leaf(expr_node_t *);
 void print_expr_tree(expr_node_t *, int num_indent, FILE *);
 void free_expr_tree(expr_node_t *);

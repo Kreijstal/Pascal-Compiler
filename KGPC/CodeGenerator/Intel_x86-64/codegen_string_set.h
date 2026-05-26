@@ -7,12 +7,12 @@
 #define CODEGEN_HASHSET_SIZE 8191
 
 typedef struct CodeGenHashEntry {
-    const char *key;
-    struct CodeGenHashEntry *next;
+  const char *key;
+  struct CodeGenHashEntry *next;
 } CodeGenHashEntry;
 
 typedef struct {
-    CodeGenHashEntry *buckets[CODEGEN_HASHSET_SIZE];
+  CodeGenHashEntry *buckets[CODEGEN_HASHSET_SIZE];
 } CodeGenStringSet;
 
 int codegen_set_contains(const CodeGenStringSet *set, const char *key);

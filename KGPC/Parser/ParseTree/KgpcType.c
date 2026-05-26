@@ -1,6 +1,7 @@
 /*
  * KgpcType.c
- * First-class type system implementation for the Kreijstal Gwinn Pascal Compiler
+ * First-class type system implementation for the Kreijstal Gwinn Pascal
+ * Compiler
  */
 
 #include <stdlib.h>
@@ -32,7 +33,6 @@
 #include "../SemanticCheck/HashTable/HashTable.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 
-
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 
@@ -40,596 +40,567 @@ extern const char *kgpc_getenv(const char *name);
 static long long kgpc_default_set_storage_size_for_high(long long high);
 static int kgpc_list_length(ListNode_t *list);
 
-/* Check if a HashNode represents a class type (either a pointer to a class record
- * or a direct class record).  Used to prefer class types over plain record aliases
- * when the same name resolves to both (e.g. TTimeZone = timezone struct alias vs
- * TTimeZone = class abstract). */
-static int hashnode_is_class_type(const HashNode_t *node)
-{
-    if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
-        return 0;
-    if (node->type->kind == TYPE_KIND_POINTER &&
-        node->type->info.points_to != NULL &&
-        node->type->info.points_to->kind == TYPE_KIND_RECORD &&
-        node->type->info.points_to->info.record_info != NULL &&
-        record_type_is_class(node->type->info.points_to->info.record_info))
-        return 1;
-    if (node->type->kind == TYPE_KIND_RECORD &&
-        node->type->info.record_info != NULL &&
-        record_type_is_class(node->type->info.record_info))
-        return 1;
+/* Check if a HashNode represents a class type (either a pointer to a class
+ * record or a direct class record).  Used to prefer class types over plain
+ * record aliases when the same name resolves to both (e.g. TTimeZone = timezone
+ * struct alias vs TTimeZone = class abstract). */
+static int hashnode_is_class_type(const HashNode_t *node) {
+  if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
     return 0;
+  if (node->type->kind == TYPE_KIND_POINTER &&
+      node->type->info.points_to != NULL &&
+      node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+      node->type->info.points_to->info.record_info != NULL &&
+      record_type_is_class(node->type->info.points_to->info.record_info))
+    return 1;
+  if (node->type->kind == TYPE_KIND_RECORD &&
+      node->type->info.record_info != NULL &&
+      record_type_is_class(node->type->info.record_info))
+    return 1;
+  return 0;
 }
 
 /* Check if a HashNode is a plain (non-class, non-interface) record type */
-static int hashnode_is_plain_record(const HashNode_t *node)
-{
-    if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
-        return 0;
-    if (node->type->kind == TYPE_KIND_RECORD &&
-        node->type->info.record_info != NULL &&
-        !record_type_is_class(node->type->info.record_info) &&
-        !node->type->info.record_info->is_interface)
-        return 1;
+static int hashnode_is_plain_record(const HashNode_t *node) {
+  if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
     return 0;
+  if (node->type->kind == TYPE_KIND_RECORD &&
+      node->type->info.record_info != NULL &&
+      !record_type_is_class(node->type->info.record_info) &&
+      !node->type->info.record_info->is_interface)
+    return 1;
+  return 0;
 }
 
 /* Find the best type node in a single hash table, preferring class types over
  * plain record aliases when multiple entries share the same name. */
-static HashNode_t *find_best_type_in_table(HashTable_t *table, const char *type_id)
-{
-    HashNode_t *first = FindIdentInTable(table, type_id);
-    if (first == NULL || first->hash_type != HASHTYPE_TYPE)
-        return first;
-    /* If the first match is already a class type or not a plain record,
-     * no disambiguation needed. */
-    if (!hashnode_is_plain_record(first))
-        return first;
-    /* The first match is a plain record — check if there's a class type
-     * with the same name in this table. */
-    ListNode_t *all = FindAllIdentsInTable(table, type_id);
-    HashNode_t *best = first;
-    for (ListNode_t *n = all; n != NULL; n = n->next)
-    {
-        HashNode_t *cand = (HashNode_t *)n->cur;
-        if (cand != NULL && cand->hash_type == HASHTYPE_TYPE &&
-            hashnode_is_class_type(cand))
-        {
-            best = cand;
-            break;
-        }
+static HashNode_t *find_best_type_in_table(HashTable_t *table,
+                                           const char *type_id) {
+  HashNode_t *first = FindIdentInTable(table, type_id);
+  if (first == NULL || first->hash_type != HASHTYPE_TYPE)
+    return first;
+  /* If the first match is already a class type or not a plain record,
+   * no disambiguation needed. */
+  if (!hashnode_is_plain_record(first))
+    return first;
+  /* The first match is a plain record — check if there's a class type
+   * with the same name in this table. */
+  ListNode_t *all = FindAllIdentsInTable(table, type_id);
+  HashNode_t *best = first;
+  for (ListNode_t *n = all; n != NULL; n = n->next) {
+    HashNode_t *cand = (HashNode_t *)n->cur;
+    if (cand != NULL && cand->hash_type == HASHTYPE_TYPE &&
+        hashnode_is_class_type(cand)) {
+      best = cand;
+      break;
     }
-    DestroyList(all);
-    return best;
+  }
+  DestroyList(all);
+  return best;
 }
 
-static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
-{
-    if (symtab == NULL || type_id == NULL)
-        return NULL;
-
-    /* Prefer type identifiers even if a variable with the same name exists.
-     * Walk the scope tree from current_scope up to (but not including) builtin_scope. */
-    for (ScopeNode *sc = symtab->current_scope; sc != NULL && sc != symtab->builtin_scope; sc = sc->parent)
-    {
-        HashNode_t *node = FindIdentInTable(sc->table, type_id);
-        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-            return node;
-    }
-
-    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
-    if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
-        return builtin;
-
+static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id) {
+  if (symtab == NULL || type_id == NULL)
     return NULL;
+
+  /* Prefer type identifiers even if a variable with the same name exists.
+   * Walk the scope tree from current_scope up to (but not including)
+   * builtin_scope. */
+  for (ScopeNode *sc = symtab->current_scope;
+       sc != NULL && sc != symtab->builtin_scope; sc = sc->parent) {
+    HashNode_t *node = FindIdentInTable(sc->table, type_id);
+    if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+      return node;
+  }
+
+  HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
+  if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
+    return builtin;
+
+  return NULL;
 }
 
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
-    const char *type_id, int defined_in_unit);
+                                                      const char *type_id,
+                                                      int defined_in_unit);
 static long long kgpc_type_get_array_scalar_element_size(KgpcType *type);
 
-static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
-{
-    if (symtab == NULL || id == NULL || out_value == NULL)
-        return 1;
-
-    HashNode_t *node = NULL;
-    if (FindSymbol(&node, symtab, id) != 0 &&
-        node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
-    {
-        *out_value = node->const_int_value;
-        return 0;
-    }
-
+static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id,
+                                         long long *out_value) {
+  if (symtab == NULL || id == NULL || out_value == NULL)
     return 1;
+
+  HashNode_t *node = NULL;
+  if (FindSymbol(&node, symtab, id) != 0 && node != NULL &&
+      (node->hash_type == HASHTYPE_CONST || node->is_typed_const)) {
+    *out_value = node->const_int_value;
+    return 0;
+  }
+
+  return 1;
 }
 
-static void kgpc_skip_const_expr_ws(const char **p)
-{
-    while (p != NULL && *p != NULL && (**p == ' ' || **p == '\t'))
-        (*p)++;
+static void kgpc_skip_const_expr_ws(const char **p) {
+  while (p != NULL && *p != NULL && (**p == ' ' || **p == '\t'))
+    (*p)++;
 }
 
-static int kgpc_match_const_expr_keyword(const char **p, const char *keyword)
-{
-    size_t len = strlen(keyword);
-    if (strncasecmp(*p, keyword, len) != 0)
-        return 0;
-    char next = (*p)[len];
-    if ((next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') ||
-        (next >= '0' && next <= '9') || next == '_')
-        return 0;
-    *p += len;
-    return 1;
+static int kgpc_match_const_expr_keyword(const char **p, const char *keyword) {
+  size_t len = strlen(keyword);
+  if (strncasecmp(*p, keyword, len) != 0)
+    return 0;
+  char next = (*p)[len];
+  if ((next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') ||
+      (next >= '0' && next <= '9') || next == '_')
+    return 0;
+  *p += len;
+  return 1;
 }
 
-static int kgpc_eval_const_expr_additive(SymTab_t *symtab, const char **p, long long *out_value);
+static int kgpc_eval_const_expr_additive(SymTab_t *symtab, const char **p,
+                                         long long *out_value);
 
-static int kgpc_eval_const_expr_primary(SymTab_t *symtab, const char **p, long long *out_value)
-{
-    if (p == NULL || *p == NULL || out_value == NULL)
-        return -1;
-
-    kgpc_skip_const_expr_ws(p);
-
-    if (**p == '(')
-    {
-        (*p)++;
-        if (kgpc_eval_const_expr_additive(symtab, p, out_value) != 0)
-            return -1;
-        kgpc_skip_const_expr_ws(p);
-        if (**p != ')')
-            return -1;
-        (*p)++;
-        return 0;
-    }
-
-    if (kgpc_match_const_expr_keyword(p, "sizeof"))
-    {
-        kgpc_skip_const_expr_ws(p);
-        if (**p != '(')
-            return -1;
-        (*p)++;
-        kgpc_skip_const_expr_ws(p);
-
-        const char *start = *p;
-        while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
-               (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
-            (*p)++;
-        if (*p == start)
-            return -1;
-
-        size_t len = (size_t)(*p - start);
-        char *type_id = (char *)malloc(len + 1);
-        if (type_id == NULL)
-            return -1;
-        memcpy(type_id, start, len);
-        type_id[len] = '\0';
-
-        kgpc_skip_const_expr_ws(p);
-        if (**p != ')')
-        {
-            free(type_id);
-            return -1;
-        }
-        (*p)++;
-
-        HashNode_t *type_node = kgpc_find_type_node(symtab, type_id);
-        free(type_id);
-        if (type_node == NULL || type_node->type == NULL)
-            return -1;
-        *out_value = kgpc_type_sizeof(type_node->type);
-        return (*out_value >= 0) ? 0 : -1;
-    }
-
-    if (**p == '\'')
-    {
-        (*p)++;
-        if (**p == '\0')
-            return -1;
-        unsigned char ch = (unsigned char)**p;
-        (*p)++;
-        if (**p != '\'')
-            return -1;
-        (*p)++;
-        *out_value = (long long)ch;
-        return 0;
-    }
-
-    if ((**p >= '0' && **p <= '9') ||
-        ((**p == '+' || **p == '-') && ((*p)[1] >= '0' && (*p)[1] <= '9')))
-    {
-        char *endptr = NULL;
-        errno = 0;
-        long long value = strtoll(*p, &endptr, 10);
-        if (endptr == *p || errno == ERANGE)
-            return -1;
-        *p = endptr;
-        *out_value = value;
-        return 0;
-    }
-
-    if ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') || **p == '_')
-    {
-        const char *start = *p;
-        while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
-               (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
-            (*p)++;
-        size_t len = (size_t)(*p - start);
-        char *id = (char *)malloc(len + 1);
-        if (id == NULL)
-            return -1;
-        memcpy(id, start, len);
-        id[len] = '\0';
-        int ok = (kgpc_resolve_const_identifier(symtab, id, out_value) == 0);
-        free(id);
-        return ok ? 0 : -1;
-    }
-
+static int kgpc_eval_const_expr_primary(SymTab_t *symtab, const char **p,
+                                        long long *out_value) {
+  if (p == NULL || *p == NULL || out_value == NULL)
     return -1;
-}
 
-static int kgpc_eval_const_expr_unary(SymTab_t *symtab, const char **p, long long *out_value)
-{
-    if (p == NULL || *p == NULL || out_value == NULL)
-        return -1;
+  kgpc_skip_const_expr_ws(p);
+
+  if (**p == '(') {
+    (*p)++;
+    if (kgpc_eval_const_expr_additive(symtab, p, out_value) != 0)
+      return -1;
+    kgpc_skip_const_expr_ws(p);
+    if (**p != ')')
+      return -1;
+    (*p)++;
+    return 0;
+  }
+
+  if (kgpc_match_const_expr_keyword(p, "sizeof")) {
+    kgpc_skip_const_expr_ws(p);
+    if (**p != '(')
+      return -1;
+    (*p)++;
+    kgpc_skip_const_expr_ws(p);
+
+    const char *start = *p;
+    while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
+           (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
+      (*p)++;
+    if (*p == start)
+      return -1;
+
+    size_t len = (size_t)(*p - start);
+    char *type_id = (char *)malloc(len + 1);
+    if (type_id == NULL)
+      return -1;
+    memcpy(type_id, start, len);
+    type_id[len] = '\0';
 
     kgpc_skip_const_expr_ws(p);
-    if (**p == '+')
-    {
-        (*p)++;
-        return kgpc_eval_const_expr_unary(symtab, p, out_value);
+    if (**p != ')') {
+      free(type_id);
+      return -1;
     }
-    if (**p == '-')
-    {
-        long long inner = 0;
-        (*p)++;
-        if (kgpc_eval_const_expr_unary(symtab, p, &inner) != 0)
-            return -1;
-        *out_value = -inner;
-        return 0;
-    }
+    (*p)++;
 
-    return kgpc_eval_const_expr_primary(symtab, p, out_value);
-}
+    HashNode_t *type_node = kgpc_find_type_node(symtab, type_id);
+    free(type_id);
+    if (type_node == NULL || type_node->type == NULL)
+      return -1;
+    *out_value = kgpc_type_sizeof(type_node->type);
+    return (*out_value >= 0) ? 0 : -1;
+  }
 
-static int kgpc_eval_const_expr_multiplicative(SymTab_t *symtab, const char **p, long long *out_value)
-{
-    if (kgpc_eval_const_expr_unary(symtab, p, out_value) != 0)
-        return -1;
-
-    while (1)
-    {
-        long long rhs = 0;
-        kgpc_skip_const_expr_ws(p);
-        if (**p == '*')
-        {
-            (*p)++;
-            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0)
-                return -1;
-            *out_value *= rhs;
-            continue;
-        }
-        if (kgpc_match_const_expr_keyword(p, "div"))
-        {
-            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs == 0)
-                return -1;
-            *out_value /= rhs;
-            continue;
-        }
-        if (kgpc_match_const_expr_keyword(p, "mod"))
-        {
-            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs == 0)
-                return -1;
-            *out_value %= rhs;
-            continue;
-        }
-        if (kgpc_match_const_expr_keyword(p, "shl"))
-        {
-            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs < 0)
-                return -1;
-            *out_value <<= rhs;
-            continue;
-        }
-        if (kgpc_match_const_expr_keyword(p, "shr"))
-        {
-            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs < 0)
-                return -1;
-            *out_value >>= rhs;
-            continue;
-        }
-        break;
-    }
-
+  if (**p == '\'') {
+    (*p)++;
+    if (**p == '\0')
+      return -1;
+    unsigned char ch = (unsigned char)**p;
+    (*p)++;
+    if (**p != '\'')
+      return -1;
+    (*p)++;
+    *out_value = (long long)ch;
     return 0;
-}
+  }
 
-static int kgpc_eval_const_expr_additive(SymTab_t *symtab, const char **p, long long *out_value)
-{
-    if (kgpc_eval_const_expr_multiplicative(symtab, p, out_value) != 0)
-        return -1;
-
-    while (1)
-    {
-        long long rhs = 0;
-        kgpc_skip_const_expr_ws(p);
-        if (**p == '+')
-        {
-            (*p)++;
-            if (kgpc_eval_const_expr_multiplicative(symtab, p, &rhs) != 0)
-                return -1;
-            *out_value += rhs;
-            continue;
-        }
-        if (**p == '-')
-        {
-            (*p)++;
-            if (kgpc_eval_const_expr_multiplicative(symtab, p, &rhs) != 0)
-                return -1;
-            *out_value -= rhs;
-            continue;
-        }
-        break;
-    }
-
+  if ((**p >= '0' && **p <= '9') ||
+      ((**p == '+' || **p == '-') && ((*p)[1] >= '0' && (*p)[1] <= '9'))) {
+    char *endptr = NULL;
+    errno = 0;
+    long long value = strtoll(*p, &endptr, 10);
+    if (endptr == *p || errno == ERANGE)
+      return -1;
+    *p = endptr;
+    *out_value = value;
     return 0;
+  }
+
+  if ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') || **p == '_') {
+    const char *start = *p;
+    while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
+           (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
+      (*p)++;
+    size_t len = (size_t)(*p - start);
+    char *id = (char *)malloc(len + 1);
+    if (id == NULL)
+      return -1;
+    memcpy(id, start, len);
+    id[len] = '\0';
+    int ok = (kgpc_resolve_const_identifier(symtab, id, out_value) == 0);
+    free(id);
+    return ok ? 0 : -1;
+  }
+
+  return -1;
 }
 
-static int kgpc_resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value)
-{
-    if (expr == NULL || out_value == NULL)
-        return -1;
+static int kgpc_eval_const_expr_unary(SymTab_t *symtab, const char **p,
+                                      long long *out_value) {
+  if (p == NULL || *p == NULL || out_value == NULL)
+    return -1;
 
-    const char *p = expr;
-    long long result = 0;
-    if (kgpc_eval_const_expr_additive(symtab, &p, &result) != 0)
-        return -1;
-    kgpc_skip_const_expr_ws(&p);
-    if (*p != '\0' || result < INT_MIN || result > INT_MAX)
-        return -1;
-    *out_value = (int)result;
+  kgpc_skip_const_expr_ws(p);
+  if (**p == '+') {
+    (*p)++;
+    return kgpc_eval_const_expr_unary(symtab, p, out_value);
+  }
+  if (**p == '-') {
+    long long inner = 0;
+    (*p)++;
+    if (kgpc_eval_const_expr_unary(symtab, p, &inner) != 0)
+      return -1;
+    *out_value = -inner;
     return 0;
+  }
+
+  return kgpc_eval_const_expr_primary(symtab, p, out_value);
 }
 
-static void kgpc_resolve_alias_array_bounds(struct TypeAlias *alias, SymTab_t *symtab)
-{
-    if (alias == NULL || !alias->is_array || alias->array_dimensions == NULL || symtab == NULL)
-        return;
+static int kgpc_eval_const_expr_multiplicative(SymTab_t *symtab, const char **p,
+                                               long long *out_value) {
+  if (kgpc_eval_const_expr_unary(symtab, p, out_value) != 0)
+    return -1;
 
-    ListNode_t *first_dim = alias->array_dimensions;
-    if (first_dim == NULL || first_dim->type != LIST_STRING || first_dim->cur == NULL)
-        return;
-
-    const char *dim_str = (const char *)first_dim->cur;
-    const char *separator = strstr(dim_str, "..");
-    if (separator == NULL)
-        return;
-
-    size_t start_len = (size_t)(separator - dim_str);
-    char *start_str = (char *)malloc(start_len + 1);
-    char *end_str = strdup(separator + 2);
-    if (start_str == NULL || end_str == NULL)
-    {
-        free(start_str);
-        free(end_str);
-        return;
+  while (1) {
+    long long rhs = 0;
+    kgpc_skip_const_expr_ws(p);
+    if (**p == '*') {
+      (*p)++;
+      if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0)
+        return -1;
+      *out_value *= rhs;
+      continue;
     }
-
-    memcpy(start_str, dim_str, start_len);
-    start_str[start_len] = '\0';
-
-    char *start_trim = start_str;
-    char *end_trim = end_str;
-    while (*start_trim == ' ' || *start_trim == '\t')
-        start_trim++;
-    while (*end_trim == ' ' || *end_trim == '\t')
-        end_trim++;
-
-    int start_val = 0;
-    int end_val = 0;
-    if (kgpc_resolve_array_bound_expr(symtab, start_trim, &start_val) == 0 &&
-        kgpc_resolve_array_bound_expr(symtab, end_trim, &end_val) == 0)
-    {
-        alias->array_start = start_val;
-        alias->array_end = end_val;
-        alias->is_open_array = (end_val < start_val);
+    if (kgpc_match_const_expr_keyword(p, "div")) {
+      if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs == 0)
+        return -1;
+      *out_value /= rhs;
+      continue;
     }
+    if (kgpc_match_const_expr_keyword(p, "mod")) {
+      if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs == 0)
+        return -1;
+      *out_value %= rhs;
+      continue;
+    }
+    if (kgpc_match_const_expr_keyword(p, "shl")) {
+      if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs < 0)
+        return -1;
+      *out_value <<= rhs;
+      continue;
+    }
+    if (kgpc_match_const_expr_keyword(p, "shr")) {
+      if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs < 0)
+        return -1;
+      *out_value >>= rhs;
+      continue;
+    }
+    break;
+  }
 
+  return 0;
+}
+
+static int kgpc_eval_const_expr_additive(SymTab_t *symtab, const char **p,
+                                         long long *out_value) {
+  if (kgpc_eval_const_expr_multiplicative(symtab, p, out_value) != 0)
+    return -1;
+
+  while (1) {
+    long long rhs = 0;
+    kgpc_skip_const_expr_ws(p);
+    if (**p == '+') {
+      (*p)++;
+      if (kgpc_eval_const_expr_multiplicative(symtab, p, &rhs) != 0)
+        return -1;
+      *out_value += rhs;
+      continue;
+    }
+    if (**p == '-') {
+      (*p)++;
+      if (kgpc_eval_const_expr_multiplicative(symtab, p, &rhs) != 0)
+        return -1;
+      *out_value -= rhs;
+      continue;
+    }
+    break;
+  }
+
+  return 0;
+}
+
+static int kgpc_resolve_array_bound_expr(SymTab_t *symtab, const char *expr,
+                                         int *out_value) {
+  if (expr == NULL || out_value == NULL)
+    return -1;
+
+  const char *p = expr;
+  long long result = 0;
+  if (kgpc_eval_const_expr_additive(symtab, &p, &result) != 0)
+    return -1;
+  kgpc_skip_const_expr_ws(&p);
+  if (*p != '\0' || result < INT_MIN || result > INT_MAX)
+    return -1;
+  *out_value = (int)result;
+  return 0;
+}
+
+static void kgpc_resolve_alias_array_bounds(struct TypeAlias *alias,
+                                            SymTab_t *symtab) {
+  if (alias == NULL || !alias->is_array || alias->array_dimensions == NULL ||
+      symtab == NULL)
+    return;
+
+  ListNode_t *first_dim = alias->array_dimensions;
+  if (first_dim == NULL || first_dim->type != LIST_STRING ||
+      first_dim->cur == NULL)
+    return;
+
+  const char *dim_str = (const char *)first_dim->cur;
+  const char *separator = strstr(dim_str, "..");
+  if (separator == NULL)
+    return;
+
+  size_t start_len = (size_t)(separator - dim_str);
+  char *start_str = (char *)malloc(start_len + 1);
+  char *end_str = strdup(separator + 2);
+  if (start_str == NULL || end_str == NULL) {
     free(start_str);
     free(end_str);
+    return;
+  }
+
+  memcpy(start_str, dim_str, start_len);
+  start_str[start_len] = '\0';
+
+  char *start_trim = start_str;
+  char *end_trim = end_str;
+  while (*start_trim == ' ' || *start_trim == '\t')
+    start_trim++;
+  while (*end_trim == ' ' || *end_trim == '\t')
+    end_trim++;
+
+  int start_val = 0;
+  int end_val = 0;
+  if (kgpc_resolve_array_bound_expr(symtab, start_trim, &start_val) == 0 &&
+      kgpc_resolve_array_bound_expr(symtab, end_trim, &end_val) == 0) {
+    alias->array_start = start_val;
+    alias->array_end = end_val;
+    alias->is_open_array = (end_val < start_val);
+  }
+
+  free(start_str);
+  free(end_str);
 }
 
-static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(SymTab_t *symtab,
-    const TypeRef *type_ref, int defined_in_unit)
-{
-    if (symtab == NULL || type_ref == NULL || type_ref->name == NULL)
-        return NULL;
-    if (type_ref->name->count <= 1)
-        return kgpc_find_type_node_with_unit_flag(symtab,
-            type_ref_base_name(type_ref), defined_in_unit);
+static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(
+    SymTab_t *symtab, const TypeRef *type_ref, int defined_in_unit) {
+  if (symtab == NULL || type_ref == NULL || type_ref->name == NULL)
+    return NULL;
+  if (type_ref->name->count <= 1)
+    return kgpc_find_type_node_with_unit_flag(
+        symtab, type_ref_base_name(type_ref), defined_in_unit);
 
-    char *qualified = qualified_ident_join(type_ref->name, ".");
-    if (qualified != NULL)
-    {
-        HashNode_t *node = kgpc_find_type_node(symtab, qualified);
-        free(qualified);
-        if (node != NULL)
-            return node;
+  char *qualified = qualified_ident_join(type_ref->name, ".");
+  if (qualified != NULL) {
+    HashNode_t *node = kgpc_find_type_node(symtab, qualified);
+    free(qualified);
+    if (node != NULL)
+      return node;
+  }
+
+  const char *unit_name =
+      type_ref->name->segments != NULL ? type_ref->name->segments[0] : NULL;
+  const char *base_name = qualified_ident_last(type_ref->name);
+  if (unit_name == NULL || base_name == NULL)
+    return NULL;
+
+  HashNode_t *best = NULL;
+  ListNode_t *matches = FindAllIdents(symtab, base_name);
+  for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+    HashNode_t *candidate = (HashNode_t *)cur->cur;
+    if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+      continue;
+    const char *candidate_unit =
+        unit_registry_get(candidate->source_unit_index);
+    if (candidate_unit == NULL ||
+        !pascal_identifier_equals(candidate_unit, unit_name))
+      continue;
+    if (best == NULL ||
+        (candidate->defined_in_unit == defined_in_unit &&
+         best->defined_in_unit != defined_in_unit) ||
+        (candidate->defined_in_unit && !best->defined_in_unit)) {
+      best = candidate;
+      if (candidate->defined_in_unit == defined_in_unit)
+        break;
     }
+  }
+  if (matches != NULL)
+    DestroyList(matches);
+  if (best != NULL)
+    return best;
 
-    const char *unit_name = type_ref->name->segments != NULL ?
-        type_ref->name->segments[0] : NULL;
-    const char *base_name = qualified_ident_last(type_ref->name);
-    if (unit_name == NULL || base_name == NULL)
-        return NULL;
-
-    HashNode_t *best = NULL;
-    ListNode_t *matches = FindAllIdents(symtab, base_name);
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-    {
-        HashNode_t *candidate = (HashNode_t *)cur->cur;
-        if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
-            continue;
-        const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
-        if (candidate_unit == NULL ||
-            !pascal_identifier_equals(candidate_unit, unit_name))
-            continue;
-        if (best == NULL ||
-            (candidate->defined_in_unit == defined_in_unit &&
-             best->defined_in_unit != defined_in_unit) ||
-            (candidate->defined_in_unit && !best->defined_in_unit))
-        {
-            best = candidate;
-            if (candidate->defined_in_unit == defined_in_unit)
-                break;
-        }
+  /* Some imported alias types (for example ctypes.cint) collapse to a
+   * single visible underlying type node rather than keeping a distinct
+   * unit-owned entry. Preserve qualified lookup only when it is still
+   * unambiguous. */
+  HashNode_t *single = NULL;
+  matches = FindAllIdents(symtab, base_name);
+  for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+    HashNode_t *candidate = (HashNode_t *)cur->cur;
+    if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+      continue;
+    if (single != NULL && single != candidate) {
+      single = NULL;
+      break;
     }
-    if (matches != NULL)
-        DestroyList(matches);
-    if (best != NULL)
-        return best;
-
-    /* Some imported alias types (for example ctypes.cint) collapse to a
-     * single visible underlying type node rather than keeping a distinct
-     * unit-owned entry. Preserve qualified lookup only when it is still
-     * unambiguous. */
-    HashNode_t *single = NULL;
-    matches = FindAllIdents(symtab, base_name);
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-    {
-        HashNode_t *candidate = (HashNode_t *)cur->cur;
-        if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
-            continue;
-        if (single != NULL && single != candidate)
-        {
-            single = NULL;
-            break;
-        }
-        single = candidate;
-    }
-    if (matches != NULL)
-        DestroyList(matches);
-    return single;
+    single = candidate;
+  }
+  if (matches != NULL)
+    DestroyList(matches);
+  return single;
 }
 
 /* Helper: return 1 if node's type is an UNKNOWN_TYPE primitive stub */
-static int hashnode_is_unknown_type_stub(const HashNode_t *node)
-{
-    if (node == NULL || node->type == NULL)
-        return 0;
-    return (node->type->kind == TYPE_KIND_PRIMITIVE &&
-            node->type->info.primitive_type_tag == UNKNOWN_TYPE);
+static int hashnode_is_unknown_type_stub(const HashNode_t *node) {
+  if (node == NULL || node->type == NULL)
+    return 0;
+  return (node->type->kind == TYPE_KIND_PRIMITIVE &&
+          node->type->info.primitive_type_tag == UNKNOWN_TYPE);
 }
 
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
-    const char *type_id, int defined_in_unit)
-{
-    if (symtab == NULL || type_id == NULL)
-        return NULL;
+                                                      const char *type_id,
+                                                      int defined_in_unit) {
+  if (symtab == NULL || type_id == NULL)
+    return NULL;
 
-    HashNode_t *fallback = NULL;
-    HashNode_t *fallback_outermost = NULL;
-    HashNode_t *fallback_resolved = NULL; /* best non-UNKNOWN fallback (cross-unit resolved type) */
-    HashNode_t *unit_match = NULL;  /* exact defined_in_unit match (may be plain record or UNKNOWN stub) */
-    /* Walk scope tree from current_scope up to (but not including) builtin_scope. */
-    for (ScopeNode *sc = symtab->current_scope; sc != NULL && sc != symtab->builtin_scope; sc = sc->parent)
-    {
-        HashNode_t *node = find_best_type_in_table(sc->table, type_id);
-        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-        {
-            if (node->defined_in_unit == defined_in_unit)
-            {
-                /* If this is a class type, return immediately.
-                 * If it's a plain record or an UNKNOWN_TYPE stub (cross-unit
-                 * alias that failed to resolve at predeclare time), save it
-                 * as a fallback — a resolved type from another unit is better.
-                 */
-                if (!hashnode_is_plain_record(node) && !hashnode_is_unknown_type_stub(node))
-                    return node;
-                if (unit_match == NULL)
-                    unit_match = node;
-            }
-            if (fallback == NULL)
-                fallback = node;
-            if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
-                fallback_resolved = node;
-            fallback_outermost = node;
-        }
+  HashNode_t *fallback = NULL;
+  HashNode_t *fallback_outermost = NULL;
+  HashNode_t *fallback_resolved =
+      NULL; /* best non-UNKNOWN fallback (cross-unit resolved type) */
+  HashNode_t *unit_match = NULL; /* exact defined_in_unit match (may be plain
+                                    record or UNKNOWN stub) */
+  /* Walk scope tree from current_scope up to (but not including) builtin_scope.
+   */
+  for (ScopeNode *sc = symtab->current_scope;
+       sc != NULL && sc != symtab->builtin_scope; sc = sc->parent) {
+    HashNode_t *node = find_best_type_in_table(sc->table, type_id);
+    if (node != NULL && node->hash_type == HASHTYPE_TYPE) {
+      if (node->defined_in_unit == defined_in_unit) {
+        /* If this is a class type, return immediately.
+         * If it's a plain record or an UNKNOWN_TYPE stub (cross-unit
+         * alias that failed to resolve at predeclare time), save it
+         * as a fallback — a resolved type from another unit is better.
+         */
+        if (!hashnode_is_plain_record(node) &&
+            !hashnode_is_unknown_type_stub(node))
+          return node;
+        if (unit_match == NULL)
+          unit_match = node;
+      }
+      if (fallback == NULL)
+        fallback = node;
+      if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+        fallback_resolved = node;
+      fallback_outermost = node;
     }
+  }
 
-    /* Search per-unit tables (types from imported units live here) */
-    {
-        int n_units = unit_registry_count();
-        for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++)
-        {
-            if (symtab->unit_scopes[i] == NULL)
-                continue;
-            HashNode_t *node = find_best_type_in_table(symtab->unit_scopes[i]->table, type_id);
-            if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-            {
-                if (node->defined_in_unit == defined_in_unit)
-                {
-                    if (!hashnode_is_plain_record(node) && !hashnode_is_unknown_type_stub(node))
-                        return node;
-                    if (unit_match == NULL)
-                        unit_match = node;
-                }
-                /* When we already have a plain-record fallback and this candidate
-                 * is a class type, upgrade the fallback to the class. */
-                if (fallback == NULL)
-                    fallback = node;
-                else if (hashnode_is_plain_record(fallback) && hashnode_is_class_type(node))
-                    fallback = node;
-                if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
-                    fallback_resolved = node;
-                fallback_outermost = node;
-            }
+  /* Search per-unit tables (types from imported units live here) */
+  {
+    int n_units = unit_registry_count();
+    for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++) {
+      if (symtab->unit_scopes[i] == NULL)
+        continue;
+      HashNode_t *node =
+          find_best_type_in_table(symtab->unit_scopes[i]->table, type_id);
+      if (node != NULL && node->hash_type == HASHTYPE_TYPE) {
+        if (node->defined_in_unit == defined_in_unit) {
+          if (!hashnode_is_plain_record(node) &&
+              !hashnode_is_unknown_type_stub(node))
+            return node;
+          if (unit_match == NULL)
+            unit_match = node;
         }
-    }
-
-    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
-    if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
-    {
-        if (builtin->defined_in_unit == defined_in_unit)
-            return builtin;
+        /* When we already have a plain-record fallback and this candidate
+         * is a class type, upgrade the fallback to the class. */
         if (fallback == NULL)
-            fallback = builtin;
+          fallback = node;
+        else if (hashnode_is_plain_record(fallback) &&
+                 hashnode_is_class_type(node))
+          fallback = node;
+        if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+          fallback_resolved = node;
+        fallback_outermost = node;
+      }
     }
+  }
 
-    /* Imported declarations should prefer unit-defined symbols, but if absent
-     * they must bind to outer/prelude types rather than local shadows.
-     * Example: prefer UnixType.TSize over local Types.TSize; if UnixType.TSize
-     * is absent, still allow global System aliases.
-     * Additionally, prefer a resolved (non-UNKNOWN) type over an UNKNOWN stub
-     * so cross-unit aliases like TDateTime=System.TDateTime resolve correctly. */
-    if (defined_in_unit)
-    {
-        if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
-            return builtin;
-        if (fallback_resolved != NULL)
-            return fallback_resolved;
-        return fallback_outermost;
-    }
+  HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
+  if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE) {
+    if (builtin->defined_in_unit == defined_in_unit)
+      return builtin;
+    if (fallback == NULL)
+      fallback = builtin;
+  }
 
-    /* If we found a unit_match (plain record or UNKNOWN stub) but a resolved
-     * type exists from another unit (e.g. System.TDateTime resolves TDateTime
-     * while SysUtils only has an UNKNOWN alias stub), prefer the resolved one.
-     * Also, if a class type was found in another table, prefer it over a plain
-     * record unit_match. */
-    if (unit_match != NULL)
-    {
-        if (hashnode_is_unknown_type_stub(unit_match) && fallback_resolved != NULL)
-            return fallback_resolved;
-        if (fallback != NULL && hashnode_is_class_type(fallback))
-            return fallback;
-        return unit_match;
-    }
+  /* Imported declarations should prefer unit-defined symbols, but if absent
+   * they must bind to outer/prelude types rather than local shadows.
+   * Example: prefer UnixType.TSize over local Types.TSize; if UnixType.TSize
+   * is absent, still allow global System aliases.
+   * Additionally, prefer a resolved (non-UNKNOWN) type over an UNKNOWN stub
+   * so cross-unit aliases like TDateTime=System.TDateTime resolve correctly. */
+  if (defined_in_unit) {
+    if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
+      return builtin;
+    if (fallback_resolved != NULL)
+      return fallback_resolved;
+    return fallback_outermost;
+  }
 
-    return fallback;
+  /* If we found a unit_match (plain record or UNKNOWN stub) but a resolved
+   * type exists from another unit (e.g. System.TDateTime resolves TDateTime
+   * while SysUtils only has an UNKNOWN alias stub), prefer the resolved one.
+   * Also, if a class type was found in another table, prefer it over a plain
+   * record unit_match. */
+  if (unit_match != NULL) {
+    if (hashnode_is_unknown_type_stub(unit_match) && fallback_resolved != NULL)
+      return fallback_resolved;
+    if (fallback != NULL && hashnode_is_class_type(fallback))
+      return fallback;
+    return unit_match;
+  }
+
+  return fallback;
 }
 
 /* Forward declarations for TypeAlias copy functions */
-static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
+static struct TypeAlias *copy_type_alias(const struct TypeAlias *src);
 static void free_copied_type_alias(struct TypeAlias *alias);
 /* Track heap-owned KgpcType instances so any objects left with positive
  * reference counts after normal AST/symbol-table teardown can be released.
@@ -640,677 +611,675 @@ static size_t g_live_kgpc_type_count = 0;
 static size_t g_live_kgpc_type_capacity = 0;
 static int g_live_kgpc_type_cleaning = 0;
 
-static void kgpc_type_register_live(KgpcType *type)
-{
-    if (type == NULL || g_live_kgpc_type_cleaning)
-        return;
-    if (g_live_kgpc_type_count == g_live_kgpc_type_capacity)
-    {
-        size_t new_capacity = g_live_kgpc_type_capacity == 0 ? 256 : g_live_kgpc_type_capacity * 2;
-        KgpcType **new_items = (KgpcType **)realloc(g_live_kgpc_types,
-            new_capacity * sizeof(KgpcType *));
-        if (new_items == NULL)
-            return;
-        g_live_kgpc_types = new_items;
-        g_live_kgpc_type_capacity = new_capacity;
-    }
-    type->live_index = g_live_kgpc_type_count;
-    g_live_kgpc_types[g_live_kgpc_type_count++] = type;
+static void kgpc_type_register_live(KgpcType *type) {
+  if (type == NULL || g_live_kgpc_type_cleaning)
+    return;
+  if (g_live_kgpc_type_count == g_live_kgpc_type_capacity) {
+    size_t new_capacity =
+        g_live_kgpc_type_capacity == 0 ? 256 : g_live_kgpc_type_capacity * 2;
+    KgpcType **new_items = (KgpcType **)realloc(
+        g_live_kgpc_types, new_capacity * sizeof(KgpcType *));
+    if (new_items == NULL)
+      return;
+    g_live_kgpc_types = new_items;
+    g_live_kgpc_type_capacity = new_capacity;
+  }
+  type->live_index = g_live_kgpc_type_count;
+  g_live_kgpc_types[g_live_kgpc_type_count++] = type;
 }
 
-static void kgpc_type_unregister_live(KgpcType *type)
-{
-    if (type == NULL || g_live_kgpc_types == NULL)
-        return;
+static void kgpc_type_unregister_live(KgpcType *type) {
+  if (type == NULL || g_live_kgpc_types == NULL)
+    return;
 
-    size_t index = type->live_index;
-    if (index < g_live_kgpc_type_count && g_live_kgpc_types[index] == type)
-    {
-        size_t last_index = g_live_kgpc_type_count - 1;
-        KgpcType *last = g_live_kgpc_types[last_index];
-        g_live_kgpc_types[index] = last;
-        g_live_kgpc_types[last_index] = NULL;
-        --g_live_kgpc_type_count;
-        if (last != NULL && last != type)
-            last->live_index = index;
-        type->live_index = (size_t)-1;
-        return;
-    }
+  size_t index = type->live_index;
+  if (index < g_live_kgpc_type_count && g_live_kgpc_types[index] == type) {
+    size_t last_index = g_live_kgpc_type_count - 1;
+    KgpcType *last = g_live_kgpc_types[last_index];
+    g_live_kgpc_types[index] = last;
+    g_live_kgpc_types[last_index] = NULL;
+    --g_live_kgpc_type_count;
+    if (last != NULL && last != type)
+      last->live_index = index;
+    type->live_index = (size_t)-1;
+    return;
+  }
 
-    for (size_t i = 0; i < g_live_kgpc_type_count; ++i)
-    {
-        if (g_live_kgpc_types[i] == type)
-        {
-            size_t last_index = g_live_kgpc_type_count - 1;
-            KgpcType *last = g_live_kgpc_types[last_index];
-            g_live_kgpc_types[i] = last;
-            g_live_kgpc_types[last_index] = NULL;
-            --g_live_kgpc_type_count;
-            if (last != NULL && last != type)
-                last->live_index = i;
-            type->live_index = (size_t)-1;
-            return;
-        }
+  for (size_t i = 0; i < g_live_kgpc_type_count; ++i) {
+    if (g_live_kgpc_types[i] == type) {
+      size_t last_index = g_live_kgpc_type_count - 1;
+      KgpcType *last = g_live_kgpc_types[last_index];
+      g_live_kgpc_types[i] = last;
+      g_live_kgpc_types[last_index] = NULL;
+      --g_live_kgpc_type_count;
+      if (last != NULL && last != type)
+        last->live_index = i;
+      type->live_index = (size_t)-1;
+      return;
     }
+  }
 }
 
-void kgpc_type_cleanup_remaining(void)
-{
-    g_live_kgpc_type_cleaning = 1;
-    while (g_live_kgpc_type_count > 0)
-    {
-        KgpcType *type = g_live_kgpc_types[--g_live_kgpc_type_count];
-        g_live_kgpc_types[g_live_kgpc_type_count] = NULL;
-        if (type == NULL)
-            continue;
+void kgpc_type_cleanup_remaining(void) {
+  g_live_kgpc_type_cleaning = 1;
+  while (g_live_kgpc_type_count > 0) {
+    KgpcType *type = g_live_kgpc_types[--g_live_kgpc_type_count];
+    g_live_kgpc_types[g_live_kgpc_type_count] = NULL;
+    if (type == NULL)
+      continue;
 
-        switch (type->kind)
-        {
-            case TYPE_KIND_PROCEDURE:
-                if (type->info.proc_info.owns_params)
-                    destroy_list(type->info.proc_info.params);
-                else
-                    DestroyList(type->info.proc_info.params);
-                type->info.proc_info.params = NULL;
-                free(type->info.proc_info.return_type_id);
-                type->info.proc_info.return_type_id = NULL;
-                type->info.proc_info.return_type = NULL;
-                break;
-            case TYPE_KIND_ARRAY:
-                free(type->info.array_info.element_type_id);
-                type->info.array_info.element_type_id = NULL;
-                type->info.array_info.element_type = NULL;
-                break;
-            case TYPE_KIND_POINTER:
-                type->info.points_to = NULL;
-                break;
-            case TYPE_KIND_PRIMITIVE:
-            case TYPE_KIND_RECORD:
-            case TYPE_KIND_ARRAY_OF_CONST:
-                break;
-        }
-
-        if (type->type_alias != NULL)
-        {
-            type->type_alias->kgpc_type = NULL;
-            free_copied_type_alias(type->type_alias);
-            type->type_alias = NULL;
-        }
-        free(type);
+    switch (type->kind) {
+    case TYPE_KIND_PROCEDURE:
+      if (type->info.proc_info.owns_params)
+        destroy_list(type->info.proc_info.params);
+      else
+        DestroyList(type->info.proc_info.params);
+      type->info.proc_info.params = NULL;
+      free(type->info.proc_info.return_type_id);
+      type->info.proc_info.return_type_id = NULL;
+      type->info.proc_info.return_type = NULL;
+      break;
+    case TYPE_KIND_ARRAY:
+      free(type->info.array_info.element_type_id);
+      type->info.array_info.element_type_id = NULL;
+      type->info.array_info.element_type = NULL;
+      break;
+    case TYPE_KIND_POINTER:
+      type->info.points_to = NULL;
+      break;
+    case TYPE_KIND_PRIMITIVE:
+    case TYPE_KIND_RECORD:
+    case TYPE_KIND_ARRAY_OF_CONST:
+      break;
     }
-    free(g_live_kgpc_types);
-    g_live_kgpc_types = NULL;
-    g_live_kgpc_type_capacity = 0;
-    g_live_kgpc_type_cleaning = 0;
+
+    if (type->type_alias != NULL) {
+      type->type_alias->kgpc_type = NULL;
+      free_copied_type_alias(type->type_alias);
+      type->type_alias = NULL;
+    }
+    free(type);
+  }
+  free(g_live_kgpc_types);
+  g_live_kgpc_types = NULL;
+  g_live_kgpc_type_capacity = 0;
+  g_live_kgpc_type_cleaning = 0;
 }
 
-int kgpc_type_is_real_family_tag(int primitive_tag)
-{
-    return is_real_family_type(primitive_tag);
+int kgpc_type_is_real_family_tag(int primitive_tag) {
+  return is_real_family_type(primitive_tag);
 }
 
-int kgpc_type_is_extended_tag(int primitive_tag)
-{
-    return (primitive_tag == EXTENDED_TYPE);
+int kgpc_type_is_extended_tag(int primitive_tag) {
+  return (primitive_tag == EXTENDED_TYPE);
 }
 
 // --- Constructor Implementations ---
 
-KgpcType* create_primitive_type(int primitive_tag) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_PRIMITIVE;
-    type->info.primitive_type_tag = primitive_tag;
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    // Size will be determined later in semcheck
-    return type;
+KgpcType *create_primitive_type(int primitive_tag) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_PRIMITIVE;
+  type->info.primitive_type_tag = primitive_tag;
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+  // Size will be determined later in semcheck
+  return type;
 }
 
-KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_PRIMITIVE;
-    type->info.primitive_type_tag = primitive_tag;
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    
-    /* Create a minimal type_alias just to hold the storage_size */
-    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-    if (alias != NULL) {
-        alias->storage_size = storage_size;
-        /* These fields are required for proper cleanup */
-        alias->base_type = primitive_tag;
-        alias->is_array = 0;
-        alias->is_pointer = 0;
-        alias->is_set = (primitive_tag == SET_TYPE) ? 1 : 0;
-        alias->is_enum = 0;
-        alias->is_file = 0;
-        alias->is_range = 0;
-    }
-    type->type_alias = alias;
-    
-    return type;
+KgpcType *create_primitive_type_with_size(int primitive_tag, int storage_size) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_PRIMITIVE;
+  type->info.primitive_type_tag = primitive_tag;
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+
+  /* Create a minimal type_alias just to hold the storage_size */
+  struct TypeAlias *alias =
+      (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+  if (alias != NULL) {
+    alias->storage_size = storage_size;
+    /* These fields are required for proper cleanup */
+    alias->base_type = primitive_tag;
+    alias->is_array = 0;
+    alias->is_pointer = 0;
+    alias->is_set = (primitive_tag == SET_TYPE) ? 1 : 0;
+    alias->is_enum = 0;
+    alias->is_file = 0;
+    alias->is_range = 0;
+  }
+  type->type_alias = alias;
+
+  return type;
 }
 
-KgpcType* create_pointer_type(KgpcType *points_to) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_POINTER;
-    type->info.points_to = points_to;
-    if (points_to != NULL)
-        kgpc_type_retain(points_to);
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    return type;
+KgpcType *create_pointer_type(KgpcType *points_to) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_POINTER;
+  type->info.points_to = points_to;
+  if (points_to != NULL)
+    kgpc_type_retain(points_to);
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+  return type;
 }
 
-KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_PROCEDURE;
-    type->info.proc_info.params = CopyListShallow(params); // Takes ownership of a copy
-    type->info.proc_info.owns_params = 0;
-    type->info.proc_info.return_type = return_type;
-    if (return_type != NULL)
-        kgpc_type_retain(return_type);
-    type->info.proc_info.definition = NULL;
-    type->info.proc_info.return_type_id = NULL;
-    type->info.proc_info.is_method_pointer = 0;
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    
-    #ifdef DEBUG_KGPC_TYPE_CREATION
-    fprintf(stderr, "DEBUG: create_procedure_type: params=%p, return_type=%p (is_function=%d)\n",
-            (void*)params, (void*)return_type, return_type != NULL);
-    #endif
-    
-    return type;
+KgpcType *create_procedure_type(ListNode_t *params, KgpcType *return_type) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_PROCEDURE;
+  type->info.proc_info.params =
+      CopyListShallow(params); // Takes ownership of a copy
+  type->info.proc_info.owns_params = 0;
+  type->info.proc_info.return_type = return_type;
+  if (return_type != NULL)
+    kgpc_type_retain(return_type);
+  type->info.proc_info.definition = NULL;
+  type->info.proc_info.return_type_id = NULL;
+  type->info.proc_info.is_method_pointer = 0;
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+
+#ifdef DEBUG_KGPC_TYPE_CREATION
+  fprintf(stderr,
+          "DEBUG: create_procedure_type: params=%p, return_type=%p "
+          "(is_function=%d)\n",
+          (void *)params, (void *)return_type, return_type != NULL);
+#endif
+
+  return type;
 }
 
-KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_index) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_ARRAY;
-    type->info.array_info.element_type = element_type;
-    if (element_type != NULL)
-        kgpc_type_retain(element_type);
-    type->info.array_info.start_index = start_index;
-    type->info.array_info.end_index = end_index;
-    type->info.array_info.element_type_id = NULL; // Initialize deferred resolution field
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    return type;
+KgpcType *create_array_type(KgpcType *element_type, int start_index,
+                            int end_index) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_ARRAY;
+  type->info.array_info.element_type = element_type;
+  if (element_type != NULL)
+    kgpc_type_retain(element_type);
+  type->info.array_info.start_index = start_index;
+  type->info.array_info.end_index = end_index;
+  type->info.array_info.element_type_id =
+      NULL; // Initialize deferred resolution field
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+  return type;
 }
 
-KgpcType* create_array_of_const_type(void) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_ARRAY_OF_CONST;
-    type->info.array_of_const_info.element_size = sizeof(kgpc_tvarrec);
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    return type;
+KgpcType *create_array_of_const_type(void) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_ARRAY_OF_CONST;
+  type->info.array_of_const_info.element_size = sizeof(kgpc_tvarrec);
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+  return type;
 }
 
-KgpcType* create_record_type(struct RecordType *record_info) {
-    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
-    assert(type != NULL);
-    type->kind = TYPE_KIND_RECORD;
-    type->info.record_info = record_info; // Record is owned by the AST
-    type->ref_count = 1;
-    kgpc_type_register_live(type);
-    return type;
+KgpcType *create_record_type(struct RecordType *record_info) {
+  KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+  assert(type != NULL);
+  type->kind = TYPE_KIND_RECORD;
+  type->info.record_info = record_info; // Record is owned by the AST
+  type->ref_count = 1;
+  kgpc_type_register_live(type);
+  return type;
 }
 
-KgpcType* create_record_type_owned(struct RecordType *record_info) {
-    KgpcType *type = create_record_type(record_info);
-    if (type != NULL)
-        type->owns_record_info = 1;
-    return type;
+KgpcType *create_record_type_owned(struct RecordType *record_info) {
+  KgpcType *type = create_record_type(record_info);
+  if (type != NULL)
+    type->owns_record_info = 1;
+  return type;
 }
 
-KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *src)
-{
-    if (src == NULL)
-        return NULL;
+KgpcType *kgpc_type_clone_shallow_owned(const KgpcType *src) {
+  if (src == NULL)
+    return NULL;
 
-    KgpcType *clone = (KgpcType *)calloc(1, sizeof(KgpcType));
-    if (clone == NULL)
-        return NULL;
+  KgpcType *clone = (KgpcType *)calloc(1, sizeof(KgpcType));
+  if (clone == NULL)
+    return NULL;
 
-    clone->kind = src->kind;
-    clone->size_in_bytes = src->size_in_bytes;
-    clone->alignment_in_bytes = src->alignment_in_bytes;
-    clone->ref_count = 1;
-    kgpc_type_register_live(clone);
+  clone->kind = src->kind;
+  clone->size_in_bytes = src->size_in_bytes;
+  clone->alignment_in_bytes = src->alignment_in_bytes;
+  clone->ref_count = 1;
+  kgpc_type_register_live(clone);
 
-    if (src->type_alias != NULL)
-        kgpc_type_set_type_alias(clone, src->type_alias);
+  if (src->type_alias != NULL)
+    kgpc_type_set_type_alias(clone, src->type_alias);
 
-    switch (src->kind) {
-        case TYPE_KIND_PRIMITIVE:
-            clone->info.primitive_type_tag = src->info.primitive_type_tag;
-            break;
-        case TYPE_KIND_POINTER:
-            clone->info.points_to = kgpc_type_clone_shallow_owned(src->info.points_to);
-            break;
-        case TYPE_KIND_ARRAY:
-            clone->info.array_info.element_type =
-                kgpc_type_clone_shallow_owned(src->info.array_info.element_type);
-            clone->info.array_info.start_index = src->info.array_info.start_index;
-            clone->info.array_info.end_index = src->info.array_info.end_index;
-            clone->info.array_info.element_type_id =
-                src->info.array_info.element_type_id != NULL ?
-                    strdup(src->info.array_info.element_type_id) : NULL;
-            break;
-        case TYPE_KIND_PROCEDURE:
-            clone->info.proc_info.params = CopyListShallow(src->info.proc_info.params);
-            clone->info.proc_info.owns_params = 0;
-            clone->info.proc_info.return_type =
-                kgpc_type_clone_shallow_owned(src->info.proc_info.return_type);
-            clone->info.proc_info.definition = src->info.proc_info.definition;
-            clone->info.proc_info.return_type_id =
-                src->info.proc_info.return_type_id != NULL ?
-                    strdup(src->info.proc_info.return_type_id) : NULL;
-            clone->info.proc_info.is_method_pointer = src->info.proc_info.is_method_pointer;
-            break;
-        case TYPE_KIND_RECORD:
-            clone->info.record_info = src->info.record_info;
-            break;
-        case TYPE_KIND_ARRAY_OF_CONST:
-            clone->info.array_of_const_info.element_size =
-                src->info.array_of_const_info.element_size;
-            break;
-    }
+  switch (src->kind) {
+  case TYPE_KIND_PRIMITIVE:
+    clone->info.primitive_type_tag = src->info.primitive_type_tag;
+    break;
+  case TYPE_KIND_POINTER:
+    clone->info.points_to = kgpc_type_clone_shallow_owned(src->info.points_to);
+    break;
+  case TYPE_KIND_ARRAY:
+    clone->info.array_info.element_type =
+        kgpc_type_clone_shallow_owned(src->info.array_info.element_type);
+    clone->info.array_info.start_index = src->info.array_info.start_index;
+    clone->info.array_info.end_index = src->info.array_info.end_index;
+    clone->info.array_info.element_type_id =
+        src->info.array_info.element_type_id != NULL
+            ? strdup(src->info.array_info.element_type_id)
+            : NULL;
+    break;
+  case TYPE_KIND_PROCEDURE:
+    clone->info.proc_info.params = CopyListShallow(src->info.proc_info.params);
+    clone->info.proc_info.owns_params = 0;
+    clone->info.proc_info.return_type =
+        kgpc_type_clone_shallow_owned(src->info.proc_info.return_type);
+    clone->info.proc_info.definition = src->info.proc_info.definition;
+    clone->info.proc_info.return_type_id =
+        src->info.proc_info.return_type_id != NULL
+            ? strdup(src->info.proc_info.return_type_id)
+            : NULL;
+    clone->info.proc_info.is_method_pointer =
+        src->info.proc_info.is_method_pointer;
+    break;
+  case TYPE_KIND_RECORD:
+    clone->info.record_info = src->info.record_info;
+    break;
+  case TYPE_KIND_ARRAY_OF_CONST:
+    clone->info.array_of_const_info.element_size =
+        src->info.array_of_const_info.element_size;
+    break;
+  }
 
-    return clone;
+  return clone;
 }
 
 /* Create KgpcType from TypeAlias structure
  * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
  * Returns NULL if conversion fails (e.g., unresolvable type reference)
  */
-KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab,
-    int defined_in_unit) {
-    if (alias == NULL) return NULL;
-    
-    KgpcType *result = NULL;
+KgpcType *create_kgpc_type_from_type_alias(struct TypeAlias *alias,
+                                           struct SymTab *symtab,
+                                           int defined_in_unit) {
+  if (alias == NULL)
+    return NULL;
 
-    if (kgpc_getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
-        alias->alias_name != NULL &&
-        pascal_identifier_equals(alias->alias_name, "PShortString"))
-    {
-        fprintf(stderr,
-            "[PShortString] alias create: is_pointer=%d pointer_type_id=%s pointer_type_tag=%d target=%s\n",
+  KgpcType *result = NULL;
+
+  if (kgpc_getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
+      alias->alias_name != NULL &&
+      pascal_identifier_equals(alias->alias_name, "PShortString")) {
+    fprintf(stderr,
+            "[PShortString] alias create: is_pointer=%d pointer_type_id=%s "
+            "pointer_type_tag=%d target=%s\n",
             alias->is_pointer,
             alias->pointer_type_id ? alias->pointer_type_id : "<null>",
             alias->pointer_type,
             alias->target_type_id ? alias->target_type_id : "<null>");
+  }
+
+  /* Treat WideChar/UnicodeChar aliases as 2-byte CHAR_TYPE, even if declared as
+   * Word. */
+  if (alias->alias_name != NULL &&
+      (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+       pascal_identifier_equals(alias->alias_name, "UnicodeChar"))) {
+    result = create_primitive_type_with_size(CHAR_TYPE, 2);
+    if (result != NULL)
+      kgpc_type_set_type_alias(result, alias);
+    return result;
+  }
+
+  /* If alias already has a KgpcType (enums, sets), use it */
+  if (alias->kgpc_type != NULL) {
+    /* If the KgpcType doesn't have type_alias set, set it now.
+     * This is important for RawByteString/UnicodeString name mangling. */
+    if (alias->kgpc_type->type_alias == NULL && alias->alias_name != NULL) {
+      kgpc_type_set_type_alias(alias->kgpc_type, alias);
+    }
+    /* Retain so the caller owns one reference, matching the ownership
+     * contract of the other branches that return freshly-created types.
+     * Otherwise the caller's destroy_kgpc_type would release a borrowed
+     * reference and trigger a use-after-free once the alias is released. */
+    kgpc_type_retain(alias->kgpc_type);
+    return alias->kgpc_type;
+  }
+
+  /* Handle array type aliases: type TIntArray = array[1..10] of Integer */
+  if (alias->is_array) {
+    kgpc_resolve_alias_array_bounds(alias, symtab);
+    int start = alias->array_start;
+    int end = alias->array_end;
+
+    if (alias->is_open_array) {
+      start = 0;
+      end = -1;
     }
 
-    /* Treat WideChar/UnicodeChar aliases as 2-byte CHAR_TYPE, even if declared as Word. */
-    if (alias->alias_name != NULL &&
-        (pascal_identifier_equals(alias->alias_name, "WideChar") ||
-         pascal_identifier_equals(alias->alias_name, "UnicodeChar")))
-    {
-        result = create_primitive_type_with_size(CHAR_TYPE, 2);
-        if (result != NULL)
-            kgpc_type_set_type_alias(result, alias);
-        return result;
+    /* Resolve element type */
+    KgpcType *element_type = NULL;
+    int element_type_tag = alias->array_element_type;
+    const char *deferred_element_id = NULL;
+
+    if (element_type_tag != UNKNOWN_TYPE) {
+      /* Prefer resolving via type reference to preserve aliased sizes (e.g.,
+       * WideChar). */
+      if ((alias->array_element_type_ref != NULL ||
+           alias->array_element_type_id != NULL) &&
+          symtab != NULL) {
+        HashNode_t *element_node = NULL;
+        if (alias->array_element_type_ref != NULL)
+          element_node = kgpc_find_type_node_ref_with_unit_flag(
+              symtab, alias->array_element_type_ref, defined_in_unit);
+        if (element_node == NULL && alias->array_element_type_id != NULL)
+          element_node = kgpc_find_type_node_with_unit_flag(
+              symtab, alias->array_element_type_id, defined_in_unit);
+        if (element_node != NULL && element_node->type != NULL) {
+          /* If the alias carries a specific element storage size
+             (e.g. string[19] → 20 bytes), prefer that over the
+             generic symbol table entry (ShortString → 256). */
+          if (alias->array_element_storage_size > 0) {
+            element_type = create_primitive_type_with_size(
+                element_type_tag, alias->array_element_storage_size);
+          } else {
+            element_type = element_node->type;
+            kgpc_type_retain(element_type);
+          }
+        }
+      }
+      if (element_type == NULL) {
+        if (alias->array_element_storage_size > 0)
+          element_type = create_primitive_type_with_size(
+              element_type_tag, alias->array_element_storage_size);
+        else
+          element_type = create_primitive_type(element_type_tag);
+      }
+    } else if ((alias->array_element_type_ref != NULL ||
+                alias->array_element_type_id != NULL) &&
+               symtab != NULL) {
+      /* Type reference - try to resolve it */
+      HashNode_t *element_node = NULL;
+      if (alias->array_element_type_ref != NULL)
+        element_node = kgpc_find_type_node_ref_with_unit_flag(
+            symtab, alias->array_element_type_ref, defined_in_unit);
+      if (element_node == NULL && alias->array_element_type_id != NULL)
+        element_node = kgpc_find_type_node_with_unit_flag(
+            symtab, alias->array_element_type_id, defined_in_unit);
+      if (element_node != NULL && element_node->type != NULL) {
+        /* Use the resolved type - MUST retain since it's borrowed from symbol
+         * table and create_array_type takes ownership. */
+        element_type = element_node->type;
+        kgpc_type_retain(element_type);
+      } else {
+        /* Forward reference - store element_type_id for deferred resolution */
+        element_type = NULL;
+        deferred_element_id = alias->array_element_type_id;
+      }
     }
 
-    /* If alias already has a KgpcType (enums, sets), use it */
-    if (alias->kgpc_type != NULL) {
-        /* If the KgpcType doesn't have type_alias set, set it now.
-         * This is important for RawByteString/UnicodeString name mangling. */
-        if (alias->kgpc_type->type_alias == NULL && alias->alias_name != NULL) {
-            kgpc_type_set_type_alias(alias->kgpc_type, alias);
-        }
-        /* Retain so the caller owns one reference, matching the ownership
-         * contract of the other branches that return freshly-created types.
-         * Otherwise the caller's destroy_kgpc_type would release a borrowed
-         * reference and trigger a use-after-free once the alias is released. */
-        kgpc_type_retain(alias->kgpc_type);
-        return alias->kgpc_type;
+    /* Create array type even if element type is NULL (forward reference) */
+    result = create_array_type(element_type, start, end);
+    kgpc_type_release(element_type);
+    if (result != NULL) {
+      kgpc_type_set_type_alias(result, alias);
+      /* Store element type ID for deferred resolution if element_type is NULL
+       */
+      if (element_type == NULL && deferred_element_id != NULL) {
+        result->info.array_info.element_type_id = strdup(deferred_element_id);
+      }
     }
-    
-    /* Handle array type aliases: type TIntArray = array[1..10] of Integer */
-    if (alias->is_array) {
-        kgpc_resolve_alias_array_bounds(alias, symtab);
-        int start = alias->array_start;
-        int end = alias->array_end;
+    return result;
+  }
 
-        if (alias->is_open_array) {
-            start = 0;
-            end = -1;
-        }
+  /* Handle pointer type aliases: type PInteger = ^Integer */
+  if (alias->is_pointer) {
+    KgpcType *pointee_type = NULL;
+    int pointer_type_tag = alias->pointer_type;
 
-        /* Resolve element type */
-        KgpcType *element_type = NULL;
-        int element_type_tag = alias->array_element_type;
-        const char *deferred_element_id = NULL;
+    if (pointer_type_tag == RECORD_TYPE && symtab != NULL &&
+        (alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL)) {
+      /* "class of T" or pointer-to-record: look up T's actual record type */
+      HashNode_t *pointee_node = NULL;
+      if (alias->pointer_type_ref != NULL)
+        pointee_node = kgpc_find_type_node_ref_with_unit_flag(
+            symtab, alias->pointer_type_ref, defined_in_unit);
+      if (pointee_node == NULL && alias->pointer_type_id != NULL)
+        pointee_node = kgpc_find_type_node_with_unit_flag(
+            symtab, alias->pointer_type_id, defined_in_unit);
+      if (pointee_node != NULL && pointee_node->type != NULL) {
+        pointee_type = pointee_node->type;
+        kgpc_type_retain(pointee_type);
+      } else {
+        /* Target class not yet declared; create primitive placeholder */
+        pointee_type = create_primitive_type(pointer_type_tag);
+      }
+    } else if (pointer_type_tag != UNKNOWN_TYPE) {
+      /* Direct primitive type tag.  When a type reference is available,
+       * prefer looking it up from the symbol table so that sized types
+       * (e.g. WideChar = CHAR_TYPE with storage_size 2) keep their
+       * correct size instead of collapsing to the default 1-byte
+       * create_primitive_type(CHAR_TYPE). */
+      if (symtab != NULL &&
+          (alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL)) {
+        HashNode_t *pointee_node = NULL;
+        if (alias->pointer_type_ref != NULL)
+          pointee_node = kgpc_find_type_node_ref_with_unit_flag(
+              symtab, alias->pointer_type_ref, defined_in_unit);
+        if (pointee_node == NULL && alias->pointer_type_id != NULL)
+          pointee_node = kgpc_find_type_node_with_unit_flag(
+              symtab, alias->pointer_type_id, defined_in_unit);
+        if (pointee_node != NULL && pointee_node->type != NULL) {
+          pointee_type = pointee_node->type;
+          kgpc_type_retain(pointee_type);
+        }
+      }
+      if (pointee_type == NULL)
+        pointee_type = create_primitive_type(pointer_type_tag);
+    } else if ((alias->pointer_type_ref != NULL ||
+                alias->pointer_type_id != NULL) &&
+               symtab != NULL) {
+      /* Type reference - try to resolve it */
+      HashNode_t *pointee_node = NULL;
+      if (alias->pointer_type_ref != NULL)
+        pointee_node = kgpc_find_type_node_ref_with_unit_flag(
+            symtab, alias->pointer_type_ref, defined_in_unit);
+      if (pointee_node == NULL && alias->pointer_type_id != NULL)
+        pointee_node = kgpc_find_type_node_with_unit_flag(
+            symtab, alias->pointer_type_id, defined_in_unit);
+      if (pointee_node != NULL && pointee_node->type != NULL) {
+        /* Use the resolved type - MUST retain since it's borrowed from symbol
+         * table and create_pointer_type takes ownership. */
+        pointee_type = pointee_node->type;
+        kgpc_type_retain(pointee_type);
+      } else {
+        /* Forward reference or unresolved type
+         * Create a pointer to NULL - this is valid in Pascal
+         * The pointee type will be resolved later during usage */
+        pointee_type = NULL;
+      }
+    }
 
-        if (element_type_tag != UNKNOWN_TYPE) {
-            /* Prefer resolving via type reference to preserve aliased sizes (e.g., WideChar). */
-            if ((alias->array_element_type_ref != NULL || alias->array_element_type_id != NULL) &&
-                symtab != NULL)
-            {
-                HashNode_t *element_node = NULL;
-                if (alias->array_element_type_ref != NULL)
-                    element_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                        alias->array_element_type_ref, defined_in_unit);
-                if (element_node == NULL && alias->array_element_type_id != NULL)
-                    element_node = kgpc_find_type_node_with_unit_flag(symtab,
-                        alias->array_element_type_id, defined_in_unit);
-                if (element_node != NULL && element_node->type != NULL)
-                {
-                    /* If the alias carries a specific element storage size
-                       (e.g. string[19] → 20 bytes), prefer that over the
-                       generic symbol table entry (ShortString → 256). */
-                    if (alias->array_element_storage_size > 0) {
-                        element_type = create_primitive_type_with_size(
-                            element_type_tag, alias->array_element_storage_size);
-                    } else {
-                        element_type = element_node->type;
-                        kgpc_type_retain(element_type);
-                    }
-                }
-            }
-            if (element_type == NULL) {
-                if (alias->array_element_storage_size > 0)
-                    element_type = create_primitive_type_with_size(
-                        element_type_tag, alias->array_element_storage_size);
-                else
-                    element_type = create_primitive_type(element_type_tag);
-            }
-        } else if ((alias->array_element_type_ref != NULL || alias->array_element_type_id != NULL) &&
-            symtab != NULL) {
-            /* Type reference - try to resolve it */
-            HashNode_t *element_node = NULL;
-            if (alias->array_element_type_ref != NULL)
-                element_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                    alias->array_element_type_ref, defined_in_unit);
-            if (element_node == NULL && alias->array_element_type_id != NULL)
-                element_node = kgpc_find_type_node_with_unit_flag(symtab,
-                    alias->array_element_type_id, defined_in_unit);
-            if (element_node != NULL && element_node->type != NULL) {
-                /* Use the resolved type - MUST retain since it's borrowed from symbol table
-                 * and create_array_type takes ownership. */
-                element_type = element_node->type;
-                kgpc_type_retain(element_type);
-            } else {
-                /* Forward reference - store element_type_id for deferred resolution */
-                element_type = NULL;
-                deferred_element_id = alias->array_element_type_id;
-            }
-        }
+    /* Create pointer type even if pointee is NULL (forward reference) */
+    result = create_pointer_type(pointee_type);
+    /* create_pointer_type retains pointee_type; release our reference */
+    kgpc_type_release(pointee_type);
+    if (result != NULL) {
+      kgpc_type_set_type_alias(result, alias);
+    }
+    return result;
+  }
 
-        /* Create array type even if element type is NULL (forward reference) */
-        result = create_array_type(element_type, start, end);
-        kgpc_type_release(element_type);
-        if (result != NULL) {
-            kgpc_type_set_type_alias(result, alias);
-            /* Store element type ID for deferred resolution if element_type is NULL */
-            if (element_type == NULL && deferred_element_id != NULL) {
-                result->info.array_info.element_type_id = strdup(deferred_element_id);
-            }
-        }
-        return result;
+  /* Handle set type aliases: type TCharSet = set of Char */
+  if (alias->is_set) {
+    /* For sets, we should ideally have alias->kgpc_type already populated
+     * But if not, we can create a primitive SET_TYPE */
+    result = create_primitive_type(SET_TYPE);
+    if (result != NULL) {
+      kgpc_type_set_type_alias(result, alias);
     }
-    
-    /* Handle pointer type aliases: type PInteger = ^Integer */
-    if (alias->is_pointer) {
-        KgpcType *pointee_type = NULL;
-        int pointer_type_tag = alias->pointer_type;
+    return result;
+  }
 
-        if (pointer_type_tag == RECORD_TYPE && symtab != NULL &&
-            (alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL)) {
-            /* "class of T" or pointer-to-record: look up T's actual record type */
-            HashNode_t *pointee_node = NULL;
-            if (alias->pointer_type_ref != NULL)
-                pointee_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                    alias->pointer_type_ref, defined_in_unit);
-            if (pointee_node == NULL && alias->pointer_type_id != NULL)
-                pointee_node = kgpc_find_type_node_with_unit_flag(symtab,
-                    alias->pointer_type_id, defined_in_unit);
-            if (pointee_node != NULL && pointee_node->type != NULL) {
-                pointee_type = pointee_node->type;
-                kgpc_type_retain(pointee_type);
-            } else {
-                /* Target class not yet declared; create primitive placeholder */
-                pointee_type = create_primitive_type(pointer_type_tag);
-            }
-        } else if (pointer_type_tag != UNKNOWN_TYPE) {
-            /* Direct primitive type tag.  When a type reference is available,
-             * prefer looking it up from the symbol table so that sized types
-             * (e.g. WideChar = CHAR_TYPE with storage_size 2) keep their
-             * correct size instead of collapsing to the default 1-byte
-             * create_primitive_type(CHAR_TYPE). */
-            if (symtab != NULL &&
-                (alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL))
-            {
-                HashNode_t *pointee_node = NULL;
-                if (alias->pointer_type_ref != NULL)
-                    pointee_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                        alias->pointer_type_ref, defined_in_unit);
-                if (pointee_node == NULL && alias->pointer_type_id != NULL)
-                    pointee_node = kgpc_find_type_node_with_unit_flag(symtab,
-                        alias->pointer_type_id, defined_in_unit);
-                if (pointee_node != NULL && pointee_node->type != NULL)
-                {
-                    pointee_type = pointee_node->type;
-                    kgpc_type_retain(pointee_type);
-                }
-            }
-            if (pointee_type == NULL)
-                pointee_type = create_primitive_type(pointer_type_tag);
-        } else if ((alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL) &&
-            symtab != NULL) {
-            /* Type reference - try to resolve it */
-            HashNode_t *pointee_node = NULL;
-            if (alias->pointer_type_ref != NULL)
-                pointee_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                    alias->pointer_type_ref, defined_in_unit);
-            if (pointee_node == NULL && alias->pointer_type_id != NULL)
-                pointee_node = kgpc_find_type_node_with_unit_flag(symtab,
-                    alias->pointer_type_id, defined_in_unit);
-            if (pointee_node != NULL && pointee_node->type != NULL) {
-                /* Use the resolved type - MUST retain since it's borrowed from symbol table
-                 * and create_pointer_type takes ownership. */
-                pointee_type = pointee_node->type;
-                kgpc_type_retain(pointee_type);
-            } else {
-                /* Forward reference or unresolved type
-                 * Create a pointer to NULL - this is valid in Pascal
-                 * The pointee type will be resolved later during usage */
-                pointee_type = NULL;
-            }
-        }
+  /* Handle enum type aliases: type TColor = (Red, Green, Blue) */
+  if (alias->is_enum) {
+    /* For enums, we should ideally have alias->kgpc_type already populated
+     * But if not, we can create a primitive ENUM_TYPE */
+    result = create_primitive_type(ENUM_TYPE);
+    if (result != NULL) {
+      kgpc_type_set_type_alias(result, alias);
+    }
+    return result;
+  }
 
-        /* Create pointer type even if pointee is NULL (forward reference) */
-        result = create_pointer_type(pointee_type);
-        /* create_pointer_type retains pointee_type; release our reference */
-        kgpc_type_release(pointee_type);
-        if (result != NULL) {
-            kgpc_type_set_type_alias(result, alias);
-        }
-        return result;
+  /* Handle file type aliases: type TTextFile = file of Char */
+  if (alias->is_file) {
+    /* For files, create a primitive FILE_TYPE */
+    result = create_primitive_type(FILE_TYPE);
+    if (result != NULL) {
+      kgpc_type_set_type_alias(result, alias);
     }
-    
-    /* Handle set type aliases: type TCharSet = set of Char */
-    if (alias->is_set) {
-        /* For sets, we should ideally have alias->kgpc_type already populated
-         * But if not, we can create a primitive SET_TYPE */
-        result = create_primitive_type(SET_TYPE);
-        if (result != NULL) {
-            kgpc_type_set_type_alias(result, alias);
-        }
-        return result;
+    return result;
+  }
+
+  /* Handle simple type aliases: type MyInt = Integer */
+  if (alias->base_type != UNKNOWN_TYPE && alias->target_type_id == NULL) {
+    /* Simple primitive type alias */
+    if (alias->storage_size > 0) {
+      /* Preserve storage size if specified */
+      result = create_primitive_type_with_size(alias->base_type,
+                                               alias->storage_size);
+    } else {
+      result = create_primitive_type(alias->base_type);
     }
-    
-    /* Handle enum type aliases: type TColor = (Red, Green, Blue) */
-    if (alias->is_enum) {
-        /* For enums, we should ideally have alias->kgpc_type already populated
-         * But if not, we can create a primitive ENUM_TYPE */
-        result = create_primitive_type(ENUM_TYPE);
-        if (result != NULL) {
-            kgpc_type_set_type_alias(result, alias);
-        }
-        return result;
+    if (result != NULL) {
+      kgpc_type_set_type_alias(result, alias);
     }
-    
-    /* Handle file type aliases: type TTextFile = file of Char */
-    if (alias->is_file) {
-        /* For files, create a primitive FILE_TYPE */
-        result = create_primitive_type(FILE_TYPE);
-        if (result != NULL) {
-            kgpc_type_set_type_alias(result, alias);
-        }
-        return result;
+    return result;
+  }
+
+  /* Handle type reference aliases: type MyType = SomeOtherType */
+  if (symtab != NULL) {
+    HashNode_t *target_node = NULL;
+    if (alias->target_type_ref != NULL)
+      target_node = kgpc_find_type_node_ref_with_unit_flag(
+          symtab, alias->target_type_ref, defined_in_unit);
+    if (target_node == NULL && alias->target_type_id != NULL)
+      target_node = kgpc_find_type_node_with_unit_flag(
+          symtab, alias->target_type_id, defined_in_unit);
+    if (target_node != NULL && target_node->type != NULL) {
+      kgpc_type_retain(target_node->type);
+      return target_node->type;
     }
-    
-    /* Handle simple type aliases: type MyInt = Integer */
-    if (alias->base_type != UNKNOWN_TYPE && alias->target_type_id == NULL) {
-        /* Simple primitive type alias */
-        if (alias->storage_size > 0) {
-            /* Preserve storage size if specified */
-            result = create_primitive_type_with_size(alias->base_type, alias->storage_size);
-        } else {
-            result = create_primitive_type(alias->base_type);
-        }
-        if (result != NULL) {
-            kgpc_type_set_type_alias(result, alias);
-        }
-        return result;
-    }
-    
-    /* Handle type reference aliases: type MyType = SomeOtherType */
-    if (symtab != NULL) {
-        HashNode_t *target_node = NULL;
-        if (alias->target_type_ref != NULL)
-            target_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                alias->target_type_ref, defined_in_unit);
-        if (target_node == NULL && alias->target_type_id != NULL)
-            target_node = kgpc_find_type_node_with_unit_flag(symtab,
-                alias->target_type_id, defined_in_unit);
-        if (target_node != NULL && target_node->type != NULL) {
-            kgpc_type_retain(target_node->type);
-            return target_node->type;
-        }
-    }
-    
-    /* If we couldn't resolve the type, return NULL */
-    return NULL;
+  }
+
+  /* If we couldn't resolve the type, return NULL */
+  return NULL;
 }
 
 // --- Destructor Implementation ---
 
 void kgpc_type_retain(KgpcType *type) {
-    if (type == NULL)
-        return;
-    assert(type->ref_count > 0);
-    type->ref_count++;
+  if (type == NULL)
+    return;
+  assert(type->ref_count > 0);
+  type->ref_count++;
 }
 
-void kgpc_type_release(KgpcType *type) {
-    destroy_kgpc_type(type);
-}
+void kgpc_type_release(KgpcType *type) { destroy_kgpc_type(type); }
 
 void destroy_kgpc_type(KgpcType *type) {
-    if (type == NULL) return;
-    
-    /* Defensive check: if ref_count is already 0, this indicates a double-free.
-     * This can happen when a KgpcType is shared across multiple structures but
-     * not properly retained, or when the same pointer is destroyed multiple times.
-     * Instead of crashing, we log a warning and return safely. */
-    if (type->ref_count <= 0) {
-        static int warn_once = 0;
-        if (kgpc_getenv("KGPC_DEBUG_TYPE_FREE") != NULL) {
-            fprintf(stderr,
-                "[KgpcType] destroy_kgpc_type ref_count=%d type=%p kind=%d",
-                type->ref_count, (void *)type, type->kind);
-            if (type->type_alias != NULL) {
-                if (type->type_alias->alias_name != NULL)
-                    fprintf(stderr, " alias=%s", type->type_alias->alias_name);
-                if (type->type_alias->target_type_id != NULL)
-                    fprintf(stderr, " target=%s", type->type_alias->target_type_id);
-            }
-            if (type->kind == TYPE_KIND_RECORD &&
-                type->info.record_info != NULL &&
-                type->info.record_info->type_id != NULL)
-                fprintf(stderr, " record=%s", type->info.record_info->type_id);
-            fprintf(stderr, "\n");
-#ifdef HAVE_EXECINFO
-            void *bt[32];
-            int bt_count = backtrace(bt, (int)(sizeof(bt) / sizeof(bt[0])));
-            if (bt_count > 0)
-            {
-                backtrace_symbols_fd(bt, bt_count, fileno(stderr));
-            }
-#endif
-        }
-        if (!warn_once) {
-            fprintf(stderr,
-                "Warning: Attempting to destroy KgpcType with ref_count=%d (possible double-free)\n",
-                type->ref_count);
-            warn_once = 1;
-        }
-        return;
-    }
-    
-    assert(type->ref_count > 0);
-    type->ref_count--;
-    if (type->ref_count > 0)
-        return;
+  if (type == NULL)
+    return;
 
-    switch (type->kind) {
-        case TYPE_KIND_POINTER:
-            destroy_kgpc_type(type->info.points_to);
-            break;
-        case TYPE_KIND_PROCEDURE:
-            if (type->info.proc_info.owns_params)
-                destroy_list(type->info.proc_info.params);
-            else
-                DestroyList(type->info.proc_info.params);
-            destroy_kgpc_type(type->info.proc_info.return_type);
-            if (type->info.proc_info.return_type_id != NULL)
-            {
-                free(type->info.proc_info.return_type_id);
-                type->info.proc_info.return_type_id = NULL;
-            }
-            break;
-        case TYPE_KIND_ARRAY:
-            destroy_kgpc_type(type->info.array_info.element_type);
-            if (type->info.array_info.element_type_id != NULL) {
-                free(type->info.array_info.element_type_id);
-                type->info.array_info.element_type_id = NULL;
-            }
-            break;
-        case TYPE_KIND_ARRAY_OF_CONST:
-            break;
-        case TYPE_KIND_PRIMITIVE:
-            break;
-        case TYPE_KIND_RECORD:
-            if (type->owns_record_info && type->info.record_info != NULL) {
-                destroy_record_type(type->info.record_info);
-                type->info.record_info = NULL;
-            }
-            break;
+  /* Defensive check: if ref_count is already 0, this indicates a double-free.
+   * This can happen when a KgpcType is shared across multiple structures but
+   * not properly retained, or when the same pointer is destroyed multiple
+   * times. Instead of crashing, we log a warning and return safely. */
+  if (type->ref_count <= 0) {
+    static int warn_once = 0;
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_FREE") != NULL) {
+      fprintf(stderr,
+              "[KgpcType] destroy_kgpc_type ref_count=%d type=%p kind=%d",
+              type->ref_count, (void *)type, type->kind);
+      if (type->type_alias != NULL) {
+        if (type->type_alias->alias_name != NULL)
+          fprintf(stderr, " alias=%s", type->type_alias->alias_name);
+        if (type->type_alias->target_type_id != NULL)
+          fprintf(stderr, " target=%s", type->type_alias->target_type_id);
+      }
+      if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL &&
+          type->info.record_info->type_id != NULL)
+        fprintf(stderr, " record=%s", type->info.record_info->type_id);
+      fprintf(stderr, "\n");
+#ifdef HAVE_EXECINFO
+      void *bt[32];
+      int bt_count = backtrace(bt, (int)(sizeof(bt) / sizeof(bt[0])));
+      if (bt_count > 0) {
+        backtrace_symbols_fd(bt, bt_count, fileno(stderr));
+      }
+#endif
     }
-    
-    /* Free the copied type_alias if it exists */
-    if (type->type_alias != NULL) {
-        if (type->type_alias->kgpc_type == type) {
-            /* Avoid releasing self-referential aliases during teardown. */
-            type->type_alias->kgpc_type = NULL;
-        }
-        free_copied_type_alias(type->type_alias);
-        type->type_alias = NULL;
+    if (!warn_once) {
+      fprintf(stderr,
+              "Warning: Attempting to destroy KgpcType with ref_count=%d "
+              "(possible double-free)\n",
+              type->ref_count);
+      warn_once = 1;
     }
-    
-    kgpc_type_unregister_live(type);
-    free(type);
+    return;
+  }
+
+  assert(type->ref_count > 0);
+  type->ref_count--;
+  if (type->ref_count > 0)
+    return;
+
+  switch (type->kind) {
+  case TYPE_KIND_POINTER:
+    destroy_kgpc_type(type->info.points_to);
+    break;
+  case TYPE_KIND_PROCEDURE:
+    if (type->info.proc_info.owns_params)
+      destroy_list(type->info.proc_info.params);
+    else
+      DestroyList(type->info.proc_info.params);
+    destroy_kgpc_type(type->info.proc_info.return_type);
+    if (type->info.proc_info.return_type_id != NULL) {
+      free(type->info.proc_info.return_type_id);
+      type->info.proc_info.return_type_id = NULL;
+    }
+    break;
+  case TYPE_KIND_ARRAY:
+    destroy_kgpc_type(type->info.array_info.element_type);
+    if (type->info.array_info.element_type_id != NULL) {
+      free(type->info.array_info.element_type_id);
+      type->info.array_info.element_type_id = NULL;
+    }
+    break;
+  case TYPE_KIND_ARRAY_OF_CONST:
+    break;
+  case TYPE_KIND_PRIMITIVE:
+    break;
+  case TYPE_KIND_RECORD:
+    if (type->owns_record_info && type->info.record_info != NULL) {
+      destroy_record_type(type->info.record_info);
+      type->info.record_info = NULL;
+    }
+    break;
+  }
+
+  /* Free the copied type_alias if it exists */
+  if (type->type_alias != NULL) {
+    if (type->type_alias->kgpc_type == type) {
+      /* Avoid releasing self-referential aliases during teardown. */
+      type->type_alias->kgpc_type = NULL;
+    }
+    free_copied_type_alias(type->type_alias);
+    type->type_alias = NULL;
+  }
+
+  kgpc_type_unregister_live(type);
+  free(type);
 }
 
 // --- Utility Implementations ---
@@ -1319,2767 +1288,2736 @@ void destroy_kgpc_type(KgpcType *type) {
 #define SHORTSTRING_START_INDEX 0
 #define SHORTSTRING_END_INDEX 255
 
-/* Helper function to check if a KgpcType is a char array (shortstring representation) */
+/* Helper function to check if a KgpcType is a char array (shortstring
+ * representation) */
 static int is_char_array_type(KgpcType *type) {
-    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
-        return 0;
-    if (type->info.array_info.element_type == NULL) {
-        /* Check if this is a ShortString-like array (bounds 0..255) with NULL element_type */
-        if (type->info.array_info.start_index == SHORTSTRING_START_INDEX && 
-            type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
-            /* Treat arrays with 0..255 bounds and NULL element_type as char arrays */
-            return 1;
-        }
-        return 0;
-    }
-    if (type->info.array_info.element_type->kind != TYPE_KIND_PRIMITIVE)
-        return 0;
-    int tag = type->info.array_info.element_type->info.primitive_type_tag;
-    /* Accept CHAR_TYPE for regular char arrays */
-    if (tag == CHAR_TYPE)
-        return 1;
-    /* Also accept STRING_TYPE and SHORTSTRING_TYPE for ShortString compatibility */
-    /* ShortString is often represented as array[0..255] of String internally */
-    if ((tag == STRING_TYPE || tag == SHORTSTRING_TYPE) &&
-        type->info.array_info.start_index == SHORTSTRING_START_INDEX && 
+  if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+    return 0;
+  if (type->info.array_info.element_type == NULL) {
+    /* Check if this is a ShortString-like array (bounds 0..255) with NULL
+     * element_type */
+    if (type->info.array_info.start_index == SHORTSTRING_START_INDEX &&
         type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
-        return 1;
+      /* Treat arrays with 0..255 bounds and NULL element_type as char arrays */
+      return 1;
     }
     return 0;
+  }
+  if (type->info.array_info.element_type->kind != TYPE_KIND_PRIMITIVE)
+    return 0;
+  int tag = type->info.array_info.element_type->info.primitive_type_tag;
+  /* Accept CHAR_TYPE for regular char arrays */
+  if (tag == CHAR_TYPE)
+    return 1;
+  /* Also accept STRING_TYPE and SHORTSTRING_TYPE for ShortString compatibility
+   */
+  /* ShortString is often represented as array[0..255] of String internally */
+  if ((tag == STRING_TYPE || tag == SHORTSTRING_TYPE) &&
+      type->info.array_info.start_index == SHORTSTRING_START_INDEX &&
+      type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
+    return 1;
+  }
+  return 0;
 }
 
-static int is_untyped_pointer_compat(KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
-    if (type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == POINTER_TYPE)
-        return 1;
-    if (type->kind == TYPE_KIND_POINTER)
-    {
-        KgpcType *points_to = type->info.points_to;
-        if (points_to == NULL)
-            return 1;
-        if (points_to->kind == TYPE_KIND_PRIMITIVE &&
-            points_to->info.primitive_type_tag == POINTER_TYPE)
-            return 1;
-    }
+static int is_untyped_pointer_compat(KgpcType *type) {
+  if (type == NULL)
     return 0;
+  if (type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.primitive_type_tag == POINTER_TYPE)
+    return 1;
+  if (type->kind == TYPE_KIND_POINTER) {
+    KgpcType *points_to = type->info.points_to;
+    if (points_to == NULL)
+      return 1;
+    if (points_to->kind == TYPE_KIND_PRIMITIVE &&
+        points_to->info.primitive_type_tag == POINTER_TYPE)
+      return 1;
+  }
+  return 0;
 }
 
 /* Helper function to check numeric type compatibility */
 static int types_numeric_compatible(int lhs, int rhs) {
-    /* Exact match */
-    if (lhs == rhs)
-        return 1;
+  /* Exact match */
+  if (lhs == rhs)
+    return 1;
 
-    /* All integer types are compatible with each other */
-    if (is_integer_type(lhs) && is_integer_type(rhs))
-        return 1;
+  /* All integer types are compatible with each other */
+  if (is_integer_type(lhs) && is_integer_type(rhs))
+    return 1;
 
-    /* Real can accept any integer type */
-    if (is_real_family_type(lhs) && is_integer_type(rhs))
-        return 1;
+  /* Real can accept any integer type */
+  if (is_real_family_type(lhs) && is_integer_type(rhs))
+    return 1;
 
-    /* Integer can accept real (truncation, as in FPC Trunc semantics) */
-    if (is_integer_type(lhs) && is_real_family_type(rhs))
-        return 1;
+  /* Integer can accept real (truncation, as in FPC Trunc semantics) */
+  if (is_integer_type(lhs) && is_real_family_type(rhs))
+    return 1;
 
-    /* Floating-point types interoperate with each other. */
-    if (is_real_family_type(lhs) && is_real_family_type(rhs))
-        return 1;
+  /* Floating-point types interoperate with each other. */
+  if (is_real_family_type(lhs) && is_real_family_type(rhs))
+    return 1;
 
-    /* Integer can accept char (for compatibility) */
-    if (is_integer_type(lhs) && rhs == CHAR_TYPE)
-        return 1;
+  /* Integer can accept char (for compatibility) */
+  if (is_integer_type(lhs) && rhs == CHAR_TYPE)
+    return 1;
 
-    return 0;
+  return 0;
 }
 
-/* Helper function to resolve KgpcType from a parameter Tree_t node 
+/* Helper function to resolve KgpcType from a parameter Tree_t node
  * This is needed for procedure type compatibility checking */
-KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type) {
-    if (var_decl == NULL)
-        return NULL;
+KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
+                                    int *owns_type) {
+  if (var_decl == NULL)
+    return NULL;
 
-    if (owns_type != NULL)
-        *owns_type = 0;
+  if (owns_type != NULL)
+    *owns_type = 0;
 
-    const char *decl_type_id = NULL;
-    int decl_defined_in_unit = 0;
-    if (var_decl->type == TREE_VAR_DECL)
-    {
-        decl_type_id = var_decl->tree_data.var_decl_data.type_id;
-        decl_defined_in_unit = var_decl->tree_data.var_decl_data.defined_in_unit;
-    }
+  const char *decl_type_id = NULL;
+  int decl_defined_in_unit = 0;
+  if (var_decl->type == TREE_VAR_DECL) {
+    decl_type_id = var_decl->tree_data.var_decl_data.type_id;
+    decl_defined_in_unit = var_decl->tree_data.var_decl_data.defined_in_unit;
+  }
 
-    /* Prefer declaration-time type cache to avoid late scope shadowing
-     * changing the meaning of parameter type identifiers (e.g. TSize).
-     * However, older cached types may have collapsed imported array aliases
-     * such as TFDSet to a scalar. Rebuild those from the symbol-table alias. */
-    if (var_decl->type == TREE_VAR_DECL &&
-        var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
-    {
-        struct TypeAlias *inline_alias = var_decl->tree_data.var_decl_data.inline_type_alias;
-        int var_type_tag = var_decl->tree_data.var_decl_data.type;
-        if (inline_alias != NULL && inline_alias->is_array &&
-            !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
-        {
-            KgpcType *alias_type = create_kgpc_type_from_type_alias(inline_alias, symtab,
-                decl_defined_in_unit);
-            if (alias_type != NULL)
-            {
-                if (owns_type != NULL)
-                    *owns_type = 1;
-                return alias_type;
-            }
-        }
-
-        if (decl_type_id != NULL && symtab != NULL &&
-            !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
-        {
-            struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
-                decl_type_id, decl_defined_in_unit);
-            if (type_node != NULL)
-            {
-                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
-                if (alias != NULL && alias->is_array)
-                {
-                    KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab,
-                        decl_defined_in_unit);
-                    if (alias_type != NULL)
-                    {
-                        if (owns_type != NULL)
-                            *owns_type = 1;
-                        return alias_type;
-                    }
-                }
-                /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias
-                 * that couldn't be resolved at predeclare time), try to get a
-                 * resolved type from the freshly looked-up type_node now that
-                 * all unit scopes are wired. */
-                KgpcType *cached = var_decl->tree_data.var_decl_data.cached_kgpc_type;
-                if (cached != NULL &&
-                    cached->kind == TYPE_KIND_PRIMITIVE &&
-                    cached->info.primitive_type_tag == UNKNOWN_TYPE &&
-                    type_node->type != NULL &&
-                    !(type_node->type->kind == TYPE_KIND_PRIMITIVE &&
-                      type_node->type->info.primitive_type_tag == UNKNOWN_TYPE))
-                {
-                    if (owns_type != NULL)
-                        *owns_type = 1;
-                    kgpc_type_retain(type_node->type);
-                    return type_node->type;
-                }
-                /* If the cached type is a bare REAL_TYPE without an
-                 * alias name, prefer the symbol-table type which carries
-                 * proper size info (Single=4, Double=8) or a distinct tag
-                 * (EXTENDED_TYPE).  Without this, overload resolution
-                 * can't distinguish Single/Double/Extended formals. */
-                if (cached != NULL &&
-                    cached->kind == TYPE_KIND_PRIMITIVE &&
-                    is_real_family_type(cached->info.primitive_type_tag) &&
-                    (cached->type_alias == NULL ||
-                     cached->type_alias->alias_name == NULL) &&
-                    type_node->type != NULL &&
-                    type_node->type->kind == TYPE_KIND_PRIMITIVE)
-                {
-                    if (owns_type != NULL)
-                        *owns_type = 1;
-                    kgpc_type_retain(type_node->type);
-                    return type_node->type;
-                }
-            }
-        }
-
-        if (var_type_tag == POINTER_TYPE &&
-            !kgpc_type_is_pointer(var_decl->tree_data.var_decl_data.cached_kgpc_type) &&
-            decl_type_id != NULL)
-        {
-            KgpcType *pointee_type = NULL;
-            int pointee_shared = 0;
-            if (symtab != NULL)
-            {
-                struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
-                    decl_type_id, decl_defined_in_unit);
-                if (type_node != NULL && type_node->type != NULL)
-                {
-                    pointee_type = type_node->type;
-                    pointee_shared = 1;
-                }
-            }
-            if (pointee_type == NULL)
-            {
-                int builtin_tag = UNKNOWN_TYPE;
-                if (pascal_identifier_equals(decl_type_id, "String") || pascal_identifier_equals(decl_type_id, "AnsiString") ||
-                    pascal_identifier_equals(decl_type_id, "RawByteString") ||
-                    pascal_identifier_equals(decl_type_id, "UnicodeString") ||
-                    pascal_identifier_equals(decl_type_id, "WideString"))
-                    builtin_tag = STRING_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "ShortString"))
-                    builtin_tag = SHORTSTRING_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Integer"))
-                    builtin_tag = INT_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "LongInt"))
-                    builtin_tag = LONGINT_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Int64") ||
-                         pascal_identifier_equals(decl_type_id, "SizeUInt") || pascal_identifier_equals(decl_type_id, "QWord") ||
-                         pascal_identifier_equals(decl_type_id, "NativeUInt") || pascal_identifier_equals(decl_type_id, "NativeInt") ||
-                         pascal_identifier_equals(decl_type_id, "PtrInt") || pascal_identifier_equals(decl_type_id, "PtrUInt"))
-                    builtin_tag = INT64_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Byte"))
-                    builtin_tag = BYTE_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Word"))
-                    builtin_tag = WORD_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "LongWord") || pascal_identifier_equals(decl_type_id, "Cardinal"))
-                    builtin_tag = LONGWORD_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Real") || pascal_identifier_equals(decl_type_id, "Double"))
-                    builtin_tag = REAL_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Extended"))
-                    builtin_tag = EXTENDED_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Char") || pascal_identifier_equals(decl_type_id, "AnsiChar"))
-                    builtin_tag = CHAR_TYPE;
-                else if (pascal_identifier_equals(decl_type_id, "Boolean"))
-                    builtin_tag = BOOL;
-                else if (pascal_identifier_equals(decl_type_id, "Pointer"))
-                    builtin_tag = POINTER_TYPE;
-
-                if (builtin_tag != UNKNOWN_TYPE)
-                    pointee_type = create_primitive_type(builtin_tag);
-            }
-
-            if (pointee_type != NULL)
-            {
-                if (pointee_shared)
-                    kgpc_type_retain(pointee_type);
-                KgpcType *pointer_type = create_pointer_type(pointee_type);
-                destroy_kgpc_type(pointee_type);
-                if (pointer_type != NULL)
-                {
-                    if (owns_type != NULL)
-                        *owns_type = 1;
-                    return pointer_type;
-                }
-            }
-        }
-        if (owns_type != NULL)
-            *owns_type = 1;
-        kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
-        return var_decl->tree_data.var_decl_data.cached_kgpc_type;
-    }
-
-    /* Handle inline array declarations: var x: array[1..20] of char */
-    if (var_decl->type == TREE_ARR_DECL)
-    {
-        int start = var_decl->tree_data.arr_decl_data.s_range;
-        int end = var_decl->tree_data.arr_decl_data.e_range;
-        int elem_type_tag = var_decl->tree_data.arr_decl_data.type;
-        char *elem_type_id = var_decl->tree_data.arr_decl_data.type_id;
-        
-        if (elem_type_tag == ARRAY_OF_CONST_TYPE)
-        {
-            if (owns_type != NULL)
-                *owns_type = 1;
-            return create_array_of_const_type();
-        }
-
-        KgpcType *elem_type = NULL;
-        int elem_type_borrowed = 0;
-
-        /* For SHORTSTRING_TYPE element (string[N]), use the preserved
-         * element_kgpc_type from the AST — it carries the specific size
-         * (N+1 bytes). Without this, create_primitive_type(SHORTSTRING_TYPE)
-         * produces a bare type with no alias and the array stride defaults
-         * to 256. Build a fresh primitive with the captured storage size so
-         * we don't alias the tree's shared pointer. */
-        if (elem_type_tag == SHORTSTRING_TYPE &&
-            var_decl->tree_data.arr_decl_data.element_kgpc_type != NULL)
-        {
-            long long ek_size = kgpc_type_sizeof(
-                var_decl->tree_data.arr_decl_data.element_kgpc_type);
-            if (ek_size > 0 && ek_size <= INT_MAX)
-            {
-                elem_type = create_primitive_type_with_size(SHORTSTRING_TYPE,
-                                                            (int)ek_size);
-            }
-        }
-        /* Resolve element type */
-        if (elem_type == NULL && elem_type_tag != UNKNOWN_TYPE && elem_type_tag != -1)
-        {
-            elem_type = create_primitive_type(elem_type_tag);
-        }
-        else if (elem_type_id != NULL && symtab != NULL)
-        {
-            /* Look up named element type in symbol table */
-            struct HashNode *elem_node = kgpc_find_type_node_with_unit_flag(symtab,
-                elem_type_id, var_decl->tree_data.arr_decl_data.defined_in_unit);
-            if (elem_node != NULL && elem_node->type != NULL)
-            {
-                elem_type = elem_node->type;
-                elem_type_borrowed = 1;
-            }
-        }
-
-        if (elem_type != NULL)
-        {
-            /* CRITICAL: Retain elem_type if borrowed from symbol table
-             * since create_array_type takes ownership. */
-            if (elem_type_borrowed)
-                kgpc_type_retain(elem_type);
-            /* Create a new array KgpcType - caller owns this */
-            if (owns_type != NULL)
-                *owns_type = 1;
-            KgpcType *array_type = create_array_type(elem_type, start, end);
-            destroy_kgpc_type(elem_type);
-            return array_type;
-        }
-
-        return NULL;
-    }
-    
-    if (var_decl->type != TREE_VAR_DECL)
-        return NULL;
-
+  /* Prefer declaration-time type cache to avoid late scope shadowing
+   * changing the meaning of parameter type identifiers (e.g. TSize).
+   * However, older cached types may have collapsed imported array aliases
+   * such as TFDSet to a scalar. Rebuild those from the symbol-table alias. */
+  if (var_decl->type == TREE_VAR_DECL &&
+      var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL) {
+    struct TypeAlias *inline_alias =
+        var_decl->tree_data.var_decl_data.inline_type_alias;
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
-    const char *type_id = var_decl->tree_data.var_decl_data.type_id;
-    int is_imported_decl = var_decl->tree_data.var_decl_data.defined_in_unit;
+    if (inline_alias != NULL && inline_alias->is_array &&
+        !kgpc_type_is_array(
+            var_decl->tree_data.var_decl_data.cached_kgpc_type)) {
+      KgpcType *alias_type = create_kgpc_type_from_type_alias(
+          inline_alias, symtab, decl_defined_in_unit);
+      if (alias_type != NULL) {
+        if (owns_type != NULL)
+          *owns_type = 1;
+        return alias_type;
+      }
+    }
 
-    /* In imported Unix/C declarations, "TSize/tsize" should resolve to
-     * the C alias (size_t), not to local GUI record types with the same name. */
-    if (is_imported_decl && type_id != NULL &&
-        (pascal_identifier_equals(type_id, "TSize") || pascal_identifier_equals(type_id, "tsize")) &&
-        symtab != NULL)
-    {
-        struct HashNode *size_node = kgpc_find_type_node_with_unit_flag(symtab, "size_t", 1);
-        if (size_node == NULL)
-            size_node = kgpc_find_type_node(symtab, "size_t");
-        if (size_node != NULL && size_node->type != NULL &&
-            size_node->type->kind != TYPE_KIND_RECORD)
-        {
+    if (decl_type_id != NULL && symtab != NULL &&
+        !kgpc_type_is_array(
+            var_decl->tree_data.var_decl_data.cached_kgpc_type)) {
+      struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
+          symtab, decl_type_id, decl_defined_in_unit);
+      if (type_node != NULL) {
+        struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+        if (alias != NULL && alias->is_array) {
+          KgpcType *alias_type = create_kgpc_type_from_type_alias(
+              alias, symtab, decl_defined_in_unit);
+          if (alias_type != NULL) {
             if (owns_type != NULL)
-                *owns_type = 1;
-            kgpc_type_retain(size_node->type);
-            return size_node->type;
+              *owns_type = 1;
+            return alias_type;
+          }
         }
-    }
-
-    if (var_type_tag == ARRAY_OF_CONST_TYPE)
-    {
-        if (owns_type != NULL)
+        /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias
+         * that couldn't be resolved at predeclare time), try to get a
+         * resolved type from the freshly looked-up type_node now that
+         * all unit scopes are wired. */
+        KgpcType *cached = var_decl->tree_data.var_decl_data.cached_kgpc_type;
+        if (cached != NULL && cached->kind == TYPE_KIND_PRIMITIVE &&
+            cached->info.primitive_type_tag == UNKNOWN_TYPE &&
+            type_node->type != NULL &&
+            !(type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+              type_node->type->info.primitive_type_tag == UNKNOWN_TYPE)) {
+          if (owns_type != NULL)
             *owns_type = 1;
-        return create_array_of_const_type();
+          kgpc_type_retain(type_node->type);
+          return type_node->type;
+        }
+        /* If the cached type is a bare REAL_TYPE without an
+         * alias name, prefer the symbol-table type which carries
+         * proper size info (Single=4, Double=8) or a distinct tag
+         * (EXTENDED_TYPE).  Without this, overload resolution
+         * can't distinguish Single/Double/Extended formals. */
+        if (cached != NULL && cached->kind == TYPE_KIND_PRIMITIVE &&
+            is_real_family_type(cached->info.primitive_type_tag) &&
+            (cached->type_alias == NULL ||
+             cached->type_alias->alias_name == NULL) &&
+            type_node->type != NULL &&
+            type_node->type->kind == TYPE_KIND_PRIMITIVE) {
+          if (owns_type != NULL)
+            *owns_type = 1;
+          kgpc_type_retain(type_node->type);
+          return type_node->type;
+        }
+      }
     }
 
-    if (var_type_tag == POINTER_TYPE && type_id != NULL)
-    {
-        KgpcType *pointee_type = NULL;
-        int pointee_shared = 0;
-        if (symtab != NULL)
-        {
-            struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
-                type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
-            if (type_node != NULL && type_node->type != NULL)
-            {
-                pointee_type = type_node->type;
-                pointee_shared = 1;
-            }
+    if (var_type_tag == POINTER_TYPE &&
+        !kgpc_type_is_pointer(
+            var_decl->tree_data.var_decl_data.cached_kgpc_type) &&
+        decl_type_id != NULL) {
+      KgpcType *pointee_type = NULL;
+      int pointee_shared = 0;
+      if (symtab != NULL) {
+        struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
+            symtab, decl_type_id, decl_defined_in_unit);
+        if (type_node != NULL && type_node->type != NULL) {
+          pointee_type = type_node->type;
+          pointee_shared = 1;
         }
-        if (pointee_type == NULL)
-        {
-            int builtin_tag = UNKNOWN_TYPE;
-            if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
-                pascal_identifier_equals(type_id, "RawByteString") ||
-                pascal_identifier_equals(type_id, "UnicodeString") ||
-                pascal_identifier_equals(type_id, "WideString"))
-                builtin_tag = STRING_TYPE;
-            else if (pascal_identifier_equals(type_id, "ShortString"))
-                builtin_tag = SHORTSTRING_TYPE;
-            else if (pascal_identifier_equals(type_id, "Integer"))
-                builtin_tag = INT_TYPE;
-            else if (pascal_identifier_equals(type_id, "LongInt"))
-                builtin_tag = LONGINT_TYPE;
-            else if (pascal_identifier_equals(type_id, "Int64") ||
-                     pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") ||
-                     pascal_identifier_equals(type_id, "NativeUInt") || pascal_identifier_equals(type_id, "NativeInt") ||
-                     pascal_identifier_equals(type_id, "PtrInt") || pascal_identifier_equals(type_id, "PtrUInt"))
-                builtin_tag = INT64_TYPE;
-            else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "SmallInt") ||
-                     pascal_identifier_equals(type_id, "Word"))
-                builtin_tag = INT_TYPE;
-            else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
-                builtin_tag = REAL_TYPE;
-            else if (pascal_identifier_equals(type_id, "Extended"))
-                builtin_tag = EXTENDED_TYPE;
-            else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar"))
-                builtin_tag = CHAR_TYPE;
-            else if (pascal_identifier_equals(type_id, "Boolean"))
-                builtin_tag = BOOL;
-            else if (pascal_identifier_equals(type_id, "Pointer"))
-                builtin_tag = POINTER_TYPE;
+      }
+      if (pointee_type == NULL) {
+        int builtin_tag = UNKNOWN_TYPE;
+        if (pascal_identifier_equals(decl_type_id, "String") ||
+            pascal_identifier_equals(decl_type_id, "AnsiString") ||
+            pascal_identifier_equals(decl_type_id, "RawByteString") ||
+            pascal_identifier_equals(decl_type_id, "UnicodeString") ||
+            pascal_identifier_equals(decl_type_id, "WideString"))
+          builtin_tag = STRING_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "ShortString"))
+          builtin_tag = SHORTSTRING_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Integer"))
+          builtin_tag = INT_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "LongInt"))
+          builtin_tag = LONGINT_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Int64") ||
+                 pascal_identifier_equals(decl_type_id, "SizeUInt") ||
+                 pascal_identifier_equals(decl_type_id, "QWord") ||
+                 pascal_identifier_equals(decl_type_id, "NativeUInt") ||
+                 pascal_identifier_equals(decl_type_id, "NativeInt") ||
+                 pascal_identifier_equals(decl_type_id, "PtrInt") ||
+                 pascal_identifier_equals(decl_type_id, "PtrUInt"))
+          builtin_tag = INT64_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Byte"))
+          builtin_tag = BYTE_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Word"))
+          builtin_tag = WORD_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "LongWord") ||
+                 pascal_identifier_equals(decl_type_id, "Cardinal"))
+          builtin_tag = LONGWORD_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Real") ||
+                 pascal_identifier_equals(decl_type_id, "Double"))
+          builtin_tag = REAL_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Extended"))
+          builtin_tag = EXTENDED_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Char") ||
+                 pascal_identifier_equals(decl_type_id, "AnsiChar"))
+          builtin_tag = CHAR_TYPE;
+        else if (pascal_identifier_equals(decl_type_id, "Boolean"))
+          builtin_tag = BOOL;
+        else if (pascal_identifier_equals(decl_type_id, "Pointer"))
+          builtin_tag = POINTER_TYPE;
 
-            if (builtin_tag != UNKNOWN_TYPE)
-                pointee_type = create_primitive_type(builtin_tag);
-        }
+        if (builtin_tag != UNKNOWN_TYPE)
+          pointee_type = create_primitive_type(builtin_tag);
+      }
 
+      if (pointee_type != NULL) {
         if (pointee_shared)
-            kgpc_type_retain(pointee_type);
-        if (owns_type != NULL)
-            *owns_type = 1;
+          kgpc_type_retain(pointee_type);
         KgpcType *pointer_type = create_pointer_type(pointee_type);
         destroy_kgpc_type(pointee_type);
-        return pointer_type;
-    }
-
-    /* Handle named type references using the symbol table */
-    if (type_id != NULL && symtab != NULL) {
-        /* Look up the named type in the symbol table.
-         * kgpc_find_type_node_with_unit_flag already prefers class types over
-         * plain record aliases when the same name resolves to both (e.g.
-         * TTimeZone = timezone struct alias vs TTimeZone = class abstract). */
-        struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
-            type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
-        if (type_node != NULL && type_node->type != NULL) {
-            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
-            if (alias != NULL && alias->is_array &&
-                !kgpc_type_is_array(type_node->type))
-            {
-                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab,
-                    var_decl->tree_data.var_decl_data.defined_in_unit);
-                if (alias_type != NULL)
-                {
-                    if (owns_type != NULL)
-                        *owns_type = 1;
-                    return alias_type;
-                }
-            }
-            /* Return a retained reference to the shared symbol-table type. */
-            if (owns_type != NULL)
-                *owns_type = 1;
-            kgpc_type_retain(type_node->type);
-            return type_node->type;
-        }
-        
-        /* Fallback: Check for built-in type names not in symbol table */
-        int builtin_tag = UNKNOWN_TYPE;
-        
-        /* String types */
-        if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
-            pascal_identifier_equals(type_id, "RawByteString") ||
-            pascal_identifier_equals(type_id, "UnicodeString") ||
-            pascal_identifier_equals(type_id, "WideString")) {
-            builtin_tag = STRING_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "ShortString")) {
-            builtin_tag = SHORTSTRING_TYPE;
-        }
-        /* Integer types */
-        else if (pascal_identifier_equals(type_id, "Integer")) {
-            builtin_tag = INT_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "LongInt")) {
-            builtin_tag = LONGINT_TYPE;  /* 32-bit for FPC compatibility */
-        }
-        else if (pascal_identifier_equals(type_id, "Int64") ||
-                 pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") ||
-                 pascal_identifier_equals(type_id, "NativeUInt") || pascal_identifier_equals(type_id, "NativeInt") ||
-                 pascal_identifier_equals(type_id, "PtrInt") || pascal_identifier_equals(type_id, "PtrUInt")) {
-            builtin_tag = INT64_TYPE;  /* 64-bit integer types */
-        }
-        else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "SmallInt") ||
-                 pascal_identifier_equals(type_id, "Word")) {
-            builtin_tag = INT_TYPE;
-        }
-        /* Other types */
-        else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double")) {
-            builtin_tag = REAL_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "Extended")) {
-            builtin_tag = EXTENDED_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar")) {
-            builtin_tag = CHAR_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "Boolean")) {
-            builtin_tag = BOOL;
-        }
-        else if (pascal_identifier_equals(type_id, "Pointer")) {
-            builtin_tag = POINTER_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "File")) {
-            builtin_tag = FILE_TYPE;
-        }
-        else if (pascal_identifier_equals(type_id, "Text") || pascal_identifier_equals(type_id, "TextFile")) {
-            builtin_tag = TEXT_TYPE;
-        }
-        
-        if (builtin_tag != UNKNOWN_TYPE) {
-            if (owns_type != NULL)
-                *owns_type = 1;
-            return create_primitive_type(builtin_tag);
-        }
-        
-        /* Named type lookup failed. For imported declarations, do not fall
-         * back to legacy aggregate tags (record/array/etc): that can silently
-         * reinterpret aliased names (e.g. TSize) as unrelated local types.
-         * Primitive tags remain safe to materialize directly. */
-        if (is_imported_decl)
-        {
-            switch (var_type_tag)
-            {
-                case BOOL:
-                case CHAR_TYPE:
-                case STRING_TYPE:
-                case SHORTSTRING_TYPE:
-                case POINTER_TYPE:
-                case FILE_TYPE:
-                case TEXT_TYPE:
-                case REAL_TYPE:
-                case INT_TYPE:
-                case LONGINT_TYPE:
-                case INT64_TYPE:
-                case BYTE_TYPE:
-                case WORD_TYPE:
-                case LONGWORD_TYPE:
-                case QWORD_TYPE:
-                case ENUM_TYPE:
-                case SET_TYPE:
-                case RECORD_TYPE:
-                case EXTENDED_TYPE:
-                case VARIANT_TYPE:
-                    if (owns_type != NULL)
-                        *owns_type = 1;
-                    return create_primitive_type(var_type_tag);
-                default:
-                    return NULL;
-            }
-        }
-
-        if (var_type_tag == UNKNOWN_TYPE || var_type_tag == -1)
-            return NULL;
-    }
-
-    /* For primitive types, create a KgpcType - caller owns this */
-    if (var_type_tag != UNKNOWN_TYPE && var_type_tag != -1) {
-        if (owns_type != NULL)
+        if (pointer_type != NULL) {
+          if (owns_type != NULL)
             *owns_type = 1;
-        return create_primitive_type(var_type_tag);
+          return pointer_type;
+        }
+      }
+    }
+    if (owns_type != NULL)
+      *owns_type = 1;
+    kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
+    return var_decl->tree_data.var_decl_data.cached_kgpc_type;
+  }
+
+  /* Handle inline array declarations: var x: array[1..20] of char */
+  if (var_decl->type == TREE_ARR_DECL) {
+    int start = var_decl->tree_data.arr_decl_data.s_range;
+    int end = var_decl->tree_data.arr_decl_data.e_range;
+    int elem_type_tag = var_decl->tree_data.arr_decl_data.type;
+    char *elem_type_id = var_decl->tree_data.arr_decl_data.type_id;
+
+    if (elem_type_tag == ARRAY_OF_CONST_TYPE) {
+      if (owns_type != NULL)
+        *owns_type = 1;
+      return create_array_of_const_type();
+    }
+
+    KgpcType *elem_type = NULL;
+    int elem_type_borrowed = 0;
+
+    /* For SHORTSTRING_TYPE element (string[N]), use the preserved
+     * element_kgpc_type from the AST — it carries the specific size
+     * (N+1 bytes). Without this, create_primitive_type(SHORTSTRING_TYPE)
+     * produces a bare type with no alias and the array stride defaults
+     * to 256. Build a fresh primitive with the captured storage size so
+     * we don't alias the tree's shared pointer. */
+    if (elem_type_tag == SHORTSTRING_TYPE &&
+        var_decl->tree_data.arr_decl_data.element_kgpc_type != NULL) {
+      long long ek_size =
+          kgpc_type_sizeof(var_decl->tree_data.arr_decl_data.element_kgpc_type);
+      if (ek_size > 0 && ek_size <= INT_MAX) {
+        elem_type =
+            create_primitive_type_with_size(SHORTSTRING_TYPE, (int)ek_size);
+      }
+    }
+    /* Resolve element type */
+    if (elem_type == NULL && elem_type_tag != UNKNOWN_TYPE &&
+        elem_type_tag != -1) {
+      elem_type = create_primitive_type(elem_type_tag);
+    } else if (elem_type_id != NULL && symtab != NULL) {
+      /* Look up named element type in symbol table */
+      struct HashNode *elem_node = kgpc_find_type_node_with_unit_flag(
+          symtab, elem_type_id,
+          var_decl->tree_data.arr_decl_data.defined_in_unit);
+      if (elem_node != NULL && elem_node->type != NULL) {
+        elem_type = elem_node->type;
+        elem_type_borrowed = 1;
+      }
+    }
+
+    if (elem_type != NULL) {
+      /* CRITICAL: Retain elem_type if borrowed from symbol table
+       * since create_array_type takes ownership. */
+      if (elem_type_borrowed)
+        kgpc_type_retain(elem_type);
+      /* Create a new array KgpcType - caller owns this */
+      if (owns_type != NULL)
+        *owns_type = 1;
+      KgpcType *array_type = create_array_type(elem_type, start, end);
+      destroy_kgpc_type(elem_type);
+      return array_type;
     }
 
     return NULL;
+  }
+
+  if (var_decl->type != TREE_VAR_DECL)
+    return NULL;
+
+  int var_type_tag = var_decl->tree_data.var_decl_data.type;
+  const char *type_id = var_decl->tree_data.var_decl_data.type_id;
+  int is_imported_decl = var_decl->tree_data.var_decl_data.defined_in_unit;
+
+  /* In imported Unix/C declarations, "TSize/tsize" should resolve to
+   * the C alias (size_t), not to local GUI record types with the same name. */
+  if (is_imported_decl && type_id != NULL &&
+      (pascal_identifier_equals(type_id, "TSize") ||
+       pascal_identifier_equals(type_id, "tsize")) &&
+      symtab != NULL) {
+    struct HashNode *size_node =
+        kgpc_find_type_node_with_unit_flag(symtab, "size_t", 1);
+    if (size_node == NULL)
+      size_node = kgpc_find_type_node(symtab, "size_t");
+    if (size_node != NULL && size_node->type != NULL &&
+        size_node->type->kind != TYPE_KIND_RECORD) {
+      if (owns_type != NULL)
+        *owns_type = 1;
+      kgpc_type_retain(size_node->type);
+      return size_node->type;
+    }
+  }
+
+  if (var_type_tag == ARRAY_OF_CONST_TYPE) {
+    if (owns_type != NULL)
+      *owns_type = 1;
+    return create_array_of_const_type();
+  }
+
+  if (var_type_tag == POINTER_TYPE && type_id != NULL) {
+    KgpcType *pointee_type = NULL;
+    int pointee_shared = 0;
+    if (symtab != NULL) {
+      struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
+          symtab, type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
+      if (type_node != NULL && type_node->type != NULL) {
+        pointee_type = type_node->type;
+        pointee_shared = 1;
+      }
+    }
+    if (pointee_type == NULL) {
+      int builtin_tag = UNKNOWN_TYPE;
+      if (pascal_identifier_equals(type_id, "String") ||
+          pascal_identifier_equals(type_id, "AnsiString") ||
+          pascal_identifier_equals(type_id, "RawByteString") ||
+          pascal_identifier_equals(type_id, "UnicodeString") ||
+          pascal_identifier_equals(type_id, "WideString"))
+        builtin_tag = STRING_TYPE;
+      else if (pascal_identifier_equals(type_id, "ShortString"))
+        builtin_tag = SHORTSTRING_TYPE;
+      else if (pascal_identifier_equals(type_id, "Integer"))
+        builtin_tag = INT_TYPE;
+      else if (pascal_identifier_equals(type_id, "LongInt"))
+        builtin_tag = LONGINT_TYPE;
+      else if (pascal_identifier_equals(type_id, "Int64") ||
+               pascal_identifier_equals(type_id, "SizeUInt") ||
+               pascal_identifier_equals(type_id, "QWord") ||
+               pascal_identifier_equals(type_id, "NativeUInt") ||
+               pascal_identifier_equals(type_id, "NativeInt") ||
+               pascal_identifier_equals(type_id, "PtrInt") ||
+               pascal_identifier_equals(type_id, "PtrUInt"))
+        builtin_tag = INT64_TYPE;
+      else if (pascal_identifier_equals(type_id, "Byte") ||
+               pascal_identifier_equals(type_id, "SmallInt") ||
+               pascal_identifier_equals(type_id, "Word"))
+        builtin_tag = INT_TYPE;
+      else if (pascal_identifier_equals(type_id, "Real") ||
+               pascal_identifier_equals(type_id, "Double"))
+        builtin_tag = REAL_TYPE;
+      else if (pascal_identifier_equals(type_id, "Extended"))
+        builtin_tag = EXTENDED_TYPE;
+      else if (pascal_identifier_equals(type_id, "Char") ||
+               pascal_identifier_equals(type_id, "AnsiChar"))
+        builtin_tag = CHAR_TYPE;
+      else if (pascal_identifier_equals(type_id, "Boolean"))
+        builtin_tag = BOOL;
+      else if (pascal_identifier_equals(type_id, "Pointer"))
+        builtin_tag = POINTER_TYPE;
+
+      if (builtin_tag != UNKNOWN_TYPE)
+        pointee_type = create_primitive_type(builtin_tag);
+    }
+
+    if (pointee_shared)
+      kgpc_type_retain(pointee_type);
+    if (owns_type != NULL)
+      *owns_type = 1;
+    KgpcType *pointer_type = create_pointer_type(pointee_type);
+    destroy_kgpc_type(pointee_type);
+    return pointer_type;
+  }
+
+  /* Handle named type references using the symbol table */
+  if (type_id != NULL && symtab != NULL) {
+    /* Look up the named type in the symbol table.
+     * kgpc_find_type_node_with_unit_flag already prefers class types over
+     * plain record aliases when the same name resolves to both (e.g.
+     * TTimeZone = timezone struct alias vs TTimeZone = class abstract). */
+    struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
+        symtab, type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
+    if (type_node != NULL && type_node->type != NULL) {
+      struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+      if (alias != NULL && alias->is_array &&
+          !kgpc_type_is_array(type_node->type)) {
+        KgpcType *alias_type = create_kgpc_type_from_type_alias(
+            alias, symtab, var_decl->tree_data.var_decl_data.defined_in_unit);
+        if (alias_type != NULL) {
+          if (owns_type != NULL)
+            *owns_type = 1;
+          return alias_type;
+        }
+      }
+      /* Return a retained reference to the shared symbol-table type. */
+      if (owns_type != NULL)
+        *owns_type = 1;
+      kgpc_type_retain(type_node->type);
+      return type_node->type;
+    }
+
+    /* Fallback: Check for built-in type names not in symbol table */
+    int builtin_tag = UNKNOWN_TYPE;
+
+    /* String types */
+    if (pascal_identifier_equals(type_id, "String") ||
+        pascal_identifier_equals(type_id, "AnsiString") ||
+        pascal_identifier_equals(type_id, "RawByteString") ||
+        pascal_identifier_equals(type_id, "UnicodeString") ||
+        pascal_identifier_equals(type_id, "WideString")) {
+      builtin_tag = STRING_TYPE;
+    } else if (pascal_identifier_equals(type_id, "ShortString")) {
+      builtin_tag = SHORTSTRING_TYPE;
+    }
+    /* Integer types */
+    else if (pascal_identifier_equals(type_id, "Integer")) {
+      builtin_tag = INT_TYPE;
+    } else if (pascal_identifier_equals(type_id, "LongInt")) {
+      builtin_tag = LONGINT_TYPE; /* 32-bit for FPC compatibility */
+    } else if (pascal_identifier_equals(type_id, "Int64") ||
+               pascal_identifier_equals(type_id, "SizeUInt") ||
+               pascal_identifier_equals(type_id, "QWord") ||
+               pascal_identifier_equals(type_id, "NativeUInt") ||
+               pascal_identifier_equals(type_id, "NativeInt") ||
+               pascal_identifier_equals(type_id, "PtrInt") ||
+               pascal_identifier_equals(type_id, "PtrUInt")) {
+      builtin_tag = INT64_TYPE; /* 64-bit integer types */
+    } else if (pascal_identifier_equals(type_id, "Byte") ||
+               pascal_identifier_equals(type_id, "SmallInt") ||
+               pascal_identifier_equals(type_id, "Word")) {
+      builtin_tag = INT_TYPE;
+    }
+    /* Other types */
+    else if (pascal_identifier_equals(type_id, "Real") ||
+             pascal_identifier_equals(type_id, "Double")) {
+      builtin_tag = REAL_TYPE;
+    } else if (pascal_identifier_equals(type_id, "Extended")) {
+      builtin_tag = EXTENDED_TYPE;
+    } else if (pascal_identifier_equals(type_id, "Char") ||
+               pascal_identifier_equals(type_id, "AnsiChar")) {
+      builtin_tag = CHAR_TYPE;
+    } else if (pascal_identifier_equals(type_id, "Boolean")) {
+      builtin_tag = BOOL;
+    } else if (pascal_identifier_equals(type_id, "Pointer")) {
+      builtin_tag = POINTER_TYPE;
+    } else if (pascal_identifier_equals(type_id, "File")) {
+      builtin_tag = FILE_TYPE;
+    } else if (pascal_identifier_equals(type_id, "Text") ||
+               pascal_identifier_equals(type_id, "TextFile")) {
+      builtin_tag = TEXT_TYPE;
+    }
+
+    if (builtin_tag != UNKNOWN_TYPE) {
+      if (owns_type != NULL)
+        *owns_type = 1;
+      return create_primitive_type(builtin_tag);
+    }
+
+    /* Named type lookup failed. For imported declarations, do not fall
+     * back to legacy aggregate tags (record/array/etc): that can silently
+     * reinterpret aliased names (e.g. TSize) as unrelated local types.
+     * Primitive tags remain safe to materialize directly. */
+    if (is_imported_decl) {
+      switch (var_type_tag) {
+      case BOOL:
+      case CHAR_TYPE:
+      case STRING_TYPE:
+      case SHORTSTRING_TYPE:
+      case POINTER_TYPE:
+      case FILE_TYPE:
+      case TEXT_TYPE:
+      case REAL_TYPE:
+      case INT_TYPE:
+      case LONGINT_TYPE:
+      case INT64_TYPE:
+      case BYTE_TYPE:
+      case WORD_TYPE:
+      case LONGWORD_TYPE:
+      case QWORD_TYPE:
+      case ENUM_TYPE:
+      case SET_TYPE:
+      case RECORD_TYPE:
+      case EXTENDED_TYPE:
+      case VARIANT_TYPE:
+        if (owns_type != NULL)
+          *owns_type = 1;
+        return create_primitive_type(var_type_tag);
+      default:
+        return NULL;
+      }
+    }
+
+    if (var_type_tag == UNKNOWN_TYPE || var_type_tag == -1)
+      return NULL;
+  }
+
+  /* For primitive types, create a KgpcType - caller owns this */
+  if (var_type_tag != UNKNOWN_TYPE && var_type_tag != -1) {
+    if (owns_type != NULL)
+      *owns_type = 1;
+    return create_primitive_type(var_type_tag);
+  }
+
+  return NULL;
 }
 
 /* Helper function to check if a record type is a subclass of another */
 /* Helper to get RecordType from HashNode, handling pointer types (classes) */
-static struct RecordType* get_record_type_from_hashnode(HashNode_t *node) {
-    if (node == NULL || node->type == NULL)
-        return NULL;
-    
-    /* Direct record type */
-    if (node->type->kind == TYPE_KIND_RECORD)
-        return node->type->info.record_info;
-    
-    /* Pointer to record (class types) */
-    if (node->type->kind == TYPE_KIND_POINTER) {
-        KgpcType *pointed_to = node->type->info.points_to;
-        if (pointed_to != NULL && pointed_to->kind == TYPE_KIND_RECORD)
-            return pointed_to->info.record_info;
-    }
-    
+static struct RecordType *get_record_type_from_hashnode(HashNode_t *node) {
+  if (node == NULL || node->type == NULL)
     return NULL;
+
+  /* Direct record type */
+  if (node->type->kind == TYPE_KIND_RECORD)
+    return node->type->info.record_info;
+
+  /* Pointer to record (class types) */
+  if (node->type->kind == TYPE_KIND_POINTER) {
+    KgpcType *pointed_to = node->type->info.points_to;
+    if (pointed_to != NULL && pointed_to->kind == TYPE_KIND_RECORD)
+      return pointed_to->info.record_info;
+  }
+
+  return NULL;
 }
 
 static int records_same_type(struct RecordType *a, struct RecordType *b) {
-    if (a == b)
-        return 1;
-    if (a != NULL && b != NULL &&
-        a->type_id != NULL && b->type_id != NULL &&
-        strcasecmp(a->type_id, b->type_id) == 0)
-        return 1;
-    return 0;
+  if (a == b)
+    return 1;
+  if (a != NULL && b != NULL && a->type_id != NULL && b->type_id != NULL &&
+      strcasecmp(a->type_id, b->type_id) == 0)
+    return 1;
+  return 0;
 }
 
-static int is_record_subclass(struct RecordType *subclass, struct RecordType *superclass, struct SymTab *symtab) {
-    if (records_same_type(subclass, superclass))
+static int is_record_subclass(struct RecordType *subclass,
+                              struct RecordType *superclass,
+                              struct SymTab *symtab) {
+  if (records_same_type(subclass, superclass))
+    return 1;
+
+  /* Follow inheritance chain */
+  struct RecordType *current = subclass;
+  while (current != NULL && current->parent_class_name != NULL) {
+    /* Check by name if parent_class_name matches superclass type_id */
+    if (superclass != NULL && superclass->type_id != NULL &&
+        strcasecmp(current->parent_class_name, superclass->type_id) == 0)
+      return 1;
+    /* Look up parent class type in symbol table.  Use the type-specific
+     * lookup which prefers class types over plain record aliases when the
+     * same name resolves to both (e.g. TTimeZone struct alias vs class). */
+    HashNode_t *parent_node = kgpc_find_type_node_with_unit_flag(
+        symtab, current->parent_class_name, /*defined_in_unit=*/1);
+    if (parent_node == NULL)
+      parent_node = kgpc_find_type_node(symtab, current->parent_class_name);
+    if (parent_node != NULL) {
+      struct RecordType *parent_record =
+          get_record_type_from_hashnode(parent_node);
+      if (records_same_type(parent_record, superclass))
         return 1;
-
-    /* Follow inheritance chain */
-    struct RecordType *current = subclass;
-    while (current != NULL && current->parent_class_name != NULL) {
-        /* Check by name if parent_class_name matches superclass type_id */
-        if (superclass != NULL && superclass->type_id != NULL &&
-            strcasecmp(current->parent_class_name, superclass->type_id) == 0)
-            return 1;
-        /* Look up parent class type in symbol table.  Use the type-specific
-         * lookup which prefers class types over plain record aliases when the
-         * same name resolves to both (e.g. TTimeZone struct alias vs class). */
-        HashNode_t *parent_node = kgpc_find_type_node_with_unit_flag(symtab,
-            current->parent_class_name, /*defined_in_unit=*/1);
-        if (parent_node == NULL)
-            parent_node = kgpc_find_type_node(symtab, current->parent_class_name);
-        if (parent_node != NULL) {
-            struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
-            if (records_same_type(parent_record, superclass))
-                return 1;
-            current = parent_record;
-        } else {
-            break;
-        }
+      current = parent_record;
+    } else {
+      break;
     }
+  }
 
-    /* In Pascal, any class without an explicit parent implicitly inherits from TObject.
-     * If we walked the chain and ended at a class with no parent_class_name, and the
-     * superclass being checked is TObject, then subclass IS a subclass of TObject. */
-    if (current != NULL && current->parent_class_name == NULL &&
-        current->is_class && superclass != NULL && superclass->type_id != NULL &&
-        strcasecmp(superclass->type_id, "TObject") == 0)
-    {
-        return 1;
-    }
+  /* In Pascal, any class without an explicit parent implicitly inherits from
+   * TObject. If we walked the chain and ended at a class with no
+   * parent_class_name, and the superclass being checked is TObject, then
+   * subclass IS a subclass of TObject. */
+  if (current != NULL && current->parent_class_name == NULL &&
+      current->is_class && superclass != NULL && superclass->type_id != NULL &&
+      strcasecmp(superclass->type_id, "TObject") == 0) {
+    return 1;
+  }
 
-    return 0;
+  return 0;
 }
 
-static struct RecordType *kgpc_resolve_class_record_from_alias(struct SymTab *symtab,
-    const struct TypeAlias *alias)
-{
-    if (symtab == NULL || alias == NULL)
-        return NULL;
+static struct RecordType *
+kgpc_resolve_class_record_from_alias(struct SymTab *symtab,
+                                     const struct TypeAlias *alias) {
+  if (symtab == NULL || alias == NULL)
+    return NULL;
 
-    HashNode_t *type_node = NULL;
-    if (alias->pointer_type_ref != NULL)
-        type_node = kgpc_find_type_node_ref_with_unit_flag(symtab, alias->pointer_type_ref, 0);
-    if (type_node == NULL && alias->pointer_type_id != NULL)
-        type_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
-    if (type_node == NULL && alias->target_type_ref != NULL)
-        type_node = kgpc_find_type_node_ref_with_unit_flag(symtab, alias->target_type_ref, 0);
-    if (type_node == NULL && alias->target_type_id != NULL)
-        type_node = kgpc_find_type_node(symtab, alias->target_type_id);
+  HashNode_t *type_node = NULL;
+  if (alias->pointer_type_ref != NULL)
+    type_node = kgpc_find_type_node_ref_with_unit_flag(
+        symtab, alias->pointer_type_ref, 0);
+  if (type_node == NULL && alias->pointer_type_id != NULL)
+    type_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
+  if (type_node == NULL && alias->target_type_ref != NULL)
+    type_node = kgpc_find_type_node_ref_with_unit_flag(
+        symtab, alias->target_type_ref, 0);
+  if (type_node == NULL && alias->target_type_id != NULL)
+    type_node = kgpc_find_type_node(symtab, alias->target_type_id);
 
-    return get_record_type_from_hashnode(type_node);
+  return get_record_type_from_hashnode(type_node);
 }
 
 static struct RecordType *kgpc_resolve_class_record_type(struct SymTab *symtab,
-    KgpcType *type)
-{
-    if (type == NULL)
-        return NULL;
-
-    if (type->kind == TYPE_KIND_RECORD)
-        return type->info.record_info;
-
-    if (type->kind != TYPE_KIND_POINTER)
-        return NULL;
-
-    KgpcType *inner = type->info.points_to;
-    if (inner != NULL && inner->kind == TYPE_KIND_RECORD)
-        return inner->info.record_info;
-
-    if (type->type_alias != NULL)
-        return kgpc_resolve_class_record_from_alias(symtab, type->type_alias);
-
-    if (inner != NULL && inner->type_alias != NULL)
-        return kgpc_resolve_class_record_from_alias(symtab, inner->type_alias);
-
+                                                         KgpcType *type) {
+  if (type == NULL)
     return NULL;
+
+  if (type->kind == TYPE_KIND_RECORD)
+    return type->info.record_info;
+
+  if (type->kind != TYPE_KIND_POINTER)
+    return NULL;
+
+  KgpcType *inner = type->info.points_to;
+  if (inner != NULL && inner->kind == TYPE_KIND_RECORD)
+    return inner->info.record_info;
+
+  if (type->type_alias != NULL)
+    return kgpc_resolve_class_record_from_alias(symtab, type->type_alias);
+
+  if (inner != NULL && inner->type_alias != NULL)
+    return kgpc_resolve_class_record_from_alias(symtab, inner->type_alias);
+
+  return NULL;
 }
 
-static struct RecordField *get_first_visible_record_field(struct RecordType *record)
-{
-    if (record == NULL)
-        return NULL;
-
-    for (ListNode_t *node = record->fields; node != NULL; node = node->next)
-    {
-        if (node->type != LIST_RECORD_FIELD)
-            continue;
-        struct RecordField *field = (struct RecordField *)node->cur;
-        if (field == NULL || record_field_is_hidden(field))
-            continue;
-        return field;
-    }
-
+static struct RecordField *
+get_first_visible_record_field(struct RecordType *record) {
+  if (record == NULL)
     return NULL;
+
+  for (ListNode_t *node = record->fields; node != NULL; node = node->next) {
+    if (node->type != LIST_RECORD_FIELD)
+      continue;
+    struct RecordField *field = (struct RecordField *)node->cur;
+    if (field == NULL || record_field_is_hidden(field))
+      continue;
+    return field;
+  }
+
+  return NULL;
 }
 
-static struct RecordType *resolve_record_field_record_type(struct RecordField *field,
-    struct SymTab *symtab)
-{
-    if (field == NULL)
-        return NULL;
-    if (field->nested_record != NULL)
-        return field->nested_record;
-    if (field->type_ref != NULL)
-    {
-        HashNode_t *type_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-            field->type_ref, 0);
-        struct RecordType *record = get_record_type_from_hashnode(type_node);
-        if (record != NULL)
-            return record;
-    }
-    if (field->type_id != NULL)
-    {
-        HashNode_t *type_node = NULL;
-        if (FindSymbol(&type_node, symtab, field->type_id) != 0)
-        {
-            struct RecordType *record = get_record_type_from_hashnode(type_node);
-            if (record != NULL)
-                return record;
-        }
-    }
+static struct RecordType *
+resolve_record_field_record_type(struct RecordField *field,
+                                 struct SymTab *symtab) {
+  if (field == NULL)
     return NULL;
+  if (field->nested_record != NULL)
+    return field->nested_record;
+  if (field->type_ref != NULL) {
+    HashNode_t *type_node =
+        kgpc_find_type_node_ref_with_unit_flag(symtab, field->type_ref, 0);
+    struct RecordType *record = get_record_type_from_hashnode(type_node);
+    if (record != NULL)
+      return record;
+  }
+  if (field->type_id != NULL) {
+    HashNode_t *type_node = NULL;
+    if (FindSymbol(&type_node, symtab, field->type_id) != 0) {
+      struct RecordType *record = get_record_type_from_hashnode(type_node);
+      if (record != NULL)
+        return record;
+    }
+  }
+  return NULL;
 }
 
-static int record_has_prefix_field_type(struct RecordType *record, struct RecordType *prefix,
-    struct SymTab *symtab)
-{
-    if (record == NULL || prefix == NULL)
-        return 0;
+static int record_has_prefix_field_type(struct RecordType *record,
+                                        struct RecordType *prefix,
+                                        struct SymTab *symtab) {
+  if (record == NULL || prefix == NULL)
+    return 0;
 
-    struct RecordField *first_field = get_first_visible_record_field(record);
-    struct RecordType *first_field_record = resolve_record_field_record_type(first_field, symtab);
-    if (first_field_record == NULL)
-        return 0;
+  struct RecordField *first_field = get_first_visible_record_field(record);
+  struct RecordType *first_field_record =
+      resolve_record_field_record_type(first_field, symtab);
+  if (first_field_record == NULL)
+    return 0;
 
-    return records_same_type(first_field_record, prefix);
+  return records_same_type(first_field_record, prefix);
 }
 
 static int record_prefix_pointer_compatible(struct RecordType *lhs_record,
-    struct RecordType *rhs_record, struct SymTab *symtab)
-{
-    if (records_same_type(lhs_record, rhs_record))
-        return 1;
+                                            struct RecordType *rhs_record,
+                                            struct SymTab *symtab) {
+  if (records_same_type(lhs_record, rhs_record))
+    return 1;
 
-    if (record_has_prefix_field_type(lhs_record, rhs_record, symtab))
-        return 1;
-    if (record_has_prefix_field_type(rhs_record, lhs_record, symtab))
-        return 1;
+  if (record_has_prefix_field_type(lhs_record, rhs_record, symtab))
+    return 1;
+  if (record_has_prefix_field_type(rhs_record, lhs_record, symtab))
+    return 1;
 
-    return 0;
+  return 0;
 }
 
-int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, struct SymTab *symtab) {
-    /* NULL types are incompatible */
-    if (lhs_type == NULL || rhs_type == NULL)
-        return 0;
+int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
+                                        struct SymTab *symtab) {
+  /* NULL types are incompatible */
+  if (lhs_type == NULL || rhs_type == NULL)
+    return 0;
 
-    /* Variant type auto-coerces to/from any other type */
-    if ((lhs_type->kind == TYPE_KIND_PRIMITIVE && lhs_type->info.primitive_type_tag == VARIANT_TYPE) ||
-        (rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == VARIANT_TYPE))
-    {
+  /* Variant type auto-coerces to/from any other type */
+  if ((lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+       lhs_type->info.primitive_type_tag == VARIANT_TYPE) ||
+      (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+       rhs_type->info.primitive_type_tag == VARIANT_TYPE)) {
+    return 1;
+  }
+
+  /* Special case: Allow string (primitive) to be assigned to char array */
+  /* This is a common Pascal idiom: var s: array[1..20] of char; begin s :=
+   * 'hello'; end; */
+  if (lhs_type->kind == TYPE_KIND_ARRAY &&
+      lhs_type->info.array_info.element_type != NULL &&
+      lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+      lhs_type->info.array_info.element_type->info.primitive_type_tag ==
+          CHAR_TYPE &&
+      rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      (rhs_type->info.primitive_type_tag == STRING_TYPE ||
+       rhs_type->info.primitive_type_tag == CHAR_TYPE)) {
+    /* String literals and single characters can be assigned to char arrays */
+    /* Size checking should be done at a higher level where we have access to
+     * the actual string */
+    return 1;
+  }
+
+  /* Special case: Allow char to be assigned to string/shortstring */
+  /* This is a common Pascal idiom: var s: string; begin s := 'a'; end; */
+  if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      (lhs_type->info.primitive_type_tag == STRING_TYPE ||
+       lhs_type->info.primitive_type_tag == SHORTSTRING_TYPE) &&
+      rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->info.primitive_type_tag == CHAR_TYPE) {
+    /* Single characters can be assigned to string variables */
+    return 1;
+  }
+
+  /* Allow PChar <-> String/ShortString assignment */
+  /* PChar is ^Char */
+  int lhs_is_pchar =
+      (lhs_type->kind == TYPE_KIND_POINTER &&
+       lhs_type->info.points_to != NULL &&
+       lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+       lhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+  int rhs_is_pchar =
+      (rhs_type->kind == TYPE_KIND_POINTER &&
+       rhs_type->info.points_to != NULL &&
+       rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+       rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+  int lhs_is_string = (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+                       (lhs_type->info.primitive_type_tag == STRING_TYPE ||
+                        lhs_type->info.primitive_type_tag == SHORTSTRING_TYPE));
+  int rhs_is_string = (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+                       (rhs_type->info.primitive_type_tag == STRING_TYPE ||
+                        rhs_type->info.primitive_type_tag == SHORTSTRING_TYPE));
+
+  if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
+    return 1;
+  }
+  /* Allow PChar := Char (single character promoted to static PChar) */
+  int rhs_is_char = (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+                     rhs_type->info.primitive_type_tag == CHAR_TYPE);
+  if (lhs_is_pchar && rhs_is_char)
+    return 1;
+
+  /* Allow assigning typed pointers to/from generic Pointer. */
+  if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      lhs_type->info.primitive_type_tag == POINTER_TYPE &&
+      rhs_type->kind == TYPE_KIND_POINTER) {
+    return 1;
+  }
+  if (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->info.primitive_type_tag == POINTER_TYPE &&
+      lhs_type->kind == TYPE_KIND_POINTER) {
+    return 1;
+  }
+
+  /* Allow pointer-to-array to be assigned to pointer-to-element when element
+   * types match. This supports idioms like: pchar := @char_array; */
+  if (lhs_type->kind == TYPE_KIND_POINTER &&
+      rhs_type->kind == TYPE_KIND_POINTER) {
+    struct RecordType *lhs_class_record =
+        kgpc_resolve_class_record_type(symtab, lhs_type);
+    struct RecordType *rhs_class_record =
+        kgpc_resolve_class_record_type(symtab, rhs_type);
+    int lhs_ptr_sub = kgpc_type_get_pointer_subtype_tag(lhs_type);
+    int rhs_ptr_sub = kgpc_type_get_pointer_subtype_tag(rhs_type);
+    if (lhs_class_record != NULL && rhs_class_record != NULL &&
+        (record_type_is_class(lhs_class_record) ||
+         lhs_class_record->is_interface) &&
+        (record_type_is_class(rhs_class_record) ||
+         rhs_class_record->is_interface)) {
+      if (records_same_type(lhs_class_record, rhs_class_record))
         return 1;
+      if (is_record_subclass(rhs_class_record, lhs_class_record, symtab))
+        return 1;
+      if (lhs_class_record->is_interface && rhs_class_record->is_class)
+        return 1;
+      /* FPC defaults to non-strict typed-pointer checking ({$T-}): any two
+       * class pointers in the same hierarchy assign freely.  Accept either
+       * direction so patterns like `^taddnode := @check.right` (where
+       * right: tnode is a base-class field) work without falling into
+       * the operator-overload search and binding `op_assign(terror)`. */
+      if (is_record_subclass(lhs_class_record, rhs_class_record, symtab))
+        return 1;
+    } else if (lhs_ptr_sub == RECORD_TYPE && rhs_ptr_sub == RECORD_TYPE) {
+      /* Keep unresolved class placeholders assignment-compatible.
+       * The bootstrap still carries many class values as
+       * ^primitive(RECORD_TYPE) without fully linked record nodes; reject only
+       * when we have concrete class records above and can prove
+       * incompatibility. */
+      return 1;
     }
 
-    /* Special case: Allow string (primitive) to be assigned to char array */
-    /* This is a common Pascal idiom: var s: array[1..20] of char; begin s := 'hello'; end; */
+    KgpcType *lhs_points_to = lhs_type->info.points_to;
+    KgpcType *rhs_points_to = rhs_type->info.points_to;
+    if (lhs_points_to == NULL || rhs_points_to == NULL)
+      return 1;
+    /* Pointer-to-pointer: when both sides are typed pointers whose pointees
+     * are themselves pointers (typically class references), accept if the
+     * inner pointee types are themselves assignment-compatible.  Needed for
+     * patterns like `newcheck: ^taddnode; newcheck := @check.right` where
+     * `right: tnode` (FPC compiler/nset.pas makeifblock).  Without this the
+     * assignment falls into the operator-overload search and accidentally
+     * binds to `olevariant.op_assign(terror)`, causing a NULL-call crash. */
+    if (lhs_points_to->kind == TYPE_KIND_POINTER &&
+        rhs_points_to->kind == TYPE_KIND_POINTER) {
+      if (are_types_compatible_for_assignment(lhs_points_to, rhs_points_to,
+                                              symtab))
+        return 1;
+    }
+    if (lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_points_to->kind == TYPE_KIND_PRIMITIVE) {
+      int lhs_tag = lhs_points_to->info.primitive_type_tag;
+      int rhs_tag = rhs_points_to->info.primitive_type_tag;
+      if ((lhs_tag == CHAR_TYPE || lhs_tag == STRING_TYPE ||
+           lhs_tag == SHORTSTRING_TYPE) &&
+          (rhs_tag == CHAR_TYPE || rhs_tag == STRING_TYPE ||
+           rhs_tag == SHORTSTRING_TYPE))
+        return 1;
+      /* Allow ^WideChar/^UnicodeChar <-> ^Word assignment.
+       * WideChar is CHAR_TYPE with 2-byte storage; Word is WORD_TYPE
+       * with 2-byte storage.  FPC treats these as interchangeable
+       * pointer targets because WideChar = Word at the type level.
+       * More generally, pointers to same-sized primitive types where
+       * one is a char type and the other an integer type are compatible. */
+      long long lhs_sz = kgpc_type_sizeof(lhs_points_to);
+      long long rhs_sz = kgpc_type_sizeof(rhs_points_to);
+      if (lhs_sz > 0 && lhs_sz == rhs_sz &&
+          ((lhs_tag == CHAR_TYPE && is_integer_type(rhs_tag)) ||
+           (rhs_tag == CHAR_TYPE && is_integer_type(lhs_tag))))
+        return 1;
+    }
+    if (lhs_points_to != NULL && rhs_points_to != NULL &&
+        rhs_points_to->kind == TYPE_KIND_ARRAY) {
+      KgpcType *rhs_elem =
+          kgpc_type_get_array_element_type_resolved(rhs_points_to, symtab);
+      if (rhs_elem != NULL && kgpc_type_equals(lhs_points_to, rhs_elem))
+        return 1;
+    }
+    if (lhs_points_to != NULL && rhs_points_to != NULL &&
+        rhs_points_to->kind == TYPE_KIND_ARRAY &&
+        lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_points_to->info.primitive_type_tag == BYTE_TYPE) {
+      return 1;
+    }
+  }
+
+  /* Allow assigning procedure values to strings in helper conversions
+   * (e.g., unresolved parameterless method references in array-of-const
+   * formatting). */
+  if (lhs_is_string && rhs_type->kind == TYPE_KIND_PROCEDURE) {
+    return 1;
+  }
+
+  /* Allow boolean to integer assignment (False=0, True=1) */
+  if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      is_integer_type(lhs_type->info.primitive_type_tag) &&
+      rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->info.primitive_type_tag == BOOL) {
+    return 1;
+  }
+  /* Allow integer-to-integer assignment (with implicit promotions). */
+  if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      is_integer_type(lhs_type->info.primitive_type_tag) &&
+      is_integer_type(rhs_type->info.primitive_type_tag)) {
+    return 1;
+  }
+  if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->info.primitive_type_tag == PROCEDURE) {
+    return 1;
+  }
+  if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->info.primitive_type_tag == POINTER_TYPE) {
+    return 1;
+  }
+
+  /* Allow assigning generic pointers to strings to support PChar-style
+   * conversions when the pointer subtype can't be resolved. */
+  if (lhs_is_string && rhs_type->kind == TYPE_KIND_POINTER) {
+    KgpcType *points_to = rhs_type->info.points_to;
+    if (points_to == NULL)
+      return 1;
+    if (points_to->kind == TYPE_KIND_PRIMITIVE &&
+        points_to->info.primitive_type_tag == CHAR_TYPE)
+      return 1;
+  }
+
+  /* Allow String <-> ShortString assignment */
+  if (lhs_is_string && rhs_is_string) {
+    return 1;
+  }
+
+  /* Allow String/ShortString <-> array[0..255] of char assignment (ShortString
+   * compatibility) */
+  /* Allow String/ShortString <-> array of char assignment (ShortString
+   * compatibility) */
+  if (lhs_is_string && is_char_array_type(rhs_type))
+    return 1;
+  if (rhs_is_string && is_char_array_type(lhs_type))
+    return 1;
+  if (is_char_array_type(lhs_type) && rhs_is_pchar)
+    return 1;
+  if (is_char_array_type(rhs_type) && lhs_is_pchar)
+    return 1;
+  if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
+    return 1;
+  if (is_char_array_type(lhs_type) && rhs_type->kind == TYPE_KIND_POINTER &&
+      rhs_type->info.points_to == NULL)
+    return 1;
+
+  /* Two procedure types are compatible (FPC allows assigning between
+   * procedure-of-object types without strict signature matching in many
+   * contexts).  A stricter check could compare parameter lists, but FPC
+   * itself is lenient for `@Method` assignments. */
+  if (lhs_type->kind == TYPE_KIND_PROCEDURE &&
+      rhs_type->kind == TYPE_KIND_PROCEDURE)
+    return 1;
+
+  /* Allow procedure variables to accept explicit @proc references or NIL */
+  if (lhs_type->kind == TYPE_KIND_PROCEDURE &&
+      rhs_type->kind == TYPE_KIND_POINTER) {
+    KgpcType *rhs_proc = rhs_type->info.points_to;
+    /* NIL can be assigned to any procedure type */
+    if (rhs_proc == NULL)
+      return 1;
+    if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
+      return are_types_compatible_for_assignment(lhs_type, rhs_proc, symtab);
+    if (rhs_proc->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_proc->info.primitive_type_tag == PROCEDURE)
+      return 1;
+    return 0;
+  }
+  if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      lhs_type->info.primitive_type_tag == PROCEDURE &&
+      rhs_type->kind == TYPE_KIND_POINTER) {
+    KgpcType *rhs_proc = rhs_type->info.points_to;
+    if (rhs_proc == NULL)
+      return 1;
+    if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
+      return 1;
+    if (rhs_proc->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_proc->info.primitive_type_tag == PROCEDURE)
+      return 1;
+    return 0;
+  }
+  if (lhs_type->kind == TYPE_KIND_POINTER &&
+      rhs_type->kind == TYPE_KIND_PROCEDURE) {
+    KgpcType *lhs_target = lhs_type->info.points_to;
+    if (lhs_target == NULL)
+      return 1; /* Generic Pointer can hold procedure addresses */
+    if (lhs_target->kind == TYPE_KIND_PROCEDURE)
+      return are_types_compatible_for_assignment(lhs_target, rhs_type, symtab);
+    return 0;
+  }
+
+  /* Allow untyped pointer (including Pointer and ^Pointer placeholders) to be
+   * compatible with any type. This handles var/out parameters whose pointed-to
+   * type couldn't be resolved, as well as untyped Pointer parameters like
+   * FreeAndNil(var Obj: Pointer). */
+  if (is_untyped_pointer_compat(lhs_type))
+    return 1;
+  if (is_untyped_pointer_compat(rhs_type))
+    return 1;
+
+  /* Allow pointer-to-record := record (var parameter auto-dereference).
+   * When a var parameter of record type is assigned, the LHS is ^record
+   * and the RHS is the record value. Only allow when record types match. */
+  if (lhs_type->kind == TYPE_KIND_POINTER &&
+      rhs_type->kind == TYPE_KIND_RECORD) {
+    if (lhs_type->info.points_to != NULL &&
+        lhs_type->info.points_to->kind == TYPE_KIND_RECORD) {
+      /* Check if record types match */
+      if (kgpc_type_equals(lhs_type->info.points_to, rhs_type))
+        return 1;
+      /* Name-based comparison for non-class records (var parameter dereference)
+       */
+      if (lhs_type->info.points_to->info.record_info != NULL &&
+          rhs_type->info.record_info != NULL) {
+        const char *lhs_id =
+            lhs_type->info.points_to->info.record_info->type_id;
+        const char *rhs_id = rhs_type->info.record_info->type_id;
+        if (lhs_id != NULL && rhs_id != NULL && strcasecmp(lhs_id, rhs_id) == 0)
+          return 1;
+      }
+      /* If pointed-to record is a class and rhs is a class, check class
+       * hierarchy */
+      if (lhs_type->info.points_to->info.record_info != NULL &&
+          rhs_type->info.record_info != NULL &&
+          record_type_is_class(lhs_type->info.points_to->info.record_info) &&
+          record_type_is_class(rhs_type->info.record_info))
+        return 1;
+    }
+    /* Allow plain record to untyped pointer (points_to == NULL) for var param
+     */
+    if (lhs_type->info.points_to == NULL)
+      return 1;
+    /* Allow class instance to typed/untyped Pointer */
+    if (rhs_type->info.record_info != NULL &&
+        record_type_is_class(rhs_type->info.record_info))
+      return 1;
+  }
+  /* Allow ^record := primitive-with-RECORD_TYPE-tag (type compatibility for
+   * unresolved record pointers) */
+  if (lhs_type->kind == TYPE_KIND_POINTER &&
+      rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+      rhs_type->info.primitive_type_tag == RECORD_TYPE) {
+    return 1;
+  }
+  if (rhs_type->kind == TYPE_KIND_POINTER &&
+      lhs_type->kind == TYPE_KIND_RECORD) {
+    if (rhs_type->info.points_to != NULL &&
+        rhs_type->info.points_to->kind == TYPE_KIND_RECORD) {
+      if (kgpc_type_equals(rhs_type->info.points_to, lhs_type))
+        return 1;
+      if (rhs_type->info.points_to->info.record_info != NULL &&
+          lhs_type->info.record_info != NULL &&
+          record_type_is_class(rhs_type->info.points_to->info.record_info) &&
+          record_type_is_class(lhs_type->info.record_info))
+        return 1;
+    }
+    if (lhs_type->info.record_info != NULL &&
+        record_type_is_class(lhs_type->info.record_info))
+      return 1;
+  }
+
+  /* If kinds are different, generally incompatible */
+  /* Exception: we need to check for special cases */
+  if (lhs_type->kind != rhs_type->kind) {
+    /* Allow array literals to be assigned to array of const parameters.
+     * Any array (TYPE_KIND_ARRAY) can be passed to array of const
+     * (TYPE_KIND_ARRAY_OF_CONST). */
+    if (lhs_type->kind == TYPE_KIND_ARRAY_OF_CONST &&
+        rhs_type->kind == TYPE_KIND_ARRAY) {
+      return 1; /* Array literal or array variable to array of const */
+    }
+    /* Allow nil (represented as pointer) to be assigned to any pointer */
+    /* This is a common Pascal idiom: var p: PNode; begin p := nil; end; */
+    if (lhs_type->kind == TYPE_KIND_POINTER &&
+        rhs_type->kind == TYPE_KIND_POINTER) {
+      /* Both are pointers, check if one is nil (points_to == NULL) */
+      if (rhs_type->info.points_to == NULL) {
+        /* rhs is nil, can be assigned to any pointer */
+        return 1;
+      }
+      if (lhs_type->info.points_to == NULL) {
+        /* lhs is nil, rhs pointer can be assigned */
+        return 1;
+      }
+    }
+
+    /* Allow nil (represented as pointer) to be assigned to dynamic arrays.
+     * Dynamic arrays in Pascal can be assigned nil to clear/empty them.
+     * This is a common Pascal idiom: var A: array of Integer; begin A := nil;
+     * end; */
     if (lhs_type->kind == TYPE_KIND_ARRAY &&
-        lhs_type->info.array_info.element_type != NULL &&
-        lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-        lhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
-        rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        (rhs_type->info.primitive_type_tag == STRING_TYPE || rhs_type->info.primitive_type_tag == CHAR_TYPE))
-    {
-        /* String literals and single characters can be assigned to char arrays */
-        /* Size checking should be done at a higher level where we have access to the actual string */
-        return 1;
+        kgpc_type_is_dynamic_array(lhs_type) &&
+        rhs_type->kind == TYPE_KIND_POINTER &&
+        rhs_type->info.points_to == NULL) {
+      return 1; /* nil can be assigned to any dynamic array */
     }
 
-    /* Special case: Allow char to be assigned to string/shortstring */
-    /* This is a common Pascal idiom: var s: string; begin s := 'a'; end; */
-    if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        (lhs_type->info.primitive_type_tag == STRING_TYPE ||
-         lhs_type->info.primitive_type_tag == SHORTSTRING_TYPE) &&
-        rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        rhs_type->info.primitive_type_tag == CHAR_TYPE)
-    {
-        /* Single characters can be assigned to string variables */
-        return 1;
-    }
-
-    /* Allow PChar <-> String/ShortString assignment */
-    /* PChar is ^Char */
-    int lhs_is_pchar = (lhs_type->kind == TYPE_KIND_POINTER && lhs_type->info.points_to != NULL &&
-                        lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
-                        lhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
-    int rhs_is_pchar = (rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to != NULL &&
-                        rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
-                        rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
-    int lhs_is_string = (lhs_type->kind == TYPE_KIND_PRIMITIVE && 
-                         (lhs_type->info.primitive_type_tag == STRING_TYPE ||
-                          lhs_type->info.primitive_type_tag == SHORTSTRING_TYPE));
-    int rhs_is_string = (rhs_type->kind == TYPE_KIND_PRIMITIVE && 
-                         (rhs_type->info.primitive_type_tag == STRING_TYPE ||
-                          rhs_type->info.primitive_type_tag == SHORTSTRING_TYPE));
-
-    if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
-        return 1;
-    }
-    /* Allow PChar := Char (single character promoted to static PChar) */
-    int rhs_is_char = (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-                       rhs_type->info.primitive_type_tag == CHAR_TYPE);
-    if (lhs_is_pchar && rhs_is_char)
-        return 1;
-
-    /* Allow assigning typed pointers to/from generic Pointer. */
+    /* Allow typed pointer (^T) to be assigned to untyped Pointer (primitive
+     * POINTER_TYPE) */
+    /* This is needed for procedures like: procedure foo(p: Pointer); ...
+     * foo(@myInt64); */
     if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
         lhs_type->info.primitive_type_tag == POINTER_TYPE &&
-        rhs_type->kind == TYPE_KIND_POINTER)
-    {
-        return 1;
+        rhs_type->kind == TYPE_KIND_POINTER) {
+      return 1; /* Any typed pointer can be passed to an untyped Pointer
+                   parameter */
     }
     if (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
         rhs_type->info.primitive_type_tag == POINTER_TYPE &&
-        lhs_type->kind == TYPE_KIND_POINTER)
-    {
-        return 1;
+        lhs_type->kind == TYPE_KIND_POINTER) {
+      return 1; /* Untyped Pointer can be assigned to any typed pointer */
     }
 
-    /* Allow pointer-to-array to be assigned to pointer-to-element when element types match.
-     * This supports idioms like: pchar := @char_array; */
-    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_POINTER)
-    {
-        struct RecordType *lhs_class_record =
-            kgpc_resolve_class_record_type(symtab, lhs_type);
-        struct RecordType *rhs_class_record =
-            kgpc_resolve_class_record_type(symtab, rhs_type);
-        int lhs_ptr_sub = kgpc_type_get_pointer_subtype_tag(lhs_type);
-        int rhs_ptr_sub = kgpc_type_get_pointer_subtype_tag(rhs_type);
-        if (lhs_class_record != NULL && rhs_class_record != NULL &&
-            (record_type_is_class(lhs_class_record) || lhs_class_record->is_interface) &&
-            (record_type_is_class(rhs_class_record) || rhs_class_record->is_interface))
-        {
-            if (records_same_type(lhs_class_record, rhs_class_record))
-                return 1;
-            if (is_record_subclass(rhs_class_record, lhs_class_record, symtab))
-                return 1;
-            if (lhs_class_record->is_interface && rhs_class_record->is_class)
-                return 1;
-            /* FPC defaults to non-strict typed-pointer checking ({$T-}): any two
-             * class pointers in the same hierarchy assign freely.  Accept either
-             * direction so patterns like `^taddnode := @check.right` (where
-             * right: tnode is a base-class field) work without falling into
-             * the operator-overload search and binding `op_assign(terror)`. */
-            if (is_record_subclass(lhs_class_record, rhs_class_record, symtab))
-                return 1;
-        }
-        else if (lhs_ptr_sub == RECORD_TYPE && rhs_ptr_sub == RECORD_TYPE)
-        {
-            /* Keep unresolved class placeholders assignment-compatible.
-             * The bootstrap still carries many class values as ^primitive(RECORD_TYPE)
-             * without fully linked record nodes; reject only when we have concrete
-             * class records above and can prove incompatibility. */
-            return 1;
-        }
-
-        KgpcType *lhs_points_to = lhs_type->info.points_to;
-        KgpcType *rhs_points_to = rhs_type->info.points_to;
-        if (lhs_points_to == NULL || rhs_points_to == NULL)
-            return 1;
-        /* Pointer-to-pointer: when both sides are typed pointers whose pointees
-         * are themselves pointers (typically class references), accept if the
-         * inner pointee types are themselves assignment-compatible.  Needed for
-         * patterns like `newcheck: ^taddnode; newcheck := @check.right` where
-         * `right: tnode` (FPC compiler/nset.pas makeifblock).  Without this the
-         * assignment falls into the operator-overload search and accidentally
-         * binds to `olevariant.op_assign(terror)`, causing a NULL-call crash. */
-        if (lhs_points_to->kind == TYPE_KIND_POINTER &&
-            rhs_points_to->kind == TYPE_KIND_POINTER)
-        {
-            if (are_types_compatible_for_assignment(lhs_points_to, rhs_points_to, symtab))
-                return 1;
-        }
-        if (lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
-            rhs_points_to->kind == TYPE_KIND_PRIMITIVE)
-        {
-            int lhs_tag = lhs_points_to->info.primitive_type_tag;
-            int rhs_tag = rhs_points_to->info.primitive_type_tag;
-            if ((lhs_tag == CHAR_TYPE || lhs_tag == STRING_TYPE || lhs_tag == SHORTSTRING_TYPE) &&
-                (rhs_tag == CHAR_TYPE || rhs_tag == STRING_TYPE || rhs_tag == SHORTSTRING_TYPE))
-                return 1;
-            /* Allow ^WideChar/^UnicodeChar <-> ^Word assignment.
-             * WideChar is CHAR_TYPE with 2-byte storage; Word is WORD_TYPE
-             * with 2-byte storage.  FPC treats these as interchangeable
-             * pointer targets because WideChar = Word at the type level.
-             * More generally, pointers to same-sized primitive types where
-             * one is a char type and the other an integer type are compatible. */
-            long long lhs_sz = kgpc_type_sizeof(lhs_points_to);
-            long long rhs_sz = kgpc_type_sizeof(rhs_points_to);
-            if (lhs_sz > 0 && lhs_sz == rhs_sz &&
-                ((lhs_tag == CHAR_TYPE && is_integer_type(rhs_tag)) ||
-                 (rhs_tag == CHAR_TYPE && is_integer_type(lhs_tag))))
-                return 1;
-        }
-        if (lhs_points_to != NULL && rhs_points_to != NULL &&
-            rhs_points_to->kind == TYPE_KIND_ARRAY)
-        {
-            KgpcType *rhs_elem = kgpc_type_get_array_element_type_resolved(rhs_points_to, symtab);
-            if (rhs_elem != NULL && kgpc_type_equals(lhs_points_to, rhs_elem))
-                return 1;
-        }
-        if (lhs_points_to != NULL && rhs_points_to != NULL &&
-            rhs_points_to->kind == TYPE_KIND_ARRAY &&
-            lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
-            lhs_points_to->info.primitive_type_tag == BYTE_TYPE)
-        {
-            return 1;
-        }
+    /* Allow integer-to-pointer and pointer-to-integer conversions.
+     * Pascal allows passing integer values where pointer types are expected
+     * in low-level code (e.g., syscall wrappers like Fptime(t) where t: time_t
+     * is passed to a ptime_t parameter). */
+    if (lhs_type->kind == TYPE_KIND_POINTER &&
+        rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(rhs_type->info.primitive_type_tag)) {
+      return 1;
+    }
+    if (rhs_type->kind == TYPE_KIND_POINTER &&
+        lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(lhs_type->info.primitive_type_tag)) {
+      return 1;
     }
 
-    /* Allow assigning procedure values to strings in helper conversions
-     * (e.g., unresolved parameterless method references in array-of-const formatting). */
-    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PROCEDURE)
-    {
-        return 1;
-    }
+    return 0;
+  }
 
-    /* Allow boolean to integer assignment (False=0, True=1) */
-    if (lhs_type->kind == TYPE_KIND_PRIMITIVE && is_integer_type(lhs_type->info.primitive_type_tag) &&
-        rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == BOOL)
-    {
-        return 1;
+  switch (lhs_type->kind) {
+  case TYPE_KIND_PRIMITIVE:
+    /* Allow enum <-> integer compatibility for ordinal values. */
+    if (lhs_type->info.primitive_type_tag == ENUM_TYPE &&
+        rhs_type->info.primitive_type_tag != ENUM_TYPE &&
+        is_integer_type(rhs_type->info.primitive_type_tag)) {
+      return 1;
     }
-    /* Allow integer-to-integer assignment (with implicit promotions). */
-    if (lhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        is_integer_type(lhs_type->info.primitive_type_tag) &&
-        is_integer_type(rhs_type->info.primitive_type_tag))
-    {
-        return 1;
+    if (rhs_type->info.primitive_type_tag == ENUM_TYPE &&
+        lhs_type->info.primitive_type_tag != ENUM_TYPE &&
+        is_integer_type(lhs_type->info.primitive_type_tag)) {
+      return 1;
     }
-    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        rhs_type->info.primitive_type_tag == PROCEDURE)
-    {
-        return 1;
-    }
-    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        rhs_type->info.primitive_type_tag == POINTER_TYPE)
-    {
-        return 1;
-    }
+    /* Use numeric compatibility for primitives */
+    return types_numeric_compatible(lhs_type->info.primitive_type_tag,
+                                    rhs_type->info.primitive_type_tag);
 
-    /* Allow assigning generic pointers to strings to support PChar-style conversions
-     * when the pointer subtype can't be resolved. */
-    if (lhs_is_string && rhs_type->kind == TYPE_KIND_POINTER)
+  case TYPE_KIND_POINTER:
+    /* Pointers are compatible if they point to compatible types */
+    /* Also allow nil assignment (both point to NULL) */
+    if (lhs_type->info.points_to == NULL && rhs_type->info.points_to == NULL)
+      return 1;
+    if (lhs_type->info.points_to == NULL || rhs_type->info.points_to == NULL)
+      return 1; /* nil can be assigned to any pointer */
+
+    /* Special case for class references ("class of T"):
+     * When both sides are pointers and at least one of them points to a pointer
+     * to a record (indicating a class reference type), check if they point to
+     * the same class or compatible classes.
+     *
+     * Pattern: class of TClass = ^(^TClass_record)
+     * Assigning: ClassRef := TClass, where TClass is ^TClass_record
+     *
+     * We need to "unwrap" the extra indirection level for class references.
+     */
     {
-        KgpcType *points_to = rhs_type->info.points_to;
-        if (points_to == NULL)
-            return 1;
-        if (points_to->kind == TYPE_KIND_PRIMITIVE &&
-            points_to->info.primitive_type_tag == CHAR_TYPE)
-            return 1;
-    }
+      KgpcType *lhs_inner = lhs_type->info.points_to;
+      KgpcType *rhs_inner = rhs_type->info.points_to;
 
-    /* Allow String <-> ShortString assignment */
-    if (lhs_is_string && rhs_is_string) {
-        return 1;
-    }
-
-    /* Allow String/ShortString <-> array[0..255] of char assignment (ShortString compatibility) */
-    /* Allow String/ShortString <-> array of char assignment (ShortString compatibility) */
-    if (lhs_is_string && is_char_array_type(rhs_type))
-        return 1;
-    if (rhs_is_string && is_char_array_type(lhs_type))
-        return 1;
-    if (is_char_array_type(lhs_type) && rhs_is_pchar)
-        return 1;
-    if (is_char_array_type(rhs_type) && lhs_is_pchar)
-        return 1;
-    if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
-        return 1;
-    if (is_char_array_type(lhs_type) && rhs_type->kind == TYPE_KIND_POINTER &&
-        rhs_type->info.points_to == NULL)
-        return 1;
-
-    /* Two procedure types are compatible (FPC allows assigning between
-     * procedure-of-object types without strict signature matching in many
-     * contexts).  A stricter check could compare parameter lists, but FPC
-     * itself is lenient for `@Method` assignments. */
-    if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_PROCEDURE)
-        return 1;
-
-    /* Allow procedure variables to accept explicit @proc references or NIL */
-    if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
-    {
-        KgpcType *rhs_proc = rhs_type->info.points_to;
-        /* NIL can be assigned to any procedure type */
-        if (rhs_proc == NULL)
-            return 1;
-        if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
-            return are_types_compatible_for_assignment(lhs_type, rhs_proc, symtab);
-        if (rhs_proc->kind == TYPE_KIND_PRIMITIVE &&
-            rhs_proc->info.primitive_type_tag == PROCEDURE)
-            return 1;
-        return 0;
-    }
-    if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        lhs_type->info.primitive_type_tag == PROCEDURE &&
-        rhs_type->kind == TYPE_KIND_POINTER)
-    {
-        KgpcType *rhs_proc = rhs_type->info.points_to;
-        if (rhs_proc == NULL)
-            return 1;
-        if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
-            return 1;
-        if (rhs_proc->kind == TYPE_KIND_PRIMITIVE &&
-            rhs_proc->info.primitive_type_tag == PROCEDURE)
-            return 1;
-        return 0;
-    }
-    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PROCEDURE)
-    {
-        KgpcType *lhs_target = lhs_type->info.points_to;
-        if (lhs_target == NULL)
-            return 1; /* Generic Pointer can hold procedure addresses */
-        if (lhs_target->kind == TYPE_KIND_PROCEDURE)
-            return are_types_compatible_for_assignment(lhs_target, rhs_type, symtab);
-        return 0;
-    }
-
-    /* Allow untyped pointer (including Pointer and ^Pointer placeholders) to be compatible
-     * with any type. This handles var/out parameters whose pointed-to type couldn't be
-     * resolved, as well as untyped Pointer parameters like FreeAndNil(var Obj: Pointer). */
-    if (is_untyped_pointer_compat(lhs_type))
-        return 1;
-    if (is_untyped_pointer_compat(rhs_type))
-        return 1;
-
-    /* Allow pointer-to-record := record (var parameter auto-dereference).
-     * When a var parameter of record type is assigned, the LHS is ^record
-     * and the RHS is the record value. Only allow when record types match. */
-    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_RECORD)
-    {
-        if (lhs_type->info.points_to != NULL &&
-            lhs_type->info.points_to->kind == TYPE_KIND_RECORD)
-        {
-            /* Check if record types match */
-            if (kgpc_type_equals(lhs_type->info.points_to, rhs_type))
-                return 1;
-            /* Name-based comparison for non-class records (var parameter dereference) */
-            if (lhs_type->info.points_to->info.record_info != NULL &&
-                rhs_type->info.record_info != NULL)
-            {
-                const char *lhs_id = lhs_type->info.points_to->info.record_info->type_id;
-                const char *rhs_id = rhs_type->info.record_info->type_id;
-                if (lhs_id != NULL && rhs_id != NULL && strcasecmp(lhs_id, rhs_id) == 0)
-                    return 1;
+      /* Special case: LHS points to primitive(RECORD_TYPE) and RHS points to
+       * record. This happens with "class of T" types where the TypeInfo created
+       * a primitive type with RECORD_TYPE tag instead of an actual pointer to
+       * the class record. For class references, we need to verify the RHS is
+       * compatible with the target class. */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+          lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD) {
+        /* LHS is "class of T" (represented as ^primitive(RECORD_TYPE))
+         * RHS is a class type (represented as ^record)
+         * Check if LHS has type_alias info to validate the target class */
+        struct TypeAlias *lhs_alias = lhs_type->type_alias;
+        if (lhs_alias != NULL && lhs_alias->pointer_type_id != NULL) {
+          /* LHS has target class info - validate compatibility */
+          struct RecordType *rhs_record = rhs_inner->info.record_info;
+          if (rhs_record != NULL && rhs_record->type_id != NULL) {
+            /* Check if RHS is the same as or subclass of target */
+            if (strcasecmp(lhs_alias->pointer_type_id, rhs_record->type_id) ==
+                0) {
+              return 1; /* Same class */
             }
-            /* If pointed-to record is a class and rhs is a class, check class hierarchy */
-            if (lhs_type->info.points_to->info.record_info != NULL &&
-                rhs_type->info.record_info != NULL &&
-                record_type_is_class(lhs_type->info.points_to->info.record_info) &&
-                record_type_is_class(rhs_type->info.record_info))
-                return 1;
-        }
-        /* Allow plain record to untyped pointer (points_to == NULL) for var param */
-        if (lhs_type->info.points_to == NULL)
-            return 1;
-        /* Allow class instance to typed/untyped Pointer */
-        if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
-            return 1;
-    }
-    /* Allow ^record := primitive-with-RECORD_TYPE-tag (type compatibility for unresolved record pointers) */
-    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        rhs_type->info.primitive_type_tag == RECORD_TYPE)
-    {
-        return 1;
-    }
-    if (rhs_type->kind == TYPE_KIND_POINTER && lhs_type->kind == TYPE_KIND_RECORD)
-    {
-        if (rhs_type->info.points_to != NULL &&
-            rhs_type->info.points_to->kind == TYPE_KIND_RECORD)
-        {
-            if (kgpc_type_equals(rhs_type->info.points_to, lhs_type))
-                return 1;
-            if (rhs_type->info.points_to->info.record_info != NULL &&
-                lhs_type->info.record_info != NULL &&
-                record_type_is_class(rhs_type->info.points_to->info.record_info) &&
-                record_type_is_class(lhs_type->info.record_info))
-                return 1;
-        }
-        if (lhs_type->info.record_info != NULL && record_type_is_class(lhs_type->info.record_info))
-            return 1;
-    }
-
-    /* If kinds are different, generally incompatible */
-    /* Exception: we need to check for special cases */
-    if (lhs_type->kind != rhs_type->kind) {
-        /* Allow array literals to be assigned to array of const parameters.
-         * Any array (TYPE_KIND_ARRAY) can be passed to array of const (TYPE_KIND_ARRAY_OF_CONST). */
-        if (lhs_type->kind == TYPE_KIND_ARRAY_OF_CONST && rhs_type->kind == TYPE_KIND_ARRAY) {
-            return 1;  /* Array literal or array variable to array of const */
-        }
-        /* Allow nil (represented as pointer) to be assigned to any pointer */
-        /* This is a common Pascal idiom: var p: PNode; begin p := nil; end; */
-        if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_POINTER) {
-            /* Both are pointers, check if one is nil (points_to == NULL) */
-            if (rhs_type->info.points_to == NULL) {
-                /* rhs is nil, can be assigned to any pointer */
-                return 1;
-            }
-            if (lhs_type->info.points_to == NULL) {
-                /* lhs is nil, rhs pointer can be assigned */
-                return 1;
-            }
-        }
-
-        /* Allow nil (represented as pointer) to be assigned to dynamic arrays.
-         * Dynamic arrays in Pascal can be assigned nil to clear/empty them.
-         * This is a common Pascal idiom: var A: array of Integer; begin A := nil; end; */
-        if (lhs_type->kind == TYPE_KIND_ARRAY && kgpc_type_is_dynamic_array(lhs_type) &&
-            rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to == NULL)
-        {
-            return 1;  /* nil can be assigned to any dynamic array */
-        }
-        
-        /* Allow typed pointer (^T) to be assigned to untyped Pointer (primitive POINTER_TYPE) */
-        /* This is needed for procedures like: procedure foo(p: Pointer); ... foo(@myInt64); */
-        if (lhs_type->kind == TYPE_KIND_PRIMITIVE && 
-            lhs_type->info.primitive_type_tag == POINTER_TYPE &&
-            rhs_type->kind == TYPE_KIND_POINTER)
-        {
-            return 1;  /* Any typed pointer can be passed to an untyped Pointer parameter */
-        }
-        if (rhs_type->kind == TYPE_KIND_PRIMITIVE && 
-            rhs_type->info.primitive_type_tag == POINTER_TYPE &&
-            lhs_type->kind == TYPE_KIND_POINTER)
-        {
-            return 1;  /* Untyped Pointer can be assigned to any typed pointer */
-        }
-
-        /* Allow integer-to-pointer and pointer-to-integer conversions.
-         * Pascal allows passing integer values where pointer types are expected
-         * in low-level code (e.g., syscall wrappers like Fptime(t) where t: time_t
-         * is passed to a ptime_t parameter). */
-        if (lhs_type->kind == TYPE_KIND_POINTER &&
-            rhs_type->kind == TYPE_KIND_PRIMITIVE &&
-            is_integer_type(rhs_type->info.primitive_type_tag))
-        {
-            return 1;
-        }
-        if (rhs_type->kind == TYPE_KIND_POINTER &&
-            lhs_type->kind == TYPE_KIND_PRIMITIVE &&
-            is_integer_type(lhs_type->info.primitive_type_tag))
-        {
-            return 1;
-        }
-        
-        return 0;
-    }
-
-    switch (lhs_type->kind) {
-        case TYPE_KIND_PRIMITIVE:
-            /* Allow enum <-> integer compatibility for ordinal values. */
-            if (lhs_type->info.primitive_type_tag == ENUM_TYPE &&
-                rhs_type->info.primitive_type_tag != ENUM_TYPE &&
-                is_integer_type(rhs_type->info.primitive_type_tag))
-            {
-                return 1;
-            }
-            if (rhs_type->info.primitive_type_tag == ENUM_TYPE &&
-                lhs_type->info.primitive_type_tag != ENUM_TYPE &&
-                is_integer_type(lhs_type->info.primitive_type_tag))
-            {
-                return 1;
-            }
-            /* Use numeric compatibility for primitives */
-            return types_numeric_compatible(
-                lhs_type->info.primitive_type_tag,
-                rhs_type->info.primitive_type_tag);
-
-        case TYPE_KIND_POINTER:
-            /* Pointers are compatible if they point to compatible types */
-            /* Also allow nil assignment (both point to NULL) */
-            if (lhs_type->info.points_to == NULL && rhs_type->info.points_to == NULL)
-                return 1;
-            if (lhs_type->info.points_to == NULL || rhs_type->info.points_to == NULL)
-                return 1; /* nil can be assigned to any pointer */
-            
-            /* Special case for class references ("class of T"):
-             * When both sides are pointers and at least one of them points to a pointer
-             * to a record (indicating a class reference type), check if they point to
-             * the same class or compatible classes.
-             * 
-             * Pattern: class of TClass = ^(^TClass_record)
-             * Assigning: ClassRef := TClass, where TClass is ^TClass_record
-             * 
-             * We need to "unwrap" the extra indirection level for class references.
-             */
-            {
-                KgpcType *lhs_inner = lhs_type->info.points_to;
-                KgpcType *rhs_inner = rhs_type->info.points_to;
-                
-                /* Special case: LHS points to primitive(RECORD_TYPE) and RHS points to record.
-                 * This happens with "class of T" types where the TypeInfo created a primitive
-                 * type with RECORD_TYPE tag instead of an actual pointer to the class record.
-                 * For class references, we need to verify the RHS is compatible with the target class. */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
-                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD)
-                {
-                    /* LHS is "class of T" (represented as ^primitive(RECORD_TYPE))
-                     * RHS is a class type (represented as ^record)
-                     * Check if LHS has type_alias info to validate the target class */
-                    struct TypeAlias *lhs_alias = lhs_type->type_alias;
-                    if (lhs_alias != NULL && lhs_alias->pointer_type_id != NULL) {
-                        /* LHS has target class info - validate compatibility */
-                        struct RecordType *rhs_record = rhs_inner->info.record_info;
-                        if (rhs_record != NULL && rhs_record->type_id != NULL) {
-                            /* Check if RHS is the same as or subclass of target */
-                            if (strcasecmp(lhs_alias->pointer_type_id, rhs_record->type_id) == 0) {
-                                return 1;  /* Same class */
-                            }
-                            /* Check inheritance - if RHS has a parent, walk up to find if LHS target is an ancestor */
-                            if (rhs_record->parent_class_name != NULL) {
-                                /* Walk up parent chain to find if LHS target is an ancestor */
-                                const char *parent = rhs_record->parent_class_name;
-                                while (parent != NULL) {
-                                    if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
-                                        return 1;  /* RHS is subclass of LHS target */
-                                    }
-                                    /* Look up parent record to continue walking */
-                                    struct HashNode *parent_node = NULL;
-                                    if (symtab != NULL && FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
-                                        parent_node != NULL && parent_node->type != NULL &&
-                                        parent_node->type->kind == TYPE_KIND_POINTER &&
-                                        parent_node->type->info.points_to != NULL &&
-                                        parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                        struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
-                                        if (parent_record != NULL) {
-                                            parent = parent_record->parent_class_name;
-                                        } else {
-                                            parent = NULL;
-                                        }
-                                    } else {
-                                        parent = NULL;
-                                    }
-                                }
-                            }
-                            return 0;  /* Incompatible classes */
-                        }
-                    }
-                    /* No target class info or can't verify - allow (for backwards compatibility) */
-                    return 1;
+            /* Check inheritance - if RHS has a parent, walk up to find if LHS
+             * target is an ancestor */
+            if (rhs_record->parent_class_name != NULL) {
+              /* Walk up parent chain to find if LHS target is an ancestor */
+              const char *parent = rhs_record->parent_class_name;
+              while (parent != NULL) {
+                if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
+                  return 1; /* RHS is subclass of LHS target */
                 }
-
-                /* Reverse case: LHS points to record and RHS points to primitive(RECORD_TYPE).
-                 * This happens when one side was resolved to TYPE_KIND_RECORD by symtab lookup
-                 * but the other side still has the unresolved primitive placeholder. */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
-                    rhs_inner->info.primitive_type_tag == RECORD_TYPE)
-                {
-                    struct RecordType *lhs_record = lhs_inner->info.record_info;
-                    struct TypeAlias *rhs_alias = rhs_type->type_alias;
-                    if (lhs_record != NULL && lhs_record->type_id != NULL &&
-                        rhs_alias != NULL && rhs_alias->pointer_type_id != NULL)
-                    {
-                        if (strcasecmp(lhs_record->type_id, rhs_alias->pointer_type_id) == 0)
-                            return 1;  /* Same class */
-                        /* Check if RHS target is a subclass of LHS record */
-                        if (symtab != NULL) {
-                            struct HashNode *rhs_class_node = NULL;
-                            if (FindSymbol(&rhs_class_node, symtab, rhs_alias->pointer_type_id) != 0 &&
-                                rhs_class_node != NULL && rhs_class_node->type != NULL &&
-                                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
-                                rhs_class_node->type->info.points_to != NULL &&
-                                rhs_class_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                struct RecordType *rhs_record = rhs_class_node->type->info.points_to->info.record_info;
-                                if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
-                                    const char *parent = rhs_record->parent_class_name;
-                                    while (parent != NULL) {
-                                        if (strcasecmp(lhs_record->type_id, parent) == 0)
-                                            return 1;
-                                        struct HashNode *parent_node = NULL;
-                                        if (FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
-                                            parent_node != NULL && parent_node->type != NULL &&
-                                            parent_node->type->kind == TYPE_KIND_POINTER &&
-                                            parent_node->type->info.points_to != NULL &&
-                                            parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                            struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
-                                            parent = (parent_record != NULL) ? parent_record->parent_class_name : NULL;
-                                        } else {
-                                            parent = NULL;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        /* Check if LHS record is a subclass of RHS target */
-                        if (lhs_record->parent_class_name != NULL) {
-                            const char *parent = lhs_record->parent_class_name;
-                            while (parent != NULL) {
-                                if (strcasecmp(rhs_alias->pointer_type_id, parent) == 0)
-                                    return 1;
-                                struct HashNode *parent_node = NULL;
-                                if (symtab != NULL &&
-                                    FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
-                                    parent_node != NULL && parent_node->type != NULL &&
-                                    parent_node->type->kind == TYPE_KIND_POINTER &&
-                                    parent_node->type->info.points_to != NULL &&
-                                    parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                    struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
-                                    parent = (parent_record != NULL) ? parent_record->parent_class_name : NULL;
-                                } else {
-                                    parent = NULL;
-                                }
-                            }
-                        }
-                        return 0;  /* Incompatible classes */
-                    }
-                    /* No type info to compare - allow for backwards compatibility */
-                    return 1;
-                }
-
-                /* Symmetric case: both are ^primitive(RECORD_TYPE) - class ref to class ref */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
-                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
-                    rhs_inner->info.primitive_type_tag == RECORD_TYPE)
-                {
-                    /* Both are class reference types - check type_alias for target compatibility */
-                    struct TypeAlias *lhs_alias = lhs_type->type_alias;
-                    struct TypeAlias *rhs_alias = rhs_type->type_alias;
-                    if (lhs_alias != NULL && lhs_alias->pointer_type_id != NULL &&
-                        rhs_alias != NULL && rhs_alias->pointer_type_id != NULL) {
-                        /* Both have target class info - must be same or compatible */
-                        if (strcasecmp(lhs_alias->pointer_type_id, rhs_alias->pointer_type_id) == 0) {
-                            return 1;  /* Same target class */
-                        }
-                        /* Check subclass relationship for class references */
-                        /* RHS must be a subclass of LHS (e.g., "class of TChild" assigned to "class of TParent" is allowed) */
-                        if (symtab != NULL) {
-                            struct HashNode *rhs_class_node = NULL;
-                            if (FindSymbol(&rhs_class_node, symtab, rhs_alias->pointer_type_id) != 0 &&
-                                rhs_class_node != NULL && rhs_class_node->type != NULL &&
-                                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
-                                rhs_class_node->type->info.points_to != NULL &&
-                                rhs_class_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                struct RecordType *rhs_record = rhs_class_node->type->info.points_to->info.record_info;
-                                if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
-                                    /* Walk up parent chain to find if LHS target is an ancestor */
-                                    const char *parent = rhs_record->parent_class_name;
-                                    while (parent != NULL) {
-                                        if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
-                                            return 1;  /* RHS is class ref to subclass of LHS target */
-                                        }
-                                        /* Look up parent record to continue walking */
-                                        struct HashNode *parent_node = NULL;
-                                        if (FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
-                                            parent_node != NULL && parent_node->type != NULL &&
-                                            parent_node->type->kind == TYPE_KIND_POINTER &&
-                                            parent_node->type->info.points_to != NULL &&
-                                            parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                            struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
-                                            if (parent_record != NULL) {
-                                                parent = parent_record->parent_class_name;
-                                            } else {
-                                                parent = NULL;
-                                            }
-                                        } else {
-                                            parent = NULL;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        return 0;  /* Different target classes */
-                    }
-                    /* Fall through if no alias info */
-                    return 1;
-                }
-                
-                /* Check if LHS is ^(^record) and RHS is ^record */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD)
-                {
-                    KgpcType *lhs_record_ptr = lhs_inner->info.points_to;
-                    if (lhs_record_ptr != NULL && lhs_record_ptr->kind == TYPE_KIND_RECORD)
-                    {
-                        /* LHS is class of T (^(^record)), RHS is T (^record) */
-                        /* Check if they point to the same or compatible records */
-                        if (lhs_record_ptr->info.record_info == rhs_inner->info.record_info)
-                            return 1;
-                        if (is_record_subclass(rhs_inner->info.record_info, lhs_record_ptr->info.record_info, symtab))
-                            return 1;
-                        return 0;  /* Incompatible class for "class of T" */
-                    }
-                }
-
-                /* Symmetric case: LHS is ^record and RHS is ^(^record).
-                 * This appears in low-level RTTI/VMT code paths where class
-                 * references are represented with one extra indirection. */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
-                {
-                    KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
-                    if (rhs_record_ptr != NULL && rhs_record_ptr->kind == TYPE_KIND_RECORD)
-                    {
-                        if (lhs_inner->info.record_info == rhs_record_ptr->info.record_info)
-                            return 1;
-                        if (is_record_subclass(rhs_record_ptr->info.record_info,
-                                lhs_inner->info.record_info, symtab))
-                            return 1;
-                        if (is_record_subclass(lhs_inner->info.record_info,
-                                rhs_record_ptr->info.record_info, symtab))
-                            return 1;
-                        return 0;
-                    }
-                }
-
-                /* Variant of the above where LHS still uses primitive(RECORD_TYPE)
-                 * placeholder instead of fully-resolved TYPE_KIND_RECORD. */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
-                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
-                {
-                    KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
-                    if (rhs_record_ptr != NULL &&
-                        ((rhs_record_ptr->kind == TYPE_KIND_RECORD) ||
-                         (rhs_record_ptr->kind == TYPE_KIND_PRIMITIVE &&
-                          rhs_record_ptr->info.primitive_type_tag == RECORD_TYPE)))
-                    {
-                        return 1;
-                    }
-                }
-                
-                /* Check if both are ^(^record) - class reference to class reference */
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
-                {
-                    KgpcType *lhs_record = lhs_inner->info.points_to;
-                    KgpcType *rhs_record = rhs_inner->info.points_to;
-                    if (lhs_record != NULL && lhs_record->kind == TYPE_KIND_RECORD &&
-                        rhs_record != NULL && rhs_record->kind == TYPE_KIND_RECORD)
-                    {
-                        /* Both are class references - check record compatibility */
-                        if (lhs_record->info.record_info == rhs_record->info.record_info)
-                            return 1;
-                        if (is_record_subclass(rhs_record->info.record_info, lhs_record->info.record_info, symtab))
-                            return 1;
-                    }
-                }
-
-                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
-                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD &&
-                    record_prefix_pointer_compatible(lhs_inner->info.record_info,
-                        rhs_inner->info.record_info, symtab))
-                {
-                    return 1;
-                }
-            }
-            
-            return are_types_compatible_for_assignment(
-                lhs_type->info.points_to,
-                rhs_type->info.points_to,
-                symtab);
-
-        case TYPE_KIND_ARRAY:
-        {
-            if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
-                return 1;
-            int lhs_dynamic = lhs_type->info.array_info.end_index < lhs_type->info.array_info.start_index;
-            int rhs_dynamic = rhs_type->info.array_info.end_index < rhs_type->info.array_info.start_index;
-            if (!lhs_dynamic && !rhs_dynamic)
-            {
-                if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
-                    return 0;
-                if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
-                    return 0;
-            }
-            
-            /* Handle NULL element types - if both NULL, they're compatible (untyped arrays) */
-            if (lhs_type->info.array_info.element_type == NULL && 
-                rhs_type->info.array_info.element_type == NULL)
-                return 1;
-            
-            /* If only one is NULL, check if indices match (for shortstring-like arrays) */
-            if (lhs_type->info.array_info.element_type == NULL ||
-                rhs_type->info.array_info.element_type == NULL)
-            {
-                /* Allow if array bounds match (for shortstring compatibility) */
-                if (!lhs_dynamic && !rhs_dynamic)
-                    return 1;
-                return 0;
-            }
-
-            /* Pascal array assignment/call compatibility is stricter than scalar
-             * assignment compatibility: array element types must match structurally
-             * rather than relying on scalar widening (for example, array of LongInt
-             * must not match array of Real). */
-            if (kgpc_type_equals(lhs_type->info.array_info.element_type,
-                                 rhs_type->info.array_info.element_type))
-                return 1;
-
-            if (lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-                rhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE)
-            {
-                int lhs_elem_tag = lhs_type->info.array_info.element_type->info.primitive_type_tag;
-                int rhs_elem_tag = rhs_type->info.array_info.element_type->info.primitive_type_tag;
-                if (is_integer_type(lhs_elem_tag) && is_integer_type(rhs_elem_tag))
-                    return 1;
-            }
-
-            /* Fallback for structurally equal types represented through different
-             * alias objects but with the same resolved spelling. */
-            const char *lhs_elem_str = kgpc_type_to_string(lhs_type->info.array_info.element_type);
-            const char *rhs_elem_str = kgpc_type_to_string(rhs_type->info.array_info.element_type);
-            if (lhs_elem_str != NULL && rhs_elem_str != NULL &&
-                strcasecmp(lhs_elem_str, rhs_elem_str) == 0)
-                return 1;
-
-            return 0;
-        }
-        case TYPE_KIND_ARRAY_OF_CONST:
-            return 1;
-
-        case TYPE_KIND_RECORD:
-            /* Records are compatible if they are the same record type
-             * or if one is a subclass of the other */
-            if (lhs_type->info.record_info == rhs_type->info.record_info)
-                return 1;
-
-            /* Records are compatible if they share the same type_id
-             * (e.g., cloned record types from generic instantiation) */
-            if (lhs_type->info.record_info != NULL && rhs_type->info.record_info != NULL &&
-                lhs_type->info.record_info->type_id != NULL && rhs_type->info.record_info->type_id != NULL &&
-                strcasecmp(lhs_type->info.record_info->type_id, rhs_type->info.record_info->type_id) == 0)
-                return 1;
-
-            /* Check inheritance: rhs_type should be assignable to lhs_type if
-             * rhs_type is a subclass of lhs_type */
-            if (is_record_subclass(rhs_type->info.record_info, lhs_type->info.record_info, symtab))
-                return 1;
-
-            /* Allow assigning a class instance to an interface variable.
-             * In Delphi/FPC, if LHS is an interface and RHS is a class that
-             * implements the interface, the assignment is valid. */
-            if (lhs_type->info.record_info != NULL && lhs_type->info.record_info->is_interface &&
-                rhs_type->info.record_info != NULL && rhs_type->info.record_info->is_class)
-                return 1;
-
-            return 0;
-
-        case TYPE_KIND_PROCEDURE: {
-            ProcedureTypeInfo *lhs_proc = &lhs_type->info.proc_info;
-            ProcedureTypeInfo *rhs_proc = &rhs_type->info.proc_info;
-
-            /* 1. Check function vs procedure compatibility 
-             * A procedure variable can only hold a procedure, not a function, and vice versa 
-             * Note: A function has either return_type != NULL or return_type_id != NULL */
-            int lhs_is_function = (lhs_proc->return_type != NULL || lhs_proc->return_type_id != NULL);
-            int rhs_is_function = (rhs_proc->return_type != NULL || rhs_proc->return_type_id != NULL);
-            
-            if (lhs_is_function != rhs_is_function)
-                return 0; /* Cannot assign function to procedure var or vice versa */
-
-            /* 2. If both are functions, check return types */
-            if (lhs_is_function) {
-                /* Handle case where return_type is NULL but return_type_id is set */
-                if (lhs_proc->return_type != NULL && rhs_proc->return_type != NULL) {
-                    if (!are_types_compatible_for_assignment(
-                            lhs_proc->return_type,
-                            rhs_proc->return_type,
-                            symtab))
-                        return 0;
-                } else if (lhs_proc->return_type_id != NULL && rhs_proc->return_type_id != NULL) {
-                    /* Both have return_type_id but no resolved return_type - compare by name */
-                    if (strcasecmp(lhs_proc->return_type_id, rhs_proc->return_type_id) != 0)
-                        return 0;
-                } else if (lhs_proc->return_type != NULL && rhs_proc->return_type_id != NULL) {
-                    /* LHS has resolved type, RHS has type_id - compare by string representation */
-                    const char *lhs_str = kgpc_type_to_string(lhs_proc->return_type);
-                    if (lhs_str == NULL || strcasecmp(lhs_str, rhs_proc->return_type_id) != 0)
-                        return 0;
-                } else if (lhs_proc->return_type_id != NULL && rhs_proc->return_type != NULL) {
-                    /* LHS has type_id, RHS has resolved type - compare by string representation */
-                    const char *rhs_str = kgpc_type_to_string(rhs_proc->return_type);
-                    if (rhs_str == NULL || strcasecmp(lhs_proc->return_type_id, rhs_str) != 0)
-                        return 0;
-                }
-                /* If all above checks pass or fall through, types are compatible */
-            }
-
-            /* 3. Check parameter counts */
-            int lhs_param_count = ListLength(lhs_proc->params);
-            int rhs_param_count = ListLength(rhs_proc->params);
-            
-            
-            if (lhs_param_count != rhs_param_count)
-                return 0;
-
-            /* 4. Check each parameter's type and var status */
-            ListNode_t *lhs_p = lhs_proc->params;
-            ListNode_t *rhs_p = rhs_proc->params;
-
-            while (lhs_p != NULL && rhs_p != NULL) {
-                if (lhs_p->type != LIST_TREE || rhs_p->type != LIST_TREE)
-                    return 0; /* Invalid parameter node */
-
-                Tree_t *lhs_decl = (Tree_t *)lhs_p->cur;
-                Tree_t *rhs_decl = (Tree_t *)rhs_p->cur;
-
-                if (lhs_decl == NULL || rhs_decl == NULL)
-                    return 0;
-
-                if (lhs_decl->type != TREE_VAR_DECL || rhs_decl->type != TREE_VAR_DECL)
-                    return 0;
-
-                /* Check var vs. value parameter 
-                 * var parameters must match exactly */
-                int lhs_is_var = lhs_decl->tree_data.var_decl_data.is_var_param;
-                int rhs_is_var = rhs_decl->tree_data.var_decl_data.is_var_param;
-                
-                if (lhs_is_var != rhs_is_var)
-                    return 0;
-
-                /* Check parameter types */
-                int lhs_param_owned = 0;
-                int rhs_param_owned = 0;
-                KgpcType *lhs_param_type = resolve_type_from_vardecl(lhs_decl, symtab, &lhs_param_owned);
-                KgpcType *rhs_param_type = resolve_type_from_vardecl(rhs_decl, symtab, &rhs_param_owned);
-
-                int param_compatible = 1;
-                if (lhs_param_type != NULL && rhs_param_type != NULL) {
-                    param_compatible = are_types_compatible_for_assignment(
-                        lhs_param_type, rhs_param_type, symtab);
-                } else if (lhs_param_type != NULL || rhs_param_type != NULL) {
-                    /* One is NULL, other is not - check type_id strings as fallback */
-                    const char *lhs_type_id = lhs_decl->tree_data.var_decl_data.type_id;
-                    const char *rhs_type_id = rhs_decl->tree_data.var_decl_data.type_id;
-                    
-                    /* If both have type IDs, compare them (for named types) */
-                    if (lhs_type_id != NULL && rhs_type_id != NULL) {
-                        param_compatible = (strcmp(lhs_type_id, rhs_type_id) == 0);
-                    } else {
-                        /* Different parameter types (one named, one primitive) */
-                        param_compatible = 0;
-                    }
+                /* Look up parent record to continue walking */
+                struct HashNode *parent_node = NULL;
+                if (symtab != NULL &&
+                    FindSymbol(&parent_node, symtab, (char *)parent) != 0 &&
+                    parent_node != NULL && parent_node->type != NULL &&
+                    parent_node->type->kind == TYPE_KIND_POINTER &&
+                    parent_node->type->info.points_to != NULL &&
+                    parent_node->type->info.points_to->kind ==
+                        TYPE_KIND_RECORD) {
+                  struct RecordType *parent_record =
+                      parent_node->type->info.points_to->info.record_info;
+                  if (parent_record != NULL) {
+                    parent = parent_record->parent_class_name;
+                  } else {
+                    parent = NULL;
+                  }
                 } else {
-                    /* Both are NULL - check if type tags match */
-                    int lhs_tag = lhs_decl->tree_data.var_decl_data.type;
-                    int rhs_tag = rhs_decl->tree_data.var_decl_data.type;
-                    param_compatible = types_numeric_compatible(lhs_tag, rhs_tag);
+                  parent = NULL;
                 }
-
-                /* Clean up temporary types */
-                if (lhs_param_owned && lhs_param_type != NULL)
-                    destroy_kgpc_type(lhs_param_type);
-                if (rhs_param_owned && rhs_param_type != NULL)
-                    destroy_kgpc_type(rhs_param_type);
-
-                if (!param_compatible)
-                    return 0;
-
-                lhs_p = lhs_p->next;
-                rhs_p = rhs_p->next;
+              }
             }
+            return 0; /* Incompatible classes */
+          }
+        }
+        /* No target class info or can't verify - allow (for backwards
+         * compatibility) */
+        return 1;
+      }
 
-            /* All checks passed */
+      /* Reverse case: LHS points to record and RHS points to
+       * primitive(RECORD_TYPE). This happens when one side was resolved to
+       * TYPE_KIND_RECORD by symtab lookup but the other side still has the
+       * unresolved primitive placeholder. */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+          rhs_inner->info.primitive_type_tag == RECORD_TYPE) {
+        struct RecordType *lhs_record = lhs_inner->info.record_info;
+        struct TypeAlias *rhs_alias = rhs_type->type_alias;
+        if (lhs_record != NULL && lhs_record->type_id != NULL &&
+            rhs_alias != NULL && rhs_alias->pointer_type_id != NULL) {
+          if (strcasecmp(lhs_record->type_id, rhs_alias->pointer_type_id) == 0)
+            return 1; /* Same class */
+          /* Check if RHS target is a subclass of LHS record */
+          if (symtab != NULL) {
+            struct HashNode *rhs_class_node = NULL;
+            if (FindSymbol(&rhs_class_node, symtab,
+                           rhs_alias->pointer_type_id) != 0 &&
+                rhs_class_node != NULL && rhs_class_node->type != NULL &&
+                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
+                rhs_class_node->type->info.points_to != NULL &&
+                rhs_class_node->type->info.points_to->kind ==
+                    TYPE_KIND_RECORD) {
+              struct RecordType *rhs_record =
+                  rhs_class_node->type->info.points_to->info.record_info;
+              if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
+                const char *parent = rhs_record->parent_class_name;
+                while (parent != NULL) {
+                  if (strcasecmp(lhs_record->type_id, parent) == 0)
+                    return 1;
+                  struct HashNode *parent_node = NULL;
+                  if (FindSymbol(&parent_node, symtab, (char *)parent) != 0 &&
+                      parent_node != NULL && parent_node->type != NULL &&
+                      parent_node->type->kind == TYPE_KIND_POINTER &&
+                      parent_node->type->info.points_to != NULL &&
+                      parent_node->type->info.points_to->kind ==
+                          TYPE_KIND_RECORD) {
+                    struct RecordType *parent_record =
+                        parent_node->type->info.points_to->info.record_info;
+                    parent = (parent_record != NULL)
+                                 ? parent_record->parent_class_name
+                                 : NULL;
+                  } else {
+                    parent = NULL;
+                  }
+                }
+              }
+            }
+          }
+          /* Check if LHS record is a subclass of RHS target */
+          if (lhs_record->parent_class_name != NULL) {
+            const char *parent = lhs_record->parent_class_name;
+            while (parent != NULL) {
+              if (strcasecmp(rhs_alias->pointer_type_id, parent) == 0)
+                return 1;
+              struct HashNode *parent_node = NULL;
+              if (symtab != NULL &&
+                  FindSymbol(&parent_node, symtab, (char *)parent) != 0 &&
+                  parent_node != NULL && parent_node->type != NULL &&
+                  parent_node->type->kind == TYPE_KIND_POINTER &&
+                  parent_node->type->info.points_to != NULL &&
+                  parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                struct RecordType *parent_record =
+                    parent_node->type->info.points_to->info.record_info;
+                parent = (parent_record != NULL)
+                             ? parent_record->parent_class_name
+                             : NULL;
+              } else {
+                parent = NULL;
+              }
+            }
+          }
+          return 0; /* Incompatible classes */
+        }
+        /* No type info to compare - allow for backwards compatibility */
+        return 1;
+      }
+
+      /* Symmetric case: both are ^primitive(RECORD_TYPE) - class ref to class
+       * ref */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+          lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+          rhs_inner->info.primitive_type_tag == RECORD_TYPE) {
+        /* Both are class reference types - check type_alias for target
+         * compatibility */
+        struct TypeAlias *lhs_alias = lhs_type->type_alias;
+        struct TypeAlias *rhs_alias = rhs_type->type_alias;
+        if (lhs_alias != NULL && lhs_alias->pointer_type_id != NULL &&
+            rhs_alias != NULL && rhs_alias->pointer_type_id != NULL) {
+          /* Both have target class info - must be same or compatible */
+          if (strcasecmp(lhs_alias->pointer_type_id,
+                         rhs_alias->pointer_type_id) == 0) {
+            return 1; /* Same target class */
+          }
+          /* Check subclass relationship for class references */
+          /* RHS must be a subclass of LHS (e.g., "class of TChild" assigned to
+           * "class of TParent" is allowed) */
+          if (symtab != NULL) {
+            struct HashNode *rhs_class_node = NULL;
+            if (FindSymbol(&rhs_class_node, symtab,
+                           rhs_alias->pointer_type_id) != 0 &&
+                rhs_class_node != NULL && rhs_class_node->type != NULL &&
+                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
+                rhs_class_node->type->info.points_to != NULL &&
+                rhs_class_node->type->info.points_to->kind ==
+                    TYPE_KIND_RECORD) {
+              struct RecordType *rhs_record =
+                  rhs_class_node->type->info.points_to->info.record_info;
+              if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
+                /* Walk up parent chain to find if LHS target is an ancestor */
+                const char *parent = rhs_record->parent_class_name;
+                while (parent != NULL) {
+                  if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
+                    return 1; /* RHS is class ref to subclass of LHS target */
+                  }
+                  /* Look up parent record to continue walking */
+                  struct HashNode *parent_node = NULL;
+                  if (FindSymbol(&parent_node, symtab, (char *)parent) != 0 &&
+                      parent_node != NULL && parent_node->type != NULL &&
+                      parent_node->type->kind == TYPE_KIND_POINTER &&
+                      parent_node->type->info.points_to != NULL &&
+                      parent_node->type->info.points_to->kind ==
+                          TYPE_KIND_RECORD) {
+                    struct RecordType *parent_record =
+                        parent_node->type->info.points_to->info.record_info;
+                    if (parent_record != NULL) {
+                      parent = parent_record->parent_class_name;
+                    } else {
+                      parent = NULL;
+                    }
+                  } else {
+                    parent = NULL;
+                  }
+                }
+              }
+            }
+          }
+          return 0; /* Different target classes */
+        }
+        /* Fall through if no alias info */
+        return 1;
+      }
+
+      /* Check if LHS is ^(^record) and RHS is ^record */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD) {
+        KgpcType *lhs_record_ptr = lhs_inner->info.points_to;
+        if (lhs_record_ptr != NULL &&
+            lhs_record_ptr->kind == TYPE_KIND_RECORD) {
+          /* LHS is class of T (^(^record)), RHS is T (^record) */
+          /* Check if they point to the same or compatible records */
+          if (lhs_record_ptr->info.record_info == rhs_inner->info.record_info)
+            return 1;
+          if (is_record_subclass(rhs_inner->info.record_info,
+                                 lhs_record_ptr->info.record_info, symtab))
+            return 1;
+          return 0; /* Incompatible class for "class of T" */
+        }
+      }
+
+      /* Symmetric case: LHS is ^record and RHS is ^(^record).
+       * This appears in low-level RTTI/VMT code paths where class
+       * references are represented with one extra indirection. */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER) {
+        KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
+        if (rhs_record_ptr != NULL &&
+            rhs_record_ptr->kind == TYPE_KIND_RECORD) {
+          if (lhs_inner->info.record_info == rhs_record_ptr->info.record_info)
+            return 1;
+          if (is_record_subclass(rhs_record_ptr->info.record_info,
+                                 lhs_inner->info.record_info, symtab))
+            return 1;
+          if (is_record_subclass(lhs_inner->info.record_info,
+                                 rhs_record_ptr->info.record_info, symtab))
+            return 1;
+          return 0;
+        }
+      }
+
+      /* Variant of the above where LHS still uses primitive(RECORD_TYPE)
+       * placeholder instead of fully-resolved TYPE_KIND_RECORD. */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+          lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER) {
+        KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
+        if (rhs_record_ptr != NULL &&
+            ((rhs_record_ptr->kind == TYPE_KIND_RECORD) ||
+             (rhs_record_ptr->kind == TYPE_KIND_PRIMITIVE &&
+              rhs_record_ptr->info.primitive_type_tag == RECORD_TYPE))) {
+          return 1;
+        }
+      }
+
+      /* Check if both are ^(^record) - class reference to class reference */
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER) {
+        KgpcType *lhs_record = lhs_inner->info.points_to;
+        KgpcType *rhs_record = rhs_inner->info.points_to;
+        if (lhs_record != NULL && lhs_record->kind == TYPE_KIND_RECORD &&
+            rhs_record != NULL && rhs_record->kind == TYPE_KIND_RECORD) {
+          /* Both are class references - check record compatibility */
+          if (lhs_record->info.record_info == rhs_record->info.record_info)
+            return 1;
+          if (is_record_subclass(rhs_record->info.record_info,
+                                 lhs_record->info.record_info, symtab))
             return 1;
         }
+      }
 
-        default:
-            /* Unknown type kind */
-            return 0;
+      if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+          rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD &&
+          record_prefix_pointer_compatible(lhs_inner->info.record_info,
+                                           rhs_inner->info.record_info,
+                                           symtab)) {
+        return 1;
+      }
     }
+
+    return are_types_compatible_for_assignment(
+        lhs_type->info.points_to, rhs_type->info.points_to, symtab);
+
+  case TYPE_KIND_ARRAY: {
+    if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
+      return 1;
+    int lhs_dynamic = lhs_type->info.array_info.end_index <
+                      lhs_type->info.array_info.start_index;
+    int rhs_dynamic = rhs_type->info.array_info.end_index <
+                      rhs_type->info.array_info.start_index;
+    if (!lhs_dynamic && !rhs_dynamic) {
+      if (lhs_type->info.array_info.start_index !=
+          rhs_type->info.array_info.start_index)
+        return 0;
+      if (lhs_type->info.array_info.end_index !=
+          rhs_type->info.array_info.end_index)
+        return 0;
+    }
+
+    /* Handle NULL element types - if both NULL, they're compatible (untyped
+     * arrays) */
+    if (lhs_type->info.array_info.element_type == NULL &&
+        rhs_type->info.array_info.element_type == NULL)
+      return 1;
+
+    /* If only one is NULL, check if indices match (for shortstring-like arrays)
+     */
+    if (lhs_type->info.array_info.element_type == NULL ||
+        rhs_type->info.array_info.element_type == NULL) {
+      /* Allow if array bounds match (for shortstring compatibility) */
+      if (!lhs_dynamic && !rhs_dynamic)
+        return 1;
+      return 0;
+    }
+
+    /* Pascal array assignment/call compatibility is stricter than scalar
+     * assignment compatibility: array element types must match structurally
+     * rather than relying on scalar widening (for example, array of LongInt
+     * must not match array of Real). */
+    if (kgpc_type_equals(lhs_type->info.array_info.element_type,
+                         rhs_type->info.array_info.element_type))
+      return 1;
+
+    if (lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE) {
+      int lhs_elem_tag =
+          lhs_type->info.array_info.element_type->info.primitive_type_tag;
+      int rhs_elem_tag =
+          rhs_type->info.array_info.element_type->info.primitive_type_tag;
+      if (is_integer_type(lhs_elem_tag) && is_integer_type(rhs_elem_tag))
+        return 1;
+    }
+
+    /* Fallback for structurally equal types represented through different
+     * alias objects but with the same resolved spelling. */
+    const char *lhs_elem_str =
+        kgpc_type_to_string(lhs_type->info.array_info.element_type);
+    const char *rhs_elem_str =
+        kgpc_type_to_string(rhs_type->info.array_info.element_type);
+    if (lhs_elem_str != NULL && rhs_elem_str != NULL &&
+        strcasecmp(lhs_elem_str, rhs_elem_str) == 0)
+      return 1;
+
+    return 0;
+  }
+  case TYPE_KIND_ARRAY_OF_CONST:
+    return 1;
+
+  case TYPE_KIND_RECORD:
+    /* Records are compatible if they are the same record type
+     * or if one is a subclass of the other */
+    if (lhs_type->info.record_info == rhs_type->info.record_info)
+      return 1;
+
+    /* Records are compatible if they share the same type_id
+     * (e.g., cloned record types from generic instantiation) */
+    if (lhs_type->info.record_info != NULL &&
+        rhs_type->info.record_info != NULL &&
+        lhs_type->info.record_info->type_id != NULL &&
+        rhs_type->info.record_info->type_id != NULL &&
+        strcasecmp(lhs_type->info.record_info->type_id,
+                   rhs_type->info.record_info->type_id) == 0)
+      return 1;
+
+    /* Check inheritance: rhs_type should be assignable to lhs_type if
+     * rhs_type is a subclass of lhs_type */
+    if (is_record_subclass(rhs_type->info.record_info,
+                           lhs_type->info.record_info, symtab))
+      return 1;
+
+    /* Allow assigning a class instance to an interface variable.
+     * In Delphi/FPC, if LHS is an interface and RHS is a class that
+     * implements the interface, the assignment is valid. */
+    if (lhs_type->info.record_info != NULL &&
+        lhs_type->info.record_info->is_interface &&
+        rhs_type->info.record_info != NULL &&
+        rhs_type->info.record_info->is_class)
+      return 1;
+
+    return 0;
+
+  case TYPE_KIND_PROCEDURE: {
+    ProcedureTypeInfo *lhs_proc = &lhs_type->info.proc_info;
+    ProcedureTypeInfo *rhs_proc = &rhs_type->info.proc_info;
+
+    /* 1. Check function vs procedure compatibility
+     * A procedure variable can only hold a procedure, not a function, and vice
+     * versa Note: A function has either return_type != NULL or return_type_id
+     * != NULL */
+    int lhs_is_function =
+        (lhs_proc->return_type != NULL || lhs_proc->return_type_id != NULL);
+    int rhs_is_function =
+        (rhs_proc->return_type != NULL || rhs_proc->return_type_id != NULL);
+
+    if (lhs_is_function != rhs_is_function)
+      return 0; /* Cannot assign function to procedure var or vice versa */
+
+    /* 2. If both are functions, check return types */
+    if (lhs_is_function) {
+      /* Handle case where return_type is NULL but return_type_id is set */
+      if (lhs_proc->return_type != NULL && rhs_proc->return_type != NULL) {
+        if (!are_types_compatible_for_assignment(lhs_proc->return_type,
+                                                 rhs_proc->return_type, symtab))
+          return 0;
+      } else if (lhs_proc->return_type_id != NULL &&
+                 rhs_proc->return_type_id != NULL) {
+        /* Both have return_type_id but no resolved return_type - compare by
+         * name */
+        if (strcasecmp(lhs_proc->return_type_id, rhs_proc->return_type_id) != 0)
+          return 0;
+      } else if (lhs_proc->return_type != NULL &&
+                 rhs_proc->return_type_id != NULL) {
+        /* LHS has resolved type, RHS has type_id - compare by string
+         * representation */
+        const char *lhs_str = kgpc_type_to_string(lhs_proc->return_type);
+        if (lhs_str == NULL ||
+            strcasecmp(lhs_str, rhs_proc->return_type_id) != 0)
+          return 0;
+      } else if (lhs_proc->return_type_id != NULL &&
+                 rhs_proc->return_type != NULL) {
+        /* LHS has type_id, RHS has resolved type - compare by string
+         * representation */
+        const char *rhs_str = kgpc_type_to_string(rhs_proc->return_type);
+        if (rhs_str == NULL ||
+            strcasecmp(lhs_proc->return_type_id, rhs_str) != 0)
+          return 0;
+      }
+      /* If all above checks pass or fall through, types are compatible */
+    }
+
+    /* 3. Check parameter counts */
+    int lhs_param_count = ListLength(lhs_proc->params);
+    int rhs_param_count = ListLength(rhs_proc->params);
+
+    if (lhs_param_count != rhs_param_count)
+      return 0;
+
+    /* 4. Check each parameter's type and var status */
+    ListNode_t *lhs_p = lhs_proc->params;
+    ListNode_t *rhs_p = rhs_proc->params;
+
+    while (lhs_p != NULL && rhs_p != NULL) {
+      if (lhs_p->type != LIST_TREE || rhs_p->type != LIST_TREE)
+        return 0; /* Invalid parameter node */
+
+      Tree_t *lhs_decl = (Tree_t *)lhs_p->cur;
+      Tree_t *rhs_decl = (Tree_t *)rhs_p->cur;
+
+      if (lhs_decl == NULL || rhs_decl == NULL)
+        return 0;
+
+      if (lhs_decl->type != TREE_VAR_DECL || rhs_decl->type != TREE_VAR_DECL)
+        return 0;
+
+      /* Check var vs. value parameter
+       * var parameters must match exactly */
+      int lhs_is_var = lhs_decl->tree_data.var_decl_data.is_var_param;
+      int rhs_is_var = rhs_decl->tree_data.var_decl_data.is_var_param;
+
+      if (lhs_is_var != rhs_is_var)
+        return 0;
+
+      /* Check parameter types */
+      int lhs_param_owned = 0;
+      int rhs_param_owned = 0;
+      KgpcType *lhs_param_type =
+          resolve_type_from_vardecl(lhs_decl, symtab, &lhs_param_owned);
+      KgpcType *rhs_param_type =
+          resolve_type_from_vardecl(rhs_decl, symtab, &rhs_param_owned);
+
+      int param_compatible = 1;
+      if (lhs_param_type != NULL && rhs_param_type != NULL) {
+        param_compatible = are_types_compatible_for_assignment(
+            lhs_param_type, rhs_param_type, symtab);
+      } else if (lhs_param_type != NULL || rhs_param_type != NULL) {
+        /* One is NULL, other is not - check type_id strings as fallback */
+        const char *lhs_type_id = lhs_decl->tree_data.var_decl_data.type_id;
+        const char *rhs_type_id = rhs_decl->tree_data.var_decl_data.type_id;
+
+        /* If both have type IDs, compare them (for named types) */
+        if (lhs_type_id != NULL && rhs_type_id != NULL) {
+          param_compatible = (strcmp(lhs_type_id, rhs_type_id) == 0);
+        } else {
+          /* Different parameter types (one named, one primitive) */
+          param_compatible = 0;
+        }
+      } else {
+        /* Both are NULL - check if type tags match */
+        int lhs_tag = lhs_decl->tree_data.var_decl_data.type;
+        int rhs_tag = rhs_decl->tree_data.var_decl_data.type;
+        param_compatible = types_numeric_compatible(lhs_tag, rhs_tag);
+      }
+
+      /* Clean up temporary types */
+      if (lhs_param_owned && lhs_param_type != NULL)
+        destroy_kgpc_type(lhs_param_type);
+      if (rhs_param_owned && rhs_param_type != NULL)
+        destroy_kgpc_type(rhs_param_type);
+
+      if (!param_compatible)
+        return 0;
+
+      lhs_p = lhs_p->next;
+      rhs_p = rhs_p->next;
+    }
+
+    /* All checks passed */
+    return 1;
+  }
+
+  default:
+    /* Unknown type kind */
+    return 0;
+  }
 }
 
-const char* kgpc_type_to_string(KgpcType *type) {
-    /* Use multiple static buffers to handle recursive calls.
-     * Each recursive level uses a different buffer to prevent
-     * the inner call from overwriting the outer call's data. */
-    #define TYPE_STRING_BUFFER_COUNT 8
-    #define TYPE_STRING_BUFFER_SIZE 256
-    static char buffers[TYPE_STRING_BUFFER_COUNT][TYPE_STRING_BUFFER_SIZE];
-    static int buffer_index = 0;
-    
-    char *buffer = buffers[buffer_index];
-    buffer_index = (buffer_index + 1) % TYPE_STRING_BUFFER_COUNT;
-    
-    if (type == NULL) {
-        return "NULL";
+const char *kgpc_type_to_string(KgpcType *type) {
+/* Use multiple static buffers to handle recursive calls.
+ * Each recursive level uses a different buffer to prevent
+ * the inner call from overwriting the outer call's data. */
+#define TYPE_STRING_BUFFER_COUNT 8
+#define TYPE_STRING_BUFFER_SIZE 256
+  static char buffers[TYPE_STRING_BUFFER_COUNT][TYPE_STRING_BUFFER_SIZE];
+  static int buffer_index = 0;
+
+  char *buffer = buffers[buffer_index];
+  buffer_index = (buffer_index + 1) % TYPE_STRING_BUFFER_COUNT;
+
+  if (type == NULL) {
+    return "NULL";
+  }
+
+  switch (type->kind) {
+  case TYPE_KIND_PRIMITIVE:
+    switch (type->info.primitive_type_tag) {
+    case INT_TYPE:
+      return "Integer";
+    case REAL_TYPE:
+      return "Real";
+    case EXTENDED_TYPE:
+      return "Extended";
+    case LONGINT_TYPE:
+      return "LongInt";
+    case STRING_TYPE:
+      return "String";
+    case CHAR_TYPE:
+      return "Char";
+    case BOOL:
+      return "Boolean";
+    case POINTER_TYPE:
+      return "Pointer";
+    case SET_TYPE:
+      return "Set";
+    case ENUM_TYPE:
+      return "Enum";
+    case FILE_TYPE:
+      return "File";
+    case UNKNOWN_TYPE:
+      return "Unknown";
+    case BUILTIN_ANY_TYPE:
+      return "Any";
+    case INT64_TYPE:
+      return "Int64";
+    case RECORD_TYPE:
+      return "Record";
+    case ARRAY_OF_CONST_TYPE:
+      return "array of const";
+    case TEXT_TYPE:
+      return "Text";
+    case SHORTSTRING_TYPE:
+      return "ShortString";
+    case BYTE_TYPE:
+      return "Byte";
+    case WORD_TYPE:
+      return "Word";
+    case LONGWORD_TYPE:
+      return "LongWord";
+    case QWORD_TYPE:
+      return "QWord";
+    case VARIANT_TYPE:
+      return "Variant";
+    default:
+      snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "primitive(%d)",
+               type->info.primitive_type_tag);
+      return buffer;
     }
-    
-    switch (type->kind) {
-        case TYPE_KIND_PRIMITIVE:
-            switch (type->info.primitive_type_tag) {
-                case INT_TYPE: return "Integer";
-                case REAL_TYPE: return "Real";
-                case EXTENDED_TYPE: return "Extended";
-                case LONGINT_TYPE: return "LongInt";
-                case STRING_TYPE: return "String";
-                case CHAR_TYPE: return "Char";
-                case BOOL: return "Boolean";
-                case POINTER_TYPE: return "Pointer";
-                case SET_TYPE: return "Set";
-                case ENUM_TYPE: return "Enum";
-                case FILE_TYPE: return "File";
-                case UNKNOWN_TYPE: return "Unknown";
-                case BUILTIN_ANY_TYPE: return "Any";
-                case INT64_TYPE: return "Int64";
-                case RECORD_TYPE: return "Record";
-                case ARRAY_OF_CONST_TYPE: return "array of const";
-                case TEXT_TYPE: return "Text";
-                case SHORTSTRING_TYPE: return "ShortString";
-                case BYTE_TYPE: return "Byte";
-                case WORD_TYPE: return "Word";
-                case LONGWORD_TYPE: return "LongWord";
-                case QWORD_TYPE: return "QWord";
-                case VARIANT_TYPE: return "Variant";
-                default:
-                    snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "primitive(%d)", type->info.primitive_type_tag);
-                    return buffer;
-            }
-        case TYPE_KIND_POINTER:
-            snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "^%s", kgpc_type_to_string(type->info.points_to));
-            return buffer;
-        case TYPE_KIND_ARRAY:
-            snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "array[%d..%d] of %s",
-                type->info.array_info.start_index,
-                type->info.array_info.end_index,
-                kgpc_type_to_string(type->info.array_info.element_type));
-            return buffer;
-        case TYPE_KIND_ARRAY_OF_CONST:
-            return "array of const";
-        case TYPE_KIND_RECORD:
-            return "record";
-        case TYPE_KIND_PROCEDURE:
-            if (type->info.proc_info.return_type == NULL) {
-                /* If return_type is NULL but return_type_id is set, show it as a function */
-                if (type->info.proc_info.return_type_id != NULL) {
-                    snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "function: %s",
-                        type->info.proc_info.return_type_id);
-                    return buffer;
-                }
-                return "procedure";
-            } else {
-                snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "function: %s",
-                    kgpc_type_to_string(type->info.proc_info.return_type));
-                return buffer;
-            }
-        default:
-            return "unknown";
+  case TYPE_KIND_POINTER:
+    snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "^%s",
+             kgpc_type_to_string(type->info.points_to));
+    return buffer;
+  case TYPE_KIND_ARRAY:
+    snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "array[%d..%d] of %s",
+             type->info.array_info.start_index, type->info.array_info.end_index,
+             kgpc_type_to_string(type->info.array_info.element_type));
+    return buffer;
+  case TYPE_KIND_ARRAY_OF_CONST:
+    return "array of const";
+  case TYPE_KIND_RECORD:
+    return "record";
+  case TYPE_KIND_PROCEDURE:
+    if (type->info.proc_info.return_type == NULL) {
+      /* If return_type is NULL but return_type_id is set, show it as a function
+       */
+      if (type->info.proc_info.return_type_id != NULL) {
+        snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "function: %s",
+                 type->info.proc_info.return_type_id);
+        return buffer;
+      }
+      return "procedure";
+    } else {
+      snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "function: %s",
+               kgpc_type_to_string(type->info.proc_info.return_type));
+      return buffer;
     }
-    #undef TYPE_STRING_BUFFER_COUNT
-    #undef TYPE_STRING_BUFFER_SIZE
+  default:
+    return "unknown";
+  }
+#undef TYPE_STRING_BUFFER_COUNT
+#undef TYPE_STRING_BUFFER_SIZE
 }
 
 // --- Helper Function Implementations ---
 
-static int kgpc_list_length(ListNode_t *list)
-{
-    int count = 0;
-    for (ListNode_t *cur = list; cur != NULL; cur = cur->next)
-        ++count;
-    return count;
+static int kgpc_list_length(ListNode_t *list) {
+  int count = 0;
+  for (ListNode_t *cur = list; cur != NULL; cur = cur->next)
+    ++count;
+  return count;
 }
 
-static long long kgpc_default_set_storage_size_for_high(long long high)
-{
-    if (high < 32)
-        return 4;
-    if (high < 256)
-        return 32;
-    return (high + 7) / 8;
-}
-
-static long long kgpc_set_storage_size(const struct TypeAlias *alias)
-{
-    if (alias == NULL)
-        return 4;
-
-    if (alias->set_element_type == CHAR_TYPE ||
-        alias->set_element_type == BYTE_TYPE ||
-        (alias->set_element_type_id != NULL &&
-         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
-          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
-        return 32;
-
-    if (alias->is_enum_set && alias->inline_enum_values != NULL)
-    {
-        int count = kgpc_list_length(alias->inline_enum_values);
-        if (count > 0)
-            return kgpc_default_set_storage_size_for_high((long long)count - 1);
-    }
-
-    if (alias->range_known && alias->range_end >= alias->range_start)
-    {
-        long long count = (long long)alias->range_end - (long long)alias->range_start + 1;
-        if (count > 0)
-            return kgpc_default_set_storage_size_for_high(count - 1);
-    }
-
-    if (alias->storage_size > 0)
-        return alias->storage_size;
-
+static long long kgpc_default_set_storage_size_for_high(long long high) {
+  if (high < 32)
     return 4;
+  if (high < 256)
+    return 32;
+  return (high + 7) / 8;
 }
 
-static long long kgpc_enum_storage_size(const struct TypeAlias *alias)
-{
-    if (alias == NULL)
-        return 4;
-
-    if (alias->storage_size > 0)
-        return alias->storage_size;
-
-    if (alias->range_known)
-    {
-        if (alias->range_start >= 0 && alias->range_end <= 0xff)
-            return 1;
-        if (alias->range_start >= 0 && alias->range_end <= 0xffff)
-            return 2;
-        return 4;
-    }
-
-    if (alias->enum_literals != NULL)
-    {
-        int count = kgpc_list_length(alias->enum_literals);
-        if (count > 0 && count <= 0x100)
-            return 1;
-        if (count > 0 && count <= 0x10000)
-            return 2;
-    }
-
+static long long kgpc_set_storage_size(const struct TypeAlias *alias) {
+  if (alias == NULL)
     return 4;
+
+  if (alias->set_element_type == CHAR_TYPE ||
+      alias->set_element_type == BYTE_TYPE ||
+      (alias->set_element_type_id != NULL &&
+       (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+        pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+        pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
+    return 32;
+
+  if (alias->is_enum_set && alias->inline_enum_values != NULL) {
+    int count = kgpc_list_length(alias->inline_enum_values);
+    if (count > 0)
+      return kgpc_default_set_storage_size_for_high((long long)count - 1);
+  }
+
+  if (alias->range_known && alias->range_end >= alias->range_start) {
+    long long count =
+        (long long)alias->range_end - (long long)alias->range_start + 1;
+    if (count > 0)
+      return kgpc_default_set_storage_size_for_high(count - 1);
+  }
+
+  if (alias->storage_size > 0)
+    return alias->storage_size;
+
+  return 4;
 }
 
-long long kgpc_type_sizeof(KgpcType *type)
-{
-    if (type == NULL)
-        return -1;
+static long long kgpc_enum_storage_size(const struct TypeAlias *alias) {
+  if (alias == NULL)
+    return 4;
 
-    if (type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == SET_TYPE &&
-        type->type_alias != NULL &&
-        type->type_alias->is_set)
-    {
+  if (alias->storage_size > 0)
+    return alias->storage_size;
+
+  if (alias->range_known) {
+    if (alias->range_start >= 0 && alias->range_end <= 0xff)
+      return 1;
+    if (alias->range_start >= 0 && alias->range_end <= 0xffff)
+      return 2;
+    return 4;
+  }
+
+  if (alias->enum_literals != NULL) {
+    int count = kgpc_list_length(alias->enum_literals);
+    if (count > 0 && count <= 0x100)
+      return 1;
+    if (count > 0 && count <= 0x10000)
+      return 2;
+  }
+
+  return 4;
+}
+
+long long kgpc_type_sizeof(KgpcType *type) {
+  if (type == NULL)
+    return -1;
+
+  if (type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.primitive_type_tag == SET_TYPE && type->type_alias != NULL &&
+      type->type_alias->is_set) {
+    return kgpc_set_storage_size(type->type_alias);
+  }
+
+  if (type->type_alias != NULL && type->type_alias->storage_size > 0 &&
+      type->kind == TYPE_KIND_PRIMITIVE) {
+    return type->type_alias->storage_size;
+  }
+
+  switch (type->kind) {
+  case TYPE_KIND_PRIMITIVE:
+    switch (type->info.primitive_type_tag) {
+    case INT_TYPE:
+      return 4;
+    case BOOL:
+      return 1;
+    case ENUM_TYPE:
+      return kgpc_enum_storage_size(type->type_alias);
+    case SET_TYPE: {
+      if (type->size_in_bytes > 0)
+        return type->size_in_bytes;
+      if (type->type_alias != NULL && type->type_alias->is_set)
         return kgpc_set_storage_size(type->type_alias);
+      return 4;
     }
-
-    if (type->type_alias != NULL &&
-        type->type_alias->storage_size > 0 &&
-        type->kind == TYPE_KIND_PRIMITIVE)
-    {
+    case LONGINT_TYPE:
+      return 4; /* 32-bit for FPC-compatible LongInt */
+    case INT64_TYPE:
+      return 8; /* 64-bit Int64 */
+    case REAL_TYPE:
+      return 8;
+    case EXTENDED_TYPE:
+      return 10;
+    case STRING_TYPE:
+    case POINTER_TYPE:
+    case PROCEDURE:
+      return 8; /* Pointers are 8 bytes on x86-64 */
+    case SHORTSTRING_TYPE:
+      if (type->size_in_bytes > 0)
+        return type->size_in_bytes;
+      if (type->type_alias != NULL && type->type_alias->is_shortstring &&
+          type->type_alias->array_end > 0)
+        return type->type_alias->array_end + 1; /* length byte + N chars */
+      if (type->type_alias != NULL && type->type_alias->storage_size > 0)
         return type->type_alias->storage_size;
+      return 256; /* length byte + 255 chars (default ShortString) */
+    case FILE_TYPE:
+      if (type->size_in_bytes > 0)
+        return type->size_in_bytes;
+      return 376; /* FPC x86_64:
+                     Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(256)+FullName(8)
+                   */
+    case TEXT_TYPE:
+      if (type->size_in_bytes > 0)
+        return type->size_in_bytes;
+      return 632;
+    case CHAR_TYPE:
+    case BYTE_TYPE:
+      return 1;
+    case WORD_TYPE:
+      return 2;
+    case LONGWORD_TYPE:
+      return 4;
+    case QWORD_TYPE:
+      return 8;
+    default:
+      return -1;
     }
-    
-    switch (type->kind)
-    {
-        case TYPE_KIND_PRIMITIVE:
-            switch (type->info.primitive_type_tag)
-            {
-                case INT_TYPE:
-                    return 4;
-                case BOOL:
-                    return 1;
-                case ENUM_TYPE:
-                    return kgpc_enum_storage_size(type->type_alias);
-                case SET_TYPE:
-                {
-                    if (type->size_in_bytes > 0)
-                        return type->size_in_bytes;
-                    if (type->type_alias != NULL && type->type_alias->is_set)
-                        return kgpc_set_storage_size(type->type_alias);
-                    return 4;
-                }
-                case LONGINT_TYPE:
-                    return 4;  /* 32-bit for FPC-compatible LongInt */
-                case INT64_TYPE:
-                    return 8;  /* 64-bit Int64 */
-                case REAL_TYPE:
-                    return 8;
-                case EXTENDED_TYPE:
-                    return 10;
-                case STRING_TYPE:
-                case POINTER_TYPE:
-                case PROCEDURE:
-                    return 8; /* Pointers are 8 bytes on x86-64 */
-                case SHORTSTRING_TYPE:
-                    if (type->size_in_bytes > 0)
-                        return type->size_in_bytes;
-                    if (type->type_alias != NULL &&
-                        type->type_alias->is_shortstring &&
-                        type->type_alias->array_end > 0)
-                        return type->type_alias->array_end + 1; /* length byte + N chars */
-                    if (type->type_alias != NULL &&
-                        type->type_alias->storage_size > 0)
-                        return type->type_alias->storage_size;
-                    return 256; /* length byte + 255 chars (default ShortString) */
-                case FILE_TYPE:
-                    if (type->size_in_bytes > 0)
-                        return type->size_in_bytes;
-                    return 376;  /* FPC x86_64: Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(256)+FullName(8) */
-                case TEXT_TYPE:
-                    if (type->size_in_bytes > 0)
-                        return type->size_in_bytes;
-                    return 632;
-                case CHAR_TYPE:
-                case BYTE_TYPE:
-                    return 1;
-                case WORD_TYPE:
-                    return 2;
-                case LONGWORD_TYPE:
-                    return 4;
-                case QWORD_TYPE:
-                    return 8;
-                default:
-                    return -1;
+
+  case TYPE_KIND_POINTER:
+    return 8; /* Pointers are 8 bytes on x86-64 */
+
+  case TYPE_KIND_ARRAY: {
+    if (kgpc_type_is_dynamic_array(type))
+      return 16; /* Runtime uses 16-byte embedded descriptor (data ptr + length)
+                  */
+    long long element_size =
+        kgpc_type_sizeof(type->info.array_info.element_type);
+    if (element_size < 0)
+      return -1;
+    int count =
+        type->info.array_info.end_index - type->info.array_info.start_index + 1;
+    if (count < 0)
+      return -1;
+    long long total = element_size * count;
+    /* Multi-dimensional arrays store additional dimensions in the TypeAlias.
+     * The first dimension is already covered by start_index/end_index above;
+     * multiply by each additional dimension. */
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->array_dimensions != NULL) {
+      ListNode_t *dim_node = alias->array_dimensions;
+      /* Skip the first dimension (already accounted for) */
+      if (dim_node != NULL)
+        dim_node = dim_node->next;
+      while (dim_node != NULL) {
+        const char *range_str = (const char *)dim_node->cur;
+        if (range_str != NULL) {
+          const char *dotdot = strstr(range_str, "..");
+          if (dotdot != NULL) {
+            long long lower = 0, upper = 0;
+            int ok = 1;
+            /* Parse left bound (before ..) */
+            size_t left_len = (size_t)(dotdot - range_str);
+            char left_buf[64];
+            if (left_len < sizeof(left_buf)) {
+              memcpy(left_buf, range_str, left_len);
+              left_buf[left_len] = '\0';
+              char *ep;
+              lower = strtoll(left_buf, &ep, 10);
+              while (*ep && isspace((unsigned char)*ep))
+                ep++;
+              if (ep == left_buf || *ep != '\0') {
+                const char *s = left_buf;
+                while (*s && isspace((unsigned char)*s))
+                  s++;
+                if (*s == '\'' && s[1] != '\0' && s[2] == '\'')
+                  lower = (unsigned char)s[1];
+                else if (isupper((unsigned char)*s) &&
+                         (s[1] == '\0' || isspace((unsigned char)s[1])))
+                  lower = (unsigned char)*s; /* Bare char: A..Z */
+                else
+                  ok = 0;
+              }
+            } else
+              ok = 0;
+            /* Parse right bound (after ..) */
+            if (ok) {
+              const char *rhs = dotdot + 2;
+              char *ep2;
+              upper = strtoll(rhs, &ep2, 10);
+              while (*ep2 && isspace((unsigned char)*ep2))
+                ep2++;
+              if (ep2 == rhs || *ep2 != '\0') {
+                const char *s = rhs;
+                while (*s && isspace((unsigned char)*s))
+                  s++;
+                if (*s == '\'' && s[1] != '\0' && s[2] == '\'')
+                  upper = (unsigned char)s[1];
+                else if (isupper((unsigned char)*s) &&
+                         (s[1] == '\0' || isspace((unsigned char)s[1])))
+                  upper = (unsigned char)*s;
+                else
+                  ok = 0;
+              }
             }
-        
-        case TYPE_KIND_POINTER:
-            return 8; /* Pointers are 8 bytes on x86-64 */
-        
-        case TYPE_KIND_ARRAY:
-        {
-            if (kgpc_type_is_dynamic_array(type))
-                return 16; /* Runtime uses 16-byte embedded descriptor (data ptr + length) */
-            long long element_size = kgpc_type_sizeof(type->info.array_info.element_type);
-            if (element_size < 0)
-                return -1;
-            int count = type->info.array_info.end_index - type->info.array_info.start_index + 1;
-            if (count < 0)
-                return -1;
-            long long total = element_size * count;
-            /* Multi-dimensional arrays store additional dimensions in the TypeAlias.
-             * The first dimension is already covered by start_index/end_index above;
-             * multiply by each additional dimension. */
-            struct TypeAlias *alias = kgpc_type_get_type_alias(type);
-            if (alias != NULL && alias->array_dimensions != NULL)
-            {
-                ListNode_t *dim_node = alias->array_dimensions;
-                /* Skip the first dimension (already accounted for) */
-                if (dim_node != NULL)
-                    dim_node = dim_node->next;
-                while (dim_node != NULL)
-                {
-                    const char *range_str = (const char *)dim_node->cur;
-                    if (range_str != NULL)
-                    {
-                        const char *dotdot = strstr(range_str, "..");
-                        if (dotdot != NULL)
-                        {
-                            long long lower = 0, upper = 0;
-                            int ok = 1;
-                            /* Parse left bound (before ..) */
-                            size_t left_len = (size_t)(dotdot - range_str);
-                            char left_buf[64];
-                            if (left_len < sizeof(left_buf))
-                            {
-                                memcpy(left_buf, range_str, left_len);
-                                left_buf[left_len] = '\0';
-                                char *ep;
-                                lower = strtoll(left_buf, &ep, 10);
-                                while (*ep && isspace((unsigned char)*ep)) ep++;
-                                if (ep == left_buf || *ep != '\0')
-                                {
-                                    const char *s = left_buf;
-                                    while (*s && isspace((unsigned char)*s)) s++;
-                                    if (*s == '\'' && s[1] != '\0' && s[2] == '\'')
-                                        lower = (unsigned char)s[1];
-                                    else if (isupper((unsigned char)*s) && (s[1] == '\0' || isspace((unsigned char)s[1])))
-                                        lower = (unsigned char)*s;  /* Bare char: A..Z */
-                                    else
-                                        ok = 0;
-                                }
-                            }
-                            else
-                                ok = 0;
-                            /* Parse right bound (after ..) */
-                            if (ok)
-                            {
-                                const char *rhs = dotdot + 2;
-                                char *ep2;
-                                upper = strtoll(rhs, &ep2, 10);
-                                while (*ep2 && isspace((unsigned char)*ep2)) ep2++;
-                                if (ep2 == rhs || *ep2 != '\0')
-                                {
-                                    const char *s = rhs;
-                                    while (*s && isspace((unsigned char)*s)) s++;
-                                    if (*s == '\'' && s[1] != '\0' && s[2] == '\'')
-                                        upper = (unsigned char)s[1];
-                                    else if (isupper((unsigned char)*s) && (s[1] == '\0' || isspace((unsigned char)s[1])))
-                                        upper = (unsigned char)*s;
-                                    else
-                                        ok = 0;
-                                }
-                            }
-                            if (ok)
-                            {
-                                long long dim_size = upper - lower + 1;
-                                if (dim_size > 0)
-                                    total *= dim_size;
-                            }
-                        }
-                    }
-                    dim_node = dim_node->next;
-                }
+            if (ok) {
+              long long dim_size = upper - lower + 1;
+              if (dim_size > 0)
+                total *= dim_size;
             }
-            return total;
+          }
         }
-        
-        case TYPE_KIND_ARRAY_OF_CONST:
-            return type->info.array_of_const_info.element_size;
-        
-        case TYPE_KIND_RECORD:
-        {
-            struct RecordType *record = type->info.record_info;
-            if (record != NULL && record->has_cached_size)
-                return record->cached_size;
-            return -1;
-        }
-        
-        case TYPE_KIND_PROCEDURE:
-            /* Method pointers ("procedure of object") are 16-byte TMethod
-             * { code: pointer; data: pointer; }.  Plain procedure pointers
-             * are 8 bytes. */
-            if (type->info.proc_info.is_method_pointer)
-                return 16;
-            return 8;
-
-        default:
-            return -1;
+        dim_node = dim_node->next;
+      }
     }
+    return total;
+  }
+
+  case TYPE_KIND_ARRAY_OF_CONST:
+    return type->info.array_of_const_info.element_size;
+
+  case TYPE_KIND_RECORD: {
+    struct RecordType *record = type->info.record_info;
+    if (record != NULL && record->has_cached_size)
+      return record->cached_size;
+    return -1;
+  }
+
+  case TYPE_KIND_PROCEDURE:
+    /* Method pointers ("procedure of object") are 16-byte TMethod
+     * { code: pointer; data: pointer; }.  Plain procedure pointers
+     * are 8 bytes. */
+    if (type->info.proc_info.is_method_pointer)
+      return 16;
+    return 8;
+
+  default:
+    return -1;
+  }
 }
 
-int kgpc_type_is_array(const KgpcType *type)
-{
-    return (type != NULL && type->kind == TYPE_KIND_ARRAY);
+int kgpc_type_is_array(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_ARRAY);
 }
 
-int kgpc_type_is_array_of_const(const KgpcType *type)
-{
-    return (type != NULL && type->kind == TYPE_KIND_ARRAY_OF_CONST);
+int kgpc_type_is_array_of_const(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_ARRAY_OF_CONST);
 }
 
-int kgpc_type_is_pointer(const KgpcType *type)
-{
-    return (type != NULL && type->kind == TYPE_KIND_POINTER);
+int kgpc_type_is_pointer(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_POINTER);
 }
 
-int kgpc_type_is_set(const KgpcType *type)
-{
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == SET_TYPE);
+int kgpc_type_is_set(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PRIMITIVE &&
+          type->info.primitive_type_tag == SET_TYPE);
 }
 
-int kgpc_type_is_record(const KgpcType *type)
-{
-    return (type != NULL && type->kind == TYPE_KIND_RECORD);
+int kgpc_type_is_record(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_RECORD);
 }
 
-int kgpc_type_is_procedure(const KgpcType *type)
-{
-    return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
+int kgpc_type_is_procedure(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
 }
 
-int kgpc_type_is_method_pointer(const KgpcType *type)
-{
-    return (type != NULL && type->kind == TYPE_KIND_PROCEDURE &&
-            type->info.proc_info.is_method_pointer);
+int kgpc_type_is_method_pointer(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PROCEDURE &&
+          type->info.proc_info.is_method_pointer);
 }
 
-void kgpc_type_set_method_pointer(KgpcType *type, int is_method_ptr)
-{
-    if (type != NULL && type->kind == TYPE_KIND_PROCEDURE)
-        type->info.proc_info.is_method_pointer = is_method_ptr ? 1 : 0;
+void kgpc_type_set_method_pointer(KgpcType *type, int is_method_ptr) {
+  if (type != NULL && type->kind == TYPE_KIND_PROCEDURE)
+    type->info.proc_info.is_method_pointer = is_method_ptr ? 1 : 0;
 }
 
-int kgpc_type_is_char(const KgpcType *type)
-{
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == CHAR_TYPE);
+int kgpc_type_is_char(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PRIMITIVE &&
+          type->info.primitive_type_tag == CHAR_TYPE);
 }
 
-int kgpc_type_is_string(const KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
-    if (type->kind == TYPE_KIND_PRIMITIVE &&
-        (type->info.primitive_type_tag == STRING_TYPE ||
-         type->info.primitive_type_tag == SHORTSTRING_TYPE))
-    {
-        return 1;
-    }
-    /* Also treat ShortString arrays as strings */
-    if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
-        type->type_alias->is_shortstring)
-    {
-        return 1;
-    }
+int kgpc_type_is_string(const KgpcType *type) {
+  if (type == NULL)
     return 0;
+  if (type->kind == TYPE_KIND_PRIMITIVE &&
+      (type->info.primitive_type_tag == STRING_TYPE ||
+       type->info.primitive_type_tag == SHORTSTRING_TYPE)) {
+    return 1;
+  }
+  /* Also treat ShortString arrays as strings */
+  if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
+      type->type_alias->is_shortstring) {
+    return 1;
+  }
+  return 0;
 }
 
-int kgpc_type_is_wide_string(const KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
-    if (type->type_alias != NULL && type->type_alias->is_wide_string)
-        return 1;
+int kgpc_type_is_wide_string(const KgpcType *type) {
+  if (type == NULL)
     return 0;
+  if (type->type_alias != NULL && type->type_alias->is_wide_string)
+    return 1;
+  return 0;
 }
 
-int kgpc_type_is_shortstring(const KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
-    if (type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == SHORTSTRING_TYPE)
-    {
-        return 1;
-    }
-    if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
-        type->type_alias->is_shortstring)
-    {
-        return 1;
-    }
+int kgpc_type_is_shortstring(const KgpcType *type) {
+  if (type == NULL)
     return 0;
+  if (type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.primitive_type_tag == SHORTSTRING_TYPE) {
+    return 1;
+  }
+  if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
+      type->type_alias->is_shortstring) {
+    return 1;
+  }
+  return 0;
 }
 
-KgpcStringStorageKind kgpc_type_string_storage_kind(const KgpcType *type)
-{
-    if (type == NULL)
-        return KGPC_STRING_STORAGE_NONE;
-
-    struct TypeAlias *alias = type->type_alias;
-    if (kgpc_type_is_shortstring(type) ||
-        (alias != NULL && alias->is_shortstring))
-    {
-        return KGPC_STRING_STORAGE_SHORTSTRING;
-    }
-
-    if (type->kind == TYPE_KIND_ARRAY &&
-        type->info.array_info.element_type != NULL &&
-        type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
-        type->info.array_info.start_index == 0 &&
-        type->info.array_info.end_index >= 0 &&
-        type->info.array_info.end_index <= 255)
-    {
-        return KGPC_STRING_STORAGE_SHORTSTRING;
-    }
-
-    if (kgpc_type_is_wide_string(type) ||
-        (alias != NULL && alias->target_type_id != NULL &&
-         (pascal_identifier_equals(alias->target_type_id, "UnicodeString") ||
-          pascal_identifier_equals(alias->target_type_id, "WideString"))))
-    {
-        return KGPC_STRING_STORAGE_MANAGED_WIDE;
-    }
-
-    if (type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == STRING_TYPE)
-    {
-        return KGPC_STRING_STORAGE_MANAGED_ANSI;
-    }
-
-    if (alias != NULL && alias->target_type_id != NULL &&
-        (pascal_identifier_equals(alias->target_type_id, "AnsiString") ||
-         pascal_identifier_equals(alias->target_type_id, "RawByteString") ||
-         pascal_identifier_equals(alias->target_type_id, "UTF8String") ||
-         pascal_identifier_equals(alias->target_type_id, "String")))
-    {
-        return KGPC_STRING_STORAGE_MANAGED_ANSI;
-    }
-
-    if (type->kind == TYPE_KIND_ARRAY &&
-        type->info.array_info.element_type != NULL &&
-        type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
-    {
-        return KGPC_STRING_STORAGE_CHAR_ARRAY;
-    }
-
+KgpcStringStorageKind kgpc_type_string_storage_kind(const KgpcType *type) {
+  if (type == NULL)
     return KGPC_STRING_STORAGE_NONE;
+
+  struct TypeAlias *alias = type->type_alias;
+  if (kgpc_type_is_shortstring(type) ||
+      (alias != NULL && alias->is_shortstring)) {
+    return KGPC_STRING_STORAGE_SHORTSTRING;
+  }
+
+  if (type->kind == TYPE_KIND_ARRAY &&
+      type->info.array_info.element_type != NULL &&
+      type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.array_info.element_type->info.primitive_type_tag ==
+          CHAR_TYPE &&
+      type->info.array_info.start_index == 0 &&
+      type->info.array_info.end_index >= 0 &&
+      type->info.array_info.end_index <= 255) {
+    return KGPC_STRING_STORAGE_SHORTSTRING;
+  }
+
+  if (kgpc_type_is_wide_string(type) ||
+      (alias != NULL && alias->target_type_id != NULL &&
+       (pascal_identifier_equals(alias->target_type_id, "UnicodeString") ||
+        pascal_identifier_equals(alias->target_type_id, "WideString")))) {
+    return KGPC_STRING_STORAGE_MANAGED_WIDE;
+  }
+
+  if (type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.primitive_type_tag == STRING_TYPE) {
+    return KGPC_STRING_STORAGE_MANAGED_ANSI;
+  }
+
+  if (alias != NULL && alias->target_type_id != NULL &&
+      (pascal_identifier_equals(alias->target_type_id, "AnsiString") ||
+       pascal_identifier_equals(alias->target_type_id, "RawByteString") ||
+       pascal_identifier_equals(alias->target_type_id, "UTF8String") ||
+       pascal_identifier_equals(alias->target_type_id, "String"))) {
+    return KGPC_STRING_STORAGE_MANAGED_ANSI;
+  }
+
+  if (type->kind == TYPE_KIND_ARRAY &&
+      type->info.array_info.element_type != NULL &&
+      type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.array_info.element_type->info.primitive_type_tag ==
+          CHAR_TYPE) {
+    return KGPC_STRING_STORAGE_CHAR_ARRAY;
+  }
+
+  return KGPC_STRING_STORAGE_NONE;
 }
 
-int kgpc_type_is_integer(const KgpcType *type)
-{
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        is_integer_type(type->info.primitive_type_tag));
+int kgpc_type_is_integer(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PRIMITIVE &&
+          is_integer_type(type->info.primitive_type_tag));
 }
 
-int kgpc_type_is_real(const KgpcType *type)
-{
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        is_real_family_type(type->info.primitive_type_tag));
+int kgpc_type_is_real(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PRIMITIVE &&
+          is_real_family_type(type->info.primitive_type_tag));
 }
 
-int kgpc_type_is_extended(const KgpcType *type)
-{
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == EXTENDED_TYPE);
+int kgpc_type_is_extended(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PRIMITIVE &&
+          type->info.primitive_type_tag == EXTENDED_TYPE);
 }
 
-int kgpc_type_is_numeric(const KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
-        return 0;
-    if (is_integer_type(type->info.primitive_type_tag))
-        return 1;
-    return is_real_family_type(type->info.primitive_type_tag);
-}
-
-long long kgpc_type_real_storage_size(const KgpcType *type)
-{
-    if (!kgpc_type_is_real(type))
-        return -1;
-
-    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
-        return type->type_alias->storage_size;
-
-    return kgpc_type_sizeof((KgpcType *)type);
-}
-
-KgpcFloatAbiClass kgpc_type_float_abi_class(const KgpcType *type)
-{
-    if (!kgpc_type_is_real(type))
-        return KGPC_FLOAT_ABI_NONE;
-    if (kgpc_type_is_extended(type))
-        return KGPC_FLOAT_ABI_X87;
-    return KGPC_FLOAT_ABI_SSE;
-}
-
-int kgpc_type_is_boolean(const KgpcType *type)
-{
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == BOOL);
-}
-int kgpc_type_get_array_bounds(KgpcType *type, int *start_out, int *end_out)
-{
-    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
-        return -1;
-    
-    if (start_out != NULL)
-        *start_out = type->info.array_info.start_index;
-    if (end_out != NULL)
-        *end_out = type->info.array_info.end_index;
-    
+int kgpc_type_is_numeric(const KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
     return 0;
+  if (is_integer_type(type->info.primitive_type_tag))
+    return 1;
+  return is_real_family_type(type->info.primitive_type_tag);
 }
 
-struct RecordType* kgpc_type_get_record(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_RECORD)
-        return NULL;
-    return type->info.record_info;
+long long kgpc_type_real_storage_size(const KgpcType *type) {
+  if (!kgpc_type_is_real(type))
+    return -1;
+
+  if (type->type_alias != NULL && type->type_alias->storage_size > 0)
+    return type->type_alias->storage_size;
+
+  return kgpc_type_sizeof((KgpcType *)type);
 }
 
-int kgpc_type_get_primitive_tag(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
-        return -1;
-    return type->info.primitive_type_tag;
+KgpcFloatAbiClass kgpc_type_float_abi_class(const KgpcType *type) {
+  if (!kgpc_type_is_real(type))
+    return KGPC_FLOAT_ABI_NONE;
+  if (kgpc_type_is_extended(type))
+    return KGPC_FLOAT_ABI_X87;
+  return KGPC_FLOAT_ABI_SSE;
 }
 
-KgpcType* kgpc_type_get_array_element_type(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
-        return NULL;
-    return type->info.array_info.element_type;
+int kgpc_type_is_boolean(const KgpcType *type) {
+  return (type != NULL && type->kind == TYPE_KIND_PRIMITIVE &&
+          type->info.primitive_type_tag == BOOL);
+}
+int kgpc_type_get_array_bounds(KgpcType *type, int *start_out, int *end_out) {
+  if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+    return -1;
+
+  if (start_out != NULL)
+    *start_out = type->info.array_info.start_index;
+  if (end_out != NULL)
+    *end_out = type->info.array_info.end_index;
+
+  return 0;
 }
 
-static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token, long long *out_value)
-{
-    if (out_value == NULL || token == NULL)
-        return -1;
-    while (*token && isspace((unsigned char)*token)) token++;
-    if (*token == '\0')
-        return -1;
+struct RecordType *kgpc_type_get_record(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_RECORD)
+    return NULL;
+  return type->info.record_info;
+}
 
-    if (token[0] == '\'' && token[1] != '\0' && token[2] == '\'' && token[3] == '\0')
-    {
-        *out_value = (unsigned char)token[1];
-        return 0;
-    }
-    if (token[0] == '#' && token[1] != '\0')
-    {
-        char *endptr = NULL;
-        errno = 0;
-        long long char_code = strtoll(token + 1, &endptr, 10);
-        if (endptr != token + 1 && *endptr == '\0' &&
-            errno != ERANGE && char_code >= 0 && char_code <= UCHAR_MAX)
-        {
-            *out_value = char_code;
-            return 0;
-        }
-    }
+int kgpc_type_get_primitive_tag(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
+    return -1;
+  return type->info.primitive_type_tag;
+}
 
-    int expr_value = 0;
-    if (kgpc_resolve_array_bound_expr(symtab, token, &expr_value) == 0)
-    {
-        *out_value = expr_value;
-        return 0;
-    }
+KgpcType *kgpc_type_get_array_element_type(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+    return NULL;
+  return type->info.array_info.element_type;
+}
 
+static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token,
+                                  long long *out_value) {
+  if (out_value == NULL || token == NULL)
+    return -1;
+  while (*token && isspace((unsigned char)*token))
+    token++;
+  if (*token == '\0')
+    return -1;
+
+  if (token[0] == '\'' && token[1] != '\0' && token[2] == '\'' &&
+      token[3] == '\0') {
+    *out_value = (unsigned char)token[1];
+    return 0;
+  }
+  if (token[0] == '#' && token[1] != '\0') {
     char *endptr = NULL;
     errno = 0;
-    long long val = strtoll(token, &endptr, 10);
-    if (endptr != token)
-    {
-        while (*endptr && isspace((unsigned char)*endptr)) endptr++;
-        if (*endptr == '\0' && errno != ERANGE)
-        {
-            *out_value = val;
-            return 0;
-        }
+    long long char_code = strtoll(token + 1, &endptr, 10);
+    if (endptr != token + 1 && *endptr == '\0' && errno != ERANGE &&
+        char_code >= 0 && char_code <= UCHAR_MAX) {
+      *out_value = char_code;
+      return 0;
     }
+  }
 
-    if (symtab != NULL)
-    {
-        /* Trim the token for lookup */
-        char *trimmed = strdup(token);
-        if (trimmed == NULL)
-            return -1;
-
-        char *end = trimmed + strlen(trimmed) - 1;
-        while (end >= trimmed && isspace((unsigned char)*end)) *end-- = '\0';
-
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, symtab, trimmed) != 0 && node != NULL &&
-            (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
-        {
-            *out_value = node->const_int_value;
-            free(trimmed);
-            return 0;
-        }
-        if (trimmed[0] != '\0' && trimmed[1] == '\0' &&
-            isprint((unsigned char)trimmed[0]))
-        {
-            *out_value = (unsigned char)trimmed[0];
-            free(trimmed);
-            return 0;
-        }
-        free(trimmed);
-    }
-    return -1;
-}
-
-int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, KgpcArrayDimensionInfo *info)
-{
-    if (type == NULL || info == NULL || type->kind != TYPE_KIND_ARRAY)
-        return -1;
-
-    memset(info, 0, sizeof(KgpcArrayDimensionInfo));
-    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
-
-    if (alias != NULL && alias->array_dimensions != NULL)
-    {
-        /* Use dimensions metadata from TypeAlias */
-        ListNode_t *dim_node = alias->array_dimensions;
-        while (dim_node != NULL && info->dim_count < 10)
-        {
-            const char *range_str = (const char *)dim_node->cur;
-            int dim_parsed = 0;
-            if (range_str != NULL)
-            {
-                const char *dotdot = strstr(range_str, "..");
-                if (dotdot != NULL)
-                {
-                    size_t left_len = (size_t)(dotdot - range_str);
-                    char *left = (char *)malloc(left_len + 1);
-                    if (left != NULL)
-                    {
-                        memcpy(left, range_str, left_len);
-                        left[left_len] = '\0';
-                        long long lower = 0;
-                        long long upper = 0;
-                        if (kgpc_parse_array_bound(symtab, left, &lower) != 0)
-                        {
-                            free(left);
-                            return -1;
-                        }
-                        free(left);
-                        if (kgpc_parse_array_bound(symtab, dotdot + 2, &upper) != 0)
-                            return -1;
-
-                        long long size = upper - lower + 1;
-                        if (size <= 0)
-                            return -1;
-
-                        info->dim_lowers[info->dim_count] = lower;
-                        info->dim_uppers[info->dim_count] = upper;
-                        info->dim_sizes[info->dim_count] = size;
-                        dim_parsed = 1;
-                    }
-                    else
-                    {
-                        /* malloc failure: this is a critical error, but we return error from function */
-                        return -1;
-                    }
-                }
-                else if (pascal_identifier_equals(range_str, "Boolean"))
-                {
-                    info->dim_lowers[info->dim_count] = 0;
-                    info->dim_uppers[info->dim_count] = 1;
-                    info->dim_sizes[info->dim_count] = 2;
-                    dim_parsed = 1;
-                }
-                else if (symtab != NULL)
-                {
-                    HashNode_t *type_node = NULL;
-                    if (FindSymbol(&type_node, symtab, range_str) != 0 &&
-                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
-                    {
-                        struct TypeAlias *range_alias = hashnode_get_type_alias(type_node);
-                        if (range_alias != NULL)
-                        {
-                            if (range_alias->is_enum && range_alias->enum_literals != NULL)
-                            {
-                                info->dim_lowers[info->dim_count] = 0;
-                                info->dim_sizes[info->dim_count] = (long long)ListLength(range_alias->enum_literals);
-                                info->dim_uppers[info->dim_count] = info->dim_sizes[info->dim_count] - 1;
-                                if (info->dim_sizes[info->dim_count] <= 0)
-                                    return -1;
-                                dim_parsed = 1;
-                            }
-                            else if (range_alias->is_range && range_alias->range_known)
-                            {
-                                long long lower = range_alias->range_start;
-                                long long upper = range_alias->range_end;
-                                long long size = upper - lower + 1;
-                                if (size <= 0)
-                                    return -1;
-
-                                info->dim_lowers[info->dim_count] = lower;
-                                info->dim_uppers[info->dim_count] = upper;
-                                info->dim_sizes[info->dim_count] = size;
-                                dim_parsed = 1;
-                            }
-                        }
-                    }
-                }
-            }
-            if (dim_parsed)
-                info->dim_count++;
-            dim_node = dim_node->next;
-        }
-
-        /* Determine element size. If the element type (from a type alias) is itself
-         * an array, use its sizeof rather than drilling to the scalar element type,
-         * since array_dimensions only covers this declaration's dimensions. */
-        info->element_size = -1;
-        if (alias->array_element_storage_size > 0)
-            info->element_size = alias->array_element_storage_size;
-        /* First check the KgpcType's own element_type (most specific — includes
-         * size_in_bytes for string[N] types created during AST construction). */
-        if (info->element_size <= 0 &&
-            type->kind == TYPE_KIND_ARRAY && type->info.array_info.element_type != NULL)
-        {
-            long long direct_size = kgpc_type_sizeof(type->info.array_info.element_type);
-            if (direct_size > 0)
-                info->element_size = direct_size;
-        }
-        if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
-        {
-            HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
-            if (node != NULL && node->type != NULL && kgpc_type_is_array(node->type))
-                info->element_size = kgpc_type_sizeof(node->type);
-            else if (node != NULL && node->type != NULL)
-                info->element_size = kgpc_type_sizeof(node->type);
-        }
-        if (info->element_size <= 0)
-            info->element_size = kgpc_type_get_array_scalar_element_size(type);
-        if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
-        {
-            HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
-            if (node != NULL && node->type != NULL)
-                info->element_size = kgpc_type_get_array_scalar_element_size(node->type);
-        }
-    }
-    else
-    {
-        /* Traverse nested KgpcType objects, computing strides per-dimension
-         * using the sizeof each level's element type. This correctly handles
-         * mixed static/dynamic nested arrays where intermediate element types
-         * are dynamic array descriptors (16 bytes) rather than scalar elements.
-         * Example: array of array[0..255] of array of longint
-         *   stride[0] = sizeof(array[0..255] of array of longint) = 4096
-         *   stride[1] = sizeof(array of longint) = 16
-         *   stride[2] = sizeof(longint) = 8
-         */
-        KgpcType *curr = type;
-        while (curr != NULL && curr->kind == TYPE_KIND_ARRAY && info->dim_count < 10)
-        {
-            /* Resolve deferred element types: dynamic-array params declared
-             * `array of Treference` may carry only element_type_id, with
-             * element_type set lazily.  Without resolution, kgpc_type_sizeof
-             * returns -1 and the stride collapses to 1, miscompiling the
-             * index expression.  Try the resolver first (handles same-scope
-             * deferred lookup), then fall back to the unit-aware FindSymbol
-             * tree walk when the element type lives in a different unit. */
-            KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(curr, symtab);
-            if (elem_type == NULL)
-                elem_type = curr->info.array_info.element_type;
-            if (elem_type == NULL && curr->info.array_info.element_type_id != NULL &&
-                symtab != NULL)
-            {
-                /* kgpc_type_get_array_element_type_resolved walks only the current
-                 * scope chain via kgpc_find_type_node, which misses cross-unit
-                 * type aliases.  Fall back to the unit-aware FindSymbol tree walk
-                 * so dynamic-array parameters like `array of Treference` —
-                 * where Treference is declared in another unit — get a non-null
-                 * element type. */
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, curr->info.array_info.element_type_id) != 0 &&
-                    node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL)
-                {
-                    elem_type = node->type;
-                }
-            }
-            long long elem_size = kgpc_type_sizeof(elem_type);
-            if (elem_size <= 0)
-                elem_size = 1;
-
-            info->dim_lowers[info->dim_count] = curr->info.array_info.start_index;
-            info->dim_uppers[info->dim_count] = curr->info.array_info.end_index;
-
-            long long dim_size = curr->info.array_info.end_index - curr->info.array_info.start_index + 1;
-            if (dim_size < 0) dim_size = 0;  /* dynamic array: runtime-determined */
-
-            info->dim_sizes[info->dim_count] = dim_size;
-            info->strides[info->dim_count] = elem_size;
-
-            info->dim_count++;
-            curr = elem_type;
-        }
-        if (curr != NULL)
-            info->element_size = kgpc_type_sizeof(curr);
-    }
-
-    if (info->dim_count == 0)
-        return -1;
-
-    if (info->element_size <= 0)
-        info->element_size = 1;
-
-    /* Compute total_size if not already set (alias branch uses the loop below;
-     * else branch strides are already computed per-level above). */
-    if (info->strides[0] == 0)
-    {
-        /* Alias branch: compute strides from element_size */
-        info->total_size = info->element_size;
-        for (int i = info->dim_count - 1; i >= 0; i--)
-        {
-            info->strides[i] = info->total_size;
-            if (info->dim_sizes[i] > 0)
-            {
-                if (info->total_size > LLONG_MAX / info->dim_sizes[i])
-                    return -1;
-                info->total_size *= info->dim_sizes[i];
-            }
-        }
-    }
-    else
-    {
-        /* Else branch: strides computed per-level; compute total_size */
-        info->total_size = info->element_size;
-        for (int i = info->dim_count - 1; i >= 0; i--)
-        {
-            if (info->dim_sizes[i] > 0)
-            {
-                if (info->total_size > LLONG_MAX / info->dim_sizes[i])
-                    return -1;
-                info->total_size *= info->dim_sizes[i];
-            }
-        }
-    }
-
+  int expr_value = 0;
+  if (kgpc_resolve_array_bound_expr(symtab, token, &expr_value) == 0) {
+    *out_value = expr_value;
     return 0;
+  }
+
+  char *endptr = NULL;
+  errno = 0;
+  long long val = strtoll(token, &endptr, 10);
+  if (endptr != token) {
+    while (*endptr && isspace((unsigned char)*endptr))
+      endptr++;
+    if (*endptr == '\0' && errno != ERANGE) {
+      *out_value = val;
+      return 0;
+    }
+  }
+
+  if (symtab != NULL) {
+    /* Trim the token for lookup */
+    char *trimmed = strdup(token);
+    if (trimmed == NULL)
+      return -1;
+
+    char *end = trimmed + strlen(trimmed) - 1;
+    while (end >= trimmed && isspace((unsigned char)*end))
+      *end-- = '\0';
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, trimmed) != 0 && node != NULL &&
+        (node->hash_type == HASHTYPE_CONST || node->is_typed_const)) {
+      *out_value = node->const_int_value;
+      free(trimmed);
+      return 0;
+    }
+    if (trimmed[0] != '\0' && trimmed[1] == '\0' &&
+        isprint((unsigned char)trimmed[0])) {
+      *out_value = (unsigned char)trimmed[0];
+      free(trimmed);
+      return 0;
+    }
+    free(trimmed);
+  }
+  return -1;
 }
 
-KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *symtab)
-{
-    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
-        return NULL;
-    
-    /* If element_type is already resolved, return it */
-    if (type->info.array_info.element_type != NULL)
-        return type->info.array_info.element_type;
-    
-    /* Try deferred resolution using element_type_id */
-    if (type->info.array_info.element_type_id != NULL && symtab != NULL) {
-        HashNode_t *element_node = kgpc_find_type_node(symtab, type->info.array_info.element_type_id);
-        if (element_node != NULL && element_node->type != NULL) {
-            /* Found the element type - update the array type and return it */
-            type->info.array_info.element_type = element_node->type;
-            kgpc_type_retain(element_node->type);
-            /* Free element_type_id since resolution is complete */
-            if (type->info.array_info.element_type_id != NULL) {
-                free(type->info.array_info.element_type_id);
-                type->info.array_info.element_type_id = NULL;
+int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab,
+                                       KgpcArrayDimensionInfo *info) {
+  if (type == NULL || info == NULL || type->kind != TYPE_KIND_ARRAY)
+    return -1;
+
+  memset(info, 0, sizeof(KgpcArrayDimensionInfo));
+  struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+
+  if (alias != NULL && alias->array_dimensions != NULL) {
+    /* Use dimensions metadata from TypeAlias */
+    ListNode_t *dim_node = alias->array_dimensions;
+    while (dim_node != NULL && info->dim_count < 10) {
+      const char *range_str = (const char *)dim_node->cur;
+      int dim_parsed = 0;
+      if (range_str != NULL) {
+        const char *dotdot = strstr(range_str, "..");
+        if (dotdot != NULL) {
+          size_t left_len = (size_t)(dotdot - range_str);
+          char *left = (char *)malloc(left_len + 1);
+          if (left != NULL) {
+            memcpy(left, range_str, left_len);
+            left[left_len] = '\0';
+            long long lower = 0;
+            long long upper = 0;
+            if (kgpc_parse_array_bound(symtab, left, &lower) != 0) {
+              free(left);
+              return -1;
             }
-            return type->info.array_info.element_type;
+            free(left);
+            if (kgpc_parse_array_bound(symtab, dotdot + 2, &upper) != 0)
+              return -1;
+
+            long long size = upper - lower + 1;
+            if (size <= 0)
+              return -1;
+
+            info->dim_lowers[info->dim_count] = lower;
+            info->dim_uppers[info->dim_count] = upper;
+            info->dim_sizes[info->dim_count] = size;
+            dim_parsed = 1;
+          } else {
+            /* malloc failure: this is a critical error, but we return error
+             * from function */
+            return -1;
+          }
+        } else if (pascal_identifier_equals(range_str, "Boolean")) {
+          info->dim_lowers[info->dim_count] = 0;
+          info->dim_uppers[info->dim_count] = 1;
+          info->dim_sizes[info->dim_count] = 2;
+          dim_parsed = 1;
+        } else if (symtab != NULL) {
+          HashNode_t *type_node = NULL;
+          if (FindSymbol(&type_node, symtab, range_str) != 0 &&
+              type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) {
+            struct TypeAlias *range_alias = hashnode_get_type_alias(type_node);
+            if (range_alias != NULL) {
+              if (range_alias->is_enum && range_alias->enum_literals != NULL) {
+                info->dim_lowers[info->dim_count] = 0;
+                info->dim_sizes[info->dim_count] =
+                    (long long)ListLength(range_alias->enum_literals);
+                info->dim_uppers[info->dim_count] =
+                    info->dim_sizes[info->dim_count] - 1;
+                if (info->dim_sizes[info->dim_count] <= 0)
+                  return -1;
+                dim_parsed = 1;
+              } else if (range_alias->is_range && range_alias->range_known) {
+                long long lower = range_alias->range_start;
+                long long upper = range_alias->range_end;
+                long long size = upper - lower + 1;
+                if (size <= 0)
+                  return -1;
+
+                info->dim_lowers[info->dim_count] = lower;
+                info->dim_uppers[info->dim_count] = upper;
+                info->dim_sizes[info->dim_count] = size;
+                dim_parsed = 1;
+              }
+            }
+          }
         }
+      }
+      if (dim_parsed)
+        info->dim_count++;
+      dim_node = dim_node->next;
     }
-    
+
+    /* Determine element size. If the element type (from a type alias) is itself
+     * an array, use its sizeof rather than drilling to the scalar element type,
+     * since array_dimensions only covers this declaration's dimensions. */
+    info->element_size = -1;
+    if (alias->array_element_storage_size > 0)
+      info->element_size = alias->array_element_storage_size;
+    /* First check the KgpcType's own element_type (most specific — includes
+     * size_in_bytes for string[N] types created during AST construction). */
+    if (info->element_size <= 0 && type->kind == TYPE_KIND_ARRAY &&
+        type->info.array_info.element_type != NULL) {
+      long long direct_size =
+          kgpc_type_sizeof(type->info.array_info.element_type);
+      if (direct_size > 0)
+        info->element_size = direct_size;
+    }
+    if (info->element_size <= 0 && alias->array_element_type_id != NULL &&
+        symtab != NULL) {
+      HashNode_t *node =
+          kgpc_find_type_node(symtab, alias->array_element_type_id);
+      if (node != NULL && node->type != NULL && kgpc_type_is_array(node->type))
+        info->element_size = kgpc_type_sizeof(node->type);
+      else if (node != NULL && node->type != NULL)
+        info->element_size = kgpc_type_sizeof(node->type);
+    }
+    if (info->element_size <= 0)
+      info->element_size = kgpc_type_get_array_scalar_element_size(type);
+    if (info->element_size <= 0 && alias->array_element_type_id != NULL &&
+        symtab != NULL) {
+      HashNode_t *node =
+          kgpc_find_type_node(symtab, alias->array_element_type_id);
+      if (node != NULL && node->type != NULL)
+        info->element_size =
+            kgpc_type_get_array_scalar_element_size(node->type);
+    }
+  } else {
+    /* Traverse nested KgpcType objects, computing strides per-dimension
+     * using the sizeof each level's element type. This correctly handles
+     * mixed static/dynamic nested arrays where intermediate element types
+     * are dynamic array descriptors (16 bytes) rather than scalar elements.
+     * Example: array of array[0..255] of array of longint
+     *   stride[0] = sizeof(array[0..255] of array of longint) = 4096
+     *   stride[1] = sizeof(array of longint) = 16
+     *   stride[2] = sizeof(longint) = 8
+     */
+    KgpcType *curr = type;
+    while (curr != NULL && curr->kind == TYPE_KIND_ARRAY &&
+           info->dim_count < 10) {
+      /* Resolve deferred element types: dynamic-array params declared
+       * `array of Treference` may carry only element_type_id, with
+       * element_type set lazily.  Without resolution, kgpc_type_sizeof
+       * returns -1 and the stride collapses to 1, miscompiling the
+       * index expression.  Try the resolver first (handles same-scope
+       * deferred lookup), then fall back to the unit-aware FindSymbol
+       * tree walk when the element type lives in a different unit. */
+      KgpcType *elem_type =
+          kgpc_type_get_array_element_type_resolved(curr, symtab);
+      if (elem_type == NULL)
+        elem_type = curr->info.array_info.element_type;
+      if (elem_type == NULL && curr->info.array_info.element_type_id != NULL &&
+          symtab != NULL) {
+        /* kgpc_type_get_array_element_type_resolved walks only the current
+         * scope chain via kgpc_find_type_node, which misses cross-unit
+         * type aliases.  Fall back to the unit-aware FindSymbol tree walk
+         * so dynamic-array parameters like `array of Treference` —
+         * where Treference is declared in another unit — get a non-null
+         * element type. */
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, curr->info.array_info.element_type_id) !=
+                0 &&
+            node != NULL && node->hash_type == HASHTYPE_TYPE &&
+            node->type != NULL) {
+          elem_type = node->type;
+        }
+      }
+      long long elem_size = kgpc_type_sizeof(elem_type);
+      if (elem_size <= 0)
+        elem_size = 1;
+
+      info->dim_lowers[info->dim_count] = curr->info.array_info.start_index;
+      info->dim_uppers[info->dim_count] = curr->info.array_info.end_index;
+
+      long long dim_size = curr->info.array_info.end_index -
+                           curr->info.array_info.start_index + 1;
+      if (dim_size < 0)
+        dim_size = 0; /* dynamic array: runtime-determined */
+
+      info->dim_sizes[info->dim_count] = dim_size;
+      info->strides[info->dim_count] = elem_size;
+
+      info->dim_count++;
+      curr = elem_type;
+    }
+    if (curr != NULL)
+      info->element_size = kgpc_type_sizeof(curr);
+  }
+
+  if (info->dim_count == 0)
+    return -1;
+
+  if (info->element_size <= 0)
+    info->element_size = 1;
+
+  /* Compute total_size if not already set (alias branch uses the loop below;
+   * else branch strides are already computed per-level above). */
+  if (info->strides[0] == 0) {
+    /* Alias branch: compute strides from element_size */
+    info->total_size = info->element_size;
+    for (int i = info->dim_count - 1; i >= 0; i--) {
+      info->strides[i] = info->total_size;
+      if (info->dim_sizes[i] > 0) {
+        if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+          return -1;
+        info->total_size *= info->dim_sizes[i];
+      }
+    }
+  } else {
+    /* Else branch: strides computed per-level; compute total_size */
+    info->total_size = info->element_size;
+    for (int i = info->dim_count - 1; i >= 0; i--) {
+      if (info->dim_sizes[i] > 0) {
+        if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+          return -1;
+        info->total_size *= info->dim_sizes[i];
+      }
+    }
+  }
+
+  return 0;
+}
+
+KgpcType *kgpc_type_get_array_element_type_resolved(KgpcType *type,
+                                                    SymTab_t *symtab) {
+  if (type == NULL || type->kind != TYPE_KIND_ARRAY)
     return NULL;
+
+  /* If element_type is already resolved, return it */
+  if (type->info.array_info.element_type != NULL)
+    return type->info.array_info.element_type;
+
+  /* Try deferred resolution using element_type_id */
+  if (type->info.array_info.element_type_id != NULL && symtab != NULL) {
+    HashNode_t *element_node =
+        kgpc_find_type_node(symtab, type->info.array_info.element_type_id);
+    if (element_node != NULL && element_node->type != NULL) {
+      /* Found the element type - update the array type and return it */
+      type->info.array_info.element_type = element_node->type;
+      kgpc_type_retain(element_node->type);
+      /* Free element_type_id since resolution is complete */
+      if (type->info.array_info.element_type_id != NULL) {
+        free(type->info.array_info.element_type_id);
+        type->info.array_info.element_type_id = NULL;
+      }
+      return type->info.array_info.element_type;
+    }
+  }
+
+  return NULL;
 }
 
-KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
-{
-    if (type == NULL || type->kind != TYPE_KIND_POINTER)
-        return type != NULL ? type->info.points_to : NULL;
+KgpcType *kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab) {
+  if (type == NULL || type->kind != TYPE_KIND_POINTER)
+    return type != NULL ? type->info.points_to : NULL;
 
-    KgpcType *pointee = type->info.points_to;
+  KgpcType *pointee = type->info.points_to;
 
-    /* Already fully resolved */
-    if (pointee != NULL &&
-        (pointee->kind == TYPE_KIND_RECORD || pointee->kind == TYPE_KIND_ARRAY))
-        return pointee;
+  /* Already fully resolved */
+  if (pointee != NULL &&
+      (pointee->kind == TYPE_KIND_RECORD || pointee->kind == TYPE_KIND_ARRAY))
+    return pointee;
 
-    if (symtab == NULL)
-        return pointee;
+  if (symtab == NULL)
+    return pointee;
 
-    /* Try to find the actual pointee type using type_alias metadata */
-    const char *target_id = NULL;
+  /* Try to find the actual pointee type using type_alias metadata */
+  const char *target_id = NULL;
 
-    /* First try the pointer's own type_alias */
-    if (type->type_alias != NULL)
-    {
-        if (type->type_alias->pointer_type_id != NULL)
-            target_id = type->type_alias->pointer_type_id;
-        else if (type->type_alias->target_type_id != NULL)
-            target_id = type->type_alias->target_type_id;
-    }
+  /* First try the pointer's own type_alias */
+  if (type->type_alias != NULL) {
+    if (type->type_alias->pointer_type_id != NULL)
+      target_id = type->type_alias->pointer_type_id;
+    else if (type->type_alias->target_type_id != NULL)
+      target_id = type->type_alias->target_type_id;
+  }
 
-    /* Also try the pointee's type_alias */
-    if (target_id == NULL && pointee != NULL && pointee->type_alias != NULL)
-    {
-        if (pointee->type_alias->alias_name != NULL)
-            target_id = pointee->type_alias->alias_name;
-        else if (pointee->type_alias->target_type_id != NULL)
-            target_id = pointee->type_alias->target_type_id;
-    }
+  /* Also try the pointee's type_alias */
+  if (target_id == NULL && pointee != NULL && pointee->type_alias != NULL) {
+    if (pointee->type_alias->alias_name != NULL)
+      target_id = pointee->type_alias->alias_name;
+    else if (pointee->type_alias->target_type_id != NULL)
+      target_id = pointee->type_alias->target_type_id;
+  }
 
-    if (target_id == NULL)
-    {
-        /* Last resort: if the pointer's type_alias has a pointer_type_ref,
-         * try to resolve through that */
-        if (type->type_alias != NULL && type->type_alias->pointer_type_ref != NULL)
-        {
-            HashNode_t *ref_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
-                type->type_alias->pointer_type_ref, 0);
-            if (ref_node != NULL && ref_node->type != NULL &&
-                (ref_node->type->kind == TYPE_KIND_RECORD ||
-                 ref_node->type->kind == TYPE_KIND_ARRAY))
-            {
-                KgpcType *resolved = ref_node->type;
-                kgpc_type_retain(resolved);
-                kgpc_type_release(pointee);
-                type->info.points_to = resolved;
-                return resolved;
-            }
-        }
-        return pointee;
-    }
-
-    HashNode_t *target_node = kgpc_find_type_node(symtab, target_id);
-    if (target_node != NULL && target_node->type != NULL &&
-        (target_node->type->kind == TYPE_KIND_RECORD ||
-         target_node->type->kind == TYPE_KIND_ARRAY))
-    {
-        /* Found the actual pointee type — patch the pointer's points_to */
-        KgpcType *resolved = target_node->type;
+  if (target_id == NULL) {
+    /* Last resort: if the pointer's type_alias has a pointer_type_ref,
+     * try to resolve through that */
+    if (type->type_alias != NULL &&
+        type->type_alias->pointer_type_ref != NULL) {
+      HashNode_t *ref_node = kgpc_find_type_node_ref_with_unit_flag(
+          symtab, type->type_alias->pointer_type_ref, 0);
+      if (ref_node != NULL && ref_node->type != NULL &&
+          (ref_node->type->kind == TYPE_KIND_RECORD ||
+           ref_node->type->kind == TYPE_KIND_ARRAY)) {
+        KgpcType *resolved = ref_node->type;
         kgpc_type_retain(resolved);
         kgpc_type_release(pointee);
         type->info.points_to = resolved;
         return resolved;
+      }
     }
-
     return pointee;
+  }
+
+  HashNode_t *target_node = kgpc_find_type_node(symtab, target_id);
+  if (target_node != NULL && target_node->type != NULL &&
+      (target_node->type->kind == TYPE_KIND_RECORD ||
+       target_node->type->kind == TYPE_KIND_ARRAY)) {
+    /* Found the actual pointee type — patch the pointer's points_to */
+    KgpcType *resolved = target_node->type;
+    kgpc_type_retain(resolved);
+    kgpc_type_release(pointee);
+    type->info.points_to = resolved;
+    return resolved;
+  }
+
+  return pointee;
 }
 
-ListNode_t* kgpc_type_get_procedure_params(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
-        return NULL;
-    return type->info.proc_info.params;
+ListNode_t *kgpc_type_get_procedure_params(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+    return NULL;
+  return type->info.proc_info.params;
 }
 
-KgpcType* kgpc_type_get_return_type(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
-        return NULL;
-    return type->info.proc_info.return_type;
+KgpcType *kgpc_type_get_return_type(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+    return NULL;
+  return type->info.proc_info.return_type;
 }
 
-int kgpc_type_is_dynamic_array(const KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
-        return 0;
-    /* Dynamic/open arrays are represented with end < start (e.g., [0..-1]) */
-    return (type->info.array_info.end_index < type->info.array_info.start_index);
+int kgpc_type_is_dynamic_array(const KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+    return 0;
+  /* Dynamic/open arrays are represented with end < start (e.g., [0..-1]) */
+  return (type->info.array_info.end_index < type->info.array_info.start_index);
 }
 
-long long kgpc_type_get_array_element_size(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
-        return -1;
+long long kgpc_type_get_array_element_size(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+    return -1;
 
-    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
-    if (alias != NULL && alias->array_element_storage_size > 0)
-        return alias->array_element_storage_size;
-    
-    KgpcType *element_type = type->info.array_info.element_type;
-    if (element_type == NULL)
-        return -1;
-    
-    return kgpc_type_sizeof(element_type);
+  struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+  if (alias != NULL && alias->array_element_storage_size > 0)
+    return alias->array_element_storage_size;
+
+  KgpcType *element_type = type->info.array_info.element_type;
+  if (element_type == NULL)
+    return -1;
+
+  return kgpc_type_sizeof(element_type);
 }
 
 /* Helper function to convert VarType enum to primitive type tag */
-static int var_type_to_primitive_tag(enum VarType var_type)
-{
-    switch(var_type)
-    {
-        case HASHVAR_INTEGER:
-            return INT_TYPE;
-        case HASHVAR_LONGINT:
-            return LONGINT_TYPE;
-        case HASHVAR_REAL:
-            return REAL_TYPE;
-        case HASHVAR_BOOLEAN:
-            return BOOL;
-        case HASHVAR_CHAR:
-            return CHAR_TYPE;
-        case HASHVAR_PCHAR:
-            return STRING_TYPE;
-        case HASHVAR_SHORTSTRING:
-            return SHORTSTRING_TYPE;
-        case HASHVAR_SET:
-            return SET_TYPE;
-        case HASHVAR_FILE:
-            return FILE_TYPE;
-        case HASHVAR_TEXT:
-            return TEXT_TYPE;
-        case HASHVAR_ENUM:
-            return ENUM_TYPE;
-        default:
-            return UNKNOWN_TYPE;
-    }
+static int var_type_to_primitive_tag(enum VarType var_type) {
+  switch (var_type) {
+  case HASHVAR_INTEGER:
+    return INT_TYPE;
+  case HASHVAR_LONGINT:
+    return LONGINT_TYPE;
+  case HASHVAR_REAL:
+    return REAL_TYPE;
+  case HASHVAR_BOOLEAN:
+    return BOOL;
+  case HASHVAR_CHAR:
+    return CHAR_TYPE;
+  case HASHVAR_PCHAR:
+    return STRING_TYPE;
+  case HASHVAR_SHORTSTRING:
+    return SHORTSTRING_TYPE;
+  case HASHVAR_SET:
+    return SET_TYPE;
+  case HASHVAR_FILE:
+    return FILE_TYPE;
+  case HASHVAR_TEXT:
+    return TEXT_TYPE;
+  case HASHVAR_ENUM:
+    return ENUM_TYPE;
+  default:
+    return UNKNOWN_TYPE;
+  }
 }
 
-static long long kgpc_type_get_array_scalar_element_size(KgpcType *type)
-{
-    KgpcType *curr = type;
-    while (curr != NULL && curr->kind == TYPE_KIND_ARRAY)
-        curr = curr->info.array_info.element_type;
-    if (curr == NULL)
-        return -1;
-    return kgpc_type_sizeof(curr);
+static long long kgpc_type_get_array_scalar_element_size(KgpcType *type) {
+  KgpcType *curr = type;
+  while (curr != NULL && curr->kind == TYPE_KIND_ARRAY)
+    curr = curr->info.array_info.element_type;
+  if (curr == NULL)
+    return -1;
+  return kgpc_type_sizeof(curr);
 }
 
-long long kgpc_type_get_array_of_const_element_size(KgpcType *type)
-{
-    if (!kgpc_type_is_array_of_const(type))
-        return -1;
-    return type->info.array_of_const_info.element_size;
+long long kgpc_type_get_array_of_const_element_size(KgpcType *type) {
+  if (!kgpc_type_is_array_of_const(type))
+    return -1;
+  return type->info.array_of_const_info.element_size;
 }
 
 /* Create a KgpcType from a VarType enum value.
@@ -4087,745 +4025,723 @@ long long kgpc_type_get_array_of_const_element_size(KgpcType *type)
  * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE,
  * HASHVAR_METHODPROCEDURE
  * require additional information and cannot be created from VarType alone.
- * Returns NULL for these types - caller must use appropriate create_*_type() function.
+ * Returns NULL for these types - caller must use appropriate create_*_type()
+ * function.
  */
-KgpcType* kgpc_type_from_var_type(enum VarType var_type)
-{
-    switch(var_type)
-    {
-        case HASHVAR_INTEGER:
-        case HASHVAR_LONGINT:
-        case HASHVAR_REAL:
-        case HASHVAR_BOOLEAN:
-        case HASHVAR_CHAR:
-        case HASHVAR_PCHAR:
-        case HASHVAR_SHORTSTRING:
-        case HASHVAR_SET:
-        case HASHVAR_FILE:
-        case HASHVAR_TEXT:
-        case HASHVAR_ENUM:
-        {
-            int tag = var_type_to_primitive_tag(var_type);
-            return create_primitive_type(tag);
-        }
-        
-        case HASHVAR_ARRAY:
-        case HASHVAR_RECORD:
-        case HASHVAR_POINTER:
-        case HASHVAR_PROCEDURE:
-        case HASHVAR_METHODPROCEDURE:
-        case HASHVAR_UNTYPED:
-            /* These require additional information beyond VarType */
-            return NULL;
-            
-        default:
-            return NULL;
-    }
+KgpcType *kgpc_type_from_var_type(enum VarType var_type) {
+  switch (var_type) {
+  case HASHVAR_INTEGER:
+  case HASHVAR_LONGINT:
+  case HASHVAR_REAL:
+  case HASHVAR_BOOLEAN:
+  case HASHVAR_CHAR:
+  case HASHVAR_PCHAR:
+  case HASHVAR_SHORTSTRING:
+  case HASHVAR_SET:
+  case HASHVAR_FILE:
+  case HASHVAR_TEXT:
+  case HASHVAR_ENUM: {
+    int tag = var_type_to_primitive_tag(var_type);
+    return create_primitive_type(tag);
+  }
+
+  case HASHVAR_ARRAY:
+  case HASHVAR_RECORD:
+  case HASHVAR_POINTER:
+  case HASHVAR_PROCEDURE:
+  case HASHVAR_METHODPROCEDURE:
+  case HASHVAR_UNTYPED:
+    /* These require additional information beyond VarType */
+    return NULL;
+
+  default:
+    return NULL;
+  }
 }
 
 /* Get the type alias metadata from a KgpcType */
 /* Helper function to copy a list of strings */
-static ListNode_t *copy_string_list(const ListNode_t *src)
-{
-    if (src == NULL)
+static ListNode_t *copy_string_list(const ListNode_t *src) {
+  if (src == NULL)
+    return NULL;
+
+  ListNode_t *dst = NULL;
+  ListNode_t *tail = NULL;
+  const ListNode_t *cur = src;
+
+  while (cur != NULL) {
+    if (cur->type == LIST_STRING && cur->cur != NULL) {
+      ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+      if (new_node == NULL) {
+        /* Free already allocated nodes on failure */
+        destroy_list(dst);
         return NULL;
-    
-    ListNode_t *dst = NULL;
-    ListNode_t *tail = NULL;
-    const ListNode_t *cur = src;
-    
-    while (cur != NULL)
-    {
-        if (cur->type == LIST_STRING && cur->cur != NULL)
-        {
-            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
-            if (new_node == NULL)
-            {
-                /* Free already allocated nodes on failure */
-                destroy_list(dst);
-                return NULL;
-            }
-            new_node->type = LIST_STRING;
-            new_node->cur = strdup((char *)cur->cur);
-            new_node->next = NULL;
-            
-            if (dst == NULL)
-            {
-                dst = new_node;
-                tail = new_node;
-            }
-            else
-            {
-                tail->next = new_node;
-                tail = new_node;
-            }
-        }
-        cur = cur->next;
+      }
+      new_node->type = LIST_STRING;
+      new_node->cur = strdup((char *)cur->cur);
+      new_node->next = NULL;
+
+      if (dst == NULL) {
+        dst = new_node;
+        tail = new_node;
+      } else {
+        tail->next = new_node;
+        tail = new_node;
+      }
     }
-    
-    return dst;
+    cur = cur->next;
+  }
+
+  return dst;
 }
 
 /* Copy a TypeAlias structure */
-static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
-{
-    if (src == NULL)
-        return NULL;
-    
-    struct TypeAlias *dst = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-    if (dst == NULL)
-        return NULL;
-    
-    /* Copy simple fields */
-    dst->base_type = src->base_type;
-    dst->is_char_alias = src->is_char_alias;
-    dst->is_array = src->is_array;
-    dst->array_start = src->array_start;
-    dst->array_end = src->array_end;
-    dst->array_element_type = src->array_element_type;
-    dst->array_element_storage_size = src->array_element_storage_size;
-    dst->is_shortstring = src->is_shortstring;
-    dst->is_wide_string = src->is_wide_string;
-    dst->is_open_array = src->is_open_array;
-    dst->is_pointer = src->is_pointer;
-    dst->is_class_reference = src->is_class_reference;
-    dst->pointer_type = src->pointer_type;
-    dst->is_set = src->is_set;
-    dst->set_element_type = src->set_element_type;
-    dst->is_enum = src->is_enum;
-    dst->enum_is_scoped = src->enum_is_scoped;
-    dst->enum_has_explicit_values = src->enum_has_explicit_values;
-    dst->is_file = src->is_file;
-    dst->file_type = src->file_type;
-    dst->is_range = src->is_range;
-    dst->range_known = src->range_known;
-    dst->range_start = src->range_start;
-    dst->range_end = src->range_end;
-    dst->storage_size = src->storage_size;
-    
-    /* Copy string fields with duplication */
-    if (src->alias_name != NULL)
-        dst->alias_name = strdup(src->alias_name);
-    if (src->target_type_id != NULL)
-        dst->target_type_id = strdup(src->target_type_id);
-    if (src->array_element_type_id != NULL)
-        dst->array_element_type_id = strdup(src->array_element_type_id);
-    if (src->pointer_type_id != NULL)
-        dst->pointer_type_id = strdup(src->pointer_type_id);
-    if (src->set_element_type_id != NULL)
-        dst->set_element_type_id = strdup(src->set_element_type_id);
-    if (src->file_type_id != NULL)
-        dst->file_type_id = strdup(src->file_type_id);
-    if (src->range_start_str != NULL)
-        dst->range_start_str = strdup(src->range_start_str);
-    if (src->range_end_str != NULL)
-        dst->range_end_str = strdup(src->range_end_str);
+static struct TypeAlias *copy_type_alias(const struct TypeAlias *src) {
+  if (src == NULL)
+    return NULL;
 
-    if (src->target_type_ref != NULL && dst->target_type_id == NULL)
-        dst->target_type_ref = type_ref_clone(src->target_type_ref);
-    if (src->array_element_type_ref != NULL && dst->array_element_type_id == NULL)
-        dst->array_element_type_ref = type_ref_clone(src->array_element_type_ref);
-    if (src->pointer_type_ref != NULL && dst->pointer_type_id == NULL)
-        dst->pointer_type_ref = type_ref_clone(src->pointer_type_ref);
-    if (src->set_element_type_ref != NULL && dst->set_element_type_id == NULL)
-        dst->set_element_type_ref = type_ref_clone(src->set_element_type_ref);
-    if (src->file_type_ref != NULL && dst->file_type_id == NULL)
-        dst->file_type_ref = type_ref_clone(src->file_type_ref);
-    
-    /* Deep copy lists */
-    dst->array_dimensions = copy_string_list(src->array_dimensions);
-    dst->enum_literals = copy_string_list(src->enum_literals);
-    dst->enum_values = copy_string_list(src->enum_values);
-    
-    /* Copy inline_record_type - reference only for now (owned by AST) */
-    dst->inline_record_type = src->inline_record_type;
-    
-    /* KgpcType-owned aliases are metadata snapshots. Do not copy kgpc_type:
-     * that field is an owning cache on AST TypeAlias nodes and copying it here
-     * creates cross-type ownership cycles. */
-    dst->kgpc_type = NULL;
-    
-    return dst;
+  struct TypeAlias *dst =
+      (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+  if (dst == NULL)
+    return NULL;
+
+  /* Copy simple fields */
+  dst->base_type = src->base_type;
+  dst->is_char_alias = src->is_char_alias;
+  dst->is_array = src->is_array;
+  dst->array_start = src->array_start;
+  dst->array_end = src->array_end;
+  dst->array_element_type = src->array_element_type;
+  dst->array_element_storage_size = src->array_element_storage_size;
+  dst->is_shortstring = src->is_shortstring;
+  dst->is_wide_string = src->is_wide_string;
+  dst->is_open_array = src->is_open_array;
+  dst->is_pointer = src->is_pointer;
+  dst->is_class_reference = src->is_class_reference;
+  dst->pointer_type = src->pointer_type;
+  dst->is_set = src->is_set;
+  dst->set_element_type = src->set_element_type;
+  dst->is_enum = src->is_enum;
+  dst->enum_is_scoped = src->enum_is_scoped;
+  dst->enum_has_explicit_values = src->enum_has_explicit_values;
+  dst->is_file = src->is_file;
+  dst->file_type = src->file_type;
+  dst->is_range = src->is_range;
+  dst->range_known = src->range_known;
+  dst->range_start = src->range_start;
+  dst->range_end = src->range_end;
+  dst->storage_size = src->storage_size;
+
+  /* Copy string fields with duplication */
+  if (src->alias_name != NULL)
+    dst->alias_name = strdup(src->alias_name);
+  if (src->target_type_id != NULL)
+    dst->target_type_id = strdup(src->target_type_id);
+  if (src->array_element_type_id != NULL)
+    dst->array_element_type_id = strdup(src->array_element_type_id);
+  if (src->pointer_type_id != NULL)
+    dst->pointer_type_id = strdup(src->pointer_type_id);
+  if (src->set_element_type_id != NULL)
+    dst->set_element_type_id = strdup(src->set_element_type_id);
+  if (src->file_type_id != NULL)
+    dst->file_type_id = strdup(src->file_type_id);
+  if (src->range_start_str != NULL)
+    dst->range_start_str = strdup(src->range_start_str);
+  if (src->range_end_str != NULL)
+    dst->range_end_str = strdup(src->range_end_str);
+
+  if (src->target_type_ref != NULL && dst->target_type_id == NULL)
+    dst->target_type_ref = type_ref_clone(src->target_type_ref);
+  if (src->array_element_type_ref != NULL && dst->array_element_type_id == NULL)
+    dst->array_element_type_ref = type_ref_clone(src->array_element_type_ref);
+  if (src->pointer_type_ref != NULL && dst->pointer_type_id == NULL)
+    dst->pointer_type_ref = type_ref_clone(src->pointer_type_ref);
+  if (src->set_element_type_ref != NULL && dst->set_element_type_id == NULL)
+    dst->set_element_type_ref = type_ref_clone(src->set_element_type_ref);
+  if (src->file_type_ref != NULL && dst->file_type_id == NULL)
+    dst->file_type_ref = type_ref_clone(src->file_type_ref);
+
+  /* Deep copy lists */
+  dst->array_dimensions = copy_string_list(src->array_dimensions);
+  dst->enum_literals = copy_string_list(src->enum_literals);
+  dst->enum_values = copy_string_list(src->enum_values);
+
+  /* Copy inline_record_type - reference only for now (owned by AST) */
+  dst->inline_record_type = src->inline_record_type;
+
+  /* KgpcType-owned aliases are metadata snapshots. Do not copy kgpc_type:
+   * that field is an owning cache on AST TypeAlias nodes and copying it here
+   * creates cross-type ownership cycles. */
+  dst->kgpc_type = NULL;
+
+  return dst;
 }
 
 /* Free a copied TypeAlias structure */
-static void free_copied_type_alias(struct TypeAlias *alias)
-{
-    if (alias == NULL)
-        return;
-    
-    free(alias->alias_name);
-    free(alias->target_type_id);
-    free(alias->array_element_type_id);
-    free(alias->pointer_type_id);
-    free(alias->set_element_type_id);
-    free(alias->file_type_id);
-    free(alias->range_start_str);
-    free(alias->range_end_str);
+static void free_copied_type_alias(struct TypeAlias *alias) {
+  if (alias == NULL)
+    return;
 
-    /* Free cloned TypeRef fields */
-    if (alias->target_type_ref != NULL)
-        type_ref_free(alias->target_type_ref);
-    if (alias->array_element_type_ref != NULL)
-        type_ref_free(alias->array_element_type_ref);
-    if (alias->pointer_type_ref != NULL)
-        type_ref_free(alias->pointer_type_ref);
-    if (alias->set_element_type_ref != NULL)
-        type_ref_free(alias->set_element_type_ref);
-    if (alias->file_type_ref != NULL)
-        type_ref_free(alias->file_type_ref);
+  free(alias->alias_name);
+  free(alias->target_type_id);
+  free(alias->array_element_type_id);
+  free(alias->pointer_type_id);
+  free(alias->set_element_type_id);
+  free(alias->file_type_id);
+  free(alias->range_start_str);
+  free(alias->range_end_str);
 
-    /* Free deep-copied lists */
-    if (alias->array_dimensions != NULL)
-        destroy_list(alias->array_dimensions);
-    if (alias->enum_literals != NULL)
-        destroy_list(alias->enum_literals);
-    if (alias->enum_values != NULL)
-        destroy_list(alias->enum_values);
-    
-    /* Note: We don't free inline_record_type as it's owned by AST */
-    
-    /* Save and NULL out kgpc_type before releasing to prevent infinite recursion
-     * when the alias's kgpc_type points back to the type that owns this alias */
-    if (alias->kgpc_type != NULL) {
-        KgpcType *kgpc_type_to_release = alias->kgpc_type;
-        alias->kgpc_type = NULL;  /* Break potential cycle before release */
-        kgpc_type_release(kgpc_type_to_release);
-    }
-    
-    free(alias);
+  /* Free cloned TypeRef fields */
+  if (alias->target_type_ref != NULL)
+    type_ref_free(alias->target_type_ref);
+  if (alias->array_element_type_ref != NULL)
+    type_ref_free(alias->array_element_type_ref);
+  if (alias->pointer_type_ref != NULL)
+    type_ref_free(alias->pointer_type_ref);
+  if (alias->set_element_type_ref != NULL)
+    type_ref_free(alias->set_element_type_ref);
+  if (alias->file_type_ref != NULL)
+    type_ref_free(alias->file_type_ref);
+
+  /* Free deep-copied lists */
+  if (alias->array_dimensions != NULL)
+    destroy_list(alias->array_dimensions);
+  if (alias->enum_literals != NULL)
+    destroy_list(alias->enum_literals);
+  if (alias->enum_values != NULL)
+    destroy_list(alias->enum_values);
+
+  /* Note: We don't free inline_record_type as it's owned by AST */
+
+  /* Save and NULL out kgpc_type before releasing to prevent infinite recursion
+   * when the alias's kgpc_type points back to the type that owns this alias */
+  if (alias->kgpc_type != NULL) {
+    KgpcType *kgpc_type_to_release = alias->kgpc_type;
+    alias->kgpc_type = NULL; /* Break potential cycle before release */
+    kgpc_type_release(kgpc_type_to_release);
+  }
+
+  free(alias);
 }
 
-struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type)
-{
-    if (type == NULL)
-        return NULL;
-    return type->type_alias;
+struct TypeAlias *kgpc_type_get_type_alias(KgpcType *type) {
+  if (type == NULL)
+    return NULL;
+  return type->type_alias;
 }
 
 /* Set the type alias metadata on a KgpcType */
-void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias)
-{
-    assert(type != NULL && "Cannot set type_alias on NULL KgpcType");
-    
-    /* Free existing copied alias if any */
-    if (type->type_alias != NULL) {
-        free_copied_type_alias(type->type_alias);
-        type->type_alias = NULL;
+void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias) {
+  assert(type != NULL && "Cannot set type_alias on NULL KgpcType");
+
+  /* Free existing copied alias if any */
+  if (type->type_alias != NULL) {
+    free_copied_type_alias(type->type_alias);
+    type->type_alias = NULL;
+  }
+
+  /* Copy the alias to make KgpcType own it, or set to NULL if alias is NULL */
+  if (alias != NULL) {
+    type->type_alias = copy_type_alias(alias);
+    /* Break circular reference: if the copied alias's kgpc_type points back
+     * to this type, it would create an ownership cycle that prevents the
+     * ref_count from ever reaching zero.  Release the circular retain and
+     * NULL the pointer; destroy_kgpc_type already guards against this case. */
+    if (type->type_alias != NULL && type->type_alias->kgpc_type == type) {
+      type->type_alias->kgpc_type = NULL;
+      kgpc_type_release(type);
     }
-    
-    /* Copy the alias to make KgpcType own it, or set to NULL if alias is NULL */
-    if (alias != NULL) {
-        type->type_alias = copy_type_alias(alias);
-        /* Break circular reference: if the copied alias's kgpc_type points back
-         * to this type, it would create an ownership cycle that prevents the
-         * ref_count from ever reaching zero.  Release the circular retain and
-         * NULL the pointer; destroy_kgpc_type already guards against this case. */
-        if (type->type_alias != NULL && type->type_alias->kgpc_type == type) {
-            type->type_alias->kgpc_type = NULL;
-            kgpc_type_release(type);
-        }
-    } else {
-        type->type_alias = NULL;
-    }
+  } else {
+    type->type_alias = NULL;
+  }
 }
 
 /* For pointer types, get the type tag of what it points to */
-int kgpc_type_get_pointer_subtype_tag(KgpcType *type)
-{
-    if (type == NULL || type->kind != TYPE_KIND_POINTER)
-        return UNKNOWN_TYPE;
-    
-    KgpcType *points_to = type->info.points_to;
-    if (points_to == NULL)
-        return UNKNOWN_TYPE;
-    
-    if (points_to->kind == TYPE_KIND_PRIMITIVE)
-        return points_to->info.primitive_type_tag;
-    if (points_to->kind == TYPE_KIND_RECORD)
-        return RECORD_TYPE;
-    if (points_to->kind == TYPE_KIND_POINTER)
-        return POINTER_TYPE;
-    if (points_to->kind == TYPE_KIND_PROCEDURE)
-        return PROCEDURE;
-    if (points_to->kind == TYPE_KIND_ARRAY_OF_CONST)
-        return ARRAY_OF_CONST_TYPE;
-    if (points_to->kind == TYPE_KIND_ARRAY &&
-        points_to->type_alias != NULL &&
-        points_to->type_alias->is_shortstring)
-        return SHORTSTRING_TYPE;
+int kgpc_type_get_pointer_subtype_tag(KgpcType *type) {
+  if (type == NULL || type->kind != TYPE_KIND_POINTER)
     return UNKNOWN_TYPE;
+
+  KgpcType *points_to = type->info.points_to;
+  if (points_to == NULL)
+    return UNKNOWN_TYPE;
+
+  if (points_to->kind == TYPE_KIND_PRIMITIVE)
+    return points_to->info.primitive_type_tag;
+  if (points_to->kind == TYPE_KIND_RECORD)
+    return RECORD_TYPE;
+  if (points_to->kind == TYPE_KIND_POINTER)
+    return POINTER_TYPE;
+  if (points_to->kind == TYPE_KIND_PROCEDURE)
+    return PROCEDURE;
+  if (points_to->kind == TYPE_KIND_ARRAY_OF_CONST)
+    return ARRAY_OF_CONST_TYPE;
+  if (points_to->kind == TYPE_KIND_ARRAY && points_to->type_alias != NULL &&
+      points_to->type_alias->is_shortstring)
+    return SHORTSTRING_TYPE;
+  return UNKNOWN_TYPE;
 }
 
 /* Check if a KgpcType requires qword (64-bit) operations */
-int kgpc_type_uses_qword(KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
+int kgpc_type_uses_qword(KgpcType *type) {
+  if (type == NULL)
+    return 0;
 
-    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
-    {
-        return (type->type_alias->storage_size > 4);
+  if (type->type_alias != NULL && type->type_alias->storage_size > 0) {
+    return (type->type_alias->storage_size > 4);
+  }
+  if (type->type_alias != NULL && type->type_alias->is_shortstring)
+    return 1;
+
+  switch (type->kind) {
+  case TYPE_KIND_PRIMITIVE:
+    switch (type->info.primitive_type_tag) {
+    case REAL_TYPE:
+    case EXTENDED_TYPE:
+    case STRING_TYPE:
+    case SHORTSTRING_TYPE:
+    case FILE_TYPE:
+    case TEXT_TYPE:
+    case POINTER_TYPE:
+    case PROCEDURE:
+    case INT64_TYPE:
+    case QWORD_TYPE:
+      return 1;
+    default:
+      return 0;
     }
-    if (type->type_alias != NULL && type->type_alias->is_shortstring)
-        return 1;
-    
-    switch (type->kind) {
-        case TYPE_KIND_PRIMITIVE:
-            switch (type->info.primitive_type_tag) {
-                case REAL_TYPE:
-                case EXTENDED_TYPE:
-                case STRING_TYPE:
-                case SHORTSTRING_TYPE:
-                case FILE_TYPE:
-                case TEXT_TYPE:
-                case POINTER_TYPE:
-                case PROCEDURE:
-                case INT64_TYPE:
-                case QWORD_TYPE:
-                    return 1;
-                default:
-                    return 0;
-            }
-        
-        case TYPE_KIND_POINTER:
-            return 1;  /* Pointers are always 64-bit */
-        
-        case TYPE_KIND_PROCEDURE:
-            return 1;  /* Procedure pointers are 64-bit */
-        
-        case TYPE_KIND_ARRAY:
-            return kgpc_type_is_dynamic_array(type);
-        case TYPE_KIND_RECORD:
-        default:
-            return 0;
-    }
+
+  case TYPE_KIND_POINTER:
+    return 1; /* Pointers are always 64-bit */
+
+  case TYPE_KIND_PROCEDURE:
+    return 1; /* Procedure pointers are 64-bit */
+
+  case TYPE_KIND_ARRAY:
+    return kgpc_type_is_dynamic_array(type);
+  case TYPE_KIND_RECORD:
+  default:
+    return 0;
+  }
 }
 
 /* Check if a KgpcType represents a signed integer type */
-int kgpc_type_is_signed(const KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
+int kgpc_type_is_signed(const KgpcType *type) {
+  if (type == NULL)
+    return 0;
 
-    if (type->type_alias != NULL && type->type_alias->range_known)
-        return (type->type_alias->range_start < 0);
+  if (type->type_alias != NULL && type->type_alias->range_known)
+    return (type->type_alias->range_start < 0);
 
-    if (type->kind != TYPE_KIND_PRIMITIVE)
-        return 0;
+  if (type->kind != TYPE_KIND_PRIMITIVE)
+    return 0;
 
-    switch (type->info.primitive_type_tag) {
-        case INT_TYPE:
-        case LONGINT_TYPE:
-        case INT64_TYPE:
-            return 1;
-        default:
-            return 0;
-    }
+  switch (type->info.primitive_type_tag) {
+  case INT_TYPE:
+  case LONGINT_TYPE:
+  case INT64_TYPE:
+    return 1;
+  default:
+    return 0;
+  }
 }
 
 /* Check if a KgpcType represents an unsigned integer type.
- * Returns 1 only for types that are explicitly unsigned (Byte, Word, LongWord/DWord/Cardinal,
- * QWord, and subrange types whose lower bound is >= 0).
- * Returns 0 for non-integer types (records, pointers, etc.) — NOT defined as !is_signed. */
-int kgpc_type_is_unsigned(const KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
+ * Returns 1 only for types that are explicitly unsigned (Byte, Word,
+ * LongWord/DWord/Cardinal, QWord, and subrange types whose lower bound is >=
+ * 0). Returns 0 for non-integer types (records, pointers, etc.) — NOT defined
+ * as !is_signed. */
+int kgpc_type_is_unsigned(const KgpcType *type) {
+  if (type == NULL)
+    return 0;
 
-    if (type->type_alias != NULL && type->type_alias->range_known)
-        return (type->type_alias->range_start >= 0);
+  if (type->type_alias != NULL && type->type_alias->range_known)
+    return (type->type_alias->range_start >= 0);
 
-    if (type->kind != TYPE_KIND_PRIMITIVE)
-        return 0;
+  if (type->kind != TYPE_KIND_PRIMITIVE)
+    return 0;
 
-    switch (type->info.primitive_type_tag) {
-        case BYTE_TYPE:
-        case WORD_TYPE:
-        case LONGWORD_TYPE:
-        case QWORD_TYPE:
-            return 1;
-        default:
-            return 0;
-    }
+  switch (type->info.primitive_type_tag) {
+  case BYTE_TYPE:
+  case WORD_TYPE:
+  case LONGWORD_TYPE:
+  case QWORD_TYPE:
+    return 1;
+  default:
+    return 0;
+  }
 }
 
 /* Check if a KgpcType matches a specific legacy type tag */
-int kgpc_type_equals_tag(KgpcType *type, int type_tag)
-{
-    if (type == NULL)
-        return (type_tag == UNKNOWN_TYPE);
+int kgpc_type_equals_tag(KgpcType *type, int type_tag) {
+  if (type == NULL)
+    return (type_tag == UNKNOWN_TYPE);
 
-    if (type->kind == TYPE_KIND_PRIMITIVE)
-        return (type->info.primitive_type_tag == type_tag);
-    if (type->kind == TYPE_KIND_POINTER)
-        return (type_tag == POINTER_TYPE);
-    if (type->kind == TYPE_KIND_RECORD)
-        return (type_tag == RECORD_TYPE);
-    if (type->kind == TYPE_KIND_PROCEDURE)
-        return (type_tag == PROCEDURE);
-    if (type->kind == TYPE_KIND_ARRAY_OF_CONST)
-        return (type_tag == ARRAY_OF_CONST_TYPE);
-    if (type->kind == TYPE_KIND_ARRAY &&
-        type->type_alias != NULL &&
-        type->type_alias->is_shortstring)
-        return (type_tag == SHORTSTRING_TYPE);
-    return 0;
+  if (type->kind == TYPE_KIND_PRIMITIVE)
+    return (type->info.primitive_type_tag == type_tag);
+  if (type->kind == TYPE_KIND_POINTER)
+    return (type_tag == POINTER_TYPE);
+  if (type->kind == TYPE_KIND_RECORD)
+    return (type_tag == RECORD_TYPE);
+  if (type->kind == TYPE_KIND_PROCEDURE)
+    return (type_tag == PROCEDURE);
+  if (type->kind == TYPE_KIND_ARRAY_OF_CONST)
+    return (type_tag == ARRAY_OF_CONST_TYPE);
+  if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
+      type->type_alias->is_shortstring)
+    return (type_tag == SHORTSTRING_TYPE);
+  return 0;
 }
 
 /* Internal helper with depth tracking to prevent infinite recursion */
-static int kgpc_type_equals_internal(KgpcType *a, KgpcType *b, int depth)
-{
-    /* Prevent infinite recursion - if we've recursed too deep, assume not equal */
-    if (depth > 100)
-    {
-        fprintf(stderr, "Warning: kgpc_type_equals recursion depth exceeded\n");
+static int kgpc_type_equals_internal(KgpcType *a, KgpcType *b, int depth) {
+  /* Prevent infinite recursion - if we've recursed too deep, assume not equal
+   */
+  if (depth > 100) {
+    fprintf(stderr, "Warning: kgpc_type_equals recursion depth exceeded\n");
+    return 0;
+  }
+
+  if (a == b)
+    return 1;
+  if (a == NULL || b == NULL)
+    return 0;
+  if ((kgpc_type_is_shortstring(a) && is_char_array_type(b)) ||
+      (kgpc_type_is_shortstring(b) && is_char_array_type(a)))
+    return 1;
+  if (a->kind != b->kind)
+    return 0;
+
+  switch (a->kind) {
+  case TYPE_KIND_PRIMITIVE:
+    if (a->info.primitive_type_tag != b->info.primitive_type_tag)
+      return 0;
+    /* For real types, also compare storage sizes so that
+     * Single (4), Double (8), and Extended (16) are distinct. */
+    if (is_real_family_type(a->info.primitive_type_tag)) {
+      long long sa = kgpc_type_sizeof(a);
+      long long sb = kgpc_type_sizeof(b);
+      if (sa > 0 && sb > 0 && sa != sb)
         return 0;
     }
-
-    if (a == b)
-        return 1;
-    if (a == NULL || b == NULL)
-        return 0;
-    if ((kgpc_type_is_shortstring(a) && is_char_array_type(b)) ||
-        (kgpc_type_is_shortstring(b) && is_char_array_type(a)))
-        return 1;
-    if (a->kind != b->kind)
-        return 0;
-
-    switch (a->kind)
-    {
-        case TYPE_KIND_PRIMITIVE:
-            if (a->info.primitive_type_tag != b->info.primitive_type_tag)
-                return 0;
-            /* For real types, also compare storage sizes so that
-             * Single (4), Double (8), and Extended (16) are distinct. */
-            if (is_real_family_type(a->info.primitive_type_tag))
-            {
-                long long sa = kgpc_type_sizeof(a);
-                long long sb = kgpc_type_sizeof(b);
-                if (sa > 0 && sb > 0 && sa != sb)
-                    return 0;
-            }
-            return 1;
-        case TYPE_KIND_POINTER:
-            return kgpc_type_equals_internal(a->info.points_to, b->info.points_to, depth + 1);
-        case TYPE_KIND_ARRAY:
-            if (a->info.array_info.start_index != b->info.array_info.start_index ||
-                a->info.array_info.end_index != b->info.array_info.end_index)
-                return 0;
-            if (a->info.array_info.element_type != NULL &&
-                b->info.array_info.element_type != NULL)
-            {
-                return kgpc_type_equals_internal(a->info.array_info.element_type,
-                    b->info.array_info.element_type, depth + 1);
-            }
-            if (a->info.array_info.element_type_id != NULL ||
-                b->info.array_info.element_type_id != NULL)
-            {
-                if (a->info.array_info.element_type_id == NULL ||
-                    b->info.array_info.element_type_id == NULL)
-                    return 0;
-                return strcasecmp(a->info.array_info.element_type_id,
-                    b->info.array_info.element_type_id) == 0;
-            }
-            return 0;
-        case TYPE_KIND_RECORD:
-            return a->info.record_info == b->info.record_info;
-        case TYPE_KIND_PROCEDURE:
-            return a->info.proc_info.definition == b->info.proc_info.definition;
-        case TYPE_KIND_ARRAY_OF_CONST:
-            return 1;
-        default:
-            return 0;
+    return 1;
+  case TYPE_KIND_POINTER:
+    return kgpc_type_equals_internal(a->info.points_to, b->info.points_to,
+                                     depth + 1);
+  case TYPE_KIND_ARRAY:
+    if (a->info.array_info.start_index != b->info.array_info.start_index ||
+        a->info.array_info.end_index != b->info.array_info.end_index)
+      return 0;
+    if (a->info.array_info.element_type != NULL &&
+        b->info.array_info.element_type != NULL) {
+      return kgpc_type_equals_internal(a->info.array_info.element_type,
+                                       b->info.array_info.element_type,
+                                       depth + 1);
     }
+    if (a->info.array_info.element_type_id != NULL ||
+        b->info.array_info.element_type_id != NULL) {
+      if (a->info.array_info.element_type_id == NULL ||
+          b->info.array_info.element_type_id == NULL)
+        return 0;
+      return strcasecmp(a->info.array_info.element_type_id,
+                        b->info.array_info.element_type_id) == 0;
+    }
+    return 0;
+  case TYPE_KIND_RECORD:
+    return a->info.record_info == b->info.record_info;
+  case TYPE_KIND_PROCEDURE:
+    return a->info.proc_info.definition == b->info.proc_info.definition;
+  case TYPE_KIND_ARRAY_OF_CONST:
+    return 1;
+  default:
+    return 0;
+  }
 }
 
-int kgpc_type_equals(KgpcType *a, KgpcType *b)
-{
-    return kgpc_type_equals_internal(a, b, 0);
+int kgpc_type_equals(KgpcType *a, KgpcType *b) {
+  return kgpc_type_equals_internal(a, b, 0);
 }
 
-int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b)
-{
-    if (ptr_a == NULL || ptr_b == NULL)
-        return 0;
-    if (ptr_a->kind != TYPE_KIND_POINTER || ptr_b->kind != TYPE_KIND_POINTER)
-        return 0;
-    if (ptr_a->info.points_to == NULL || ptr_b->info.points_to == NULL)
-        return 1;
-    return kgpc_type_equals(ptr_a->info.points_to, ptr_b->info.points_to);
+int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b) {
+  if (ptr_a == NULL || ptr_b == NULL)
+    return 0;
+  if (ptr_a->kind != TYPE_KIND_POINTER || ptr_b->kind != TYPE_KIND_POINTER)
+    return 0;
+  if (ptr_a->info.points_to == NULL || ptr_b->info.points_to == NULL)
+    return 1;
+  return kgpc_type_equals(ptr_a->info.points_to, ptr_b->info.points_to);
 }
 
-int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
-{
-    if (from == NULL || to == NULL)
-        return -1;
-    if (kgpc_type_equals(from, to))
-        return 0;
-
-    if ((kgpc_type_is_shortstring(from) && is_char_array_type(to)) ||
-        (kgpc_type_is_shortstring(to) && is_char_array_type(from)))
-        return 0;
-
-    if (to->kind == TYPE_KIND_ARRAY_OF_CONST)
-        return 1;
-
-    if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_POINTER)
-    {
-        if (!kgpc_type_pointers_compatible(from, to))
-            return -1;
-        if (from->info.points_to != NULL && to->info.points_to != NULL &&
-            kgpc_type_equals(from->info.points_to, to->info.points_to))
-            return 0;
-        return 1;
-    }
-
-    if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_PRIMITIVE &&
-        to->info.primitive_type_tag == POINTER_TYPE)
-        return 1;
-    if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
-        from->info.primitive_type_tag == POINTER_TYPE)
-        return 1;
-
-    /* Handle integer-to-POINTER_TYPE (untyped Pointer) conversions */
-    if (to->kind == TYPE_KIND_PRIMITIVE && to->info.primitive_type_tag == POINTER_TYPE &&
-        from->kind == TYPE_KIND_PRIMITIVE && is_integer_type(from->info.primitive_type_tag)) {
-        return 3;  /* Integer to untyped Pointer conversion */
-    }
-    
-    /* Handle POINTER_TYPE (untyped Pointer) to integer conversions */
-    if (from->kind == TYPE_KIND_PRIMITIVE && from->info.primitive_type_tag == POINTER_TYPE &&
-        to->kind == TYPE_KIND_PRIMITIVE && is_integer_type(to->info.primitive_type_tag)) {
-        return 3;  /* Untyped Pointer to integer conversion */
-    }
-
-    /* Handle string-to-pointer conversions (e.g., string literal to PAnsiChar) */
-    if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
-        is_string_type(from->info.primitive_type_tag)) {
-        /* String to pointer conversion (e.g., 'text' to PAnsiChar) */
-        /* Check if pointer points to char type */
-        if (to->info.points_to != NULL &&
-            to->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
-            to->info.points_to->info.primitive_type_tag == CHAR_TYPE) {
-            return 2;  /* String to PChar conversion is worse than string-to-string */
-        }
-    }
-
-    if (from->kind == TYPE_KIND_PRIMITIVE && to->kind == TYPE_KIND_PRIMITIVE)
-    {
-        int from_tag = from->info.primitive_type_tag;
-        int to_tag = to->info.primitive_type_tag;
-
-        if (is_integer_type(from_tag) && is_integer_type(to_tag))
-        {
-            long long from_size = kgpc_type_sizeof(from);
-            long long to_size = kgpc_type_sizeof(to);
-            if (from_size > 0 && to_size > 0)
-            {
-                if (to_size > from_size)
-                    return 2;
-                if (to_size < from_size)
-                    return 3;
-                return 1;
-            }
-            return 1;
-        }
-        if (is_integer_type(from_tag) && is_real_family_type(to_tag))
-            return 2;
-        if (is_real_family_type(from_tag) && is_real_family_type(to_tag))
-        {
-            long long from_size = kgpc_type_sizeof(from);
-            long long to_size = kgpc_type_sizeof(to);
-            if (from_size == to_size)
-                return 1;
-            return (to_size > from_size) ? 2 : 3;
-        }
-        if (from_tag == CHAR_TYPE && is_string_type(to_tag))
-            return 1;
-        if (is_string_type(from_tag) && is_string_type(to_tag))
-            return 1;
-        if (from_tag == ENUM_TYPE && is_integer_type(to_tag))
-            return 1;
-        if (is_integer_type(from_tag) && to_tag == ENUM_TYPE)
-            return 1;
-    }
-
-    if (from->kind == TYPE_KIND_ARRAY && to->kind == TYPE_KIND_ARRAY)
-    {
-        KgpcType *from_elem = from->info.array_info.element_type;
-        KgpcType *to_elem = to->info.array_info.element_type;
-        if (from_elem != NULL && to_elem != NULL)
-            return kgpc_type_conversion_rank(from_elem, to_elem);
-    }
-
-    if (from->kind == TYPE_KIND_PROCEDURE && to->kind == TYPE_KIND_PROCEDURE)
-        return 1;
-
+int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to) {
+  if (from == NULL || to == NULL)
     return -1;
+  if (kgpc_type_equals(from, to))
+    return 0;
+
+  if ((kgpc_type_is_shortstring(from) && is_char_array_type(to)) ||
+      (kgpc_type_is_shortstring(to) && is_char_array_type(from)))
+    return 0;
+
+  if (to->kind == TYPE_KIND_ARRAY_OF_CONST)
+    return 1;
+
+  if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_POINTER) {
+    if (!kgpc_type_pointers_compatible(from, to))
+      return -1;
+    if (from->info.points_to != NULL && to->info.points_to != NULL &&
+        kgpc_type_equals(from->info.points_to, to->info.points_to))
+      return 0;
+    return 1;
+  }
+
+  if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_PRIMITIVE &&
+      to->info.primitive_type_tag == POINTER_TYPE)
+    return 1;
+  if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
+      from->info.primitive_type_tag == POINTER_TYPE)
+    return 1;
+
+  /* Handle integer-to-POINTER_TYPE (untyped Pointer) conversions */
+  if (to->kind == TYPE_KIND_PRIMITIVE &&
+      to->info.primitive_type_tag == POINTER_TYPE &&
+      from->kind == TYPE_KIND_PRIMITIVE &&
+      is_integer_type(from->info.primitive_type_tag)) {
+    return 3; /* Integer to untyped Pointer conversion */
+  }
+
+  /* Handle POINTER_TYPE (untyped Pointer) to integer conversions */
+  if (from->kind == TYPE_KIND_PRIMITIVE &&
+      from->info.primitive_type_tag == POINTER_TYPE &&
+      to->kind == TYPE_KIND_PRIMITIVE &&
+      is_integer_type(to->info.primitive_type_tag)) {
+    return 3; /* Untyped Pointer to integer conversion */
+  }
+
+  /* Handle string-to-pointer conversions (e.g., string literal to PAnsiChar) */
+  if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
+      is_string_type(from->info.primitive_type_tag)) {
+    /* String to pointer conversion (e.g., 'text' to PAnsiChar) */
+    /* Check if pointer points to char type */
+    if (to->info.points_to != NULL &&
+        to->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+        to->info.points_to->info.primitive_type_tag == CHAR_TYPE) {
+      return 2; /* String to PChar conversion is worse than string-to-string */
+    }
+  }
+
+  if (from->kind == TYPE_KIND_PRIMITIVE && to->kind == TYPE_KIND_PRIMITIVE) {
+    int from_tag = from->info.primitive_type_tag;
+    int to_tag = to->info.primitive_type_tag;
+
+    if (is_integer_type(from_tag) && is_integer_type(to_tag)) {
+      long long from_size = kgpc_type_sizeof(from);
+      long long to_size = kgpc_type_sizeof(to);
+      if (from_size > 0 && to_size > 0) {
+        if (to_size > from_size)
+          return 2;
+        if (to_size < from_size)
+          return 3;
+        return 1;
+      }
+      return 1;
+    }
+    if (is_integer_type(from_tag) && is_real_family_type(to_tag))
+      return 2;
+    if (is_real_family_type(from_tag) && is_real_family_type(to_tag)) {
+      long long from_size = kgpc_type_sizeof(from);
+      long long to_size = kgpc_type_sizeof(to);
+      if (from_size == to_size)
+        return 1;
+      return (to_size > from_size) ? 2 : 3;
+    }
+    if (from_tag == CHAR_TYPE && is_string_type(to_tag))
+      return 1;
+    if (is_string_type(from_tag) && is_string_type(to_tag))
+      return 1;
+    if (from_tag == ENUM_TYPE && is_integer_type(to_tag))
+      return 1;
+    if (is_integer_type(from_tag) && to_tag == ENUM_TYPE)
+      return 1;
+  }
+
+  if (from->kind == TYPE_KIND_ARRAY && to->kind == TYPE_KIND_ARRAY) {
+    KgpcType *from_elem = from->info.array_info.element_type;
+    KgpcType *to_elem = to->info.array_info.element_type;
+    if (from_elem != NULL && to_elem != NULL)
+      return kgpc_type_conversion_rank(from_elem, to_elem);
+  }
+
+  if (from->kind == TYPE_KIND_PROCEDURE && to->kind == TYPE_KIND_PROCEDURE)
+    return 1;
+
+  return -1;
 }
 
-KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
-                                        HashNode_t *resolved_type_node,
-                                        int primitive_tag,
-                                        SymTab_t *symtab)
-{
-    KgpcType *result = NULL;
+KgpcType *kgpc_type_build_function_return(struct TypeAlias *inline_alias,
+                                          HashNode_t *resolved_type_node,
+                                          int primitive_tag, SymTab_t *symtab) {
+  KgpcType *result = NULL;
 
-    if (inline_alias != NULL)
-    {
-        result = create_kgpc_type_from_type_alias(inline_alias, symtab, 0);
-        if (result != NULL && result->type_alias == NULL)
-            kgpc_type_set_type_alias(result, inline_alias);
-    }
-    else if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
-        kgpc_type_retain(resolved_type_node->type);
-        result = resolved_type_node->type;
-        /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias that
-         * couldn't be resolved at predeclare time), try to re-resolve it via
-         * the node's alias now that all unit scopes are wired as deps. */
-        if (result->kind == TYPE_KIND_PRIMITIVE &&
-            result->info.primitive_type_tag == UNKNOWN_TYPE)
-        {
-            struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
-            if (alias != NULL &&
-                (alias->target_type_id != NULL || alias->target_type_ref != NULL))
-            {
-                KgpcType *resolved = create_kgpc_type_from_type_alias(alias, symtab,
-                    resolved_type_node->source_unit_index);
-                if (resolved != NULL)
-                {
-                    destroy_kgpc_type(result);
-                    result = resolved;
-                }
-            }
+  if (inline_alias != NULL) {
+    result = create_kgpc_type_from_type_alias(inline_alias, symtab, 0);
+    if (result != NULL && result->type_alias == NULL)
+      kgpc_type_set_type_alias(result, inline_alias);
+  } else if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
+    kgpc_type_retain(resolved_type_node->type);
+    result = resolved_type_node->type;
+    /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias that
+     * couldn't be resolved at predeclare time), try to re-resolve it via
+     * the node's alias now that all unit scopes are wired as deps. */
+    if (result->kind == TYPE_KIND_PRIMITIVE &&
+        result->info.primitive_type_tag == UNKNOWN_TYPE) {
+      struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
+      if (alias != NULL &&
+          (alias->target_type_id != NULL || alias->target_type_ref != NULL)) {
+        KgpcType *resolved = create_kgpc_type_from_type_alias(
+            alias, symtab, resolved_type_node->source_unit_index);
+        if (resolved != NULL) {
+          destroy_kgpc_type(result);
+          result = resolved;
         }
+      }
     }
-    else if (resolved_type_node != NULL) {
-        struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
-        if (alias != NULL) {
-            result = create_kgpc_type_from_type_alias(alias, symtab, 0);
-        }
+  } else if (resolved_type_node != NULL) {
+    struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
+    if (alias != NULL) {
+      result = create_kgpc_type_from_type_alias(alias, symtab, 0);
     }
-    else if (primitive_tag != -1)
-    {
-        result = create_primitive_type(primitive_tag);
-    }
+  } else if (primitive_tag != -1) {
+    result = create_primitive_type(primitive_tag);
+  }
 
-    return result;
+  return result;
 }
 
 /* Check if a type identified by name uses 64-bit operations */
-int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab)
-{
-    if (type_id == NULL)
-        return 0;
-
-    /* First, try to resolve the type through the symbol table */
-    if (symtab != NULL)
-    {
-        HashNode_t *type_node = kgpc_find_type_node(symtab, type_id);
-        if (type_node != NULL && type_node->type != NULL)
-        {
-            return kgpc_type_uses_qword(type_node->type);
-        }
-    }
-
-    /* If we can't resolve through symbol table, use naming conventions.
-     * In Pascal, pointer types typically:
-     * - Start with 'P' followed by uppercase letter (e.g., PAnsiChar, PByte)
-     * - Are named 'Pointer' (untyped pointer)
-     * - Are named 'CodePointer' (code pointer)
-     * - Are named '*string' types (dynamic strings are references)
-     * All pointers are 64-bit on x86-64. */
-    size_t len = strlen(type_id);
-    
-    /* Check for common 64-bit types by name */
-    if (pascal_identifier_equals(type_id, "Pointer") ||
-        pascal_identifier_equals(type_id, "CodePointer"))
-        return 1;
-    
-    /* Check for pointer types: P followed by uppercase letter */
-    if (len >= 2 && (type_id[0] == 'P' || type_id[0] == 'p'))
-    {
-        char second = type_id[1];
-        if (second >= 'A' && second <= 'Z')
-            return 1;  /* Likely a pointer type like PAnsiChar, PByte, PInteger, etc. */
-    }
-    
-    /* Check for 64-bit primitive types */
-    if (pascal_identifier_equals(type_id, "Int64") ||
-        pascal_identifier_equals(type_id, "QWord") ||
-        pascal_identifier_equals(type_id, "UInt64") ||
-        pascal_identifier_equals(type_id, "Double") ||
-        pascal_identifier_equals(type_id, "Real") ||
-        pascal_identifier_equals(type_id, "Extended") ||
-        pascal_identifier_equals(type_id, "Currency"))
-        return 1;
-    
-    /* Check for string types (dynamic strings are references/pointers) */
-    if (pascal_identifier_equals(type_id, "String") ||
-        pascal_identifier_equals(type_id, "AnsiString") ||
-        pascal_identifier_equals(type_id, "WideString") ||
-        pascal_identifier_equals(type_id, "UnicodeString") ||
-        pascal_identifier_equals(type_id, "RawByteString") ||
-        pascal_identifier_equals(type_id, "ShortString"))
-        return 1;
-    
-    /* Check for SizeInt/PtrInt/NativeInt which are pointer-sized */
-    if (pascal_identifier_equals(type_id, "SizeInt") ||
-        pascal_identifier_equals(type_id, "SizeUInt") ||
-        pascal_identifier_equals(type_id, "PtrInt") ||
-        pascal_identifier_equals(type_id, "PtrUInt") ||
-        pascal_identifier_equals(type_id, "NativeInt") ||
-        pascal_identifier_equals(type_id, "NativeUInt") ||
-        pascal_identifier_equals(type_id, "IntPtr") ||
-        pascal_identifier_equals(type_id, "UIntPtr"))
-        return 1;
-    
-    /* Check for TObject and class types (classes are references) */
-    if (len >= 2 && (type_id[0] == 'T' || type_id[0] == 't'))
-    {
-        /* TObject and T-prefixed classes are references */
-        if (pascal_identifier_equals(type_id, "TObject") ||
-            pascal_identifier_equals(type_id, "TClass"))
-            return 1;
-    }
-    
+int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab) {
+  if (type_id == NULL)
     return 0;
+
+  /* First, try to resolve the type through the symbol table */
+  if (symtab != NULL) {
+    HashNode_t *type_node = kgpc_find_type_node(symtab, type_id);
+    if (type_node != NULL && type_node->type != NULL) {
+      return kgpc_type_uses_qword(type_node->type);
+    }
+  }
+
+  /* If we can't resolve through symbol table, use naming conventions.
+   * In Pascal, pointer types typically:
+   * - Start with 'P' followed by uppercase letter (e.g., PAnsiChar, PByte)
+   * - Are named 'Pointer' (untyped pointer)
+   * - Are named 'CodePointer' (code pointer)
+   * - Are named '*string' types (dynamic strings are references)
+   * All pointers are 64-bit on x86-64. */
+  size_t len = strlen(type_id);
+
+  /* Check for common 64-bit types by name */
+  if (pascal_identifier_equals(type_id, "Pointer") ||
+      pascal_identifier_equals(type_id, "CodePointer"))
+    return 1;
+
+  /* Check for pointer types: P followed by uppercase letter */
+  if (len >= 2 && (type_id[0] == 'P' || type_id[0] == 'p')) {
+    char second = type_id[1];
+    if (second >= 'A' && second <= 'Z')
+      return 1; /* Likely a pointer type like PAnsiChar, PByte, PInteger, etc.
+                 */
+  }
+
+  /* Check for 64-bit primitive types */
+  if (pascal_identifier_equals(type_id, "Int64") ||
+      pascal_identifier_equals(type_id, "QWord") ||
+      pascal_identifier_equals(type_id, "UInt64") ||
+      pascal_identifier_equals(type_id, "Double") ||
+      pascal_identifier_equals(type_id, "Real") ||
+      pascal_identifier_equals(type_id, "Extended") ||
+      pascal_identifier_equals(type_id, "Currency"))
+    return 1;
+
+  /* Check for string types (dynamic strings are references/pointers) */
+  if (pascal_identifier_equals(type_id, "String") ||
+      pascal_identifier_equals(type_id, "AnsiString") ||
+      pascal_identifier_equals(type_id, "WideString") ||
+      pascal_identifier_equals(type_id, "UnicodeString") ||
+      pascal_identifier_equals(type_id, "RawByteString") ||
+      pascal_identifier_equals(type_id, "ShortString"))
+    return 1;
+
+  /* Check for SizeInt/PtrInt/NativeInt which are pointer-sized */
+  if (pascal_identifier_equals(type_id, "SizeInt") ||
+      pascal_identifier_equals(type_id, "SizeUInt") ||
+      pascal_identifier_equals(type_id, "PtrInt") ||
+      pascal_identifier_equals(type_id, "PtrUInt") ||
+      pascal_identifier_equals(type_id, "NativeInt") ||
+      pascal_identifier_equals(type_id, "NativeUInt") ||
+      pascal_identifier_equals(type_id, "IntPtr") ||
+      pascal_identifier_equals(type_id, "UIntPtr"))
+    return 1;
+
+  /* Check for TObject and class types (classes are references) */
+  if (len >= 2 && (type_id[0] == 'T' || type_id[0] == 't')) {
+    /* TObject and T-prefixed classes are references */
+    if (pascal_identifier_equals(type_id, "TObject") ||
+        pascal_identifier_equals(type_id, "TClass"))
+      return 1;
+  }
+
+  return 0;
 }
 
-const char* type_tag_to_string(int type_tag)
-{
-    switch (type_tag)
-    {
-        case UNKNOWN_TYPE: return "Unknown";
-        case INT_TYPE: return "Integer";
-        case REAL_TYPE: return "Real";
-        case EXTENDED_TYPE: return "Extended";
-        case LONGINT_TYPE: return "LongInt";
-        case STRING_TYPE: return "String";
-        case BUILTIN_ANY_TYPE: return "Any";
-        case INT64_TYPE: return "Int64";
-        case RECORD_TYPE: return "Record";
-        case ARRAY_OF_CONST_TYPE: return "array of const";
-        case TEXT_TYPE: return "Text";
-        case CHAR_TYPE: return "Char";
-        case POINTER_TYPE: return "Pointer";
-        case SET_TYPE: return "Set";
-        case ENUM_TYPE: return "Enum";
-        case FILE_TYPE: return "File";
-        case SHORTSTRING_TYPE: return "ShortString";
-        case BYTE_TYPE: return "Byte";
-        case WORD_TYPE: return "Word";
-        case LONGWORD_TYPE: return "LongWord";
-        case QWORD_TYPE: return "QWord";
-        case VARIANT_TYPE: return "Variant";
-        default:
-        {
-            static char buf[32];
-            snprintf(buf, sizeof(buf), "type(%d)", type_tag);
-            return buf;
-        }
-    }
+const char *type_tag_to_string(int type_tag) {
+  switch (type_tag) {
+  case UNKNOWN_TYPE:
+    return "Unknown";
+  case INT_TYPE:
+    return "Integer";
+  case REAL_TYPE:
+    return "Real";
+  case EXTENDED_TYPE:
+    return "Extended";
+  case LONGINT_TYPE:
+    return "LongInt";
+  case STRING_TYPE:
+    return "String";
+  case BUILTIN_ANY_TYPE:
+    return "Any";
+  case INT64_TYPE:
+    return "Int64";
+  case RECORD_TYPE:
+    return "Record";
+  case ARRAY_OF_CONST_TYPE:
+    return "array of const";
+  case TEXT_TYPE:
+    return "Text";
+  case CHAR_TYPE:
+    return "Char";
+  case POINTER_TYPE:
+    return "Pointer";
+  case SET_TYPE:
+    return "Set";
+  case ENUM_TYPE:
+    return "Enum";
+  case FILE_TYPE:
+    return "File";
+  case SHORTSTRING_TYPE:
+    return "ShortString";
+  case BYTE_TYPE:
+    return "Byte";
+  case WORD_TYPE:
+    return "Word";
+  case LONGWORD_TYPE:
+    return "LongWord";
+  case QWORD_TYPE:
+    return "QWord";
+  case VARIANT_TYPE:
+    return "Variant";
+  default: {
+    static char buf[32];
+    snprintf(buf, sizeof(buf), "type(%d)", type_tag);
+    return buf;
+  }
+  }
 }
