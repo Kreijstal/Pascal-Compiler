@@ -28,8 +28,8 @@ Driver: [`KGPC/main_cparser.c`](../KGPC/main_cparser.c).  The call sequence is s
    before semantic analysis.
 2. `ParsePascalOnly(argv[1])` — the user's source file.
 3. `load_units_from_list(...)` — transitive `uses`-clause resolution with
-   cycle detection (`UnitSet` in `main.c`).  Each unit is parsed and merged
-   into the same `Tree_t`.
+   cycle detection (`UnitSet` in `main_cparser.c`).  Each unit is parsed
+   and merged into the same `Tree_t`.
 4. `start_semcheck(user_tree, &sem_result)` — type checking, scope
    resolution, symbol-table construction.  Produces a `SymTab_t`.
 5. `mark_used_functions(...)` — dead-code elimination at the subprogram
@@ -64,10 +64,13 @@ KGPC/
 │   ├── List/                    Simple linked-list utilities
 │   │
 │   ├── ParseTree/               AST + type system
-│   │   ├── tree.c/.h            Tree_t node constructors / destructors
-│   │   ├── tree_types.h         TREE_* enum (PROGRAM / UNIT / STMT / EXPR ...)
-│   │   ├── KgpcType.c/.h        First-class type system (GpcType_t)
-│   │   ├── type_tags.h          Type-kind enum
+│   │   ├── tree.c/.h            Tree_t node + the TreeType enum
+│   │   │                        (TREE_PROGRAM_TYPE / TREE_UNIT /
+│   │   │                        TREE_STATEMENT_TYPE / TREE_VAR_DECL ...)
+│   │   ├── tree_types.h         StmtType / ExprType / TypeDeclKind enums
+│   │   ├── KgpcType.c/.h        First-class type system (KgpcType)
+│   │   ├── type_tags.h          Type-kind #define constants
+│   │   │                        (INT_TYPE / RECORD_TYPE / SET_TYPE ...)
 │   │   ├── ident_ref.c/.h       Interned identifier reference
 │   │   ├── generic_types.c/.h   Generic-type instantiation
 │   │   ├── operator_registry.c/.h  Built-in operator dispatch
@@ -131,15 +134,15 @@ KGPC/
 
 ## Type system
 
-`GpcType_t` (defined in `Parser/ParseTree/KgpcType.h`) is the single source
+`KgpcType` (defined in `Parser/ParseTree/KgpcType.h`) is the single source
 of truth for type representation used by both the semantic checker and the
-code generator.  It supersedes the older `var_type_*` enums still visible in
-parts of the codebase.
+code generator.
 
-`type_tags.h` enumerates the kinds (integer / real / pointer / record /
-class / array / set / file / generic-parameter / …).  Composite types carry
-references to other `GpcType_t` instances; ownership lives in a
-type registry.
+`type_tags.h` lists the kinds as `#define` constants (`INT_TYPE`,
+`REAL_TYPE`, `POINTER_TYPE`, `RECORD_TYPE`, `ARRAY_OF_CONST_TYPE`,
+`SET_TYPE`, `FILE_TYPE`, …).  Composite `KgpcType` values carry
+references to other `KgpcType` instances; ownership lives in a global
+type registry maintained by `KgpcType.c`.
 
 
 ## Symbol tables and scoping
@@ -156,10 +159,10 @@ lives in `unit_registry.c`.
 
 Two ABIs are supported at codegen time:
 
-| ABI       | Default on          | Selected via                       |
-|-----------|---------------------|------------------------------------|
-| System V  | Linux, macOS        | (default), `--target=sysv`         |
-| Windows   | `_WIN32`, `__CYGWIN__` | `--target=windows` |
+| ABI       | Default on             | Selected via                                 |
+|-----------|------------------------|----------------------------------------------|
+| System V  | Linux, macOS           | (default), `--target-sysv`, `--target sysv`   |
+| Windows   | `_WIN32`, `__CYGWIN__` | `--target-windows`, `--target windows`        |
 
 `CodeGenContext.target_abi` is consulted by every callsite emitter; see
 `abi_constants.h` for argument-register order, shadow-space rules, and the
