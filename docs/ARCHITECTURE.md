@@ -6,7 +6,8 @@ deeper notes live in the topic-specific docs under `docs/` and in the
 `KGPC/README.txt` source-layout reference.
 
 For the parser-combinator library that backs the front end, see
-[`cparser/ARCHITECTURE.md`](../cparser/ARCHITECTURE.md).
+`cparser/ARCHITECTURE.md` in the repository root (outside the Sphinx
+source tree).
 
 
 ## Pipeline
@@ -188,8 +189,8 @@ support.
 
 `tests/test_cases/` contains 2000+ `.p` files; each one with a matching
 `.expected` becomes a test automatically.  See
-[`tests/README_TEST_AUTODISCOVERY.md`](../tests/README_TEST_AUTODISCOVERY.md)
-for how the harness discovers, compiles, links, runs, and diffs them.
+`tests/README_TEST_AUTODISCOVERY.md` in the repository root for how the
+harness discovers, compiles, links, runs, and diffs them.
 
 A separate FPC-RTL mode (`-Drun_fpc_rtl_tests=true`) compiles a subset of
 the same cases against the real FPC RTL under `FPCSource/`.  This is the

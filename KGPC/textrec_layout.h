@@ -1,41 +1,25 @@
-/*
- * textrec_layout.h — C mirror of KGPC's TextRec (KGPCTextRec) for use in
- * runtime modules that cannot include runtime_internal.h (which pulls in
- * Parser/SemanticCheck dependencies).
+/**
+ * @file textrec_layout.h
+ * @brief C mirror of KGPC's `TextRec` (`KGPCTextRec`) for runtime
+ * modules that cannot include `runtime_internal.h`.
  *
- * This struct MUST stay in sync with KGPCTextRec in runtime_internal.h.
- * Any file that includes this header should add:
+ * `runtime_internal.h` pulls in `Parser/SemanticCheck` dependencies, so
+ * leaf runtime translation units (notably `runtime_fpc_assign.c`)
+ * include this minimal struct instead.  The layout MUST stay in sync
+ * with `KGPCTextRec` in `runtime_internal.h`; the `_Static_assert`
+ * block at the bottom verifies field sizes and offsets at compile time.
  *
- *   #include "runtime_internal.h"
- *   _Static_assert(sizeof(KgpcTextRecLayout) == sizeof(KGPCTextRec),
- *       "KgpcTextRecLayout / KGPCTextRec size mismatch");
- *   _Static_assert(offsetof(KgpcTextRecLayout, openfunc) ==
- *                  offsetof(KGPCTextRec,       openfunc),
- *       "KgpcTextRecLayout openfunc offset mismatch");
+ * Any file that includes this header should ideally also include
+ * `runtime_internal.h` and add cross-check asserts of the form
+ * `sizeof(KgpcTextRecLayout) == sizeof(KGPCTextRec)` and
+ * `offsetof(KgpcTextRecLayout, openfunc) == offsetof(KGPCTextRec, openfunc)`.
  *
- * (runtime_fpc_assign.c cannot include runtime_internal.h, so the static
- * asserts there compare against known numeric constants instead.)
- *
- * Layout for x86_64 Linux (KGPCTextRec, 640 bytes):
- *   0:   handle       (int32_t)
- *   4:   mode         (int32_t)
- *   8:   bufsize      (int64_t)
- *  16:   private_data (int64_t)  — FILE* pointer stored by KGPC runtime
- *  24:   bufpos       (int64_t)
- *  32:   bufend       (int64_t)
- *  40:   bufptr       (void*)
- *  48:   openfunc     (void*)   — called by opentext_t_li_li
- *  56:   inoutfunc    (void*)   — called by close_t for output flush
- *  64:   flushfunc    (void*)
- *  72:   closefunc    (void*)   — called by close_t
- *  80:   userdata[32] (uint8_t)
- * 112:   name[256]    (char)    — AnsiChar file name
- * 368:   line_end[4]  (char)
- * 372:   buffer[256]  (char)
- * 628:   codepage     (uint16_t)
- * 630:   _pad_fullname[2] (uint8_t)
- * 632:   fullname     (void*)
- * 640: end
+ * Layout (x86_64 Linux, 640 bytes total): `handle` (int32) at 0,
+ * `mode` (int32) at 4, `bufsize` / `private_data` / `bufpos` / `bufend`
+ * (int64) at 8..40, `bufptr` at 40, the four codepointers `openfunc`,
+ * `inoutfunc`, `flushfunc`, `closefunc` at 48/56/64/72, `userdata[32]`
+ * at 80, `name[256]` at 112, `line_end[4]` at 368, `buffer[256]` at 372,
+ * `codepage` (uint16) at 628, and `fullname` (`void` pointer) at 632.
  */
 
 #ifndef KGPC_TEXTREC_LAYOUT_H
@@ -44,10 +28,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/*
- * KgpcTextRecLayout mirrors KGPCTextRec from runtime_internal.h
- * field-for-field. Use offsetof(KgpcTextRecLayout, <field>) to get compile-time
- * field offsets.
+/**
+ * @brief Field-for-field mirror of `KGPCTextRec` from `runtime_internal.h`.
+ *
+ * Use `offsetof(KgpcTextRecLayout, <field>)` to get compile-time field
+ * offsets without including the heavier full definition.
  */
 typedef struct KgpcTextRecLayout {
   int32_t handle;       /*   0: THandle (Longint on x86_64 Linux) */

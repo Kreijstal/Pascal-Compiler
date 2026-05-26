@@ -1,3 +1,12 @@
+/**
+ * @file identifier_utils.h
+ * @brief Case-insensitive Pascal-identifier helpers.
+ *
+ * Pascal is case-insensitive, so identifier comparisons and hash keys
+ * need a fold to a canonical form.  This header is inline-only — each
+ * helper is a `static inline` so it can be used freely without an
+ * accompanying .c file.
+ */
 #ifndef KGPC_IDENTIFIER_UTILS_H
 #define KGPC_IDENTIFIER_UTILS_H
 
@@ -5,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/**
+ * @brief Allocate a lower-cased copy of @p src.
+ *
+ * Returns NULL on out-of-memory or if @p src is NULL.  Caller frees.
+ */
 static inline char *pascal_identifier_lower_dup(const char *src) {
   if (src == NULL)
     return NULL;
@@ -21,11 +35,17 @@ static inline char *pascal_identifier_lower_dup(const char *src) {
   return dst;
 }
 
-/* Lower an identifier into a caller-provided buffer.
- * Returns buf on success, or a malloc'd string if the identifier is too long.
- * Caller must call pascal_identifier_lower_buf_free() to free if needed. */
+/** @brief Default stack-buffer size for @ref pascal_identifier_lower_buf. */
 #define PASCAL_ID_STACK_MAX 256
 
+/**
+ * @brief Lower an identifier into a caller-provided buffer.
+ *
+ * Returns @p buf on success, or a malloc'd string if the identifier is
+ * too long for @p buf_size.  Caller must use
+ * @ref pascal_identifier_lower_buf_free to release if the result was
+ * heap-allocated.
+ */
 static inline char *pascal_identifier_lower_buf(const char *src, char *buf,
                                                 size_t buf_size) {
   if (src == NULL)
@@ -48,11 +68,22 @@ static inline char *pascal_identifier_lower_buf(const char *src, char *buf,
   return dst;
 }
 
+/**
+ * @brief Free a @ref pascal_identifier_lower_buf result if it was heap-allocated.
+ *
+ * No-op when @p result is NULL or aliases @p buf (the stack buffer).
+ */
 static inline void pascal_identifier_lower_buf_free(char *result, char *buf) {
   if (result != NULL && result != buf)
     free(result);
 }
 
+/**
+ * @brief Case-insensitive identifier equality.
+ *
+ * Returns 1 if both strings compare equal under ASCII case-folding,
+ * 0 otherwise.  Treats both arguments as identifiers (NULL only equals NULL).
+ */
 static inline int pascal_identifier_equals(const char *lhs, const char *rhs) {
   if (lhs == NULL || rhs == NULL)
     return lhs == rhs;
@@ -69,7 +100,12 @@ static inline int pascal_identifier_equals(const char *lhs, const char *rhs) {
   return *lhs == '\0' && *rhs == '\0';
 }
 
-/* Case-insensitive strstr - finds needle in haystack ignoring case */
+/**
+ * @brief Case-insensitive `strstr`.
+ *
+ * Returns the first position in @p haystack where @p needle occurs
+ * under ASCII case-folding, or NULL if not present.
+ */
 static inline const char *pascal_strcasestr(const char *haystack,
                                             const char *needle) {
   if (haystack == NULL || needle == NULL)

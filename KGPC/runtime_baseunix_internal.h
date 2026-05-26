@@ -1,9 +1,10 @@
-/*
- * runtime_baseunix_internal.h — private helpers for runtime_baseunix.c
+/**
+ * @file runtime_baseunix_internal.h
+ * @brief Private Windows-portability shims for `runtime_baseunix.c`.
  *
- * This header is included ONLY by runtime_baseunix.c.  It provides
- * Windows-portability shims (path translation, open-flag translation) that
- * are not part of the public runtime ABI.  Do not include from other files.
+ * Included ONLY by `runtime_baseunix.c` — path translation and Unix→Win32
+ * open-flag translation that are not part of the public runtime ABI.
+ * Do not include from other files.
  */
 
 #ifndef KGPC_RUNTIME_BASEUNIX_INTERNAL_H
@@ -14,11 +15,16 @@
 #include <io.h>
 #include <string.h>
 
-/* Linux open flag constants for cross-platform translation */
+/** @brief Linux `O_CREAT` constant for cross-platform flag translation. */
 #define LINUX_O_CREAT 0x40
+/** @brief Linux `O_TRUNC` constant for cross-platform flag translation. */
 #define LINUX_O_TRUNC 0x200
 
-/* Translate Unix paths to Windows equivalents */
+/**
+ * @brief Translate Unix-style paths to their Windows equivalents.
+ *
+ * Currently maps `/dev/null` → `NUL`; passes everything else through.
+ */
 static inline const char *translate_unix_path(const char *path) {
   /* Map /dev/null to NUL */
   if (path != NULL && strcmp(path, "/dev/null") == 0)
@@ -26,7 +32,11 @@ static inline const char *translate_unix_path(const char *path) {
   return path;
 }
 
-/* Translate Unix open flags to Windows _open flags */
+/**
+ * @brief Translate Unix `O_*` flags into Windows `_open` flags.
+ *
+ * Always sets `_O_BINARY` so KGPC files behave the same as on Unix.
+ */
 static inline int translate_flags(int flags) {
   int wflags = _O_BINARY; /* Always use binary mode on Windows */
 
