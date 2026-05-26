@@ -6248,11 +6248,18 @@ ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGen
      * expression: if the expression is a constructor call, ownership
      * transfers to the runtime via kgpc_current_exception, and any
      * branch-through-finally that may run below must NOT release the
-     * fresh exception object via the end-of-statement flush. */
+     * fresh exception object via the end-of-statement flush.
+     *
+     * Unwrap typecast wrappers so detection is robust against
+     * `raise EClassAlias(EUnderlying.Create(...))` style expressions. */
     int raise_ctor_snapshot = (ctx != NULL) ? ctx->pending_ctor_temp_count : 0;
+    struct Expression *raise_ctor_probe = exc_expr;
+    while (raise_ctor_probe != NULL && raise_ctor_probe->type == EXPR_TYPECAST)
+        raise_ctor_probe = raise_ctor_probe->expr_data.typecast_data.expr;
     int raise_is_constructor =
-        (exc_expr != NULL && exc_expr->type == EXPR_FUNCTION_CALL &&
-         exc_expr->expr_data.function_call_data.is_constructor_call);
+        (raise_ctor_probe != NULL &&
+         raise_ctor_probe->type == EXPR_FUNCTION_CALL &&
+         raise_ctor_probe->expr_data.function_call_data.is_constructor_call);
 
     if (exc_expr != NULL)
     {

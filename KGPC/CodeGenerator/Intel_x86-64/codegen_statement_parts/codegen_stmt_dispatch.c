@@ -635,12 +635,23 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
      * The expr_tree.c constructor-allocation site has already pushed the
      * spill slot onto ctx->pending_ctor_temp_offsets for transient-temp
      * cleanup; we must pop the topmost entry after dispatch so the end-
-     * of-statement flush does not free a still-owned object. */
+     * of-statement flush does not free a still-owned object.
+     *
+     * A typecast wrapper around the constructor call (e.g.
+     * `result := tcgprocinfo(cprocinfo.create(nil))`) only reinterprets
+     * the result pointer and does not change ownership semantics — the
+     * cast's inner constructor still produces the instance assigned to
+     * the target.  Unwrap typecasts so this ownership-transfer detection
+     * is robust against such wrappers; without this, pp.pas's
+     * `create_main_proc` releases the freshly built tprocinfo before
+     * `generate_code_tree` can dispatch through it. */
     int ctor_owned_snapshot = ctx->pending_ctor_temp_count;
     int ctor_owned_rhs_is_constructor = 0;
     if (stmt->type == STMT_VAR_ASSIGN)
     {
         struct Expression *rhs_expr = stmt->stmt_data.var_assign_data.expr;
+        while (rhs_expr != NULL && rhs_expr->type == EXPR_TYPECAST)
+            rhs_expr = rhs_expr->expr_data.typecast_data.expr;
         if (rhs_expr != NULL && rhs_expr->type == EXPR_FUNCTION_CALL &&
             rhs_expr->expr_data.function_call_data.is_constructor_call)
             ctor_owned_rhs_is_constructor = 1;
@@ -652,6 +663,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
          * the freshly allocated instance must not be released as a
          * transient temp. */
         struct Expression *raise_expr = stmt->stmt_data.raise_data.exception_expr;
+        while (raise_expr != NULL && raise_expr->type == EXPR_TYPECAST)
+            raise_expr = raise_expr->expr_data.typecast_data.expr;
         if (raise_expr != NULL && raise_expr->type == EXPR_FUNCTION_CALL &&
             raise_expr->expr_data.function_call_data.is_constructor_call)
             ctor_owned_rhs_is_constructor = 1;
