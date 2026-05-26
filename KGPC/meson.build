@@ -140,6 +140,7 @@ debug_deserializer_tests = executable('debug_deserializer_tests',
   [
     'debug_deserializer_tests.c',
     'debug_deserializer.c',
+    '../common/xmem.c',
   ],
   include_directories: [inc_dirs, parser_inc],
 )

@@ -1,4 +1,5 @@
 #include "generic_types.h"
+#include "xmem.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +18,8 @@ void generic_registry_init(void) {
 
 GenericTypeDecl *generic_registry_add_decl(const char *name, char **type_params,
                                            int num_params, Tree_t *decl) {
-  GenericTypeDecl *generic = malloc(sizeof(GenericTypeDecl));
-  generic->name = strdup(name);
+  GenericTypeDecl *generic = kgpc_xmalloc(sizeof(GenericTypeDecl));
+  generic->name = kgpc_xstrdup(name);
   generic->num_type_params = num_params;
   generic->original_decl = decl;
   generic->record_template = NULL;
@@ -30,9 +31,9 @@ GenericTypeDecl *generic_registry_add_decl(const char *name, char **type_params,
   }
 
   // Copy type parameter names
-  generic->type_parameters = malloc(sizeof(char *) * num_params);
+  generic->type_parameters = kgpc_xmalloc(sizeof(char *) * num_params);
   for (int i = 0; i < num_params; i++) {
-    generic->type_parameters[i] = strdup(type_params[i]);
+    generic->type_parameters[i] = kgpc_xstrdup(type_params[i]);
   }
 
   // Add to front of list
@@ -60,7 +61,7 @@ char *generic_mangle_name(const char *generic_name, char **concrete_types,
     len += strlen(concrete_types[i]) + 1; // +1 for underscore
   }
 
-  char *mangled = malloc(len);
+  char *mangled = kgpc_xmalloc(len);
   strcpy(mangled, generic_name);
 
   for (int i = 0; i < num_types; i++) {
@@ -81,17 +82,17 @@ generic_registry_add_specialization(const char *generic_name,
     return existing;
   }
 
-  GenericSpecialization *spec = malloc(sizeof(GenericSpecialization));
-  spec->generic_name = strdup(generic_name);
+  GenericSpecialization *spec = kgpc_xmalloc(sizeof(GenericSpecialization));
+  spec->generic_name = kgpc_xstrdup(generic_name);
   spec->num_concrete_types = num_types;
   spec->specialized_name =
       generic_mangle_name(generic_name, concrete_types, num_types);
   spec->specialized_type = NULL; // To be filled in during semantic check
 
   // Copy concrete type names
-  spec->concrete_types = malloc(sizeof(char *) * num_types);
+  spec->concrete_types = kgpc_xmalloc(sizeof(char *) * num_types);
   for (int i = 0; i < num_types; i++) {
-    spec->concrete_types[i] = strdup(concrete_types[i]);
+    spec->concrete_types[i] = kgpc_xstrdup(concrete_types[i]);
   }
 
   // Add to front of list

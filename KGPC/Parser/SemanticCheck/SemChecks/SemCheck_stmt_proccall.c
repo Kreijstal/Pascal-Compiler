@@ -9,6 +9,7 @@
    this is a general way to define the maximum scope level
 */
 
+#include "xmem.h"
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
@@ -3882,7 +3883,7 @@ struct Statement *transform_two_arg_new_dispose(struct Statement *stmt,
       mk_pointer_deref(stmt->line_num, clone_expression(ptr_expr));
 
   /* Build the argument list: receiver (self) + method args */
-  ListNode_t *call_args = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+  ListNode_t *call_args = (ListNode_t *)kgpc_xcalloc(1, sizeof(ListNode_t));
   call_args->type = LIST_EXPR;
   call_args->cur = receiver;
   call_args->next = method_args; /* may be NULL */

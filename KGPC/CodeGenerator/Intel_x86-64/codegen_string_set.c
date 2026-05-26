@@ -2,6 +2,7 @@
  * codegen_string_set.c — Simple string hash set for O(1) label/name lookups
  */
 #include "codegen_string_set.h"
+#include "xmem.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +35,8 @@ int codegen_set_contains_ci(const CodeGenStringSet *set, const char *key) {
 
 void codegen_set_insert(CodeGenStringSet *set, const char *key) {
   unsigned idx = codegen_hash(key);
-  CodeGenHashEntry *entry = malloc(sizeof(CodeGenHashEntry));
+  CodeGenHashEntry *entry = (CodeGenHashEntry *)kgpc_xmalloc(
+      sizeof(CodeGenHashEntry));
   entry->key = key;
   entry->next = set->buckets[idx];
   set->buckets[idx] = entry;
@@ -45,7 +47,8 @@ void codegen_set_insert_ci(CodeGenStringSet *set, const char *key) {
   for (const char *s = key; *s; s++)
     h = h * 31 + (unsigned char)tolower((unsigned char)*s);
   unsigned idx = h % CODEGEN_HASHSET_SIZE;
-  CodeGenHashEntry *entry = malloc(sizeof(CodeGenHashEntry));
+  CodeGenHashEntry *entry = (CodeGenHashEntry *)kgpc_xmalloc(
+      sizeof(CodeGenHashEntry));
   entry->key = key;
   entry->next = set->buckets[idx];
   set->buckets[idx] = entry;

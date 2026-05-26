@@ -6,6 +6,7 @@
    semcheck_varassign, semcheck_stmt, and property assignment functions.
 */
 
+#include "xmem.h"
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
@@ -2557,7 +2558,7 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt,
       struct Statement *extra_stmt = transform_two_arg_new_dispose(
           (struct Statement *)stmt_list->cur, &is_dispose);
       if (extra_stmt != NULL) {
-        ListNode_t *new_node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+        ListNode_t *new_node = (ListNode_t *)kgpc_xcalloc(1, sizeof(ListNode_t));
         new_node->type = LIST_STMT;
         if (is_dispose) {
           /* Dispose: insert destructor call BEFORE Dispose(p) */

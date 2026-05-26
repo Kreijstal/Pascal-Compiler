@@ -8,6 +8,7 @@
 #include "../../../identifier_utils.h"
 #include "../codegen.h"
 #include "../register_types.h"
+#include "xmem.h"
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
@@ -1655,7 +1656,7 @@ void free_reg_stack(RegStack_t *reg_stack) {
 
 StackScope_t *init_stackscope() {
   StackScope_t *new_scope;
-  new_scope = (StackScope_t *)malloc(sizeof(StackScope_t));
+  new_scope = (StackScope_t *)kgpc_xmalloc(sizeof(StackScope_t));
 
   new_scope->t_offset = 0;
   new_scope->x_offset = 0;

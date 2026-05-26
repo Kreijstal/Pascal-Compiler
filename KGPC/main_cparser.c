@@ -30,6 +30,7 @@ static int setenv(const char *name, const char *value, int overwrite) {
 static int unsetenv(const char *name) { return _putenv_s(name, ""); }
 #endif
 
+#include "xmem.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -2300,7 +2301,7 @@ static void codegen_cache_compute_key(const char *input_file, char *key_buf,
   /* Hash sorted unit names */
   int count = unit_registry_count();
   const char **names =
-      calloc((size_t)(count > 0 ? count : 1), sizeof(const char *));
+      kgpc_xcalloc((size_t)(count > 0 ? count : 1), sizeof(const char *));
   int n = 0;
   for (int i = 1; i <= count; i++) {
     const char *name = unit_registry_get(i);

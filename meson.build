@@ -16,6 +16,7 @@ cparser_core_sources = [
   'cparser/ast_cache.c',
   'common/arena.c',
   'common/file_lock.c',
+  'common/xmem.c',
 ]
 
 pascal_parser_sources = [

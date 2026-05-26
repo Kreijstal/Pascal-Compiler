@@ -3,6 +3,7 @@
 #include "Parser/ParseTree/tree_types.h"
 #include "Parser/ParseTree/type_tags.h"
 #include "Parser/SemanticCheck/HashTable/HashTable.h"
+#include "xmem.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,7 +103,7 @@ struct Expression *deserialize_expression(FILE *fp) {
   }
 
   struct Expression *expr =
-      (struct Expression *)malloc(sizeof(struct Expression));
+      (struct Expression *)kgpc_xmalloc(sizeof(struct Expression));
   expr->type = type;
   expr->line_num = -1; // Not serialized
   expr->field_width = NULL;
