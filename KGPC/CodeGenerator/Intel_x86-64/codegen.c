@@ -6429,10 +6429,20 @@ static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(ListNode_t *inst_
 #define DYNARRAY_CLEANUP_MAX_DEPTH 32
 
 /* Returns 1 if the record (including transitively) declares any dynamic-array
- * field whose data buffer needs releasing at scope exit. */
+ * field whose data buffer needs releasing at scope exit.
+ *
+ * Class types are skipped: a local variable of class type is a reference
+ * (an 8-byte heap pointer), not an inline instance.  Walking the class
+ * layout as if its fields lived in the variable's stack slot would emit
+ * finalize calls at offsets that overflow the 8-byte pointer slot into
+ * adjacent locals — corrupting unrelated frame storage and, in pp.pas's
+ * tprocinfo case, nilling out class instance fields that are still in
+ * use.  Cleanup of class instances is the responsibility of explicit
+ * Destroy/Free calls and the constructor-temp tracker, not this dynarray
+ * finalize walk. */
 static int codegen_record_contains_dynarray(struct RecordType *record)
 {
-    if (record == NULL)
+    if (record == NULL || record_type_is_class(record))
         return 0;
     for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
     {
@@ -6548,12 +6558,16 @@ static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(ListNode_t *inst_
 {
     if (record == NULL || depth >= DYNARRAY_CLEANUP_MAX_DEPTH)
         return inst_list;
+    /* A class variable is a reference (8-byte heap pointer); its inline
+     * layout never sits in the variable's stack slot, so walking the class
+     * fields here would emit finalize calls at offsets that scribble over
+     * adjacent locals.  Class cleanup is the responsibility of explicit
+     * Destroy/Free or the constructor-temp tracker, not this walk. */
+    if (record_type_is_class(record))
+        return inst_list;
 
     int is_packed = record->is_packed;
-    /* Classes carry a VMT pointer at offset 0 before any user fields. */
     long long offset = base_within_record;
-    if (record_type_is_class(record))
-        offset += 8;
 
     for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
     {
