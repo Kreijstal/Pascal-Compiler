@@ -55,11 +55,6 @@ void param_types_free(struct TypeRef **types, int count);
 int type_ref_array_equal_ci(struct TypeRef *const *lhs, int lhs_count,
                             struct TypeRef *const *rhs, int rhs_count);
 
-static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
-                                                const struct RecordType *record,
-                                                const char *class_label,
-                                                const char ***out_names,
-                                                int *out_count);
 static const struct RecordType *
 codegen_record_parent(const struct RecordType *record, SymTab_t *symtab);
 static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
@@ -1487,125 +1482,6 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
   }
 
   return NULL;
-}
-
-static int codegen_class_implements_interface(
-    SymTab_t *symtab, const struct RecordType *record, const char *class_label,
-    const struct RecordType *iface_record) {
-  if (symtab == NULL || record == NULL || iface_record == NULL)
-    return 0;
-
-  /* method_templates already includes inherited parent methods (prepended
-   * during semcheck), so iterate directly. */
-  if (iface_record->method_templates == NULL)
-    return 0;
-
-  int result = 1;
-  for (ListNode_t *cur = iface_record->method_templates; cur != NULL;
-       cur = cur->next) {
-    struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
-    if (tmpl == NULL || tmpl->name == NULL)
-      continue;
-    if (codegen_find_class_method_impl_id(symtab, record, class_label,
-                                          iface_record->type_id,
-                                          tmpl->name) == NULL) {
-      result = 0;
-      break;
-    }
-  }
-  return result;
-}
-
-static void __attribute__((unused)) codegen_collect_inferred_interfaces(
-    SymTab_t *symtab, const struct RecordType *record, const char *class_label,
-    const char ***out_names, int *out_count) {
-  *out_names = NULL;
-  *out_count = 0;
-  if (symtab == NULL || record == NULL || !record->is_class)
-    return;
-
-  int cap = 0;
-  const char **names = NULL;
-
-  const struct RecordType *parent = codegen_record_parent(record, symtab);
-  if (parent != NULL && parent->num_interfaces > 0 &&
-      parent->interface_names != NULL) {
-    for (int i = 0; i < parent->num_interfaces; i++) {
-      const char *iface = parent->interface_names[i];
-      if (iface == NULL)
-        continue;
-      if (*out_count == cap) {
-        cap = cap == 0 ? 8 : cap * 2;
-        const char **grown =
-            (const char **)realloc((void *)names, sizeof(char *) * cap);
-        if (grown == NULL) {
-          free((void *)names);
-          fprintf(stderr, "[KGPC] codegen_collect_inferred_interfaces: out of "
-                          "memory\n");
-          exit(1);
-        }
-        names = grown;
-      }
-      names[*out_count] = iface;
-      (*out_count)++;
-    }
-  }
-
-  for (int unit_idx = 0; unit_idx < SYMTAB_MAX_UNITS; unit_idx++) {
-    ScopeNode *scope = symtab->unit_scopes[unit_idx];
-    HashTable_t *table = scope != NULL ? scope->table : NULL;
-    if (table == NULL)
-      continue;
-    for (int b = 0; b < TABLE_SIZE; b++) {
-      for (ListNode_t *node = table->table[b]; node != NULL;
-           node = node->next) {
-        HashNode_t *hash_node = (HashNode_t *)node->cur;
-        if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE)
-          continue;
-        struct RecordType *iface_record = hashnode_get_record_type(hash_node);
-        if (iface_record == NULL && hash_node->type != NULL &&
-            hash_node->type->kind == TYPE_KIND_POINTER &&
-            hash_node->type->info.points_to != NULL &&
-            hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-          iface_record = hash_node->type->info.points_to->info.record_info;
-        if (iface_record == NULL || !iface_record->is_interface)
-          continue;
-        const char *iface_name = iface_record->type_id != NULL
-                                     ? iface_record->type_id
-                                     : hash_node->id;
-        if (iface_name == NULL)
-          continue;
-        int already = 0;
-        for (int i = 0; i < *out_count; i++) {
-          if (pascal_identifier_equals(names[i], iface_name)) {
-            already = 1;
-            break;
-          }
-        }
-        if (already)
-          continue;
-        if (!codegen_class_implements_interface(symtab, record, class_label,
-                                                iface_record))
-          continue;
-        if (*out_count == cap) {
-          cap = cap == 0 ? 8 : cap * 2;
-          const char **grown =
-              (const char **)realloc((void *)names, sizeof(char *) * cap);
-          if (grown == NULL) {
-            free((void *)names);
-            fprintf(stderr, "[KGPC] codegen_collect_inferred_interfaces: out "
-                            "of memory\n");
-            exit(1);
-          }
-          names = grown;
-        }
-        names[*out_count] = iface_name;
-        (*out_count)++;
-      }
-    }
-  }
-
-  *out_names = names;
 }
 
 static void
