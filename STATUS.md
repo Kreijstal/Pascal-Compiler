@@ -91,23 +91,6 @@ These are real KGPC defects that affect specific Pascal patterns.  None of
 them gate the Stage 1-3 bootstrap chain (which is why CI is green), but
 they limit how much *other* FPC-style Pascal you can throw at the compiler.
 
-### `{$packset N}` directive is silently ignored
-- **Symptom:** when source declares `{$packset 1}`, KGPC still packs every
-  set field on its natural alignment.  Externally-visible record sizes
-  for `tsettings`-style records differ from what FPC produces.
-- **Impact:** affects any code that depends on a packed-set memory layout
-  beyond what FPC bootstrap itself needs.
-- **Repro/status:** captured in agent memory as
-  `project_kgpc_packset_directive_needed.md`.
-
-### `dateutil.inc:1517` — three-XMM spill corrupts `treference`
-- **Symptom:** SIGSEGV in `spilling_create_load → loadref` for expressions
-  combining ≥3 user-defined `Double`-returning calls with `+`.
-- **Affects:** `tdatetime_basics`, `sysutils_demo`, `missing_dateutils`.
-- **Repro/status:** captured in agent memory as
-  `project_pp_bootstrap_dateutil_l1517.md`.  Suspected to be the same root
-  cause as the `packset` issue (`treference` layout mismatch).
-
 ### Stage 4: AnsiString → RawByteString/UnicodeString var-param mismatch
 - **Symptom:** FPC-built-by-KGPC rejects 8 specific `cutils.pas` call sites
   for `Delete(s,i,n)` / `Insert(s2,s,i)` when `s` is an AnsiString and the

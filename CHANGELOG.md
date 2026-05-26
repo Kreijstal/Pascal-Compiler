@@ -27,7 +27,7 @@ changes will be tracked; previous progress lives in the git history.
 ### Compiler — language and front end
 - Parser-combinator front end (`cparser/`) is the default; the legacy
   lex/yacc front end is retired.
-- `GpcType` first-class type system unifies semantic checking and codegen.
+- `KgpcType` first-class type system unifies semantic checking and codegen.
 - Per-unit symbol-table scoping via a parent-pointer scope tree
   (`KGPC/Parser/SemanticCheck/SymTab/`).
 - Extended type support: 80-bit `Extended` (x87 ABI), records, classes
