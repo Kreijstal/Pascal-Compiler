@@ -495,7 +495,6 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
   struct MethodInfo *name_match = NULL;
   int name_match_count = 0;
   struct MethodInfo *first_count_match = NULL;
-  int count_match_count = 0;
   struct MethodInfo *sig_match = NULL;
   for (ListNode_t *node = record->methods; node != NULL; node = node->next) {
     struct MethodInfo *method = (struct MethodInfo *)node->cur;
@@ -515,7 +514,6 @@ int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
         continue;
       if (first_count_match == NULL)
         first_count_match = method;
-      count_match_count++;
       if (call_param_types != NULL && method->param_types != NULL &&
           method->param_types_count >= 0 &&
           type_ref_array_equal_ci(call_param_types, call_param_types_count,

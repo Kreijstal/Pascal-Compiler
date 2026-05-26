@@ -6290,23 +6290,6 @@ static ListNode_t *codegen_emit_finalize_call(ListNode_t *inst_list,
   return inst_list;
 }
 
-/* Compute alignment requirement for a field type used in record layout.
- * Mirrors codegen_get_field_alignment but accepts a KgpcType directly. */
-static int codegen_field_alignment_for_type(KgpcType *type) {
-  if (type == NULL)
-    return 1;
-  if (type->kind == TYPE_KIND_POINTER || kgpc_type_is_dynamic_array(type))
-    return 8;
-  long long sz = kgpc_type_sizeof(type);
-  if (sz >= 8)
-    return 8;
-  if (sz >= 4)
-    return 4;
-  if (sz >= 2)
-    return 2;
-  return 1;
-}
-
 static long long codegen_align_value(long long offset, int alignment) {
   if (alignment <= 1)
     return offset;
@@ -6347,19 +6330,6 @@ static ListNode_t *codegen_emit_dynarray_cleanup_record_fields(
     struct RecordField *field = (struct RecordField *)cur->cur;
     if (field == NULL || field->is_class_var)
       continue;
-
-    /* Field's declared type (for alignment / size). */
-    KgpcType *field_type = NULL;
-    if (field->is_array) {
-      /* array_element_kgpc_type describes the element; the field's
-       * own type is an array.  For alignment/size we'd need the
-       * array's KgpcType, but we can derive what we need from
-       * field properties directly. */
-      field_type = NULL;
-    } else if (field->nested_record != NULL) {
-      /* Records have alignment driven by their widest member. */
-      field_type = NULL;
-    }
 
     /* Field alignment: matches codegen_sizeof_record's layout. */
     int field_align;

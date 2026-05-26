@@ -43,7 +43,6 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
 
   /* Start with parent's VMT if this class has a parent */
   ListNode_t *vmt = NULL;
-  int vmt_size = 0;
   int max_vmt_index = 11;
 
   if (record_info->parent_class_name != NULL) {
@@ -118,7 +117,6 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
                 node->next = NULL;
                 *tail = node;
                 tail = &node->next;
-                vmt_size++;
               } else {
                 free(cloned->name);
                 free(cloned->mangled_name);
@@ -376,7 +374,6 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
                 last = last->next;
               last->next = node;
             }
-            vmt_size++;
             max_vmt_index = new_method->vmt_index;
           } else {
             free(new_method->name);

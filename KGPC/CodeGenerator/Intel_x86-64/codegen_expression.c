@@ -1012,33 +1012,6 @@ ListNode_t *codegen_restore_spilled_reg64(ListNode_t *inst_list,
   }
 }
 
-static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list,
-                                                      CodeGenContext *ctx,
-                                                      Register_t *value_reg) {
-  if (value_reg == NULL)
-    return inst_list;
-
-  const char *arg_reg32 = current_arg_reg32(0);
-  if (arg_reg32 == NULL)
-    return inst_list;
-
-  {
-    char buffer_tmpl[128];
-    snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovl\t%%0, %s\n", arg_reg32);
-    Register_t *u[] = {value_reg};
-    inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
-  }
-  inst_list = codegen_vect_reg(inst_list, 0);
-  inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-  {
-    Register_t *d[] = {value_reg};
-    inst_list =
-        add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
-  }
-  free_arg_regs();
-  return inst_list;
-}
-
 int codegen_get_char_array_length(const struct Expression *expr,
                                   CodeGenContext *ctx, long long *out_len) {
   if (out_len != NULL)
@@ -1136,67 +1109,6 @@ codegen_array_access_targets_shortstring(const struct Expression *expr,
     if (kgpc_type_string_storage_kind(elem_type) ==
         KGPC_STRING_STORAGE_SHORTSTRING)
       return 1;
-  }
-
-  return 0;
-}
-
-static int codegen_shortstring_capacity_from_type_expr(KgpcType *type) {
-  if (type == NULL)
-    return 0;
-
-  struct TypeAlias *alias = kgpc_type_get_type_alias(type);
-  if (alias != NULL && alias->is_shortstring) {
-    if (alias->array_end >= alias->array_start && alias->array_end >= 0)
-      return alias->array_end - alias->array_start + 1;
-    if (alias->storage_size > 1 && alias->storage_size <= INT_MAX)
-      return (int)alias->storage_size;
-  }
-
-  if (kgpc_type_string_storage_kind(type) == KGPC_STRING_STORAGE_SHORTSTRING) {
-    long long type_size = kgpc_type_sizeof(type);
-    if (type_size > 1 && type_size <= INT_MAX)
-      return (int)type_size;
-    return 256;
-  }
-
-  return 0;
-}
-
-static int codegen_shortstring_capacity_from_array_access_expr(
-    const struct Expression *expr, CodeGenContext *ctx) {
-  if (expr == NULL || expr->type != EXPR_ARRAY_ACCESS || ctx == NULL)
-    return 0;
-
-  struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
-  if (base_expr == NULL)
-    return 0;
-
-  KgpcType *base_type = expr_get_kgpc_type(base_expr);
-  if (base_type == NULL && base_expr->type == EXPR_VAR_ID &&
-      base_expr->expr_data.id != NULL && ctx->symtab != NULL) {
-    HashNode_t *node = NULL;
-    if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
-        node != NULL) {
-      base_type = node->type;
-    }
-  }
-
-  if (base_type != NULL && kgpc_type_is_array(base_type)) {
-    KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
-    int capacity = codegen_shortstring_capacity_from_type_expr(elem_type);
-    if (capacity > 0)
-      return capacity;
-  }
-
-  if (base_expr->type == EXPR_VAR_ID && base_expr->expr_data.id != NULL) {
-    int scope_depth = 0;
-    StackNode_t *stack_node =
-        find_label_with_depth(base_expr->expr_data.id, &scope_depth);
-    if (stack_node != NULL && stack_node->element_size > 1 &&
-        stack_node->element_size <= INT_MAX) {
-      return stack_node->element_size;
-    }
   }
 
   return 0;
