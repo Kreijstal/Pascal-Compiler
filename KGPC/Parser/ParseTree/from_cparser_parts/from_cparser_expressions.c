@@ -1943,8 +1943,9 @@ convert_member_access_chain(int line, struct Expression *base_expr,
       ast_t *method_unwrapped = unwrap_pascal_node(method_id_node);
       if (method_unwrapped == NULL)
         method_unwrapped = method_id_node;
+      /* method_unwrapped is guaranteed non-NULL by the unwrap-or-fallback
+         block above (lines initializing it from method_id_node). */
       if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
-          method_unwrapped != NULL &&
           method_unwrapped->typ == PASCAL_T_IDENTIFIER &&
           method_unwrapped->sym != NULL &&
           method_unwrapped->sym->name != NULL &&
@@ -2332,6 +2333,7 @@ convert_member_access_chain(int line, struct Expression *base_expr,
 }
 
 struct Statement *convert_assignment(ast_t *assign_node) {
+  assert(assign_node != NULL);
   ast_t *lhs = assign_node->child;
   ast_t *rhs = lhs != NULL ? lhs->next : NULL;
 
@@ -2344,7 +2346,7 @@ struct Statement *convert_assignment(ast_t *assign_node) {
         stderr,
         "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN rhs-convert-null line=%d "
         "lhs_typ=%d rhs_typ=%d(%s) rhs_sym=%s rhs_child_typ=%d(%s)\n",
-        assign_node != NULL ? assign_node->line : -1,
+        assign_node->line,
         (int)(lhs != NULL ? lhs->typ : -1), (int)(dbg_rhs != NULL ? dbg_rhs->typ : -1),
         dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
         (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
@@ -2356,7 +2358,7 @@ struct Statement *convert_assignment(ast_t *assign_node) {
             : "<null>");
   }
   if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
-      assign_node != NULL && assign_node->line == 256) {
+      assign_node->line == 256) {
     ast_t *u_rhs = unwrap_pascal_node(rhs);
     ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
     fprintf(
@@ -2399,10 +2401,11 @@ struct Statement *convert_assignment(ast_t *assign_node) {
 
 struct Statement *convert_proc_call(ast_t *call_node,
                                     bool implicit_identifier) {
+  assert(call_node != NULL);
   if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
     fprintf(stderr, "[KGPC] convert_proc_call: typ=%d line=%d\n",
-            (int)(call_node ? call_node->typ : -1), call_node ? call_node->line : -1);
-    if (call_node && call_node->child) {
+            (int)call_node->typ, call_node->line);
+    if (call_node->child) {
       fprintf(stderr, "[KGPC]   child typ=%d\n", (int)(call_node->child->typ));
     }
   }

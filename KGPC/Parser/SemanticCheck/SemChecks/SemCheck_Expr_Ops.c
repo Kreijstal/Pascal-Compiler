@@ -3267,7 +3267,7 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
   }
 
   if (!scope_return) {
-    if (!scope_return) {
+    {
       /* FPC-style module property getter: resolve Foo as GetFoo() when present.
        */
       if (with_status != 0 && id != NULL) {

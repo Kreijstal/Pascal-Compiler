@@ -1239,10 +1239,8 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
       type_tag != ENUM_TYPE && type_tag != SET_TYPE) {
     long long size = sizeof_from_type_tag(type_tag);
     if (size > 0) {
-      int align = fpc_type_alignment_from_size(size, type_tag);
-      if (type_tag == SET_TYPE)
-        align = (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
-      *align_out = align;
+      /* SET_TYPE is excluded above, so no SET_TYPE-specific cap here. */
+      *align_out = fpc_type_alignment_from_size(size, type_tag);
       return 0;
     }
   }

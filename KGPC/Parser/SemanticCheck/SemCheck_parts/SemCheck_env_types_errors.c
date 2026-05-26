@@ -2119,7 +2119,11 @@ v_semcheck_format_error_with_context(const char *file_path, int effective_line,
                                      int effective_col, int source_index,
                                      const char *format, va_list args) {
   semcheck_print_error_prefix(file_path, effective_line, effective_col);
-  if (format != NULL && strncmp(format, "Error on line %d", 16) == 0) {
+  if (format == NULL) {
+    fprintf(stderr, "\n");
+    return;
+  }
+  if (strncmp(format, "Error on line %d", 16) == 0) {
     int original_line = va_arg(args, int);
     (void)original_line;
     const char *rest = format + 16;
@@ -2134,7 +2138,7 @@ v_semcheck_format_error_with_context(const char *file_path, int effective_line,
     vfprintf(stderr, format, args);
   }
 
-  size_t len = format ? strlen(format) : 0;
+  size_t len = strlen(format);
   if (len == 0 || format[len - 1] != '\n')
     fprintf(stderr, "\n");
 

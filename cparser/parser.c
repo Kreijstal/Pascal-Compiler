@@ -886,10 +886,10 @@ ast_t *ast2(tag_t typ, ast_t *a1, ast_t *a2) {
   ast_t *ast = new_ast();
   ast->typ = typ;
   ast->child = a1;
-  a1->next = a2;
   ast->next = NULL;
   /* Copy position from first child if available */
   if (a1 != NULL) {
+    a1->next = a2;
     ast->line = a1->line;
     ast->col = a1->col;
     ast->index = a1->index;
@@ -1883,7 +1883,7 @@ void expr_altern(combinator_t *exp, int prec, tag_t tag, combinator_t *comb) {
       exception("Invalid precedence for expression alternative");
     list = list->next;
   }
-  if (list->fix == EXPR_BASE || list == NULL)
+  if (list == NULL || list->fix == EXPR_BASE)
     exception("Invalid precedence");
   op_t *op = (op_t *)safe_malloc(sizeof(op_t));
   op->tag = tag;

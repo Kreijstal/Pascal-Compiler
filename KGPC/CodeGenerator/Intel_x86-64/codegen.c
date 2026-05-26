@@ -2567,8 +2567,8 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx,
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  vfprintf(stderr, fmt, args);
-  if (fmt != NULL && fmt[0] != '\0') {
+  if (fmt != NULL) {
+    vfprintf(stderr, fmt, args);
     size_t len = strlen(fmt);
     if (len == 0 || fmt[len - 1] != '\n')
       fputc('\n', stderr);
@@ -2581,8 +2581,8 @@ void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...) {
 void codegen_report_warning(const CodeGenContext *ctx, const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  vfprintf(stderr, fmt, args);
-  if (fmt != NULL && fmt[0] != '\0') {
+  if (fmt != NULL) {
+    vfprintf(stderr, fmt, args);
     size_t len = strlen(fmt);
     if (len == 0 || fmt[len - 1] != '\n')
       fputc('\n', stderr);

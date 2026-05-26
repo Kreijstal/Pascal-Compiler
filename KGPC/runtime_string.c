@@ -33,6 +33,8 @@
 #include "runtime_internal.h"
 #include <limits.h>
 
+/* cppcheck-suppress intToPointerCast ; deliberate sentinel: any non-NULL,
+   non-real-pointer marker for deleted hash-set slots. */
 static void *const KGPC_STRING_TOMBSTONE = (void *)1;
 static void **kgpc_string_set_slots = NULL;
 static size_t kgpc_string_set_cap = 0;
@@ -1455,7 +1457,8 @@ void kgpc_text_append(KGPCTextRec *file) {
     if (file->bufptr != NULL && file->bufsize > 0)
       setvbuf(stream, file->bufptr, _IOFBF, (size_t)file->bufsize);
     file->mode = KGPC_FM_OUTPUT;
-    fseek(stream, 0, SEEK_END);
+    /* "a" mode always positions writes at end-of-file; no explicit seek
+       needed (and the seek is a no-op per ISO C 7.21.5.3). */
     kgpc_ioresult_set(0);
   } else {
     file->mode = KGPC_FM_CLOSED;
@@ -1969,6 +1972,8 @@ __attribute__((constructor)) static void kgpc_init_memory_manager(void) {
    * pre-existing pointer (from FPC RTL's typed-const, or a NULL from
    * BSS) is intentionally replaced. */
   for (int i = 0; i < 9; i++)
+    /* cppcheck-suppress pointerSize ; sizeof(void *) is the slot width,
+       not sizeof(mm); cppcheck misreads the relationship to char *mm. */
     memcpy(mm + 8 + i * 8, &ptrs[i], sizeof(void *));
 
   /* Slots 80 (GetHeapStatus) and 88 (GetFPCHeapStatus): no libc

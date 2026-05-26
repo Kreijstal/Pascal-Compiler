@@ -251,6 +251,9 @@ void expr_insert(combinator_t *exp, int prec, tag_t tag, expr_fix fix,
 void expr_altern(combinator_t *exp, int prec, tag_t tag, combinator_t *comb);
 
 // --- Input Stream Helpers ---
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((returns_nonnull))
+#endif
 input_t *new_input();
 void free_input(input_t *in);
 char read1(input_t *in);
@@ -375,6 +378,9 @@ typedef struct main_block_args {
 } main_block_args_t;
 
 // --- Helper Function Prototypes ---
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((returns_nonnull, malloc))
+#endif
 void *safe_malloc(size_t size);
 sym_t *sym_lookup(const char *name);
 

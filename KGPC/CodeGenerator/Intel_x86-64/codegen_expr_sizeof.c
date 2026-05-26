@@ -811,9 +811,10 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx,
         KgpcType *element_type = kgpc_type_get_array_element_type(points_to);
         if (element_type != NULL && element_type->kind == TYPE_KIND_RECORD) {
           assert(element_type->info.record_info != NULL);
-          assert(codegen_sizeof_record(ctx, element_type->info.record_info,
-                                       &element_size, 0) == 0 &&
-                 element_size > 0);
+          int record_size_status = codegen_sizeof_record(
+              ctx, element_type->info.record_info, &element_size, 0);
+          assert(record_size_status == 0 && element_size > 0);
+          (void)record_size_status;
         } else if (element_size <= 0 && element_type != NULL) {
           element_size = kgpc_type_sizeof(element_type);
         }

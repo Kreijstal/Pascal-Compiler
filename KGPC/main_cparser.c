@@ -1856,7 +1856,10 @@ static int batch_mode_main(int argc, char **argv) {
 
     /* Parse "input_file output_file" */
     char batch_input[PATH_MAX], batch_output[PATH_MAX];
-    if (sscanf(line, "%s %s", batch_input, batch_output) != 2) {
+    char fmt[64];
+    snprintf(fmt, sizeof(fmt), "%%%ds %%%ds", (int)(PATH_MAX - 1),
+             (int)(PATH_MAX - 1));
+    if (sscanf(line, fmt, batch_input, batch_output) != 2) {
       fprintf(stderr, "[batch] Malformed line, skipping: %s\n", line);
       continue;
     }

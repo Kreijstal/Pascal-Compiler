@@ -1328,7 +1328,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
   if (!result.is_success) {
     // Create context for the error before freeing input (performance
     // optimization)
-    if (result.value.error != NULL && input != NULL) {
+    if (result.value.error != NULL) {
       ensure_parse_error_contexts(result.value.error, input);
     }
 

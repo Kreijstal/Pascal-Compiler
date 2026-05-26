@@ -1768,7 +1768,12 @@ ListNode_t *emit_alu_op_with_large_imm(ListNode_t *inst_list,
   char buffer[128];
   *error = 0;
 
-  if (arith_suffix == 'q' && op_right != NULL && op_right[0] == '$') {
+  if (op_right == NULL) {
+    *error = 1;
+    return inst_list;
+  }
+
+  if (arith_suffix == 'q' && op_right[0] == '$') {
     char *endptr = NULL;
     long long imm_value = strtoll(op_right + 1, &endptr, 0);
     if (endptr != NULL && *endptr == '\0' &&

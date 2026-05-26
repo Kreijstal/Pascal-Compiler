@@ -281,6 +281,8 @@ static char *load_pascal_snippet(const char *filename) {
     goto cleanup;
   }
 
+  /* cppcheck-suppress nullPointerRedundantCheck ; buffer is non-NULL here
+     after the `if (!buffer) goto cleanup;` above. */
   size_t read = fread(buffer, 1, (size_t)size, file);
   if (read != (size_t)size) {
     fprintf(stderr,
@@ -289,6 +291,7 @@ static char *load_pascal_snippet(const char *filename) {
     goto cleanup;
   }
 
+  /* cppcheck-suppress nullPointerRedundantCheck ; buffer is non-NULL here. */
   buffer[size] = '\0';
   result = buffer;
   buffer = NULL; // Prevent cleanup from freeing it
@@ -492,6 +495,8 @@ static char *load_pascal_file(const char *filename) {
     goto cleanup;
   }
 
+  /* cppcheck-suppress nullPointerRedundantCheck ; buffer is non-NULL here
+     after the `if (!buffer) goto cleanup;` above. */
   size_t read = fread(buffer, 1, (size_t)size, file);
   if (read != (size_t)size) {
     fprintf(stderr,
@@ -500,6 +505,7 @@ static char *load_pascal_file(const char *filename) {
     goto cleanup;
   }
 
+  /* cppcheck-suppress nullPointerRedundantCheck ; buffer is non-NULL here. */
   buffer[size] = '\0';
   result = buffer;
   buffer = NULL; // Prevent cleanup from freeing it

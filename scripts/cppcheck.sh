@@ -13,7 +13,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${1:-${REPO_ROOT}/build}"
 [[ $# -gt 0 ]] && shift
-SUPPRESSIONS="${REPO_ROOT}/.cppcheck-suppressions"
 DB="${BUILD_DIR}/compile_commands.json"
 
 if [[ ! -f "${DB}" ]]; then
@@ -31,7 +30,6 @@ cppcheck \
   --project="${DB}" \
   --enable=warning,performance,portability \
   --inline-suppr \
-  --suppressions-list="${SUPPRESSIONS}" \
   --suppress=missingIncludeSystem \
   --suppress='*:*/tests/test_cases/*' \
   --suppress='*:*/cparser/acutest.h' \

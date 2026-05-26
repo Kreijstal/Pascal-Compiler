@@ -1344,11 +1344,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
      * Result slot and can be finalized here for all function kinds.
      * The Result slot is not in current_subprogram_declarations so
      * codegen_emit_managed_local_cleanup never touches it. */
-    if (ctx != NULL) {
-      inst_list = codegen_emit_managed_local_cleanup(
-          inst_list, ctx->current_subprogram_declarations, ctx, symtab);
-      inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
-    }
+    if (ctx == NULL)
+      return inst_list;
+    inst_list = codegen_emit_managed_local_cleanup(
+        inst_list, ctx->current_subprogram_declarations, ctx, symtab);
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
     /* Restore callee-saved registers before leaving the frame */
     if (ctx->callee_save_rbx_offset > 0) {
       char buf[64];
