@@ -1,0 +1,12 @@
+# clangd LSP configuration. Meson writes compile_commands.json into the
+# build dir; point clangd at it so headers resolve the same as the build.
+CompileFlags:
+  CompilationDatabase: build
+
+Diagnostics:
+  Suppress:
+    # snprintf size-bound warnings on emit buffers; the truncation is bounded
+    # by the surrounding logic, not by the buffer arithmetic clangd can see.
+    - format-truncation
+    - format-overflow
+  UnusedIncludes: Strict
