@@ -483,7 +483,16 @@ FunccallState funccall_state_overload_setup(FunccallCtx *ctx) {
                 (formal_type == REAL_TYPE && is_integer_type(actual_type)) ||
                 (is_integer_type(formal_type) && actual_type == REAL_TYPE) ||
                 (formal_type == VARIANT_TYPE) ||
-                (actual_type == VARIANT_TYPE) || (formal_type == RECORD_TYPE) ||
+                (actual_type == VARIANT_TYPE) ||
+                /* Untyped formals (BUILTIN_ANY_TYPE) accept arguments of
+                 * any concrete type — this is the var/const/out parameter
+                 * pattern FPC's helpers and `array of const` use.  Without
+                 * this case the overload resolver reports things like
+                 * "got Int64 expected Any" for declarations that pass any
+                 * stage of overload-bucket scanning. */
+                (formal_type == BUILTIN_ANY_TYPE) ||
+                (actual_type == BUILTIN_ANY_TYPE) ||
+                (formal_type == RECORD_TYPE) ||
                 (actual_type == RECORD_TYPE) ||
                 (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||
                 (formal_type == CHAR_TYPE && actual_type == STRING_TYPE) ||
