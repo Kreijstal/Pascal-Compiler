@@ -1220,9 +1220,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
     }
   }
 
-  /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which
-   * expose a POSIX API) */
-#if defined(_WIN32) && !defined(__CYGWIN__)
+  /* Define MSWINDOWS when targeting Windows.  This is a target predicate,
+   * not a host predicate: cross-compiling from Linux/macOS to Windows still
+   * needs MSWINDOWS so rtl/win files and {$ifdef MSWINDOWS} guards see the
+   * Windows code paths.  The Cygwin/MSYS POSIX layer is selected by the
+   * absence of --target=windows (those builds keep target_windows_flag
+   * false), so this branch correctly omits MSWINDOWS there. */
   if (target_windows_flag()) {
     if (!pascal_preprocessor_define(preprocessor, "MSWINDOWS")) {
       report_preprocessor_error(error_out, path,
@@ -1232,10 +1235,6 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
       return false;
     }
   }
-#else
-  /* On Cygwin/MSYS and Unix, don't define MSWINDOWS */
-  (void)target_windows_flag; /* Suppress unused warning */
-#endif
 
   char *preprocess_error = NULL;
   size_t preprocessed_length = 0;
