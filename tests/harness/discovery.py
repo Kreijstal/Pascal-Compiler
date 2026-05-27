@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-from .env import FPC_RTL_DIR
+from .env import FPC_RTL_DIR, IS_NATIVE_WINDOWS
 
 # ---------------------------------------------------------------------------
 # FPC RTL known-unit cache
@@ -130,15 +130,30 @@ def should_include_in_fpcrtl(base_name, pascal_file, fpc_rtl_implicit_unit_tests
 # Bootstrap / FPC compiler path helpers
 # ---------------------------------------------------------------------------
 
+def _bootstrap_arch_defines(prefix):
+    """Architecture defines (target-independent)."""
+    return [
+        f"-{prefix}CPU64",
+        f"-{prefix}CPUX86_64",
+        f"-{prefix}x86_64",
+        f"-{prefix}FPC",
+    ]
+
+
+def _bootstrap_target_defines(prefix):
+    """Target-OS defines.  Windows targets get -DWINDOWS -DWIN64; everything
+    else assumes Linux/POSIX, which is the only other supported bootstrap
+    target today."""
+    if IS_NATIVE_WINDOWS:
+        return [f"-{prefix}WINDOWS", f"-{prefix}WIN64", f"-{prefix}MSWINDOWS"]
+    return [f"-{prefix}LINUX", f"-{prefix}UNIX"]
+
+
 def _bootstrap_define_flags():
     """Returns KGPC-style define flags for invoking the KGPC compiler itself."""
     return [
-        "-DCPU64",
-        "-DCPUX86_64",
-        "-Dx86_64",
-        "-DFPC",
-        "-DLINUX",
-        "-DUNIX",
+        *_bootstrap_arch_defines("D"),
+        *_bootstrap_target_defines("D"),
         "-DFPC_HAS_TYPE_EXTENDED",
         "-DSUPPORT_EXTENDED",
         "-DFPC_BOOTSTRAP_INDIRECT_ENTRY",
@@ -149,12 +164,8 @@ def _bootstrap_define_flags():
 def _fpc_bootstrap_define_flags():
     """Returns FPC-style define flags for invoking a compiled FPC binary (pp_bootstrap etc.)."""
     return [
-        "-dCPU64",
-        "-dCPUX86_64",
-        "-dx86_64",
-        "-dFPC",
-        "-dLINUX",
-        "-dUNIX",
+        *_bootstrap_arch_defines("d"),
+        *_bootstrap_target_defines("d"),
         "-dFPC_HAS_TYPE_EXTENDED",
         "-dSUPPORT_EXTENDED",
         "-dFPC_BOOTSTRAP_INDIRECT_ENTRY",
@@ -163,23 +174,32 @@ def _fpc_bootstrap_define_flags():
 
 
 def _bootstrap_rtl_include_dirs(fpc_src):
-    return [
+    shared = [
         os.path.join(fpc_src, "rtl", "objpas"),
         os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
         os.path.join(fpc_src, "rtl", "objpas", "classes"),
-        os.path.join(fpc_src, "rtl", "linux"),
-        os.path.join(fpc_src, "rtl", "unix"),
         os.path.join(fpc_src, "rtl", "inc"),
         os.path.join(fpc_src, "rtl", "x86_64"),
+    ]
+    if IS_NATIVE_WINDOWS:
+        # rtl/win is the shared-Windows source layer (sysutils.pp, dos.pp,
+        # windirs.pp, wininc/); rtl/win64 is the Windows+x86_64 layer
+        # (system.pp, classes.pp, signals.pp, windows.pp).
+        return shared + [
+            os.path.join(fpc_src, "rtl", "win"),
+            os.path.join(fpc_src, "rtl", "win64"),
+            os.path.join(fpc_src, "rtl", "win64", "x86_64"),
+        ]
+    return shared + [
+        os.path.join(fpc_src, "rtl", "linux"),
+        os.path.join(fpc_src, "rtl", "unix"),
         os.path.join(fpc_src, "rtl", "linux", "x86_64"),
         os.path.join(fpc_src, "rtl", "unix", "x86_64"),
     ]
 
 
 def _bootstrap_rtl_unit_dirs(fpc_src):
-    return [
-        os.path.join(fpc_src, "rtl", "unix"),
-        os.path.join(fpc_src, "rtl", "linux"),
+    shared = [
         os.path.join(fpc_src, "rtl", "objpas"),
         os.path.join(fpc_src, "rtl", "inc"),
         os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
@@ -192,6 +212,15 @@ def _bootstrap_rtl_unit_dirs(fpc_src):
         # (e.g. widestr.pas:391) crash.
         os.path.join(fpc_src, "rtl", "charmaps"),
     ]
+    if IS_NATIVE_WINDOWS:
+        return [
+            os.path.join(fpc_src, "rtl", "win"),
+            os.path.join(fpc_src, "rtl", "win64"),
+        ] + shared
+    return [
+        os.path.join(fpc_src, "rtl", "unix"),
+        os.path.join(fpc_src, "rtl", "linux"),
+    ] + shared
 
 
 def _bootstrap_compiler_include_dirs(fpc_src):

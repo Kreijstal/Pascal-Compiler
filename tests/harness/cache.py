@@ -18,6 +18,7 @@ from .env import (
     KGPC_PATH,
     FPC_RTL_MODE,
     FPC_RTL_DIR,
+    IS_NATIVE_WINDOWS,
 )
 
 # ---------------------------------------------------------------------------
@@ -81,27 +82,44 @@ def with_fpc_rtl_ast_cache(flags):
 # FPC RTL flags (assembled here because they depend on cache dirs)
 # ---------------------------------------------------------------------------
 
-FPC_RTL_FLAGS = [
-    "--no-stdlib",
-    "-I" + os.path.join(FPC_RTL_DIR, "linux"),
-    "-I" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+_FPC_PKG_DIR = os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource")
+
+# Architecture- and shared-RTL include/unit dirs are common to both targets.
+_FPC_RTL_SHARED_FLAGS = [
     "-I" + os.path.join(FPC_RTL_DIR, "inc"),
-    "-I" + os.path.join(FPC_RTL_DIR, "unix"),
     "-I" + os.path.join(FPC_RTL_DIR, "x86_64"),
     "-I" + os.path.join(FPC_RTL_DIR, "objpas", "sysutils"),
     "-I" + os.path.join(FPC_RTL_DIR, "objpas", "classes"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "objpas"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "inc"),
-    "-Fu" + os.path.join(FPC_RTL_DIR, "linux"),
-    "-Fu" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "x86_64"),
-    "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
-    "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
-    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
-    "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "inc"),
-    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "inc"),
-    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "unix"),
+    "-I" + os.path.join(_FPC_PKG_DIR, "packages", "rtl-objpas", "src", "inc"),
+    "-Fu" + os.path.join(_FPC_PKG_DIR, "packages", "rtl-objpas", "src", "inc"),
+    "-I" + os.path.join(_FPC_PKG_DIR, "packages", "rtl-console", "src", "inc"),
+    "-Fu" + os.path.join(_FPC_PKG_DIR, "packages", "rtl-console", "src", "inc"),
 ]
+
+if IS_NATIVE_WINDOWS:
+    _FPC_RTL_TARGET_FLAGS = [
+        "-I" + os.path.join(FPC_RTL_DIR, "win"),
+        "-I" + os.path.join(FPC_RTL_DIR, "win64"),
+        "-I" + os.path.join(FPC_RTL_DIR, "win64", "x86_64"),
+        "-Fu" + os.path.join(FPC_RTL_DIR, "win"),
+        "-Fu" + os.path.join(FPC_RTL_DIR, "win64"),
+        "-Fu" + os.path.join(_FPC_PKG_DIR, "packages", "rtl-console", "src", "win"),
+    ]
+else:
+    _FPC_RTL_TARGET_FLAGS = [
+        "-I" + os.path.join(FPC_RTL_DIR, "linux"),
+        "-I" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+        "-I" + os.path.join(FPC_RTL_DIR, "unix"),
+        "-Fu" + os.path.join(FPC_RTL_DIR, "linux"),
+        "-Fu" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+        "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
+        "-Fu" + os.path.join(_FPC_PKG_DIR, "packages", "rtl-console", "src", "unix"),
+    ]
+
+FPC_RTL_FLAGS = ["--no-stdlib"] + _FPC_RTL_TARGET_FLAGS + _FPC_RTL_SHARED_FLAGS
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 if _FPC_RTL_CODEGEN_CACHE_DIR is not None:

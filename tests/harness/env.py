@@ -13,6 +13,13 @@ WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
 IS_WINDOWS_ABI = os.name == "nt" or PLATFORM_ID.startswith(WINDOWS_ABI_PLATFORMS)
 
+# Strictly native-Windows host: true on plain Windows Python and on MSYS2
+# MINGW64/UCRT64/CLANG64 (all of which run as os.name == "nt"), but false on
+# MSYS proper and Cygwin (POSIX-emulating layers — os.name == "posix").
+# Use this when the harness must distinguish "target Win64 ABI with native
+# Windows RTL" from "target POSIX even though host is Windows-flavoured".
+IS_NATIVE_WINDOWS = os.name == "nt"
+
 # Detect if we're running under Wine (Windows Python on Linux).
 # In CI this may be signaled either by WINE* environment variables or by
 # Meson's exe wrapper path when the Windows Python interpreter is launched
