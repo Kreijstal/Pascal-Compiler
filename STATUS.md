@@ -133,7 +133,7 @@ they limit how much *other* FPC-style Pascal you can throw at the compiler.
 
 ## What's known-broken or limited
 
-- The four open bugs listed above.
+- The two open bugs listed above.
 - The legacy lex/yacc front end under `KGPC/Parser/LexAndYacc/` has been
   removed; the cparser combinator front end is the only supported entry.
 - A small set of tests with platform-specific assumptions that the harness
