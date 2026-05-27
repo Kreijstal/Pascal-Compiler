@@ -1813,8 +1813,16 @@ void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab) {
           HashNode_t *existing = NULL;
           if (literal_name == NULL)
             continue;
-          if (FindSymbol(&existing, symtab, literal_name) == 0 ||
-              existing == NULL)
+          /* Skip only when an existing value-namespace symbol blocks us;
+           * a HASHTYPE_TYPE from an imported unit (e.g. Windows.BCHAR =
+           * word) lives in the type namespace and must not prevent this
+           * enum literal (e.g. defcmp.pas compare_defs_ext's local
+           * tbasedef.bchar) from being registered as a CONST. */
+          int already_registered = 0;
+          if (FindSymbol(&existing, symtab, literal_name) != 0 &&
+              existing != NULL && existing->hash_type != HASHTYPE_TYPE)
+            already_registered = 1;
+          if (!already_registered)
             PushConstOntoScope_Typed(symtab, (char *)literal_name, ordinal,
                                      kgpc);
         }
@@ -1844,7 +1852,14 @@ codegen_register_record_field_enum_literals(SymTab_t *symtab,
           HashNode_t *existing = NULL;
           if (name == NULL)
             continue;
-          if (FindSymbol(&existing, symtab, name) == 0 || existing == NULL)
+          /* See note in codegen_register_type_enum_literals: skip only when a
+           * value-namespace symbol already exists; HASHTYPE_TYPE collisions
+           * occupy a separate namespace. */
+          int already_registered = 0;
+          if (FindSymbol(&existing, symtab, name) != 0 && existing != NULL &&
+              existing->hash_type != HASHTYPE_TYPE)
+            already_registered = 1;
+          if (!already_registered)
             PushConstOntoScope_Typed(symtab, (char *)name, ordinal, enum_type);
         }
         if (enum_type != NULL)
@@ -1863,7 +1878,11 @@ codegen_register_record_field_enum_literals(SymTab_t *symtab,
           HashNode_t *existing = NULL;
           if (name == NULL)
             continue;
-          if (FindSymbol(&existing, symtab, name) == 0 || existing == NULL)
+          int already_registered = 0;
+          if (FindSymbol(&existing, symtab, name) != 0 && existing != NULL &&
+              existing->hash_type != HASHTYPE_TYPE)
+            already_registered = 1;
+          if (!already_registered)
             PushConstOntoScope_Typed(symtab, (char *)name, ordinal, enum_type);
         }
         if (enum_type != NULL)
@@ -1911,7 +1930,17 @@ static void codegen_register_type_enum_literals(ListNode_t *type_decls,
           HashNode_t *existing = NULL;
           if (name == NULL)
             continue;
-          if (FindSymbol(&existing, symtab, name) == 0 || existing == NULL)
+          /* Pascal puts types and value-constants in distinct namespaces.
+           * A foreign-unit type alias (e.g. Windows.BCHAR = word) that
+           * collides case-insensitively with this enum literal name
+           * (defcmp.pas implementation enum `bchar`) must NOT block the
+           * value-namespace registration here, or the enum literal stays
+           * unbound and codegen falls back to "non-local symbol bchar". */
+          int already_registered = 0;
+          if (FindSymbol(&existing, symtab, name) != 0 && existing != NULL &&
+              existing->hash_type != HASHTYPE_TYPE)
+            already_registered = 1;
+          if (!already_registered)
             PushConstOntoScope_Typed(symtab, (char *)name, ordinal, enum_type);
         }
         if (enum_type != NULL)

@@ -302,6 +302,16 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls) {
                 HashTable_t *target_table = SymTab_GetTargetTable(symtab);
                 HashNode_t *existing =
                     FindIdentInTable(target_table, literal_name);
+                /* Only treat the collision as one if it is in the same
+                 * namespace.  Pascal puts types and value-constants in
+                 * distinct namespaces (e.g. Windows.BCHAR is a type alias
+                 * for word; defcmp.pas's `bchar` is an enum value).  When
+                 * the existing entry is a HASHTYPE_TYPE we fall through to
+                 * push the CONST alongside it via PushConstOntoScope_Typed
+                 * — check_collision_allowance permits the coexistence. */
+                if (existing != NULL &&
+                    existing->hash_type == HASHTYPE_TYPE)
+                  existing = NULL;
                 if (existing != NULL) {
                   /* Allow local enum literals to shadow imported unit literals.
                    */
@@ -414,6 +424,12 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls) {
                  * shadowing). */
                 HashNode_t *existing = FindIdentInTable(
                     symtab->current_scope->table, literal_name);
+                /* See main enum-literal block above: HASHTYPE_TYPE collisions
+                 * occupy a different Pascal namespace and must not block the
+                 * value-namespace CONST registration. */
+                if (existing != NULL &&
+                    existing->hash_type == HASHTYPE_TYPE)
+                  existing = NULL;
                 if (existing != NULL) {
                   /* Allow local enum literals to shadow imported unit literals.
                    */

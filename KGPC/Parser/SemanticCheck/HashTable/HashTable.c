@@ -741,6 +741,21 @@ static int check_collision_allowance(HashNode_t *existing_node,
     return 1;
   }
 
+  /* Allow type/constant name sharing (separate Pascal namespaces).  Required
+   * for cross-target FPC bootstrap: defcmp.pas's implementation enum literal
+   * `bchar` (HASHTYPE_CONST) collides case-insensitively with the Windows
+   * unit's `BCHAR = word` type alias (HASHTYPE_TYPE).  Pascal keeps types
+   * and constants in distinct namespaces; both must register so value-
+   * context lookups can resolve the const while type-context lookups still
+   * find the type.  Variables/arrays use HASHTYPE_VAR / HASHTYPE_ARRAY and
+   * are covered by the existing VAR+CONST coexistence rule below. */
+  if ((existing_node->hash_type == HASHTYPE_TYPE &&
+       new_hash_type == HASHTYPE_CONST) ||
+      (existing_node->hash_type == HASHTYPE_CONST &&
+       new_hash_type == HASHTYPE_TYPE)) {
+    return 1;
+  }
+
   /* Allow user-declared variables/arrays to shadow the automatic
    * FUNCTION_RETURN "Result" variable This enables the common Pascal pattern of
    * declaring a local "result" variable in functions. The function name itself
