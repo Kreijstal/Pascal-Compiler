@@ -91,17 +91,6 @@ These are real KGPC defects that affect specific Pascal patterns.  None of
 them gate the Stage 1-3 bootstrap chain (which is why CI is green), but
 they limit how much *other* FPC-style Pascal you can throw at the compiler.
 
-### Stage 4: AnsiString → RawByteString/UnicodeString var-param mismatch
-- **Symptom:** FPC-built-by-KGPC rejects 8 specific `cutils.pas` call sites
-  for `Delete(s,i,n)` / `Insert(s2,s,i)` when `s` is an AnsiString and the
-  compilerproc has a RawByteString var-param.  FPC normally accepts these
-  due to codepage compatibility rules.
-- **Impact:** prevents some Pascal programs that exercise mixed string
-  encodings from compiling, but does not block the Stage 2/3 self-host.
-- **Repro/status:** captured in agent memory as
-  `project_pp_bootstrap_stage4_remaining.md` (with a stale-memory caveat;
-  re-verify before fixing).
-
 ### `@procedure` argument SIGSEGV (FPC-built-by-KGPC parse-time)
 - **Symptom:** A minimal `function(x): T` procvar passed via `@proc_name`
   parses fine in KGPC directly but makes the KGPC-built FPC crash *while

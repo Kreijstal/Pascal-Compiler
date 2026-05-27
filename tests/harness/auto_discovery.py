@@ -414,6 +414,11 @@ FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "tdd_record_method_no_param_return_type",
     "tdd_stmt_system_error_unit_qualifier",
     "tdd_upcase_ord",
+    # STATUS.md Stage-4 regression: AnsiString / RawByteString / UnicodeString /
+    # String / WideString cross-pairings for var/out parameters must remain
+    # compatible (codepage rule).  Without explicit `uses` clauses, this test
+    # is opt-in for the FPC RTL run.
+    "regr_varparam_string_family_codepage_compat",
 }
 
 def _discover_and_add_fpc_rtl_tests():
