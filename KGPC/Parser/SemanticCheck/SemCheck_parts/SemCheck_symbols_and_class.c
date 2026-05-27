@@ -1333,24 +1333,66 @@ HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
     return NULL;
 
   ListNode_t *matches = FindAllIdents(symtab, type_id);
-  HashNode_t *best = NULL;
+  HashNode_t *best = NULL;          /* best `defined_in_unit == requested` */
   HashNode_t *fallback_outermost = NULL;
+  int best_direct_dep = 0;          /* prefer direct-uses over transitive */
+  int best_source_unit_index = 0;
+  /* Resolve the "caller" unit for direct-dep ranking. We prefer the active
+   * unit scope, fall back to the global semantic unit index. This mirrors
+   * semcheck_find_preferred_type_node_ref_internal so callers like
+   * semcheck_decls get consistent direct/transitive preference even when
+   * g_semcheck_imported_decl_unit_index has not been set. */
+  int effective_unit_index = 0;
+  if (symtab->current_scope != NULL &&
+      symtab->current_scope->unit_index > 0)
+    effective_unit_index = symtab->current_scope->unit_index;
+  if (effective_unit_index == 0)
+    effective_unit_index = g_semcheck_current_unit_index;
+
   ListNode_t *cur = matches;
   while (cur != NULL) {
     HashNode_t *node = (HashNode_t *)cur->cur;
     if (node != NULL && node->hash_type == HASHTYPE_TYPE) {
       if (node->defined_in_unit == defined_in_unit) {
-        best = node;
-        break;
+        /* Compute direct-dep rank: 1 if the candidate's source unit is the
+         * caller's own unit or a direct dependency of it, 0 if only
+         * reachable transitively. Unknown source units (idx 0) are treated
+         * as direct so legacy candidates without recorded unit context
+         * keep their previous priority. */
+        int cand_direct = 1;
+        if (effective_unit_index > 0 && node->source_unit_index > 0 &&
+            node->source_unit_index != effective_unit_index &&
+            !unit_registry_is_dep(effective_unit_index,
+                                  node->source_unit_index)) {
+          cand_direct = 0;
+        }
+        int take = 0;
+        if (best == NULL) {
+          take = 1;
+        } else if (cand_direct > best_direct_dep) {
+          take = 1;
+        } else if (cand_direct == best_direct_dep &&
+                   node->source_unit_index > 0 &&
+                   best_source_unit_index > 0 &&
+                   node->source_unit_index > best_source_unit_index) {
+          /* Later-loaded units tend to be more specific (and override
+           * generic RTL declarations); match the tiebreaker that
+           * semcheck_find_preferred_type_node_ref_internal uses. */
+          take = 1;
+        }
+        if (take) {
+          best = node;
+          best_direct_dep = cand_direct;
+          best_source_unit_index = node->source_unit_index;
+        }
+        /* Don't break — keep scanning for a better direct match. */
+      } else if (best == NULL) {
+        fallback_outermost = node;
       }
-      if (best == NULL)
-        best = node;
-      fallback_outermost = node;
     }
     cur = cur->next;
   }
-  if (best != NULL && best->defined_in_unit != defined_in_unit &&
-      defined_in_unit)
+  if (best == NULL)
     best = fallback_outermost;
   if (matches != NULL)
     DestroyList(matches);
