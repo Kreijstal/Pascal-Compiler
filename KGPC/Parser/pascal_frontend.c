@@ -1213,6 +1213,19 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
       free(buffer);
       return false;
     }
+    /* rtl/x86_64/setjump.inc gates its Win64-MS-ABI variant on
+     * {$ifdef FPC_ABI_WIN64}.  Without this, the Linux-ABI branch
+     * (using %rdi as the first arg) is compiled even though the Win64
+     * ABI passes the first arg in %rcx.  setjumph.inc also gates the
+     * jmp_buf record's extended fields (rsi, rdi, xmm6..xmm15, mxcsr,
+     * fpucw, padding) on the same define. */
+    if (!pascal_preprocessor_define(preprocessor, "FPC_ABI_WIN64")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define FPC_ABI_WIN64 symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
   }
 
   /* Define endianness - x86/x86_64 is little-endian */

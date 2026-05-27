@@ -949,6 +949,55 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
                   }
                 }
 
+                /* Try resolving as a record-field-offset expression:
+                 * `TypeName.FieldName` in inline asm evaluates to the
+                 * constant byte offset of FieldName within TypeName,
+                 * where TypeName is a record type.  FPC's setjump.inc
+                 * relies on this, e.g. `jmp_buf.rbx(%rcx)` → `0(%rcx)`.
+                 * Must run before the global-variable resolution so we
+                 * don't misinterpret a TypeName as a variable. */
+                if (!did_substitute && symtab != NULL && si < clen &&
+                    cleaned[si] == '.' && si + 1 < clen &&
+                    (isalpha((unsigned char)cleaned[si + 1]) ||
+                     cleaned[si + 1] == '_')) {
+                  HashNode_t *type_node = NULL;
+                  if (FindSymbol(&type_node, symtab, id_buf) != 0 &&
+                      type_node != NULL &&
+                      type_node->hash_type == HASHTYPE_TYPE) {
+                    struct RecordType *rec_type =
+                        hashnode_get_record_type(type_node);
+                    if (rec_type != NULL) {
+                      size_t field_start = si + 1;
+                      size_t field_end = field_start;
+                      while (field_end < clen &&
+                             (isalnum((unsigned char)cleaned[field_end]) ||
+                              cleaned[field_end] == '_'))
+                        field_end++;
+                      size_t field_len = field_end - field_start;
+                      if (field_len > 0 && field_len < 256) {
+                        char field_buf[256];
+                        memcpy(field_buf, cleaned + field_start, field_len);
+                        field_buf[field_len] = '\0';
+                        long long field_offset = 0;
+                        if (resolve_record_field(symtab, rec_type, field_buf,
+                                                 NULL, &field_offset, 0,
+                                                 1) == 0) {
+                          const char *fmt =
+                              is_intel_syntax ? "%lld" : "%lld";
+                          int n = snprintf(substituted + sj, sub_alloc - sj,
+                                           fmt, field_offset);
+                          if (n > 0) {
+                            sj += (size_t)n;
+                            did_substitute = 1;
+                            /* Consume `.FieldName` from input. */
+                            si = field_end;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+
                 /* Try resolving as a global variable (case-insensitive) */
                 if (!did_substitute) {
                   StackNode_t *var = find_label(id_buf);

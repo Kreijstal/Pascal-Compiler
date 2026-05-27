@@ -985,11 +985,30 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
         if (*p == '\0')
           break;
 
-        /* Read mnemonic */
+        /* Read mnemonic.  Skip an optional leading label like
+         * `.LFoo:` — labels can appear on the same line as the
+         * instruction in AT&T syntax, e.g.
+         *   .LOops: jmp TrulyRelocateThreadvar
+         * Without this, the jmp/call/lea target is never marked as
+         * used and DCE eliminates the body. */
         const char *mnem_start = p;
         while (*p != '\0' && !isspace((unsigned char)*p) && *p != '\n')
           p++;
         size_t mnem_len = (size_t)(p - mnem_start);
+        if (mnem_len > 1 && mnem_start[mnem_len - 1] == ':') {
+          /* This token is a label, not a mnemonic.  Skip whitespace
+           * and try the next token on the same line. */
+          while (*p != '\0' && *p != '\n' && isspace((unsigned char)*p))
+            p++;
+          if (*p != '\0' && *p != '\n') {
+            mnem_start = p;
+            while (*p != '\0' && !isspace((unsigned char)*p) && *p != '\n')
+              p++;
+            mnem_len = (size_t)(p - mnem_start);
+          } else {
+            mnem_len = 0;
+          }
+        }
 
         int is_ref_insn = 0;
         if ((mnem_len == 4 && strncmp(mnem_start, "call", 4) == 0) ||
