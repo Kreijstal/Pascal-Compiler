@@ -997,7 +997,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
       // KGPC cannot evaluate FPU intrinsics (ln, round, etc.) in constant
       // expressions, so define FPUSOFT to prevent FPC RTL from using them in
       // const initializers.
-      "FPUSOFT", "FPC_WIDESTRING_EQUAL_UNICODESTRING", "FPC_ANSI_TEXTFILEREC",
+      "FPUSOFT", "FPC_ANSI_TEXTFILEREC",
+      /* FPC_WIDESTRING_EQUAL_UNICODESTRING is added below only for
+       * non-Windows targets — on Windows WideString is the OLE BSTR type
+       * (SysAllocStringLen / SysReAllocStringLen) and differs from
+       * UnicodeString, so wstrings.inc must be included.  See the
+       * target-gated define block further down. */
       // Use the legacy (oldheap.inc) heap manager instead of the new heap.inc.
       // The new heap.inc uses complex pointer arithmetic with inline casts
       // (e.g. pCommonHeader(p - CommonHeaderSize)^.h, int32(h) - FixedFlag)
@@ -1195,6 +1200,20 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
     if (!pascal_preprocessor_define(preprocessor, "FPC_USE_LIBC")) {
       report_preprocessor_error(error_out, path,
                                 "unable to define FPC_USE_LIBC symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+    /* On non-Windows targets WideString and UnicodeString are both
+     * ref-counted UTF-16 strings owned by FPC, so the system unit's
+     * wstrings.inc (which provides a parallel WideString implementation)
+     * is skipped via this symbol.  On Windows WideString is the OLE BSTR
+     * type and wstrings.inc IS needed, so the define is omitted. */
+    if (!pascal_preprocessor_define(preprocessor,
+                                    "FPC_WIDESTRING_EQUAL_UNICODESTRING")) {
+      report_preprocessor_error(
+          error_out, path,
+          "unable to define FPC_WIDESTRING_EQUAL_UNICODESTRING symbol");
       pascal_preprocessor_free(preprocessor);
       free(buffer);
       return false;

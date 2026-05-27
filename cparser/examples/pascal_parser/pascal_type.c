@@ -2820,6 +2820,39 @@ static ParseResult subroutine_type_fn(input_t *in, void *args,
           discard_failure(nk);
           break;
         }
+        /* After the directive list, optionally consume a trailing ';' but
+         * only when an initializer ('=') immediately follows — this handles
+         * FPC's `procedure(...); stdcall; = nil` inline-typed proc-var
+         * declarations where the post-directive ';' separates the type
+         * from the initializer.  When the next token is anything else
+         * (the enclosing declaration's own ';' or further var decls), the
+         * outer parser owns the ';'. */
+        InputState s_trail;
+        save_input_state(in, &s_trail);
+        combinator_t *trail_semi = token(match(";"));
+        ParseResult trail = parse(in, trail_semi);
+        free_combinator(trail_semi);
+        if (trail.is_success) {
+          InputState s_after;
+          save_input_state(in, &s_after);
+          combinator_t *eq_peek = peek(token(match("=")));
+          ParseResult eq = parse(in, eq_peek);
+          free_combinator(eq_peek);
+          if (!eq.is_success) {
+            restore_input_state(in, &s_trail);
+            if (trail.value.ast)
+              free_ast(trail.value.ast);
+            discard_failure(eq);
+          } else {
+            if (trail.value.ast)
+              free_ast(trail.value.ast);
+            if (eq.value.ast)
+              free_ast(eq.value.ast);
+            restore_input_state(in, &s_after);
+          }
+        } else {
+          discard_failure(trail);
+        }
       }
     } else {
       discard_failure(sc);

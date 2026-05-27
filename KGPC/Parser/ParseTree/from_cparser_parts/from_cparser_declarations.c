@@ -954,11 +954,12 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr,
     }
   } else if (tuple_node->typ == PASCAL_T_IDENTIFIER) {
     if (!is_char_array_target && !is_widechar_array_target) {
-      fprintf(stderr,
-              "ERROR: Const array %s string initializer requires a char array "
-              "type.\n",
-              *id_ptr);
-      return -1;
+      /* Single-element parenthesized initializer where the lone expression
+       * is an identifier (a constant name).  The parser flattens `(NAME)`
+       * to a bare IDENTIFIER node, so the array-init path below doesn't
+       * see a TUPLE.  Fall through to the generic single-element wrap so
+       * the constant identifier becomes element 0 of a 1-element array. */
+      goto wrap_single_element_into_tuple;
     }
     if (tuple_node->sym != NULL && tuple_node->sym->name != NULL) {
       if (resolve_const_string_from_ast_internal(tuple_node->sym->name,
@@ -995,6 +996,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr,
       return -1;
     }
   } else if (tuple_node->typ != PASCAL_T_TUPLE) {
+  wrap_single_element_into_tuple:
     /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
      * The parser parses (expr) as a parenthesized expression rather than
      * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
