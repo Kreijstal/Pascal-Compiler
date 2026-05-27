@@ -4781,17 +4781,34 @@ void codegen_stack_space_for_inst_list(ListNode_t *inst_list,
 
   if (aligned_space != 0) {
     if (aligned_space > stack_probe_page) {
-      int remaining = aligned_space;
+      if (codegen_target_is_windows()) {
+        /* Win64 stack frames larger than one page must probe each page so the
+         * OS can grow the stack guard. Doing the probe inline (subq+movq per
+         * page) inflates the prologue past 255 bytes, which overflows the
+         * 1-byte UNWIND_INFO.SizeOfProlog field once the frame approaches a
+         * few hundred KB. The standard ABI fix is to call the libgcc helper
+         * ___chkstk_ms with the allocation size in %rax: it walks the pages,
+         * leaves %rsp untouched, and returns with %rax preserved so the
+         * caller can subtract it from %rsp in a single instruction. The
+         * resulting prologue is a handful of bytes regardless of frame size,
+         * and a single .seh_stackalloc directive (which gas auto-encodes
+         * with UWOP_ALLOC_LARGE) covers the unwind metadata. */
+        fprintf(ctx->output_file, "\tmovl\t$%d, %%eax\n", aligned_space);
+        fprintf(ctx->output_file, "\tcall\t___chkstk_ms\n");
+        fprintf(ctx->output_file, "\tsubq\t%%rax, %%rsp\n");
+      } else {
+        int remaining = aligned_space;
 
-      while (remaining > stack_probe_page) {
-        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", stack_probe_page);
-        fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
-        remaining -= stack_probe_page;
-      }
+        while (remaining > stack_probe_page) {
+          fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", stack_probe_page);
+          fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+          remaining -= stack_probe_page;
+        }
 
-      if (remaining > 0) {
-        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", remaining);
-        fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+        if (remaining > 0) {
+          fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", remaining);
+          fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+        }
       }
     } else {
       fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
