@@ -1183,14 +1183,23 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
     free(buffer);
     return false;
   }
-  if (!pascal_preprocessor_define(preprocessor, "FPC_USE_LIBC")) {
-    report_preprocessor_error(error_out, path,
-                              "unable to define FPC_USE_LIBC symbol");
-    pascal_preprocessor_free(preprocessor);
-    free(buffer);
-    return false;
-  }
 #endif
+
+  /* FPC_USE_LIBC switches the FPC RTL between its own assembler / syscall
+   * paths and libc-backed paths (cgeneric.inc, cgenstr.inc).  On a libc-
+   * present target (Linux, Cygwin/MSYS POSIX layer) that's fine, but on
+   * native Windows it pulls in cgeneric.inc which references cint/clib/
+   * memchr/memcmp_comparechar that the win64 RTL never declares.  Define
+   * it only when the codegen target is non-Windows. */
+  if (!target_windows_flag()) {
+    if (!pascal_preprocessor_define(preprocessor, "FPC_USE_LIBC")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define FPC_USE_LIBC symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+  }
 
   /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which
    * expose a POSIX API) */

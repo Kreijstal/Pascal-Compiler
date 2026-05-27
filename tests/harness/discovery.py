@@ -143,9 +143,21 @@ def _bootstrap_arch_defines(prefix):
 def _bootstrap_target_defines(prefix):
     """Target-OS defines.  Windows targets get -DWINDOWS -DWIN64; everything
     else assumes Linux/POSIX, which is the only other supported bootstrap
-    target today."""
+    target today.
+
+    On Windows rtl/win/syswin.inc gates `EntryInformation.PascalMain()` vs
+    bare `PascalMain;` on FPC_HAS_INDIRECT_ENTRY_INFORMATION.  We need the
+    indirect-entry path because KGPC never emits an unmangled standalone
+    `PascalMain` symbol — it ships the program entry through the
+    EntryInformation record (mirror of the linux FPC_BOOTSTRAP_INDIRECT_ENTRY
+    path)."""
     if IS_NATIVE_WINDOWS:
-        return [f"-{prefix}WINDOWS", f"-{prefix}WIN64", f"-{prefix}MSWINDOWS"]
+        return [
+            f"-{prefix}WINDOWS",
+            f"-{prefix}WIN64",
+            f"-{prefix}MSWINDOWS",
+            f"-{prefix}FPC_HAS_INDIRECT_ENTRY_INFORMATION",
+        ]
     return [f"-{prefix}LINUX", f"-{prefix}UNIX"]
 
 
