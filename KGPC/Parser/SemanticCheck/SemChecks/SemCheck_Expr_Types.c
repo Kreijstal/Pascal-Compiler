@@ -1888,6 +1888,14 @@ int semcheck_try_reinterpret_as_typecast(int *type_return, SymTab_t *symtab,
     return 0;
   if (pascal_identifier_equals(id, "Create"))
     return 0;
+  /* Method calls with an explicit receiver (e.g. `obj.size`) are rewritten by
+   * the parser/semchecker into function calls whose first argument is the
+   * receiver. They must NOT be reinterpreted as typecasts even when the
+   * method name happens to coincide with a global type name (e.g. Windows'
+   * `TSize` aliased as `SIZE`). Otherwise `sizesinttype.size` parses as the
+   * typecast `TSize(sizesinttype)`, breaking method dispatch. */
+  if (expr->expr_data.function_call_data.is_method_call_placeholder)
+    return 0;
   if (kgpc_getenv("KGPC_DEBUG_TYPECAST") != NULL &&
       pascal_identifier_equals(id, "TextRec")) {
     fprintf(stderr, "[SemCheck] try_typecast TextRec at line %d\n",
