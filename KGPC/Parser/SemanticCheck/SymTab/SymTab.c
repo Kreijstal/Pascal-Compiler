@@ -57,6 +57,162 @@ static ListNode_t *append_list(ListNode_t *a, ListNode_t *b) {
   return a;
 }
 
+/* Helper: collect the unit indices visible on the current scope chain.
+ * Returns a bitmap with bit i set when unit-index i is the unit of some
+ * scope on the chain.  Bit 0 is unused (no real unit has index 0). */
+typedef struct {
+  unsigned char bits[(SYMTAB_MAX_UNITS + 7) / 8];
+} caller_unit_set;
+
+static void caller_unit_set_init(caller_unit_set *set) {
+  if (set != NULL)
+    memset(set->bits, 0, sizeof(set->bits));
+}
+
+static int caller_unit_set_contains(const caller_unit_set *set, int idx) {
+  if (set == NULL || idx <= 0 || idx >= SYMTAB_MAX_UNITS)
+    return 0;
+  return (set->bits[idx >> 3] >> (idx & 7)) & 1;
+}
+
+static void caller_unit_set_add(caller_unit_set *set, int idx) {
+  if (set == NULL || idx <= 0 || idx >= SYMTAB_MAX_UNITS)
+    return;
+  set->bits[idx >> 3] |= (unsigned char)(1u << (idx & 7));
+}
+
+static void collect_caller_units(SymTab_t *symtab, caller_unit_set *out) {
+  if (symtab == NULL || out == NULL)
+    return;
+  caller_unit_set_init(out);
+  caller_unit_set_add(out, symtab->current_unit_index);
+  for (ScopeNode *s = symtab->current_scope; s != NULL; s = s->parent)
+    caller_unit_set_add(out, s->unit_index);
+}
+
+/* Helper: hide a non-public foreign-unit subprogram from an overload
+ * candidate list when an interface-public sibling with the SAME mangled
+ * signature exists.
+ *
+ * Pascal scoping: a unit's implementation-section subprograms are private
+ * to that unit.  FindIdent already enforces this for single-symbol lookup
+ * but FindAllIdents collects unfiltered overload buckets, so a private
+ * declaration leaks into overload resolution and can shadow the public
+ * one whenever it happens to appear first in the list.  That is exactly
+ * how sysutils.pp:869 ends up calling sysos.inc's private
+ * `function MoveFileW(...): longint` instead of wininc/unifun.inc's public
+ * `function MoveFileW(...): WINBOOL`.
+ *
+ * Two structural conditions guard the drop:
+ *   (a) The hidden candidate's mangled signature matches an interface-public
+ *       sibling.  Same canonical id but different mangled names (e.g.
+ *       min_li_li vs min_i64_i64) are independent overloads; they must be
+ *       retained.  Records of types and other non-subprogram symbols have a
+ *       NULL mangled_id and are likewise left untouched.
+ *   (b) The candidate's owning unit is not on the active scope chain.  When
+ *       we're checking a method body inside the unit that owns the private
+ *       declaration, that unit's scope is on the chain and the candidate is
+ *       kept so unit-local overload resolution still finds local helpers
+ *       (e.g. pkgutil.pas's nested `exportname(s)` next to a wider-arity
+ *       public `exportname(s, options)` from export.pas).
+ *
+ * Bypass the filter when skip_unit_filter is set (codegen needs full
+ * visibility for size computation). */
+static ListNode_t *filter_foreign_impl_symbols(SymTab_t *symtab,
+                                               ListNode_t *list) {
+  if (symtab == NULL || symtab->skip_unit_filter || list == NULL)
+    return list;
+
+  /* Quick scan: do we have any non-public foreign-unit subprogram at all?
+   * If not, return the list untouched without paying for the caller-unit
+   * collection or the public-peer pass. */
+  int have_candidate = 0;
+  for (ListNode_t *p = list; p != NULL; p = p->next) {
+    HashNode_t *n = (HashNode_t *)p->cur;
+    if (n != NULL && n->defined_in_unit && !n->unit_is_public &&
+        n->mangled_id != NULL) {
+      have_candidate = 1;
+      break;
+    }
+  }
+  if (!have_candidate)
+    return list;
+
+  caller_unit_set caller_units;
+  collect_caller_units(symtab, &caller_units);
+
+  /* Pass 1: collect the mangled signatures of every interface-public peer
+   * in the list.  We MUST do this before mutating the chain - the previous
+   * implementation walked `list` again from inside the rewrite loop, but
+   * `list`'s `next` pointers were already being rewired (or freed) at that
+   * point, so the peer scan either missed later peers or dereferenced a
+   * freed head node.  That caused SIGSEGV across the FPC RTL suite. */
+  typedef struct PublicPeer {
+    const char *mangled_id;
+    struct PublicPeer *next;
+  } PublicPeer;
+  PublicPeer *public_peers = NULL;
+  for (ListNode_t *p = list; p != NULL; p = p->next) {
+    HashNode_t *n = (HashNode_t *)p->cur;
+    if (n != NULL && n->defined_in_unit && n->unit_is_public &&
+        n->mangled_id != NULL) {
+      PublicPeer *e = (PublicPeer *)malloc(sizeof(PublicPeer));
+      if (e == NULL)
+        break;
+      e->mangled_id = n->mangled_id;
+      e->next = public_peers;
+      public_peers = e;
+    }
+  }
+
+  /* Pass 2: rebuild the chain, dropping every non-public foreign-unit
+   * subprogram whose mangled signature matches one of the public peers.
+   * Same-unit peers (the caller is inside the unit that owns the private
+   * declaration) are kept so unit-local overload resolution still works. */
+  ListNode_t *kept = NULL;
+  ListNode_t *kept_tail = NULL;
+  ListNode_t *cur = list;
+  while (cur != NULL) {
+    ListNode_t *next = cur->next;
+    HashNode_t *node = (HashNode_t *)cur->cur;
+
+    int hide = 0;
+    if (node != NULL && node->defined_in_unit && !node->unit_is_public &&
+        node->mangled_id != NULL &&
+        !caller_unit_set_contains(&caller_units, node->source_unit_index)) {
+      for (PublicPeer *e = public_peers; e != NULL; e = e->next) {
+        if (e->mangled_id != node->mangled_id &&
+            strcmp(e->mangled_id, node->mangled_id) == 0) {
+          hide = 1;
+          break;
+        }
+      }
+    }
+
+    if (hide) {
+      free(cur);
+    } else {
+      cur->next = NULL;
+      if (kept == NULL) {
+        kept = cur;
+        kept_tail = cur;
+      } else {
+        kept_tail->next = cur;
+        kept_tail = cur;
+      }
+    }
+    cur = next;
+  }
+
+  while (public_peers != NULL) {
+    PublicPeer *next = public_peers->next;
+    free(public_peers);
+    public_peers = next;
+  }
+
+  return kept;
+}
+
 /* ========================================================================
  * Init / Destroy
  * ======================================================================== */
@@ -807,6 +963,8 @@ static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id) {
     scope = scope->parent;
   }
 
+  all = filter_foreign_impl_symbols(symtab, all);
+
   pascal_identifier_lower_buf_free(canonical_id, stack_buf);
   return all;
 }
@@ -835,6 +993,7 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab,
               matches, FindAllIdentsInTableCanonical(
                            scope->dep_scopes[i]->table, canonical_id, hash));
       }
+      matches = filter_foreign_impl_symbols(symtab, matches);
       pascal_identifier_lower_buf_free(canonical_id, stack_buf);
       return matches;
     }
@@ -846,6 +1005,7 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab,
         dep_matches = append_list(
             dep_matches, FindAllIdentsInTableCanonical(
                              scope->dep_scopes[i]->table, canonical_id, hash));
+      dep_matches = filter_foreign_impl_symbols(symtab, dep_matches);
       if (dep_matches != NULL) {
         pascal_identifier_lower_buf_free(canonical_id, stack_buf);
         return dep_matches;
