@@ -1125,6 +1125,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(
   int best_scope_level = INT_MAX / 2;
   int best_same_unit = 0;
   int best_is_forward_stub = 1;
+  int best_direct_dep = 0;
   int debug_tsize =
       (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL && rendered != NULL &&
        pascal_identifier_equals(rendered, "TSize"));
@@ -1196,6 +1197,19 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(
           node->source_unit_index == effective_unit_index)
         same_unit = 1;
 
+      /* Distinguish types from direct vs transitive dependencies. Types
+       * from a directly-imported unit (or the caller's own unit) outrank
+       * types only reachable through transitive uses chains. This prevents
+       * e.g. wininc's PUINT = ^cardinal from shadowing globtype's
+       * PUint = qword when the consumer only directly uses globtype. */
+      int direct_dep = 1;
+      if (effective_unit_index > 0 && node->source_unit_index > 0 &&
+          node->source_unit_index != effective_unit_index &&
+          !unit_registry_is_dep(effective_unit_index,
+                                node->source_unit_index)) {
+        direct_dep = 0;
+      }
+
       if (debug_tsize || debug_textended ||
           (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL && lookup_id != NULL &&
            pascal_identifier_equals(lookup_id, "TSize"))) {
@@ -1226,6 +1240,11 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(
       } else if (same_unit > best_same_unit) {
         take = 1;
       } else if (same_unit == best_same_unit &&
+                 direct_dep > best_direct_dep) {
+        /* Prefer direct-uses candidate over transitive-uses candidate
+         * when neither is the caller's own unit. */
+        take = 1;
+      } else if (same_unit == best_same_unit && direct_dep == best_direct_dep &&
                  ((is_forward_stub < best_is_forward_stub) ||
                   (is_forward_stub == best_is_forward_stub &&
                    (scope_level < best_scope_level ||
@@ -1240,7 +1259,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(
       }
 
       if (debug_tsize || debug_textended)
-        fprintf(stderr, "[TYPELOOKUP]   take=%d\n", take);
+        fprintf(stderr, "[TYPELOOKUP]   take=%d direct_dep=%d\n", take,
+                direct_dep);
 
       if (take) {
         best = node;
@@ -1248,6 +1268,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(
         best_scope_level = scope_level;
         best_same_unit = same_unit;
         best_is_forward_stub = is_forward_stub;
+        best_direct_dep = direct_dep;
       }
     }
     cur = cur->next;

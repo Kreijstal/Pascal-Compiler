@@ -531,32 +531,116 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     }
   }
 
-  /* Search per-unit tables (types from imported units live here) */
+  /* Search per-unit tables (types from imported units live here).
+   *
+   * Two-pass walk: first consider only units that are direct dependencies of
+   * the caller's current unit, then fall back to transitively-visible units.
+   * This prevents a type from a transitively-imported unit (e.g. wininc's
+   * PUINT = ^cardinal pulled in via globals -> windows) from shadowing a type
+   * with the same name from a directly-imported unit (e.g. globtype's
+   * PUint = qword).
+   *
+   * Caller's unit index: SymTab->current_unit_index is the canonical
+   * source (pinned during semcheck of the enclosing unit/program). The
+   * active scope-tree walk is a fallback because subprogram scopes
+   * inside a unit typically have unit_index == 0. */
+  int caller_unit_idx = symtab->current_unit_index;
+  if (caller_unit_idx == 0) {
+    for (ScopeNode *sc = symtab->current_scope; sc != NULL; sc = sc->parent) {
+      if (sc->unit_index > 0) {
+        caller_unit_idx = sc->unit_index;
+        break;
+      }
+    }
+  }
+
   {
     int n_units = unit_registry_count();
-    for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++) {
-      if (symtab->unit_scopes[i] == NULL)
-        continue;
-      HashNode_t *node =
-          find_best_type_in_table(symtab->unit_scopes[i]->table, type_id);
-      if (node != NULL && node->hash_type == HASHTYPE_TYPE) {
+    /* Pass 0: direct dependencies of the caller's unit (and the caller's own
+     * unit table). Pass 1: every other registered unit. Pass 0 records both
+     * unit_match and fallbacks; pass 1 only contributes to fallbacks if pass
+     * 0 found nothing. */
+    HashNode_t *direct_fallback = NULL;
+    HashNode_t *direct_fallback_resolved = NULL;
+    HashNode_t *direct_fallback_outermost = NULL;
+    HashNode_t *direct_unit_match = NULL;
+
+    for (int pass = 0; pass < 2; pass++) {
+      for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++) {
+        if (symtab->unit_scopes[i] == NULL)
+          continue;
+        int is_direct = 0;
+        if (caller_unit_idx == 0) {
+          /* Program-level (no current unit): treat every registered unit as
+           * directly visible. */
+          is_direct = 1;
+        } else if (i == caller_unit_idx) {
+          is_direct = 1;
+        } else if (unit_registry_is_dep(caller_unit_idx, i)) {
+          is_direct = 1;
+        }
+        if (pass == 0 && !is_direct)
+          continue;
+        if (pass == 1 && is_direct)
+          continue;
+
+        HashNode_t *node =
+            find_best_type_in_table(symtab->unit_scopes[i]->table, type_id);
+        if (node == NULL || node->hash_type != HASHTYPE_TYPE)
+          continue;
+
         if (node->defined_in_unit == defined_in_unit) {
           if (!hashnode_is_plain_record(node) &&
-              !hashnode_is_unknown_type_stub(node))
-            return node;
-          if (unit_match == NULL)
+              !hashnode_is_unknown_type_stub(node)) {
+            if (pass == 0)
+              return node;
+            /* Pass 1 (transitive): only return when no direct candidate
+             * exists at all. */
+            if (direct_fallback == NULL && direct_unit_match == NULL &&
+                fallback == NULL && unit_match == NULL)
+              return node;
+          }
+          if (pass == 0) {
+            if (direct_unit_match == NULL)
+              direct_unit_match = node;
+          } else if (unit_match == NULL) {
             unit_match = node;
+          }
         }
-        /* When we already have a plain-record fallback and this candidate
-         * is a class type, upgrade the fallback to the class. */
-        if (fallback == NULL)
-          fallback = node;
-        else if (hashnode_is_plain_record(fallback) &&
-                 hashnode_is_class_type(node))
-          fallback = node;
-        if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
-          fallback_resolved = node;
-        fallback_outermost = node;
+
+        if (pass == 0) {
+          if (direct_fallback == NULL)
+            direct_fallback = node;
+          else if (hashnode_is_plain_record(direct_fallback) &&
+                   hashnode_is_class_type(node))
+            direct_fallback = node;
+          if (!hashnode_is_unknown_type_stub(node) &&
+              direct_fallback_resolved == NULL)
+            direct_fallback_resolved = node;
+          direct_fallback_outermost = node;
+        } else {
+          if (fallback == NULL)
+            fallback = node;
+          else if (hashnode_is_plain_record(fallback) &&
+                   hashnode_is_class_type(node))
+            fallback = node;
+          if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+            fallback_resolved = node;
+          fallback_outermost = node;
+        }
+      }
+
+      /* After pass 0, merge direct results forward so they take priority
+       * over any transitive matches discovered in pass 1. */
+      if (pass == 0) {
+        if (direct_unit_match != NULL && unit_match == NULL)
+          unit_match = direct_unit_match;
+        if (direct_fallback != NULL && fallback == NULL)
+          fallback = direct_fallback;
+        if (direct_fallback_resolved != NULL && fallback_resolved == NULL)
+          fallback_resolved = direct_fallback_resolved;
+        if (direct_fallback_outermost != NULL && fallback_outermost == NULL)
+          fallback_outermost = direct_fallback_outermost;
       }
     }
   }
