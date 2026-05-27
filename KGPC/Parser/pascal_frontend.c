@@ -1197,6 +1197,22 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
       free(buffer);
       return false;
     }
+    /* KGPC's Windows codegen ships the program entry through the
+     * EntryInformation record (mirror of the linux FPC_BOOTSTRAP_INDIRECT_ENTRY
+     * path) — it never emits an unmangled standalone PascalMain symbol.
+     * rtl/win/syswin.inc:417 calls `PascalMain;` directly under the {$else}
+     * branch when FPC_HAS_INDIRECT_ENTRY_INFORMATION is undefined, which would
+     * not resolve.  Define the symbol so the {$ifdef} branch (line 415,
+     * EntryInformation.PascalMain()) is taken instead. */
+    if (!pascal_preprocessor_define(preprocessor,
+                                    "FPC_HAS_INDIRECT_ENTRY_INFORMATION")) {
+      report_preprocessor_error(
+          error_out, path,
+          "unable to define FPC_HAS_INDIRECT_ENTRY_INFORMATION symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
   }
 
   /* Define endianness - x86/x86_64 is little-endian */
