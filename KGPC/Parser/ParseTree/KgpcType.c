@@ -2094,6 +2094,95 @@ static int record_prefix_pointer_compatible(struct RecordType *lhs_record,
   return 0;
 }
 
+/* Test whether the record `target` is reachable from `start_id` by
+ * following the symbol table's type-alias chain.  All candidate nodes
+ * for each name are considered, so a name that resolves to BOTH a
+ * record declaration (sysos.inc TFileTime) and a transparent alias
+ * (windows.pp TFILETIME = FILETIME) explores both arms and accepts a
+ * match through either.
+ *
+ * `visited_ids` is a fixed-size cycle guard; cycles caused by aliases
+ * pointing back at themselves or each other terminate cleanly. */
+static int kgpc_alias_chain_reaches_record(struct SymTab *symtab,
+                                           const char *start_id,
+                                           struct RecordType *target,
+                                           const char **visited_ids,
+                                           int visited_count,
+                                           int max_visited) {
+  if (symtab == NULL || start_id == NULL || target == NULL)
+    return 0;
+  if (visited_count >= max_visited)
+    return 0;
+  for (int i = 0; i < visited_count; i++) {
+    if (visited_ids[i] != NULL && strcasecmp(visited_ids[i], start_id) == 0)
+      return 0;
+  }
+  visited_ids[visited_count] = start_id;
+  visited_count++;
+
+  ListNode_t *matches = FindAllIdents(symtab, start_id);
+  int found = 0;
+  for (ListNode_t *cur = matches; cur != NULL && !found; cur = cur->next) {
+    HashNode_t *node = (HashNode_t *)cur->cur;
+    if (node == NULL || node->hash_type != HASHTYPE_TYPE)
+      continue;
+
+    struct RecordType *node_record = NULL;
+    if (node->type != NULL && node->type->kind == TYPE_KIND_RECORD)
+      node_record = node->type->info.record_info;
+    if (node_record == NULL)
+      node_record = hashnode_get_record_type(node);
+    if (node_record != NULL) {
+      if (node_record == target) {
+        found = 1;
+        break;
+      }
+      /* If we just hopped to a same-named cloned record, recurse via
+       * its own type_id (when distinct) to keep exploring the chain. */
+      if (node_record->type_id != NULL &&
+          strcasecmp(node_record->type_id, start_id) != 0 &&
+          kgpc_alias_chain_reaches_record(symtab, node_record->type_id, target,
+                                          visited_ids, visited_count,
+                                          max_visited)) {
+        found = 1;
+        break;
+      }
+    }
+
+    struct TypeAlias *alias = hashnode_get_type_alias(node);
+    if (alias != NULL && alias->target_type_id != NULL &&
+        strcasecmp(alias->target_type_id, start_id) != 0) {
+      if (kgpc_alias_chain_reaches_record(symtab, alias->target_type_id, target,
+                                          visited_ids, visited_count,
+                                          max_visited))
+        found = 1;
+    }
+  }
+  if (matches != NULL)
+    DestroyList(matches);
+  return found;
+}
+
+static int kgpc_records_alias_compatible(struct SymTab *symtab,
+                                         struct RecordType *lhs,
+                                         struct RecordType *rhs) {
+  if (symtab == NULL || lhs == NULL || rhs == NULL)
+    return 0;
+  if (lhs == rhs)
+    return 1;
+  const char *visited[32];
+  int max_visited = (int)(sizeof(visited) / sizeof(visited[0]));
+  if (lhs->type_id != NULL &&
+      kgpc_alias_chain_reaches_record(symtab, lhs->type_id, rhs, visited, 0,
+                                      max_visited))
+    return 1;
+  if (rhs->type_id != NULL &&
+      kgpc_alias_chain_reaches_record(symtab, rhs->type_id, lhs, visited, 0,
+                                      max_visited))
+    return 1;
+  return 0;
+}
+
 int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
                                         struct SymTab *symtab) {
   /* NULL types are incompatible */
@@ -2916,6 +3005,25 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
         rhs_type->info.record_info->type_id != NULL &&
         strcasecmp(lhs_type->info.record_info->type_id,
                    rhs_type->info.record_info->type_id) == 0)
+      return 1;
+
+    /* Records that arrive via separate alias chains may have distinct
+     * record_info instances even though they refer to the same canonical
+     * record.  This happens for the Windows RTL where TSystemTime is
+     * declared three different times: once as a raw record in sysos.inc
+     * (used by the System unit), and twice as transparent aliases in
+     * windows.pp's struct.inc (`TSYSTEMTIME = SYSTEMTIME`,
+     * `_SYSTEMTIME = SYSTEMTIME`).  Each declaration produced its own
+     * RecordType node, and same-named-but-distinct nodes coexist in the
+     * symbol table.  Walk the alias chain via FindAllIdents on each
+     * side's type_id; accept the match when one side's alias chain
+     * reaches the other side's record_info.  This is the structural
+     * analogue of records_same_type for cross-unit transparent aliases.
+     */
+    if (symtab != NULL && lhs_type->info.record_info != NULL &&
+        rhs_type->info.record_info != NULL &&
+        kgpc_records_alias_compatible(symtab, lhs_type->info.record_info,
+                                      rhs_type->info.record_info))
       return 1;
 
     /* Check inheritance: rhs_type should be assignable to lhs_type if
