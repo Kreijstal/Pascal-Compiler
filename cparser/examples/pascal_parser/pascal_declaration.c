@@ -1745,35 +1745,58 @@ void init_pascal_unit_parser(combinator_t **p) {
           token(pascal_string(PASCAL_T_STRING))), // optional deprecated message
       (combinator_t *)NULL));
 
-  // FPC linkage clause for unit-level variables: "public name 'alias'" or
-  // "external name 'alias'" This comes after the semicolon in patterns like:
-  // "var x: type; public name 'alias';"
-  combinator_t *unit_var_linkage_clause = optional(seq(
-      new_combinator(), PASCAL_T_NONE,
-      multi(
-          new_combinator(), PASCAL_T_NONE,
-          map(seq(new_combinator(), PASCAL_T_NONE, token(keyword_ci("public")),
-                  token(keyword_ci("name")),
-                  token(pascal_string(PASCAL_T_STRING)), (combinator_t *)NULL),
-              wrap_public_name_clause),
-          map(seq(new_combinator(), PASCAL_T_NONE,
-                  token(keyword_ci("external")),
-                  optional(seq(new_combinator(),
-                               PASCAL_T_NONE, // optional lib name (string or
-                                              // ident, but not 'name' keyword)
-                               pnot(peek(token(keyword_ci("name")))),
-                               multi(new_combinator(), PASCAL_T_NONE,
-                                     token(pascal_string(PASCAL_T_STRING)),
-                                     token(cident(PASCAL_T_IDENTIFIER)), (combinator_t *)NULL),
-                               (combinator_t *)NULL)),
-                  optional(seq(new_combinator(), PASCAL_T_NONE,
-                               token(keyword_ci("name")),
-                               token(pascal_string(PASCAL_T_STRING)), (combinator_t *)NULL)),
-                  (combinator_t *)NULL),
-              wrap_external_name_clause),
+  // FPC post-declaration directives for unit-level variables.  These come
+  // after the var declaration's own terminating semicolon and may be chained
+  // (e.g. `var _fltused : int64;cvar;public;` in rtl/win64/System.pp).
+  //
+  // Supported:
+  //   cvar;                            -- C-style symbol naming
+  //   public [name 'alias'];           -- export the variable
+  //   external [lib] [name 'alias'];   -- import the variable
+  //
+  // Bare `public;` is valid (the variable is exported with its own name);
+  // the `name 'alias'` part is optional.
+  combinator_t *var_modifier_cvar =
+      seq(new_combinator(), PASCAL_T_NONE,
+          token(keyword_ci("cvar")),
+          token(match(";")),
+          (combinator_t *)NULL);
+
+  combinator_t *var_modifier_public = map(
+      seq(new_combinator(), PASCAL_T_NONE,
+          token(keyword_ci("public")),
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(keyword_ci("name")),
+                       token(pascal_string(PASCAL_T_STRING)),
+                       (combinator_t *)NULL)),
+          token(match(";")),
           (combinator_t *)NULL),
-      token(match(";")), // trailing semicolon after linkage clause
-      (combinator_t *)NULL));
+      wrap_public_name_clause);
+
+  combinator_t *var_modifier_external = map(
+      seq(new_combinator(), PASCAL_T_NONE,
+          token(keyword_ci("external")),
+          optional(seq(new_combinator(),
+                       PASCAL_T_NONE, // optional lib name (string or ident,
+                                      // but not the 'name' keyword)
+                       pnot(peek(token(keyword_ci("name")))),
+                       multi(new_combinator(), PASCAL_T_NONE,
+                             token(pascal_string(PASCAL_T_STRING)),
+                             token(cident(PASCAL_T_IDENTIFIER)),
+                             (combinator_t *)NULL),
+                       (combinator_t *)NULL)),
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(keyword_ci("name")),
+                       token(pascal_string(PASCAL_T_STRING)),
+                       (combinator_t *)NULL)),
+          token(match(";")),
+          (combinator_t *)NULL),
+      wrap_external_name_clause);
+
+  combinator_t *unit_var_linkage_clause =
+      many(multi(new_combinator(), PASCAL_T_NONE,
+                 var_modifier_cvar, var_modifier_public, var_modifier_external,
+                 (combinator_t *)NULL));
 
   combinator_t *typed_var_decl =
       seq(new_combinator(), PASCAL_T_VAR_DECL,
