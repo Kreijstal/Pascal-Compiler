@@ -1148,28 +1148,56 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
     return false;
   }
 
-  /* Define platform-specific symbols */
+  /* Define platform-specific symbols.  These are target-OS predicates, not
+   * host predicates: cross-compiling from Linux to Windows must NOT define
+   * LINUX/UNIX/HASUNIX, or FPC's `{$if defined(linux) or defined(darwin)}`
+   * blocks (e.g. comptty.pas LinuxIsATTY using termio) compile into a
+   * Windows target and break the link. */
 #if defined(__linux__)
-  if (!pascal_preprocessor_define(preprocessor, "LINUX")) {
-    report_preprocessor_error(error_out, path, "unable to define LINUX symbol");
-    pascal_preprocessor_free(preprocessor);
-    free(buffer);
-    return false;
-  }
-  if (!pascal_preprocessor_define(preprocessor, "UNIX")) {
-    report_preprocessor_error(error_out, path, "unable to define UNIX symbol");
-    pascal_preprocessor_free(preprocessor);
-    free(buffer);
-    return false;
-  }
-  if (!pascal_preprocessor_define(preprocessor, "HASUNIX")) {
-    report_preprocessor_error(error_out, path,
-                              "unable to define HASUNIX symbol");
-    pascal_preprocessor_free(preprocessor);
-    free(buffer);
-    return false;
+  if (!target_windows_flag()) {
+    if (!pascal_preprocessor_define(preprocessor, "LINUX")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define LINUX symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "UNIX")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define UNIX symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "HASUNIX")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define HASUNIX symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
   }
 #endif
+
+  /* Define WINDOWS when targeting Windows.  globals.pas keys its
+   * `uses windows` clause on {$ifdef windows} (note: lowercase, but
+   * Pascal {$ifdef} is case-insensitive against the symbol table). */
+  if (target_windows_flag()) {
+    if (!pascal_preprocessor_define(preprocessor, "WINDOWS")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define WINDOWS symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "WIN64")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define WIN64 symbol");
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+  }
 
   /* Define endianness - x86/x86_64 is little-endian */
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) ||             \
