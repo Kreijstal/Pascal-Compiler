@@ -133,8 +133,15 @@ static inline const char *codegen_readonly_section_directive(void) {
 /* Return the directive to switch back to the current text section.
  * With --function-sections, each function is in its own .text.funcname section;
  * use .previous to return to it after a .rodata detour instead of the bare
- * .text which would incorrectly place code in the default .text section. */
+ * .text which would incorrectly place code in the default .text section.
+ *
+ * COFF/PE gas does not implement .previous, so on Windows targets we always
+ * emit .text and accept that --function-sections-based dead-code GC won't
+ * reach unit functions on Windows.  The Windows linker doesn't offer the same
+ * --gc-sections behaviour as GNU ld anyway. */
 static inline const char *codegen_text_section_resume(void) {
+  if (codegen_target_is_windows())
+    return "\t.text";
   return function_sections_flag() ? "\t.previous" : "\t.text";
 }
 
