@@ -73,9 +73,19 @@ fi
 
 echo "[phase3] linking /tmp/pp_win.o + libkgpc_runtime.a -> /tmp/pp_win.exe" | tee -a "$WINBUILD_LOG"
 LINK_LOG=/tmp/link.log
+# -static-libgcc + -Wl,-Bstatic for pthread: produce a self-contained .exe
+# that does not require libwinpthread-1.dll alongside it.  Without this,
+# wine reports c0000135 (STATUS_DLL_NOT_FOUND) at startup and exits 53.
+#
+# --stack 16777216,16777216: reserve and commit 16 MB stack.  pp.pas's
+# main procedure has a ~3.5 MB local frame; Windows defaults to a 1 MB
+# stack reservation which overflows during _FPC_EXE_Entry before any
+# Pascal code runs.
 set +e
 "$CC" /tmp/pp_win.o "$WINRT_DIR/libkgpc_runtime.a" -o /tmp/pp_win.exe \
-  -lkernel32 -luser32 -lws2_32 -lpthread 2>"$LINK_LOG"
+  -static-libgcc -Wl,-Bstatic -lpthread -Wl,-Bdynamic \
+  -Wl,--stack,16777216 \
+  -lkernel32 -luser32 -lws2_32 2>"$LINK_LOG"
 LINK_RC=$?
 set -e
 echo "[phase3] link exit=$LINK_RC" | tee -a "$WINBUILD_LOG"
