@@ -34,8 +34,8 @@ changes will be tracked; previous progress lives in the git history.
   with VMT, generics, sets, type helpers, interfaces.
 
 ### Compiler — code generator
-- Chaitin-style graph-coloring register allocator (toggle via Meson option
-  `use_graph_coloring_allocator`).
+- Chaitin-style graph-coloring register allocator, on by default
+  (`-Duse_graph_coloring_allocator=false` falls back to the simple LRU spiller).
 - Dead-code elimination over the program subprogram graph
   (`--disable-dce` to opt out).
 - Dual ABI support: System V AMD64 (default on Linux / macOS) and the
