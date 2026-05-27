@@ -608,6 +608,43 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     mangled_name = "kgpc_ord_longint";
   } else if (kgpc_type_is_char(arg_kgpc_type) || arg_type_tag == CHAR_TYPE ||
              is_arg_upcase_char_call) {
+    /* Fold Ord('x') and Ord(#65) on char literals to their numeric code, so
+       set-of-char/set-of-byte typed constants like
+         [Ord('a')..Ord('z'), Ord('-')]
+       reach codegen as plain integers and can use the static .rodata mask
+       fast path instead of emitting per-element runtime kgpc_ord_longint
+       calls. */
+    int folded = 0;
+    int folded_value = 0;
+    if (arg_expr != NULL && arg_expr->type == EXPR_CHAR_CODE) {
+      folded_value = (unsigned char)arg_expr->expr_data.char_code;
+      folded = 1;
+    } else if (arg_expr != NULL && arg_expr->type == EXPR_STRING) {
+      char *literal = arg_expr->expr_data.string;
+      if (literal != NULL && literal[0] != '\0' && literal[1] == '\0') {
+        folded_value = (unsigned char)literal[0];
+        folded = 1;
+      }
+    }
+    if (folded) {
+      destroy_list(expr->expr_data.function_call_data.args_expr);
+      expr->expr_data.function_call_data.args_expr = NULL;
+      if (expr->expr_data.function_call_data.id != NULL) {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+      }
+      if (expr->expr_data.function_call_data.mangled_id != NULL) {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+      }
+      semcheck_reset_function_call_cache(expr);
+
+      expr->type = EXPR_INUM;
+      expr->expr_data.i_num = folded_value;
+      semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
+      *type_return = LONGINT_TYPE;
+      return 0;
+    }
     /* For char variables, Ord returns the character code */
     mangled_name = "kgpc_ord_longint";
   } else if (kgpc_type_equals_tag(arg_kgpc_type, ENUM_TYPE)) {

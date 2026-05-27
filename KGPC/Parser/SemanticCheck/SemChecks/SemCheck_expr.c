@@ -1632,10 +1632,35 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
       expr->resolved_kgpc_type = create_pointer_type(NULL);
     }
     break;
-  case EXPR_SET:
+  case EXPR_SET: {
+    /* Semcheck each element's lower/upper expression so builtin folds
+       (Ord('a') -> 97, Chr(...), etc.) take effect; without this, set
+       literals like [Ord('a')..Ord('z')] leave unfolded Ord() calls in
+       the AST and codegen emits a bogus `call Ord` symbol that fails to
+       link. */
+    ListNode_t *cur = expr->expr_data.set_data.elements;
+    while (cur != NULL) {
+      struct SetElement *element = (struct SetElement *)cur->cur;
+      if (element != NULL) {
+        if (element->lower != NULL) {
+          KgpcType *elem_kgpc = NULL;
+          return_val += semcheck_expr_with_type(&elem_kgpc, symtab,
+                                                element->lower, max_scope_lev,
+                                                NO_MUTATE);
+        }
+        if (element->upper != NULL) {
+          KgpcType *elem_kgpc = NULL;
+          return_val += semcheck_expr_with_type(&elem_kgpc, symtab,
+                                                element->upper, max_scope_lev,
+                                                NO_MUTATE);
+        }
+      }
+      cur = cur->next;
+    }
     *type_return = SET_TYPE;
     semcheck_expr_set_resolved_type(expr, SET_TYPE);
     break;
+  }
 
   case EXPR_ARRAY_LITERAL: {
     if (expr->array_element_type == UNKNOWN_TYPE &&
