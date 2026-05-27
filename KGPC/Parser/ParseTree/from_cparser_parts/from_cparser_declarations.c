@@ -2042,6 +2042,54 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node,
     return NULL;
   }
 
+  /* `const X: set of T = [...]` is a writeable typed constant under FPC's
+   * default {$WRITEABLECONST ON}; it's used by rtl/objpas/sysutils/
+   * sysstrh.inc for LeadBytes and friends, which are mutated at unit init
+   * via Include/Exclude.  Lower it to a TREE_VAR_DECL with the set
+   * initializer so the symbol ends up as HASHTYPE_VAR with the right
+   * static storage layout (the equivalent VAR declaration shape already
+   * compiles and runs correctly). */
+  if (type_info.is_set && value_node != NULL && var_builder != NULL) {
+    struct Expression *init_expr = convert_expression(value_node);
+    if (init_expr != NULL) {
+      /* Build a real KgpcType for the set so the var-decl carries
+       * accurate size info to codegen (32 bytes for set of AnsiChar /
+       * Byte; smaller for narrower element ranges).  Without this the
+       * vardecl emits a 4-byte .comm and Include() trashes adjacent
+       * storage. */
+      int element_storage = 32; /* full 256-bit set; sized to the largest
+                                 * ordinal range KGPC handles natively. */
+      KgpcType *set_kgpc =
+          create_primitive_type_with_size(SET_TYPE, element_storage);
+      if (set_kgpc != NULL && set_kgpc->type_alias != NULL) {
+        set_kgpc->type_alias->is_set = 1;
+        set_kgpc->type_alias->set_element_type =
+            (type_info.set_element_type != UNKNOWN_TYPE)
+                ? type_info.set_element_type
+                : CHAR_TYPE;
+      }
+      ListNode_t *ids = CreateListNode(id, LIST_STRING);
+      struct Expression *lhs = mk_varid(const_decl_node->line, strdup(id));
+      struct Statement *initializer_stmt = mk_varassign(
+          const_decl_node->line, const_decl_node->col, lhs, init_expr);
+      Tree_t *decl =
+          mk_vardecl(const_decl_node->line, ids, SET_TYPE, type_id, 0, 0,
+                     initializer_stmt, NULL, NULL, NULL);
+      decl->tree_data.var_decl_data.is_typed_const = 1;
+      mark_var_decl_static_storage(decl);
+      decl->tree_data.var_decl_data.type_ref =
+          type_ref_from_info_or_id(&type_info, type_id);
+      if (set_kgpc != NULL) {
+        decl->tree_data.var_decl_data.cached_kgpc_type = set_kgpc;
+        kgpc_type_retain(set_kgpc);
+      }
+      list_builder_append(var_builder, decl, LIST_TREE);
+      destroy_type_info_contents(&type_info);
+      return NULL;
+    }
+    /* fallthrough to default CONST_DECL path on convert failure */
+  }
+
   if (type_id != NULL) {
     int empty_tuple_record_const = 0;
     if (value_node != NULL && (value_node->typ == PASCAL_T_TUPLE ||
