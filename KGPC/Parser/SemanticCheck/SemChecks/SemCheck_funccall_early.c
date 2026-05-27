@@ -52,6 +52,7 @@ static const BuiltinFuncEntry BUILTIN_FUNC_MAP[] = {
     {"New", semcheck_builtin_new_func, NULL, 0},
     {"Power", semcheck_builtin_power, NULL, 0},
     {"Aligned", semcheck_builtin_aligned, NULL, 0},
+    {"OFS", semcheck_builtin_ofs, NULL, 0},
 };
 
 #define BUILTIN_FUNC_MAP_COUNT                                                 \

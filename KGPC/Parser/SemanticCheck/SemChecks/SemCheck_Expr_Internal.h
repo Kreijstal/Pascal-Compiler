@@ -499,6 +499,8 @@ int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
                           struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
                               struct Expression *expr, int max_scope_lev);
+int semcheck_builtin_ofs(int *type_return, SymTab_t *symtab,
+                         struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
                          struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,

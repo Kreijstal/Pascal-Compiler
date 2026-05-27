@@ -1641,7 +1641,7 @@ void semcheck_add_builtins(SymTab_t *symtab) {
         {"Concat", STRING_TYPE},  {"EOF", BOOL},
         {"EOLN", BOOL},           {"SizeOf", LONGINT_TYPE},
         {"Chr", CHAR_TYPE},       {"Ord", LONGINT_TYPE},
-        {"High", LONGINT_TYPE},
+        {"High", LONGINT_TYPE},   {"OFS", QWORD_TYPE},
     };
     for (size_t i = 0; i < sizeof(simple_funcs) / sizeof(simple_funcs[0]); ++i)
       register_simple_builtin_func(symtab, simple_funcs[i].name,

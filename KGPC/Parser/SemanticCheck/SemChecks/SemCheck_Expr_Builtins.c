@@ -1676,6 +1676,123 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
   return error_count;
 }
 
+/*
+ * semcheck_builtin_ofs — FPC OFS(expr) intrinsic.
+ *
+ * Historically (16-bit DOS) OFS(x) returned the segment-offset portion of x's
+ * address.  On flat 32/64-bit memory models — the only ones KGPC targets — the
+ * "offset" IS the linear address, so OFS(x) is defined to be equivalent to
+ * PtrUInt(@x).  See FPC's compinnr.pas (fpc_in_ofs_x) and the lowering in
+ * compiler/ninl.pas which emits Pointer(Addr(Expr)) cast to PtrUInt on flat
+ * targets.
+ *
+ * Implementation: rewrite OFS(arg) in place into QWord(@arg) and re-run
+ * semcheck so the rest of the pipeline handles addressof + typecast through
+ * the existing code paths (no new lowering rule needed).
+ */
+int semcheck_builtin_ofs(int *type_return, SymTab_t *symtab,
+                         struct Expression *expr, int max_scope_lev) {
+  assert(type_return != NULL);
+  assert(symtab != NULL);
+  assert(expr != NULL);
+  assert(expr->type == EXPR_FUNCTION_CALL);
+
+  ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+  if (args == NULL || args->next != NULL || args->cur == NULL) {
+    semcheck_error_with_context_at(
+        expr->line_num, expr->col_num, expr->source_index,
+        "Error on line %d, OFS expects exactly one argument.\n",
+        expr->line_num);
+    *type_return = UNKNOWN_TYPE;
+    return 1;
+  }
+
+  /* Detach the single argument from the function call so it can be
+   * reattached as the operand of the new addressof expression without
+   * being freed when we tear down the function_call_data fields. */
+  struct Expression *arg_expr = (struct Expression *)args->cur;
+  args->cur = NULL;
+
+  /* Build @arg, then QWord(@arg).  Use the argument's line number so any
+   * downstream diagnostics still point inside the OFS call site. */
+  int line_num = expr->line_num;
+  struct Expression *addr_expr = mk_addressof(line_num, arg_expr);
+  char *target_id = strdup("QWord");
+  struct Expression *cast_expr =
+      mk_typecast(line_num, QWORD_TYPE, target_id, addr_expr);
+
+  /* Tear down the function_call_data fields BEFORE we overwrite the union
+   * with typecast_data.  We do this manually rather than calling
+   * destroy_expr so the Expression node itself (whose address callers
+   * already hold) is preserved. */
+  free(expr->expr_data.function_call_data.id);
+  expr->expr_data.function_call_data.id = NULL;
+  if (expr->expr_data.function_call_data.mangled_id != NULL) {
+    free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = NULL;
+  }
+  /* args_expr is a single LIST_EXPR node whose cur we already moved into
+   * arg_expr.  Free just the wrapper directly; destroy_list would assert
+   * because cur->cur is now NULL. */
+  free(expr->expr_data.function_call_data.args_expr);
+  expr->expr_data.function_call_data.args_expr = NULL;
+  if (expr->expr_data.function_call_data.procedural_var_expr != NULL) {
+    destroy_expr(expr->expr_data.function_call_data.procedural_var_expr);
+    expr->expr_data.function_call_data.procedural_var_expr = NULL;
+  }
+  if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL) {
+    destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+    expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+  }
+  if (expr->expr_data.function_call_data.call_kgpc_type != NULL) {
+    destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
+    expr->expr_data.function_call_data.call_kgpc_type = NULL;
+  }
+  if (expr->expr_data.function_call_data.placeholder_method_name != NULL) {
+    free(expr->expr_data.function_call_data.placeholder_method_name);
+    expr->expr_data.function_call_data.placeholder_method_name = NULL;
+  }
+  if (expr->expr_data.function_call_data.call_qualifier != NULL) {
+    free(expr->expr_data.function_call_data.call_qualifier);
+    expr->expr_data.function_call_data.call_qualifier = NULL;
+  }
+  if (expr->expr_data.function_call_data.self_class_name != NULL) {
+    free(expr->expr_data.function_call_data.self_class_name);
+    expr->expr_data.function_call_data.self_class_name = NULL;
+  }
+  if (expr->expr_data.function_call_data.cached_owner_class != NULL) {
+    free(expr->expr_data.function_call_data.cached_owner_class);
+    expr->expr_data.function_call_data.cached_owner_class = NULL;
+  }
+  if (expr->expr_data.function_call_data.cached_method_name != NULL) {
+    free(expr->expr_data.function_call_data.cached_method_name);
+    expr->expr_data.function_call_data.cached_method_name = NULL;
+  }
+
+  /* Also drop any per-expression resolved type the early dispatch may have
+   * attached, so semcheck of the new typecast starts from a clean slate. */
+  if (expr->resolved_kgpc_type != NULL) {
+    destroy_kgpc_type(expr->resolved_kgpc_type);
+    expr->resolved_kgpc_type = NULL;
+  }
+
+  /* Splice the new typecast body into expr.  Free the throwaway outer
+   * wrapper afterwards (its inner expr/target_id are now owned by *expr). */
+  expr->type = EXPR_TYPECAST;
+  expr->expr_data.typecast_data = cast_expr->expr_data.typecast_data;
+  free(cast_expr);
+
+  /* Re-run semcheck on the rewritten expression so addressof/typecast
+   * resolution runs through the normal pipeline. */
+  KgpcType *new_type = NULL;
+  int rc = semcheck_expr(symtab, expr, max_scope_lev, NO_MUTATE, &new_type);
+  if (rc == 0)
+    *type_return = QWORD_TYPE;
+  else
+    *type_return = UNKNOWN_TYPE;
+  return rc;
+}
+
 int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
                          struct Expression *expr, int max_scope_lev) {
   assert(type_return != NULL);
