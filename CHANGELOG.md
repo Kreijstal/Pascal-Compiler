@@ -68,13 +68,14 @@ changes will be tracked; previous progress lives in the git history.
   `pp_bootstrap`; `pp_bootstrap` recompiles `pp.pas` into `pp_stage2`;
   `pp_stage2` builds and runs user programs end-to-end.  Exercised on
   every push by the `test_fpcrtl_pp_pas_bootstrap` CI test.  See
-  [`docs/FPC_BOOTSTRAP.md`](docs/FPC_BOOTSTRAP.md) and
-  [`STATUS.md`](STATUS.md).
+  [`docs/FPC_BOOTSTRAP.md`](https://github.com/Kreijstal/Pascal-Compiler/blob/master/docs/FPC_BOOTSTRAP.md)
+  and
+  [`STATUS.md`](https://github.com/Kreijstal/Pascal-Compiler/blob/master/STATUS.md).
 
 ### Tests and CI
 - Test auto-discovery: any `tests/test_cases/foo.p` paired with `foo.expected`
   becomes a test automatically (see
-  [`tests/README_TEST_AUTODISCOVERY.md`](tests/README_TEST_AUTODISCOVERY.md)).
+  [`tests/README_TEST_AUTODISCOVERY.md`](https://github.com/Kreijstal/Pascal-Compiler/blob/master/tests/README_TEST_AUTODISCOVERY.md)).
 - Over 1000 compiler tests; FPC RTL mode adds a second matrix when enabled
   via `-Drun_fpc_rtl_tests=true`.
 - CI runs Linux, MSYS2 (MSYS / MINGW64 / UCRT64 / CLANG64), and a
@@ -83,7 +84,14 @@ changes will be tracked; previous progress lives in the git history.
   so Cygwin and MSYS keep coverage that pure MinGW / Wine cannot run.
 
 ### Repo hygiene
-- 23 stale build directories removed from the source tree.
-- `.gitignore` revamped to cover every supported build-dir naming and the
-  agent-state directory.
-- `KGPC/README.txt` rewritten from the original 14-line stub.
+- Dead source files removed: `KGPC/main.c` (superseded by `main_cparser.c`),
+  `KGPC/harness.c` (zero references), `btpc.dpr` (tracked test scratch).
+- Unused `KGPC/TestPrograms/` tree removed (~130 hand-written `.p` files of
+  which only two were referenced by the test harness; those two moved to
+  `tests/test_cases/legacy_sign_test.p` and `legacy_for_loop.p`).
+- Three superseded planning docs removed (`docs/UNIT_SCOPING_PLAN.md`,
+  `docs/SCOPE_TREE_REFACTORING.md`, `docs/EXTENDED_TYPE_SUPPORT.md`).
+- `.gitignore` tightened so the root no longer hides release docs, and the
+  agent-state directory (`.claude/`) is excluded.
+- `KGPC/README.txt` rewritten from the original 14-line stub into a
+  source-tree and flag reference.
