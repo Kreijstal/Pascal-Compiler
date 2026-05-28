@@ -1262,6 +1262,39 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
       return inst_list;
     }
 
+    /* Assigning an AnsiString / ShortString / string literal into a fixed
+     * `array[..] of WideChar` destination (e.g. FileRec.Name on Win64) must
+     * widen each source byte to a UTF-16 unit instead of memcpy'ing the
+     * narrow payload — which leaves stale low bytes interleaved with the
+     * length prefix and yields a corrupt PWideChar that `do_open` then
+     * passes to CreateFileW.  Route through the dedicated runtime helper
+     * before the shortstring-aware char-array paths below match it. */
+    {
+      int wide_count = codegen_dest_widechar_array_count(var_expr, ctx);
+      if (wide_count > 0 && assign_expr != NULL &&
+          assign_expr->type != EXPR_ARRAY_LITERAL &&
+          (expr_get_type_tag(assign_expr) == STRING_TYPE ||
+           expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
+           codegen_expr_is_shortstring_value_local(assign_expr) ||
+           codegen_expr_is_shortstring_array(assign_expr) ||
+           (assign_expr->type == EXPR_STRING))) {
+        Register_t *addr_reg = NULL;
+        inst_list =
+            codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL) {
+          free_reg(get_reg_stack(), value_reg);
+          if (addr_reg != NULL)
+            free_reg(get_reg_stack(), addr_reg);
+          return inst_list;
+        }
+        inst_list = codegen_call_ansistr_to_widechararray(
+            inst_list, ctx, addr_reg, value_reg, wide_count);
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+      }
+    }
+
     /* Handle shortstring assignment to char arrays */
     int array_lower = 0;
     int array_upper = -1;

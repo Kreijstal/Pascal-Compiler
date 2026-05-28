@@ -298,6 +298,34 @@ ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list,
   return inst_list;
 }
 
+/* Call kgpc_ansistr_to_widechararray(dest, src, dest_count) — used when
+ * assigning an AnsiString or string literal into a fixed `array[..] of
+ * WideChar` (e.g. FileRec.Name on Win64).  The third argument is the
+ * WideChar element count, not the byte size. */
+ListNode_t *codegen_call_ansistr_to_widechararray(ListNode_t *inst_list,
+                                                  CodeGenContext *ctx,
+                                                  Register_t *addr_reg,
+                                                  Register_t *value_reg,
+                                                  int dest_count) {
+  if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+    return inst_list;
+
+  inst_list = codegen_setup_two_arg_regs(inst_list, ctx, addr_reg, value_reg);
+
+  char buffer[128];
+  if (codegen_target_is_windows())
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", dest_count);
+  else
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", dest_count);
+  inst_list = add_inst(inst_list, buffer);
+
+  inst_list = codegen_vect_reg(inst_list, 0);
+  inst_list = codegen_call_with_shadow_space(inst_list,
+                                             "kgpc_ansistr_to_widechararray");
+  free_arg_regs();
+  return inst_list;
+}
+
 /* Call kgpc_shortstring_to_char_array(dest, src, size) */
 ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list,
                                                    CodeGenContext *ctx,
@@ -517,6 +545,75 @@ int codegen_expr_is_shortstring_array(const struct Expression *expr) {
       return 1;
   }
   return 0;
+}
+
+/* Detect whether @p expr resolves to a fixed `array[..] of WideChar` (or
+ * UnicodeChar) destination — checks AST metadata, the symbol table, and the
+ * resolved KgpcType so it also fires for VAR_ID + RECORD_ACCESS where the
+ * element-type id is not threaded onto the access expression. Returns the
+ * widechar element count (>0) on a positive hit, 0 otherwise. */
+int codegen_dest_widechar_array_count(const struct Expression *expr,
+                                      CodeGenContext *ctx) {
+  if (expr == NULL)
+    return 0;
+
+  int count = 0;
+  int matches_metadata =
+      (expr->array_element_size == 2) ||
+      (expr->array_element_type_id != NULL &&
+       (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+        pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
+
+  if (matches_metadata && expr->is_array_expr) {
+    int lo = expr_get_array_lower_bound(expr);
+    int hi = expr_get_array_upper_bound(expr);
+    if (hi >= lo)
+      count = hi - lo + 1;
+  }
+
+  KgpcType *kgpc = expr_get_kgpc_type(expr);
+  if (count == 0 && kgpc != NULL && kgpc_type_is_array(kgpc)) {
+    KgpcType *elem = kgpc_type_get_array_element_type(kgpc);
+    if (elem != NULL && kgpc_type_sizeof(elem) == 2 &&
+        elem->kind == TYPE_KIND_PRIMITIVE &&
+        elem->info.primitive_type_tag == CHAR_TYPE) {
+      int start = 0, end = -1;
+      if (kgpc_type_get_array_bounds(kgpc, &start, &end) == 0 && end >= start)
+        count = end - start + 1;
+    }
+  }
+
+  if (count == 0 && expr->type == EXPR_VAR_ID && ctx != NULL &&
+      ctx->symtab != NULL) {
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+        node != NULL && node->type != NULL && kgpc_type_is_array(node->type)) {
+      KgpcType *elem = kgpc_type_get_array_element_type(node->type);
+      if (elem != NULL && kgpc_type_sizeof(elem) == 2 &&
+          elem->kind == TYPE_KIND_PRIMITIVE &&
+          elem->info.primitive_type_tag == CHAR_TYPE) {
+        int start = node->type->info.array_info.start_index;
+        int end = node->type->info.array_info.end_index;
+        if (end >= start)
+          count = end - start + 1;
+      }
+    }
+  }
+
+  if (count == 0 && expr->type == EXPR_RECORD_ACCESS) {
+    struct RecordField *field =
+        codegen_lookup_record_field((struct Expression *)expr);
+    if (field != NULL && field->is_array && !field->array_is_open &&
+        field->array_element_type_id != NULL &&
+        (pascal_identifier_equals(field->array_element_type_id, "WideChar") ||
+         pascal_identifier_equals(field->array_element_type_id,
+                                  "UnicodeChar")) &&
+        field->array_end >= field->array_start) {
+      count = field->array_end - field->array_start + 1;
+    }
+  }
+
+  return count;
 }
 
 static int

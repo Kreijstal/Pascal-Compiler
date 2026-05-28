@@ -1112,6 +1112,26 @@ char **kgpc_array_string_to_ppchar(const void *descriptor_ptr,
   return result;
 }
 
+/* Copy an AnsiString to an array of WideChar (zero-extending each source
+ * byte to 16 bits).  `dest_count` is the number of WideChar elements in
+ * `dest` (not the byte size).  Mirrors FPC's fpc_ansistr_to_widechararray
+ * semantics: each source AnsiChar is widened to a UTF-16 unit; trailing
+ * elements past the source length are padded with zeros so the destination
+ * is fully initialised. */
+void kgpc_ansistr_to_widechararray(uint16_t *dest, const char *src,
+                                   size_t dest_count) {
+  if (dest == NULL || dest_count == 0)
+    return;
+
+  size_t src_len = (src == NULL) ? 0 : kgpc_string_known_length(src);
+  size_t copy_len = (src_len < dest_count) ? src_len : dest_count;
+  for (size_t i = 0; i < copy_len; i++)
+    dest[i] = (uint16_t)(unsigned char)src[i];
+  if (copy_len < dest_count)
+    memset(dest + copy_len, 0,
+           (dest_count - copy_len) * sizeof(uint16_t));
+}
+
 /* Copy a string literal to a char array (fixed-size buffer)
  * Fills the entire array. If the string is shorter, pads with nulls.
  * If the string is longer, truncates to fit.

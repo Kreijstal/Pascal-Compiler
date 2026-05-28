@@ -394,4 +394,10 @@ void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size);
 void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
                                              const uint16_t *value);
 
+/* AnsiString -> array of WideChar.  @p dest_count is the WideChar element
+ * count (NOT byte length).  Widens each source byte to UTF-16 and pads any
+ * unused trailing elements with zero. */
+void kgpc_ansistr_to_widechararray(uint16_t *dest, const char *src,
+                                   size_t dest_count);
+
 #endif /* KGPC_RUNTIME_INTERNAL_H */

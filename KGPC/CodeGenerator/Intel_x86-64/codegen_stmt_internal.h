@@ -78,6 +78,13 @@ ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list,
                                                    Register_t *addr_reg,
                                                    Register_t *value_reg,
                                                    int array_size);
+ListNode_t *codegen_call_ansistr_to_widechararray(ListNode_t *inst_list,
+                                                  CodeGenContext *ctx,
+                                                  Register_t *addr_reg,
+                                                  Register_t *value_reg,
+                                                  int dest_count);
+int codegen_dest_widechar_array_count(const struct Expression *expr,
+                                      CodeGenContext *ctx);
 ListNode_t *codegen_call_string_assign(ListNode_t *inst_list,
                                        CodeGenContext *ctx,
                                        Register_t *addr_reg,
