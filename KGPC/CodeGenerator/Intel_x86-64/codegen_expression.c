@@ -47,6 +47,10 @@
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
+/* Defined in codegen_stmt_assignment.c, declared in codegen_stmt_internal.h
+ * which we don't include here to avoid pulling the rest of the stmt module
+ * surface. */
+int codegen_expr_is_wide_string_value(const struct Expression *expr);
 static int
 codegen_array_access_targets_shortstring(const struct Expression *expr,
                                          CodeGenContext *ctx);
@@ -3684,8 +3688,34 @@ int codegen_expr_is_addressable(const struct Expression *expr) {
      * through a hidden sret return buffer. */
     return expr_returns_sret(expr);
   case EXPR_TYPECAST:
-    if (expr->expr_data.typecast_data.expr != NULL)
-      return codegen_expr_is_addressable(expr->expr_data.typecast_data.expr);
+    if (expr->expr_data.typecast_data.expr != NULL) {
+      /* Managed-string encoding conversions are NOT addressable: the cast
+       * produces a freshly-allocated buffer in a different encoding, so the
+       * caller has to materialise the value and stash it in a temp.  If we
+       * report addressable here, the function-call argument codegen takes
+       * the inner expression's address and skips the conversion entirely —
+       * which is how `FileExists(UnicodeString(FileName))` ended up passing
+       * raw ANSI bytes to GetFileAttributesW. */
+      struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
+      const char *target_id = expr->expr_data.typecast_data.target_type_id;
+      int target_is_wide =
+          (target_id != NULL &&
+           (pascal_identifier_equals(target_id, "UnicodeString") ||
+            pascal_identifier_equals(target_id, "WideString")));
+      int target_is_ansi =
+          (target_id != NULL &&
+           (pascal_identifier_equals(target_id, "AnsiString") ||
+            pascal_identifier_equals(target_id, "RawByteString") ||
+            pascal_identifier_equals(target_id, "string")));
+      int inner_is_wide = codegen_expr_is_wide_string_value(tc_inner);
+      int inner_is_ansi = !inner_is_wide &&
+                          (expr_has_type_tag(tc_inner, STRING_TYPE) ||
+                           tc_inner->type == EXPR_STRING);
+      if ((target_is_wide && inner_is_ansi) ||
+          (target_is_ansi && inner_is_wide))
+        return 0;
+      return codegen_expr_is_addressable(tc_inner);
+    }
     return 0;
   case EXPR_AS:
     if (expr->expr_data.as_data.expr != NULL)
@@ -4347,6 +4377,65 @@ ListNode_t *codegen_expr_tree_value(struct Expression *expr,
           *out_reg = ss_reg;
         else
           free_reg(get_reg_stack(), ss_reg);
+      } else if (out_reg != NULL) {
+        *out_reg = NULL;
+      }
+      return inst_list;
+    }
+
+    /* Managed-string encoding typecasts: build_expr_tree strips EXPR_TYPECAST
+     * so without this peek the conversion is lost and the call site receives
+     * the inner expression's raw pointer with the wrong encoding.  This is
+     * exactly what breaks FPC's Win RTL `FileExists(UnicodeString(FileName))`
+     * — without conversion, GetFileAttributesW reads ANSI bytes as UTF-16. */
+    int inner_is_wide = codegen_expr_is_wide_string_value(tc_inner);
+    int target_is_wide =
+        (expr->expr_data.typecast_data.target_type_id != NULL &&
+         (pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "UnicodeString") ||
+          pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "WideString")));
+    int target_is_ansi_string =
+        (tc_target == STRING_TYPE && !target_is_wide &&
+         (expr->expr_data.typecast_data.target_type_id == NULL ||
+          pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "AnsiString") ||
+          pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "RawByteString") ||
+          pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "string")));
+    int inner_is_ansi_string =
+        !inner_is_wide && !inner_is_ss &&
+        (expr_has_type_tag(tc_inner, STRING_TYPE) ||
+         tc_inner->type == EXPR_STRING);
+
+    const char *enc_helper = NULL;
+    if (target_is_wide && inner_is_ansi_string)
+      enc_helper = "kgpc_unicodestring_from_string";
+    else if (target_is_ansi_string && inner_is_wide)
+      enc_helper = "kgpc_string_from_unicodestring";
+
+    if (enc_helper != NULL) {
+      Register_t *inner_reg = NULL;
+      inst_list = codegen_expr_tree_value(tc_inner, inst_list, ctx, &inner_reg);
+      if (inner_reg != NULL) {
+        const char *abi_arg0 =
+            codegen_target_is_windows() ? "\tmovq\t%0, %rcx\n"
+                                        : "\tmovq\t%0, %rdi\n";
+        Register_t *u[] = {inner_reg};
+        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, abi_arg0);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, enc_helper);
+        free_arg_regs();
+        {
+          Register_t *d[] = {inner_reg};
+          inst_list =
+              add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
+        }
+        if (out_reg != NULL)
+          *out_reg = inner_reg;
+        else
+          free_reg(get_reg_stack(), inner_reg);
       } else if (out_reg != NULL) {
         *out_reg = NULL;
       }

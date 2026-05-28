@@ -794,6 +794,28 @@ static int codegen_expr_is_wide_string_value(const struct Expression *expr) {
   return 0;
 }
 
+/* Does this argument-typecast expression represent a managed-string encoding
+ * change (AnsiString↔UnicodeString) that needs a runtime conversion call? */
+static int
+codegen_arg_typecast_changes_string_encoding(const struct Expression *expr) {
+  if (expr == NULL || expr->type != EXPR_TYPECAST ||
+      expr->expr_data.typecast_data.target_type_id == NULL ||
+      expr->expr_data.typecast_data.expr == NULL)
+    return 0;
+  const char *target_id = expr->expr_data.typecast_data.target_type_id;
+  const struct Expression *inner = expr->expr_data.typecast_data.expr;
+  int target_is_wide = (pascal_identifier_equals(target_id, "UnicodeString") ||
+                        pascal_identifier_equals(target_id, "WideString"));
+  int target_is_ansi = (pascal_identifier_equals(target_id, "AnsiString") ||
+                        pascal_identifier_equals(target_id, "RawByteString") ||
+                        pascal_identifier_equals(target_id, "string"));
+  int inner_is_wide = codegen_expr_is_wide_string_value(inner);
+  int inner_is_ansi = !inner_is_wide && (expr_has_type_tag(inner, STRING_TYPE) ||
+                                         inner->type == EXPR_STRING);
+  return (target_is_wide && inner_is_ansi) ||
+         (target_is_ansi && inner_is_wide);
+}
+
 static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab) {
   if (decl == NULL)
     return UNKNOWN_TYPE;
@@ -3375,6 +3397,24 @@ ListNode_t *codegen_pass_arguments(
             /* ShortString to AnsiString typecast: build_expr_tree
              * strips EXPR_TYPECAST nodes, losing the conversion.
              * Use codegen_expr_tree_value which handles this. */
+            Register_t *value_reg = NULL;
+            inst_list =
+                codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL) {
+              if (arg_infos != NULL)
+                free(arg_infos);
+              return inst_list;
+            }
+            top_reg = value_reg;
+          } else if (arg_expr->type == EXPR_TYPECAST &&
+                     arg_expr->expr_data.typecast_data.expr != NULL &&
+                     arg_expr->expr_data.typecast_data.target_type_id != NULL &&
+                     codegen_arg_typecast_changes_string_encoding(arg_expr)) {
+            /* Managed-string encoding typecast (AnsiString↔UnicodeString) as
+             * an argument: build_expr_tree strips EXPR_TYPECAST, so the
+             * generic gencode_expr_tree path would pass the inner expression
+             * value with the wrong encoding to the callee.  Route through
+             * codegen_expr_tree_value which has the encoding-cast handler. */
             Register_t *value_reg = NULL;
             inst_list =
                 codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
