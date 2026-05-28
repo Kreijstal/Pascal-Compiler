@@ -1177,6 +1177,115 @@ ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list,
   return inst_list;
 }
 
+/* PChar (NUL-terminated C string) → ShortString. Shares the same ABI shape
+ * as codegen_call_string_to_shortstring but routes to a runtime helper that
+ * never reinterprets src[0] as a length prefix — the source is unconditionally
+ * a C string, so strlen+memcpy is the only correct lowering. */
+ListNode_t *codegen_call_pchar_to_shortstring(ListNode_t *inst_list,
+                                              CodeGenContext *ctx,
+                                              Register_t *addr_reg,
+                                              Register_t *value_reg,
+                                              int array_size) {
+  if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+    return inst_list;
+
+  if (array_size <= 1)
+    array_size = 256;
+
+  char buffer[128];
+  if (codegen_target_is_windows()) {
+    int value_in_rcx = (value_reg->reg_id == REG_RCX);
+    int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
+
+    if (value_in_rcx && addr_in_rdx) {
+      inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+    } else if (value_in_rcx) {
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+    } else if (addr_in_rdx) {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+    } else {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+    inst_list = add_inst(inst_list, buffer);
+  } else {
+    int value_in_rdi = (value_reg->reg_id == REG_RDI);
+    int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
+
+    if (value_in_rdi && addr_in_rsi) {
+      inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+    } else if (value_in_rdi) {
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+    } else if (addr_in_rsi) {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+    } else {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+    inst_list = add_inst(inst_list, buffer);
+  }
+
+  inst_list = codegen_vect_reg(inst_list, 0);
+  inst_list =
+      codegen_call_with_shadow_space(inst_list, "kgpc_pchar_to_shortstring");
+  free_arg_regs();
+  return inst_list;
+}
+
 ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list,
                                           CodeGenContext *ctx,
                                           Register_t *dest_reg, int dest_size,

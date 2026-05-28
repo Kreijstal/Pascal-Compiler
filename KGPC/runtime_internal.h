@@ -387,4 +387,11 @@ void kgpc_string_setlength(char **target, int64_t new_length);
  */
 void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size);
 
+/* PChar (NUL-terminated C string) -> ShortString conversion. */
+void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size);
+
+/* PWideChar (NUL-terminated UTF-16) -> UnicodeString assignment. */
+void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
+                                             const uint16_t *value);
+
 #endif /* KGPC_RUNTIME_INTERNAL_H */

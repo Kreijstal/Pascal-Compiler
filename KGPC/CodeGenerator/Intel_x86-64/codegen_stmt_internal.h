@@ -102,6 +102,11 @@ ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list,
                                                Register_t *addr_reg,
                                                Register_t *value_reg,
                                                int array_size);
+ListNode_t *codegen_call_pchar_to_shortstring(ListNode_t *inst_list,
+                                              CodeGenContext *ctx,
+                                              Register_t *addr_reg,
+                                              Register_t *value_reg,
+                                              int array_size);
 int codegen_expr_is_mp_integer(struct Expression *expr);
 int codegen_expr_is_shortstring_array(const struct Expression *expr);
 int codegen_expr_is_shortstring_rhs(const struct Expression *expr,

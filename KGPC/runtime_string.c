@@ -1173,6 +1173,24 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size) {
     memcpy(dest + 1, src, copy_len);
 }
 
+/* PChar → ShortString conversion: treat `src` as a NUL-terminated C string
+ * (no shortstring header heuristic). Used by FPC's Win RTL `paramstr_li`
+ * (`Result := argv[l]`) and any other ShortString := PChar assignment. */
+void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size) {
+  if (dest == NULL || dest_size < 2)
+    return;
+  if (src == NULL) {
+    dest[0] = 0;
+    return;
+  }
+  size_t src_len = strlen(src);
+  size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+  size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+  dest[0] = (char)copy_len;
+  if (copy_len > 0)
+    memcpy(dest + 1, src, copy_len);
+}
+
 void kgpc_char_array_to_shortstring(char *dest, const char *src, size_t src_len,
                                     size_t dest_size) {
   if (dest == NULL || src == NULL || dest_size < 2)
@@ -2439,6 +2457,44 @@ uint16_t *kgpc_unicodestring_from_string(const char *value) {
   if (result == NULL)
     return kgpc_alloc_empty_unicodestring();
   return result;
+}
+
+/* Assign a raw PWideChar (NUL-terminated UTF-16) to a managed UnicodeString.
+ * `value` may be unmanaged (e.g. an entry of FPC RTL's argvw or any other
+ * external PWideChar buffer); we compute its length via kgpc_widechar_length
+ * and copy through kgpc_setstring_unicode so the target ends up with a
+ * proper managed header.  Without this helper the codegen would route a
+ * `UnicodeString := PWideChar` assignment through
+ * kgpc_unicodestring_assign_from_string, which mis-treats the UTF-16 bytes
+ * as a single-byte ANSI string (strlen stops at the first NUL byte of the
+ * first widechar). */
+void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
+                                             const uint16_t *value) {
+  if (target == NULL)
+    return;
+
+  if (value == NULL) {
+    uint16_t *current = *target;
+    if (current != NULL)
+      kgpc_string_release((char *)current);
+    *target = kgpc_alloc_empty_unicodestring();
+    return;
+  }
+
+  KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
+  if (hdr != NULL && hdr->elementsize == 2) {
+    uint16_t *current = *target;
+    if (current == value)
+      return;
+    kgpc_string_retain((const char *)value);
+    if (current != NULL)
+      kgpc_string_release((char *)current);
+    *target = (uint16_t *)value;
+    return;
+  }
+
+  int64_t len = kgpc_widechar_length(value);
+  kgpc_setstring_unicode(target, value, len);
 }
 
 void kgpc_unicodestring_assign_from_string(uint16_t **target,

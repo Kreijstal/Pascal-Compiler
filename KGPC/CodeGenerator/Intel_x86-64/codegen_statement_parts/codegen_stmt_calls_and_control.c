@@ -1116,6 +1116,56 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
       int target_is_wide_string = codegen_expr_is_wide_string_value(var_expr);
       int source_is_wide_string =
           codegen_expr_is_wide_string_value(assign_expr);
+      /* `AnsiString(WidestringExpr)` typecasts have a non-wide outer type but
+       * a wide inner value — `codegen_expr_is_wide_string_value` reports the
+       * outer (target) type so source_is_wide_string is false, and without
+       * this peek the assignment falls through to `kgpc_string_assign`, which
+       * duplicates the widestring via strlen() — reading the first NUL of
+       * the UTF-16 payload and yielding a 1-byte garbage AnsiString.  The
+       * canonical victim is `_FPC_ParamStrA`'s `Result:=AnsiString(ParamStrU(l))`
+       * in the Win RTL: argv[1] = "hi.pas" gets truncated to "h" because the
+       * widestring's second byte is 0. */
+      if (!source_is_wide_string && !target_is_wide_string &&
+          assign_expr != NULL && assign_expr->type == EXPR_TYPECAST &&
+          assign_expr->expr_data.typecast_data.expr != NULL &&
+          codegen_expr_is_wide_string_value(
+              assign_expr->expr_data.typecast_data.expr)) {
+        source_is_wide_string = 1;
+      }
+      /* Raw PWideChar source (pointer-to-WideChar with element size 2)
+       * needs the dedicated `kgpc_unicodestring_assign_from_widechar` helper.
+       * Falling through to `kgpc_unicodestring_assign_from_string` would
+       * treat the UTF-16 bytes as ANSI — the canonical victim is
+       * `_FPC_ParamStrU`'s `Result:=argvw[l]` (UnicodeString := PWideChar). */
+      int source_is_raw_pwidechar = 0;
+      if (target_is_wide_string && rhs_kgpc_type != NULL &&
+          kgpc_type_is_pointer(rhs_kgpc_type) &&
+          rhs_kgpc_type->info.points_to != NULL &&
+          kgpc_type_is_char(rhs_kgpc_type->info.points_to) &&
+          kgpc_type_sizeof(rhs_kgpc_type->info.points_to) == 2) {
+        source_is_raw_pwidechar = 1;
+      }
+      if (!source_is_raw_pwidechar && target_is_wide_string &&
+          assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS) {
+        struct Expression *base_expr =
+            assign_expr->expr_data.array_access_data.array_expr;
+        KgpcType *base_type = expr_get_kgpc_type(base_expr);
+        KgpcType *elem_type = NULL;
+        if (base_type != NULL) {
+          if (kgpc_type_is_pointer(base_type) &&
+              base_type->info.points_to != NULL) {
+            elem_type = base_type->info.points_to;
+          } else if (kgpc_type_is_array(base_type)) {
+            elem_type = base_type->info.array_info.element_type;
+          }
+        }
+        if (elem_type != NULL && kgpc_type_is_pointer(elem_type) &&
+            elem_type->info.points_to != NULL &&
+            kgpc_type_is_char(elem_type->info.points_to) &&
+            kgpc_type_sizeof(elem_type->info.points_to) == 2) {
+          source_is_raw_pwidechar = 1;
+        }
+      }
       int source_needs_wide_promotion = (!source_is_wide_string);
       if (!source_needs_wide_promotion && assign_expr != NULL &&
           assign_expr->type == EXPR_TYPECAST &&
@@ -1189,6 +1239,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
         inst_list = codegen_call_string_assign_func(
             inst_list, ctx, addr_reg, value_reg,
             "kgpc_string_assign_from_shortstring");
+      else if (source_is_raw_pwidechar)
+        inst_list = codegen_call_string_assign_func(
+            inst_list, ctx, addr_reg, value_reg,
+            "kgpc_unicodestring_assign_from_widechar");
       else if (target_is_wide_string && source_is_wide_string)
         inst_list = codegen_call_string_assign_func(
             inst_list, ctx, addr_reg, value_reg, "kgpc_unicodestring_assign");
@@ -1405,6 +1459,79 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
          record_targets_shortstring) &&
         expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE) {
       return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+    }
+
+    /* ShortString := PChar (^Char).  Without this case the assignment falls
+     * through to the scalar-store path that writes the raw 8-byte pointer
+     * value into the destination's first 8 bytes — the pointer's low byte
+     * is then mis-read as the ShortString length byte.  This is how the
+     * Win RTL's `paramstr_li` (`Result := argv[l]`) is lowered, so the bug
+     * surfaces as ParamStr(N) returning a 1- to 255-byte garbage string
+     * whose payload is the next 7 bytes of the PAnsiChar pointer. */
+    int dest_is_shortstring_target =
+        (var_type == SHORTSTRING_TYPE ||
+         expr_has_type_tag(var_expr, SHORTSTRING_TYPE) ||
+         codegen_expr_is_shortstring_array(var_expr) || targets_shortstring ||
+         record_targets_shortstring);
+    /* Source-side PChar detection. We need to catch both:
+     *   (a) RHS resolved_kgpc_type is `^Char` directly (simple variable, field),
+     *   (b) RHS is `base[idx]` where `base` is `^PChar` (e.g. argv: PPAnsiChar
+     *       in FPC Win RTL) or `array of PChar` — `expr_get_kgpc_type` does
+     *       not always populate resolved_kgpc_type for the array-access node
+     *       itself, so peek at the base's pointee/element type. */
+    KgpcType *eff_rhs_type = rhs_kgpc_type;
+    if ((eff_rhs_type == NULL ||
+         !(kgpc_type_is_pointer(eff_rhs_type) &&
+           eff_rhs_type->info.points_to != NULL &&
+           eff_rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+           eff_rhs_type->info.points_to->info.primitive_type_tag ==
+               CHAR_TYPE)) &&
+        assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS) {
+      struct Expression *base_expr =
+          assign_expr->expr_data.array_access_data.array_expr;
+      KgpcType *base_type = expr_get_kgpc_type(base_expr);
+      KgpcType *elem_type = NULL;
+      if (base_type != NULL) {
+        if (kgpc_type_is_pointer(base_type) &&
+            base_type->info.points_to != NULL) {
+          elem_type = base_type->info.points_to;
+        } else if (kgpc_type_is_array(base_type)) {
+          elem_type = base_type->info.array_info.element_type;
+        }
+      }
+      if (elem_type != NULL && kgpc_type_is_pointer(elem_type) &&
+          elem_type->info.points_to != NULL &&
+          elem_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+          elem_type->info.points_to->info.primitive_type_tag == CHAR_TYPE) {
+        eff_rhs_type = elem_type;
+      }
+    }
+    if (dest_is_shortstring_target && eff_rhs_type != NULL &&
+        kgpc_type_is_pointer(eff_rhs_type) &&
+        eff_rhs_type->info.points_to != NULL &&
+        eff_rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+        eff_rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE) {
+      Register_t *addr_reg = NULL;
+      inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+      if (codegen_had_error(ctx) || addr_reg == NULL) {
+        free_reg(get_reg_stack(), value_reg);
+        if (addr_reg != NULL)
+          free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+      }
+      int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+      if (array_size <= 1) {
+        long long direct_size = expr_effective_size_bytes(var_expr);
+        if (direct_size > 1 && direct_size <= INT_MAX)
+          array_size = (int)direct_size;
+        else
+          array_size = 256;
+      }
+      inst_list = codegen_call_pchar_to_shortstring(inst_list, ctx, addr_reg,
+                                                    value_reg, array_size);
+      free_reg(get_reg_stack(), value_reg);
+      free_reg(get_reg_stack(), addr_reg);
+      return inst_list;
     }
 
     /* Handle CHAR assignment to ShortString arrays - set length=1 and store
