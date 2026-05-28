@@ -604,12 +604,33 @@ int codegen_dest_widechar_array_count(const struct Expression *expr,
     struct RecordField *field =
         codegen_lookup_record_field((struct Expression *)expr);
     if (field != NULL && field->is_array && !field->array_is_open &&
-        field->array_element_type_id != NULL &&
-        (pascal_identifier_equals(field->array_element_type_id, "WideChar") ||
-         pascal_identifier_equals(field->array_element_type_id,
-                                  "UnicodeChar")) &&
         field->array_end >= field->array_start) {
-      count = field->array_end - field->array_start + 1;
+      int is_widechar = 0;
+      if (field->array_element_kgpc_type != NULL) {
+        KgpcType *fe = field->array_element_kgpc_type;
+        if (kgpc_type_sizeof(fe) == 2 && fe->kind == TYPE_KIND_PRIMITIVE &&
+            fe->info.primitive_type_tag == CHAR_TYPE)
+          is_widechar = 1;
+      }
+      if (!is_widechar && field->array_element_type_id != NULL &&
+          (pascal_identifier_equals(field->array_element_type_id, "WideChar") ||
+           pascal_identifier_equals(field->array_element_type_id,
+                                    "UnicodeChar")))
+        is_widechar = 1;
+      /* TFileTextRecChar resolves to UnicodeChar on Win64 (FPC RTL
+       * systemh.inc); follow the type alias when the element id is a
+       * named alias rather than the primitive itself. */
+      if (!is_widechar && field->array_element_type_id != NULL &&
+          ctx != NULL) {
+        struct TypeAlias *alias =
+            codegen_lookup_type_alias(ctx, field->array_element_type_id);
+        if (alias != NULL && alias->target_type_id != NULL &&
+            (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+             pascal_identifier_equals(alias->target_type_id, "UnicodeChar")))
+          is_widechar = 1;
+      }
+      if (is_widechar)
+        count = field->array_end - field->array_start + 1;
     }
   }
 
