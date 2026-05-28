@@ -387,6 +387,7 @@ void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
 void kgpc_fpc_init_stack_params(void *stack_probe);
 void kgpc_fpc_init_thread_manager(void);
 void kgpc_fpc_init_fpu(void);
+void kgpc_fpc_init_win_entry_info(void);
 
 void kgpc_init_args(int argc, char **argv, char **envp) {
   kgpc_argc = (argc < 0) ? 0 : argc;
@@ -404,6 +405,10 @@ void kgpc_init_args(int argc, char **argv, char **envp) {
   kgpc_fpc_init_thread_manager();
   kgpc_init_widestringmanager();
   kgpc_fpc_init_fpu();
+  /* Win64-only: wire up _FPC_SysInstance / _FPC_TlsKey /              */
+  /* WStrInitTablesTable to backing storage before any Pascal init     */
+  /* code runs (system.pp's initialisation dereferences them).         */
+  kgpc_fpc_init_win_entry_info();
   /* Note: FPC heap init (initthread_u64) is NOT called here.
    * The FPC system unit's own initialization section calls it
    * before any Pascal code that needs heap allocation runs. */

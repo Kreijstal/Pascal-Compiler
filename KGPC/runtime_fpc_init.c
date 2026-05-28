@@ -88,6 +88,66 @@ struct {
 } FPC_THREADVARTABLES = {0, {NULL}};
 
 /* ------------------------------------------------------------------ */
+/* Win64 RTL indirect-entry-information shim.                          */
+/*                                                                     */
+/* When KGPC targets Windows, the program's main() calls Pascal `pp`   */
+/* directly without going through FPC's _FPC_EXE_Entry/                */
+/* SetupEntryInformation/OsSetupEntryInformation chain (which is the   */
+/* responsibility of sysinit.pp's _mainCRTStartup in a normal FPC      */
+/* build).  As a result, the indirection-pointer globals the win64     */
+/* system.pp expects to be already wired up — _FPC_SysInstance         */
+/* (PQWord), _FPC_TlsKey (PDword), and WStrInitTablesTable             */
+/* (PWStrInitTablesTable) — remain NULL when system.pp's initial-      */
+/* ization section runs.  The very first dereference (`FPCSysInstance^ */
+/* := getmodulehandle(nil)` in FPCSource/rtl/win64/system.pp:436) then */
+/* faults writing to address 0.                                        */
+/*                                                                     */
+/* This shim provides backing storage for SysInstance, TlsKeyVar, and  */
+/* a count=0 WStrInitTables, and installs pointers into the three      */
+/* indirection globals from kgpc_init_args (before `pp` runs).         */
+/*                                                                     */
+/* Only compiled on Windows targets; the corresponding symbols do not  */
+/* exist on Linux RTL and would be unresolved externs there.           */
+/* ------------------------------------------------------------------ */
+#if defined(_WIN32) || defined(_WIN64) || defined(__MINGW32__) ||              \
+    defined(__MINGW64__)
+
+/* count=0 wide-string init table.  System.pp's InitWin32Widestrings    */
+/* iterates `for i:=1 to WStrInitTablesTable^.count`; count=0 skips     */
+/* the loop entirely.                                                   */
+static struct {
+  int64_t count;
+  void *tables[1];
+} kgpc_fpc_wstr_init_tables = {0, {NULL}};
+
+/* Backing storage for the indirection pointers.                       */
+static uint64_t kgpc_fpc_sys_instance_storage;
+static uint32_t kgpc_fpc_tlskey_storage = 0xFFFFFFFFu; /* matches FPC's
+                                                          TlsKeyVar default */
+
+/* The Pascal globals are declared in FPCSource/rtl/win64/system.pp:58 */
+/* and FPCSource/rtl/win/systhrd.inc:97 as:                             */
+/*   FPCSysInstance : PQWord; public name '_FPC_SysInstance';           */
+/*   TLSKey         : PDword; public name '_FPC_TlsKey';                */
+/* `_FPC_*` is a reserved C identifier prefix; use asm-name binding to */
+/* refer to the linker symbol without forming a reserved C name.       */
+extern uint64_t *kgpc_fpc_sys_instance_ptr __asm__("_FPC_SysInstance");
+extern uint32_t *kgpc_fpc_tlskey_ptr __asm__("_FPC_TlsKey");
+extern void *WStrInitTablesTable;
+
+void kgpc_fpc_init_win_entry_info(void) {
+  kgpc_fpc_sys_instance_ptr = &kgpc_fpc_sys_instance_storage;
+  kgpc_fpc_tlskey_ptr = &kgpc_fpc_tlskey_storage;
+  WStrInitTablesTable = &kgpc_fpc_wstr_init_tables;
+}
+
+#else /* !Windows */
+
+void kgpc_fpc_init_win_entry_info(void) { /* no-op on non-Windows */ }
+
+#endif
+
+/* ------------------------------------------------------------------ */
 /* dest / Dest: operator result parameters leaked as global references */
 /* These appear as dead code in .weak functions overridden by the      */
 /* runtime's strong widechar__op_assign_olevariant_wc.  Providing      */
