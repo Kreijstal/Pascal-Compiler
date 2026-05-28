@@ -97,6 +97,29 @@ static int add_ident_to_table_internal(HashTable_t *table,
       HashNode_t *existing_node = (HashNode_t *)cur->cur;
       if (existing_node->hash_value == hash &&
           strcmp(existing_node->canonical_id, canonical_id) == 0) {
+        /* Builtin default CONST + real CONST: the real declaration wins.
+         * KGPC seeds platform-neutral defaults (e.g. DirectorySeparator='/')
+         * before unit loading; FPC's syswinh.inc later declares the
+         * platform-correct value ('\' on Windows).  Without this override
+         * path the redeclaration would be rejected and the wrong default
+         * would propagate into Fexpand/DoDirSeparators/AddPath. */
+        if (existing_node->is_builtin_default &&
+            existing_node->hash_type == HASHTYPE_CONST &&
+            params->hash_type == HASHTYPE_CONST) {
+          existing_node->is_builtin_default = 0;
+          /* Caller will populate const_int_value / const_string_value via
+           * FindIdentInTable + assignment after AddIdentToTable returns.
+           * Reset stale const fields so the new declaration's values land
+           * on a clean slate. */
+          if (existing_node->const_string_value != NULL) {
+            free(existing_node->const_string_value);
+            existing_node->const_string_value = NULL;
+          }
+          existing_node->const_int_value = 0;
+          existing_node->const_real_value = 0.0;
+          free(canonical_id);
+          return 0;
+        }
         if (!check_collision_allowance(existing_node, params->hash_type)) {
           free(canonical_id);
           return 1;

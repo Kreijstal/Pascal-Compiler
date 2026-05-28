@@ -2023,9 +2023,11 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
           snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
           char add_rodata[1024];
           const char *readonly_section = codegen_readonly_section_directive();
-          /* Simple assembly-safe emit — control chars are rare in constants */
+          char escaped_const[512];
+          escape_string(escaped_const, str_const_node->const_string_value,
+                        sizeof(escaped_const));
           snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
-                   readonly_section, label, str_const_node->const_string_value,
+                   readonly_section, label, escaped_const,
                    codegen_text_section_resume());
           inst_list = add_inst(inst_list, add_rodata);
 

@@ -88,6 +88,11 @@ typedef struct HashNode {
 
   int is_constant;
   int is_typed_const;
+  int is_builtin_default; /* 1 if this CONST was seeded as a builtin default
+                            (e.g. DirectorySeparator='/'); a later real
+                            declaration (from FPC syswinh.inc etc.) may
+                            overwrite its value rather than be rejected by
+                            CONST+CONST collision. */
   long long const_int_value;
   double const_real_value;
   char *const_string_value; /* Owned by HashNode, must be freed */
