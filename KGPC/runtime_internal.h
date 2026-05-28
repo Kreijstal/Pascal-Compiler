@@ -31,6 +31,36 @@ typedef enum {
  * x86_64 Linux).  See `KGPC/textrec_layout.h` for the C-only mirror
  * and the `_Static_assert` that locks the byte offsets.
  */
+#if defined(_WIN64) || defined(_WIN32)
+/* Win64: FPC's THandle = QWord (8 bytes) per rtl/win/sysosh.inc.  The
+ * Handle field grows by 4 bytes and 4 bytes of padding before BufSize
+ * push the total layout to 648 bytes. */
+typedef struct KGPCTextRec {
+  int64_t handle;
+  int32_t mode;
+  uint32_t _pad_bufsize;
+  int64_t bufsize;
+  int64_t private_data;
+  int64_t bufpos;
+  int64_t bufend;
+  char *bufptr;
+  void *openfunc;
+  void *inoutfunc;
+  void *flushfunc;
+  void *closefunc;
+  unsigned char userdata[32];
+  char name[256];
+  char line_end[4];
+  char buffer[256];
+  uint16_t codepage;
+  unsigned char _pad_fullname[2];
+  void *fullname;
+} KGPCTextRec;
+
+_Static_assert(
+    sizeof(KGPCTextRec) == 648,
+    "KGPCTextRec size must be 648 on Win64 to match TEXT_TYPE in SemCheck_sizeof.c");
+#else
 typedef struct KGPCTextRec {
   int32_t handle;
   int32_t mode;
@@ -55,6 +85,7 @@ typedef struct KGPCTextRec {
 _Static_assert(
     sizeof(KGPCTextRec) == 640,
     "KGPCTextRec size must be 640 to match TEXT_TYPE in SemCheck_sizeof.c");
+#endif
 
 /** @brief Runtime representation of a Pascal typed/untyped binary `File` variable. */
 typedef struct KGPCFileRec {

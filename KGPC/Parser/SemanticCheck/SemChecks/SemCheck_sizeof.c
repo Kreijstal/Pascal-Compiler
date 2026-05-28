@@ -16,6 +16,7 @@
 #define strncasecmp _strnicmp
 #endif
 
+#include "../../../flags.h"
 #include "../../../identifier_utils.h"
 #include "../../List/List.h"
 #include "../../ParseTree/KgpcType.h"
@@ -344,7 +345,11 @@ long long sizeof_from_type_tag(int type_tag) {
   case FILE_TYPE:
     return 368;
   case TEXT_TYPE:
-    return 640;
+    /* On Win64 FPC's TextRec.Handle is THandle = QWord (8 bytes) per
+     * rtl/win/sysosh.inc; the field grows by 4 bytes and 4 bytes of
+     * padding before BufSize push the total layout to 648 bytes.  On
+     * Linux THandle = LongInt (4 bytes) and the record fits in 640. */
+    return target_windows_flag() ? 648 : 640;
   case PROCEDURE:
     return POINTER_SIZE_BYTES;
   case SHORTSTRING_TYPE:

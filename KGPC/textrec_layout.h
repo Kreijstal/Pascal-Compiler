@@ -34,6 +34,57 @@
  * Use `offsetof(KgpcTextRecLayout, <field>)` to get compile-time field
  * offsets without including the heavier full definition.
  */
+#if defined(_WIN64) || defined(_WIN32)
+/* Win64 TextRec: THandle = QWord widens Handle to 8 bytes and inserts
+ * 4 bytes of padding before BufSize.  See KGPCTextRec in
+ * runtime_internal.h and SemCheck_sizeof.c TEXT_TYPE. */
+typedef struct KgpcTextRecLayout {
+  int64_t handle;         /*   0: THandle (QWord on Win64) */
+  int32_t mode;           /*   8: Mode (Longint) */
+  uint32_t _pad_bufsize;  /*  12: padding so BufSize is 8-byte aligned */
+  int64_t bufsize;        /*  16: SizeInt */
+  int64_t private_data;   /*  24: SizeInt — KGPC stores FILE* here */
+  int64_t bufpos;         /*  32: SizeInt */
+  int64_t bufend;         /*  40: SizeInt */
+  void *bufptr;           /*  48: ^TextBuf */
+  void *openfunc;         /*  56: codepointer */
+  void *inoutfunc;        /*  64: codepointer */
+  void *flushfunc;        /*  72: codepointer */
+  void *closefunc;        /*  80: codepointer */
+  uint8_t userdata[32];   /*  88: UserData[1..32] */
+  char name[256];         /* 120: name[0..255] */
+  char line_end[4];       /* 376: TLineEndStr */
+  char buffer[256];       /* 380: TextBuf */
+  uint16_t codepage;      /* 636: TSystemCodePage */
+  uint8_t _pad_fullname[2]; /* 638: padding to align fullname */
+  void *fullname;         /* 640: FullName pointer */
+} KgpcTextRecLayout;
+
+_Static_assert(sizeof(KgpcTextRecLayout) == 648,
+               "KgpcTextRecLayout must be 648 bytes on Win64 to match KGPCTextRec");
+
+_Static_assert(offsetof(KgpcTextRecLayout, handle) == 0, "handle offset");
+_Static_assert(offsetof(KgpcTextRecLayout, mode) == 8, "mode offset");
+_Static_assert(offsetof(KgpcTextRecLayout, bufsize) == 16, "bufsize offset");
+_Static_assert(offsetof(KgpcTextRecLayout, private_data) == 24,
+               "private_data offset");
+_Static_assert(offsetof(KgpcTextRecLayout, bufpos) == 32, "bufpos offset");
+_Static_assert(offsetof(KgpcTextRecLayout, bufend) == 40, "bufend offset");
+_Static_assert(offsetof(KgpcTextRecLayout, bufptr) == 48, "bufptr offset");
+_Static_assert(offsetof(KgpcTextRecLayout, openfunc) == 56, "openfunc offset");
+_Static_assert(offsetof(KgpcTextRecLayout, inoutfunc) == 64,
+               "inoutfunc offset");
+_Static_assert(offsetof(KgpcTextRecLayout, flushfunc) == 72,
+               "flushfunc offset");
+_Static_assert(offsetof(KgpcTextRecLayout, closefunc) == 80,
+               "closefunc offset");
+_Static_assert(offsetof(KgpcTextRecLayout, userdata) == 88, "userdata offset");
+_Static_assert(offsetof(KgpcTextRecLayout, name) == 120, "name offset");
+_Static_assert(offsetof(KgpcTextRecLayout, line_end) == 376, "line_end offset");
+_Static_assert(offsetof(KgpcTextRecLayout, buffer) == 380, "buffer offset");
+_Static_assert(offsetof(KgpcTextRecLayout, codepage) == 636, "codepage offset");
+_Static_assert(offsetof(KgpcTextRecLayout, fullname) == 640, "fullname offset");
+#else
 typedef struct KgpcTextRecLayout {
   int32_t handle;       /*   0: THandle (Longint on x86_64 Linux) */
   int32_t mode;         /*   4: Mode    (Longint) */
@@ -81,5 +132,6 @@ _Static_assert(offsetof(KgpcTextRecLayout, line_end) == 368, "line_end offset");
 _Static_assert(offsetof(KgpcTextRecLayout, buffer) == 372, "buffer offset");
 _Static_assert(offsetof(KgpcTextRecLayout, codepage) == 628, "codepage offset");
 _Static_assert(offsetof(KgpcTextRecLayout, fullname) == 632, "fullname offset");
+#endif
 
 #endif /* KGPC_TEXTREC_LAYOUT_H */

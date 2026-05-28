@@ -120,6 +120,20 @@ static struct {
   void *tables[1];
 } kgpc_fpc_wstr_init_tables = {0, {NULL}};
 
+/* count=0 init/final and resource-string tables for EntryInformation.
+ * TInitFinalTable layout: TableCount, InitCount, then Procs[].  FPC's
+ * FPC_INITIALIZEUNITS / FPC_FINALIZEUNITS loop `for i := 1 to TableCount`
+ * and `while InitCount > 0`; both exit immediately when zero. */
+static struct {
+  uint64_t TableCount;
+  uint64_t InitCount;
+} kgpc_fpc_init_final_table = {0, 0};
+
+static struct {
+  int64_t count;
+  void *tables[1];
+} kgpc_fpc_resourcestring_tables = {0, {NULL}};
+
 /* Backing storage for the indirection pointers.                       */
 static uint64_t kgpc_fpc_sys_instance_storage;
 static uint32_t kgpc_fpc_tlskey_storage = 0xFFFFFFFFu; /* matches FPC's
@@ -135,10 +149,53 @@ extern uint64_t *kgpc_fpc_sys_instance_ptr __asm__("_FPC_SysInstance");
 extern uint32_t *kgpc_fpc_tlskey_ptr __asm__("_FPC_TlsKey");
 extern void *WStrInitTablesTable;
 
+/* EntryInformation: TEntryInformation global in FPC system.pp (declared
+ * in rtl/inc/system.inc:76 as `EntryInformation: TEntryInformation`).
+ * Normally populated by sysinit.pp's SetupEntryInformation chain, which
+ * KGPC bypasses.  Layout per rtl/inc/systemh.inc:722 with
+ * HAS_ENTRYINFORMATION_OS on Win64 (rtl/win/sysosh.inc:54):
+ *   InitFinalTable (Pointer @ 0)
+ *   ThreadvarTablesTable (Pointer @ 8)
+ *   ResourceStringTables (Pointer @ 16)
+ *   ResStrInitTables (Pointer @ 24)
+ *   ResLocation (Pointer @ 32)
+ *   PascalMain (Procedure @ 40)
+ *   valgrind_used (Boolean @ 48) + 7 bytes padding
+ *   OS.TlsKeyAddr (PDWord @ 56)
+ *   OS.SysInstance (PQWord @ 64)
+ *   OS.WideInitTables (Pointer @ 72)
+ * Total 80 bytes. */
+typedef struct {
+  void *InitFinalTable;
+  void *ThreadvarTablesTable;
+  void *ResourceStringTables;
+  void *ResStrInitTables;
+  void *ResLocation;
+  void *PascalMain;
+  uint8_t valgrind_used;
+  uint8_t _pad_os[7];
+  void *OS_TlsKeyAddr;
+  void *OS_SysInstance;
+  void *OS_WideInitTables;
+} KgpcFPCEntryInformation;
+
+extern KgpcFPCEntryInformation EntryInformation;
+
 void kgpc_fpc_init_win_entry_info(void) {
   kgpc_fpc_sys_instance_ptr = &kgpc_fpc_sys_instance_storage;
   kgpc_fpc_tlskey_ptr = &kgpc_fpc_tlskey_storage;
   WStrInitTablesTable = &kgpc_fpc_wstr_init_tables;
+
+  EntryInformation.InitFinalTable = &kgpc_fpc_init_final_table;
+  EntryInformation.ThreadvarTablesTable = &FPC_THREADVARTABLES;
+  EntryInformation.ResourceStringTables = &kgpc_fpc_resourcestring_tables;
+  EntryInformation.ResStrInitTables = NULL;
+  EntryInformation.ResLocation = NULL;
+  EntryInformation.PascalMain = NULL;
+  EntryInformation.valgrind_used = 0;
+  EntryInformation.OS_TlsKeyAddr = &kgpc_fpc_tlskey_storage;
+  EntryInformation.OS_SysInstance = &kgpc_fpc_sys_instance_storage;
+  EntryInformation.OS_WideInitTables = &kgpc_fpc_wstr_init_tables;
 }
 
 #else /* !Windows */
