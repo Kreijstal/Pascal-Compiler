@@ -49,8 +49,18 @@ type
   TypedFile = file;
   TSystemCodePage = Word;
 
-  THandle = LongInt;
-  HRESULT = LongInt;
+  { THandle and HRESULT are NOT predeclared here: KGPC system.p and FPC's
+    system.pp both declare them with platform-appropriate sizes
+    (LongInt on 32-bit, QWord on CPU64 under FPC's sysosh.inc).  Adding a
+    placeholder here as LongInt would lock the symbol entry's primitive
+    type tag to a 32-bit value, and the later RTL re-declaration cannot
+    safely re-tag in place because record-field and function-parameter
+    type-snapshots are taken at field-declaration time.  Result: a Win64
+    THandle-typed temp returned from GetModuleHandle would spill via
+    `movl %r12d, -N(%rbp)`, truncating the 64-bit pointer to 32 bits and
+    later faulting on dereference at 0x400000e0-class addresses.  Leaving
+    these out keeps prelude.p as a strict subset of what the chosen
+    system unit will subsequently declare. }
   CodePointer = Pointer;
 
   { String type aliases - compiler C code checks these names }
