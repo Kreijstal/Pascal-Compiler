@@ -1767,6 +1767,56 @@ ListNode_t *codegen_pass_arguments(
       is_var_param =
           (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
            formal_arg_decl->tree_data.var_decl_data.is_untyped_param);
+      /* `const T` with T = record passes by reference in FPC.  Without this,
+       * `const lpFileTime: TFileTime` in FPC Win RTL's
+       * `function FileTimeToLocalFileTime(const lpFileTime: TFileTime; ...)`
+       * gets lowered as an 8-byte value copy — but the kernel32 import is
+       * `LPFILETIME` (pointer-to-FILETIME), so passing the FILETIME's bytes
+       * as the integer value of rcx page-faults inside ntdll.  Restrictions:
+       *   - actual argument must be addressable (function-call returns and
+       *     operator chains still need value-mode lowering);
+       *   - actual argument's type must itself be a matching record (avoids
+       *     the `Supports(Obj, IObserver, Obs)` case where the interface
+       *     identifier is rewritten to a TGUID by semantic check — passing
+       *     by reference would try to take the address of the interface
+       *     symbol and trip "Unresolved non-local symbol IObserver"). */
+      if (!is_var_param && arg_expr != NULL &&
+          formal_arg_decl->tree_data.var_decl_data.is_const_param &&
+          codegen_expr_is_addressable(arg_expr)) {
+        KgpcType *formal_kgpc =
+            formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type;
+        if (formal_kgpc == NULL &&
+            formal_arg_decl->tree_data.var_decl_data.type_id != NULL &&
+            ctx != NULL && ctx->symtab != NULL) {
+          HashNode_t *type_node = NULL;
+          if (FindSymbol(&type_node, ctx->symtab,
+                         formal_arg_decl->tree_data.var_decl_data.type_id) !=
+                  0 &&
+              type_node != NULL)
+            formal_kgpc = type_node->type;
+        }
+        if (formal_kgpc != NULL && kgpc_type_is_record(formal_kgpc)) {
+          KgpcType *arg_kgpc = expr_get_kgpc_type(arg_expr);
+          /* Exclude EXPR_VAR_ID where the identifier resolves to a TYPE
+           * rather than a VAR — KGPC's semcheck rewrites
+           * `Supports(Obj, IInterfaceType, Obs)` so the middle argument's
+           * resolved_kgpc_type becomes TGUID, but the EXPR_VAR_ID still
+           * carries the interface type name as its id.  Taking the address
+           * of an interface-type symbol is not meaningful (semcheck handles
+           * the GUID literal substitution at the call site).  */
+          int arg_is_type_name = 0;
+          if (arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
+              ctx != NULL && ctx->symtab != NULL) {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
+                node != NULL && node->hash_type == HASHTYPE_TYPE)
+              arg_is_type_name = 1;
+          }
+          if (!arg_is_type_name && arg_kgpc != NULL &&
+              kgpc_type_is_record(arg_kgpc))
+            is_var_param = 1;
+        }
+      }
     }
     if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
       is_var_param = 0;
