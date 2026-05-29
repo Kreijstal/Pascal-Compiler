@@ -540,6 +540,7 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value) {
     HashNode_t *node = FindIdentInTable(sys_tbl, id);
     if (node != NULL) {
       node->is_constant = 1;
+      node->is_builtin_default = 1;
       node->const_string_value = strdup(value);
     }
   }
@@ -562,6 +563,7 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value) {
     HashNode_t *node = FindIdentInTable(sys_tbl, id);
     if (node != NULL) {
       node->is_constant = 1;
+      node->is_builtin_default = 1;
       node->const_int_value = value;
     }
   }
@@ -581,6 +583,7 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value) {
     HashNode_t *node = FindIdentInTable(sys_tbl, id);
     if (node != NULL) {
       node->is_constant = 1;
+      node->is_builtin_default = 1;
       node->const_int_value = (long long)value;
     }
   }

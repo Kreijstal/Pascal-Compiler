@@ -790,6 +790,19 @@ static char *compute_ast_cache_path(const char *source_path) {
                            strlen(g_user_defines[i])) ^
              hash;
   }
+  /* Mix in the target ABI.  --target-windows defines WIN64/WINDOWS, which
+   * units select on via {$ifdef WIN64} (e.g. system.p's TextRec.Handle
+   * width), so the parsed AST differs by target.  These are built-in
+   * defines, not -D flags, so without this a Windows-target AST and a
+   * native AST for the same source collide on one cache file when a build
+   * shares a --pp-cache-dir across targets. */
+  {
+    const char *target_tag =
+        target_windows_flag() ? "kgpc-target:win64" : "kgpc-target:sysv";
+    hash = fnv1a64_bytes((const unsigned char *)target_tag,
+                         strlen(target_tag)) ^
+           hash;
+  }
   if (g_compiler_mtime_known) {
     char compiler_stamp[64];
     snprintf(compiler_stamp, sizeof(compiler_stamp), "%lld.%09ld",
@@ -997,7 +1010,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
       // KGPC cannot evaluate FPU intrinsics (ln, round, etc.) in constant
       // expressions, so define FPUSOFT to prevent FPC RTL from using them in
       // const initializers.
-      "FPUSOFT", "FPC_ANSI_TEXTFILEREC",
+      "FPUSOFT",
+      /* FPC_ANSI_TEXTFILEREC is target-conditional and defined below: it must
+       * stay set for the non-Windows pp.pas bootstrap (single-byte file APIs)
+       * but must be absent on --target=windows so TFileTextRecChar resolves to
+       * UnicodeChar and FileRec.name survives the CreateFileW path used by
+       * rtl/win/sysfile.inc's do_open.  Pre-defining it for Win64 left the
+       * scanner unable to open hi.pas even though FileExists found it. */
       /* FPC_WIDESTRING_EQUAL_UNICODESTRING is added below only for
        * non-Windows targets — on Windows WideString is the OLE BSTR type
        * (SysAllocStringLen / SysReAllocStringLen) and differs from
@@ -1016,6 +1035,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
       snprintf(detail, sizeof(detail), "unable to define default symbol '%s'",
                default_symbols[i]);
       report_preprocessor_error(error_out, path, detail);
+      pascal_preprocessor_free(preprocessor);
+      free(buffer);
+      return false;
+    }
+  }
+  /* Define FPC_ANSI_TEXTFILEREC only when NOT targeting Windows.  See the
+   * comment above the default_symbols array. */
+  if (!target_windows_flag()) {
+    if (!pascal_preprocessor_define(preprocessor, "FPC_ANSI_TEXTFILEREC")) {
+      report_preprocessor_error(error_out, path,
+                                "unable to define FPC_ANSI_TEXTFILEREC symbol");
       pascal_preprocessor_free(preprocessor);
       free(buffer);
       return false;

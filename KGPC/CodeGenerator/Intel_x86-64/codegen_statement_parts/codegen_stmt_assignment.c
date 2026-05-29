@@ -298,6 +298,34 @@ ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list,
   return inst_list;
 }
 
+/* Call kgpc_ansistr_to_widechararray(dest, src, dest_count) — used when
+ * assigning an AnsiString or string literal into a fixed `array[..] of
+ * WideChar` (e.g. FileRec.Name on Win64).  The third argument is the
+ * WideChar element count, not the byte size. */
+ListNode_t *codegen_call_ansistr_to_widechararray(ListNode_t *inst_list,
+                                                  CodeGenContext *ctx,
+                                                  Register_t *addr_reg,
+                                                  Register_t *value_reg,
+                                                  int dest_count) {
+  if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+    return inst_list;
+
+  inst_list = codegen_setup_two_arg_regs(inst_list, ctx, addr_reg, value_reg);
+
+  char buffer[128];
+  if (codegen_target_is_windows())
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", dest_count);
+  else
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", dest_count);
+  inst_list = add_inst(inst_list, buffer);
+
+  inst_list = codegen_vect_reg(inst_list, 0);
+  inst_list = codegen_call_with_shadow_space(inst_list,
+                                             "kgpc_ansistr_to_widechararray");
+  free_arg_regs();
+  return inst_list;
+}
+
 /* Call kgpc_shortstring_to_char_array(dest, src, size) */
 ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list,
                                                    CodeGenContext *ctx,
@@ -517,6 +545,96 @@ int codegen_expr_is_shortstring_array(const struct Expression *expr) {
       return 1;
   }
   return 0;
+}
+
+/* Detect whether @p expr resolves to a fixed `array[..] of WideChar` (or
+ * UnicodeChar) destination — checks AST metadata, the symbol table, and the
+ * resolved KgpcType so it also fires for VAR_ID + RECORD_ACCESS where the
+ * element-type id is not threaded onto the access expression. Returns the
+ * widechar element count (>0) on a positive hit, 0 otherwise. */
+int codegen_dest_widechar_array_count(const struct Expression *expr,
+                                      CodeGenContext *ctx) {
+  if (expr == NULL)
+    return 0;
+
+  int count = 0;
+  int matches_metadata =
+      (expr->array_element_size == 2) ||
+      (expr->array_element_type_id != NULL &&
+       (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+        pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
+
+  if (matches_metadata && expr->is_array_expr) {
+    int lo = expr_get_array_lower_bound(expr);
+    int hi = expr_get_array_upper_bound(expr);
+    if (hi >= lo)
+      count = hi - lo + 1;
+  }
+
+  KgpcType *kgpc = expr_get_kgpc_type(expr);
+  if (count == 0 && kgpc != NULL && kgpc_type_is_array(kgpc)) {
+    KgpcType *elem = kgpc_type_get_array_element_type(kgpc);
+    if (elem != NULL && kgpc_type_sizeof(elem) == 2 &&
+        elem->kind == TYPE_KIND_PRIMITIVE &&
+        elem->info.primitive_type_tag == CHAR_TYPE) {
+      int start = 0, end = -1;
+      if (kgpc_type_get_array_bounds(kgpc, &start, &end) == 0 && end >= start)
+        count = end - start + 1;
+    }
+  }
+
+  if (count == 0 && expr->type == EXPR_VAR_ID && ctx != NULL &&
+      ctx->symtab != NULL) {
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+        node != NULL && node->type != NULL && kgpc_type_is_array(node->type)) {
+      KgpcType *elem = kgpc_type_get_array_element_type(node->type);
+      if (elem != NULL && kgpc_type_sizeof(elem) == 2 &&
+          elem->kind == TYPE_KIND_PRIMITIVE &&
+          elem->info.primitive_type_tag == CHAR_TYPE) {
+        int start = node->type->info.array_info.start_index;
+        int end = node->type->info.array_info.end_index;
+        if (end >= start)
+          count = end - start + 1;
+      }
+    }
+  }
+
+  if (count == 0 && expr->type == EXPR_RECORD_ACCESS) {
+    struct RecordField *field =
+        codegen_lookup_record_field((struct Expression *)expr);
+    if (field != NULL && field->is_array && !field->array_is_open &&
+        field->array_end >= field->array_start) {
+      int is_widechar = 0;
+      if (field->array_element_kgpc_type != NULL) {
+        KgpcType *fe = field->array_element_kgpc_type;
+        if (kgpc_type_sizeof(fe) == 2 && fe->kind == TYPE_KIND_PRIMITIVE &&
+            fe->info.primitive_type_tag == CHAR_TYPE)
+          is_widechar = 1;
+      }
+      if (!is_widechar && field->array_element_type_id != NULL &&
+          (pascal_identifier_equals(field->array_element_type_id, "WideChar") ||
+           pascal_identifier_equals(field->array_element_type_id,
+                                    "UnicodeChar")))
+        is_widechar = 1;
+      /* TFileTextRecChar resolves to UnicodeChar on Win64 (FPC RTL
+       * systemh.inc); follow the type alias when the element id is a
+       * named alias rather than the primitive itself. */
+      if (!is_widechar && field->array_element_type_id != NULL &&
+          ctx != NULL) {
+        struct TypeAlias *alias =
+            codegen_lookup_type_alias(ctx, field->array_element_type_id);
+        if (alias != NULL && alias->target_type_id != NULL &&
+            (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+             pascal_identifier_equals(alias->target_type_id, "UnicodeChar")))
+          is_widechar = 1;
+      }
+      if (is_widechar)
+        count = field->array_end - field->array_start + 1;
+    }
+  }
+
+  return count;
 }
 
 static int
@@ -1177,6 +1295,115 @@ ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list,
   return inst_list;
 }
 
+/* PChar (NUL-terminated C string) → ShortString. Shares the same ABI shape
+ * as codegen_call_string_to_shortstring but routes to a runtime helper that
+ * never reinterprets src[0] as a length prefix — the source is unconditionally
+ * a C string, so strlen+memcpy is the only correct lowering. */
+ListNode_t *codegen_call_pchar_to_shortstring(ListNode_t *inst_list,
+                                              CodeGenContext *ctx,
+                                              Register_t *addr_reg,
+                                              Register_t *value_reg,
+                                              int array_size) {
+  if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+    return inst_list;
+
+  if (array_size <= 1)
+    array_size = 256;
+
+  char buffer[128];
+  if (codegen_target_is_windows()) {
+    int value_in_rcx = (value_reg->reg_id == REG_RCX);
+    int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
+
+    if (value_in_rcx && addr_in_rdx) {
+      inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+    } else if (value_in_rcx) {
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+    } else if (addr_in_rdx) {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+    } else {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+    inst_list = add_inst(inst_list, buffer);
+  } else {
+    int value_in_rdi = (value_reg->reg_id == REG_RDI);
+    int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
+
+    if (value_in_rdi && addr_in_rsi) {
+      inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+    } else if (value_in_rdi) {
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+    } else if (addr_in_rsi) {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+    } else {
+      {
+        Register_t *u[] = {addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+      {
+        Register_t *u[] = {value_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+    inst_list = add_inst(inst_list, buffer);
+  }
+
+  inst_list = codegen_vect_reg(inst_list, 0);
+  inst_list =
+      codegen_call_with_shadow_space(inst_list, "kgpc_pchar_to_shortstring");
+  free_arg_regs();
+  return inst_list;
+}
+
 ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list,
                                           CodeGenContext *ctx,
                                           Register_t *dest_reg, int dest_size,
@@ -1654,34 +1881,18 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
   }
 
-  /* Get register for size */
-  Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-  if (count_reg == NULL) {
-    free_reg(get_reg_stack(), dest_reg);
-    free_reg(get_reg_stack(), src_reg);
-    return codegen_fail_register(
-        ctx, inst_list, NULL,
-        "ERROR: Unable to allocate register for array copy size.");
-  }
-
-  {
-    char tmpl[96];
-    snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%0\n", array_size);
-    Register_t *d[] = {count_reg};
-    inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
-  }
-
-  /* Call memcpy(dest, src, size) */
-  /* NOTE: We must be careful about register conflicts. Load arguments in
-   * reverse order to avoid clobbering source registers before we've moved them
-   * to their destinations. */
+  /* Call memcpy(dest, src, size).  The byte count is a compile-time constant,
+   * so load it straight into the ABI count register (%r8 on Win64, %rdx on
+   * SysV) rather than allocating a scratch register — the array copy then
+   * needs no extra register and can't fail under register pressure.  Move
+   * dest/src to their ABI registers first, then load the immediate last, in
+   * case a pool register physically aliases the count register. */
   if (codegen_target_is_windows()) {
-    /* Windows calling convention: RCX (dest), RDX (src), R8 (size)
-     * Move in reverse order to avoid conflicts */
+    /* Windows calling convention: RCX (dest), RDX (src), R8 (size) */
     {
-      Register_t *u[] = {count_reg};
+      Register_t *u[] = {dest_reg};
       inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n");
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
     }
     {
       Register_t *u[] = {src_reg};
@@ -1689,17 +1900,16 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
           add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
     }
     {
-      Register_t *u[] = {dest_reg};
-      inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%r8\n", array_size);
+      inst_list = add_inst(inst_list, tmpl);
     }
   } else {
-    /* System V calling convention: RDI (dest), RSI (src), RDX (size)
-     * Move in reverse order to avoid conflicts */
+    /* System V calling convention: RDI (dest), RSI (src), RDX (size) */
     {
-      Register_t *u[] = {count_reg};
+      Register_t *u[] = {dest_reg};
       inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
     }
     {
       Register_t *u[] = {src_reg};
@@ -1707,15 +1917,14 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
           add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
     }
     {
-      Register_t *u[] = {dest_reg};
-      inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%rdx\n", array_size);
+      inst_list = add_inst(inst_list, tmpl);
     }
   }
 
   inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
 
-  free_reg(get_reg_stack(), count_reg);
   free_reg(get_reg_stack(), src_reg);
   free_reg(get_reg_stack(), dest_reg);
   free_arg_regs();
@@ -2477,22 +2686,13 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
       }
 
       /* src_reg now contains the address of the temporary set buffer */
-      /* Copy 32 bytes from src to dest using memcpy */
-      Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-      if (count_reg == NULL) {
-        free_reg(get_reg_stack(), dest_reg);
-        free_reg(get_reg_stack(), src_reg);
-        return codegen_fail_register(
-            ctx, inst_list, NULL,
-            "ERROR: Unable to allocate register for set copy size.");
-      }
-
-      {
-        Register_t *d[] = {count_reg};
-        inst_list =
-            add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t$32, %0\n");
-      }
-
+      /* Copy 32 bytes from src to dest via kgpc_memcpy_wrapper(dest, src, 32).
+       * The byte count is the compile-time constant 32, so load it straight
+       * into the ABI count register (%r8 on Win64, %rdx on SysV) rather than
+       * allocating a scratch register for it — this keeps the set copy from
+       * needing a third register and so it never fails under register
+       * pressure.  Emit the immediate load last, after dest/src have been
+       * moved out, in case either physically aliases the count register. */
       if (codegen_target_is_windows()) {
         {
           Register_t *u[] = {dest_reg};
@@ -2500,15 +2700,11 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
         }
         {
-          Register_t *u[] = {count_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n");
-        }
-        {
           Register_t *u[] = {src_reg};
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
         }
+        inst_list = add_inst(inst_list, "\tmovq\t$32, %r8\n");
       } else {
         {
           Register_t *u[] = {dest_reg};
@@ -2520,16 +2716,11 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
         }
-        {
-          Register_t *u[] = {count_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
-        }
+        inst_list = add_inst(inst_list, "\tmovq\t$32, %rdx\n");
       }
 
       inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
 
-      free_reg(get_reg_stack(), count_reg);
       free_reg(get_reg_stack(), src_reg);
       free_reg(get_reg_stack(), dest_reg);
       free_arg_regs();

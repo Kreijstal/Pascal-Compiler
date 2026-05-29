@@ -1387,8 +1387,9 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
             }
           }
 
-          if (left32 != NULL && left8 != NULL && bit_index != NULL &&
-              bit_base != NULL) {
+          /* bit_index aliases left32 (assigned above), so checking left32
+           * non-NULL covers it; a separate bit_index check is redundant. */
+          if (left32 != NULL && left8 != NULL && bit_base != NULL) {
             /* Bound-check elem against actual set width.  For sets ≤ 4 bytes
              * that's at most 31; for truly small sets it may be less, but
              * clamping to 31 is always safe since any element in range will

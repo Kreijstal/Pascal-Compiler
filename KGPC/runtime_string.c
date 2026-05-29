@@ -468,6 +468,19 @@ char *kgpc_windows_get_hostname_string(void) {
   }
   return kgpc_alloc_empty_string();
 #else
+  /* MSYS targets Win64 but its gcc builds against a POSIX libc with no
+   * Win32 API, so GetComputerNameA is unavailable.  Fall back to POSIX
+   * gethostname() so the Windows unit's GetHostName still returns the real
+   * host name there.  On a genuine non-Windows target the Unix unit's
+   * GetHostName (kgpc_unix_get_hostname_string) is used instead, so this
+   * branch is reached only when windows.p is compiled without _WIN32. */
+  char buffer[256];
+  if (gethostname(buffer, sizeof(buffer)) == 0) {
+    buffer[sizeof(buffer) - 1] = '\0';
+    for (size_t i = 0; buffer[i] != '\0'; i++)
+      buffer[i] = (char)tolower((unsigned char)buffer[i]);
+    return kgpc_string_duplicate(buffer);
+  }
   return kgpc_alloc_empty_string();
 #endif
 }
@@ -1112,6 +1125,26 @@ char **kgpc_array_string_to_ppchar(const void *descriptor_ptr,
   return result;
 }
 
+/* Copy an AnsiString to an array of WideChar (zero-extending each source
+ * byte to 16 bits).  `dest_count` is the number of WideChar elements in
+ * `dest` (not the byte size).  Mirrors FPC's fpc_ansistr_to_widechararray
+ * semantics: each source AnsiChar is widened to a UTF-16 unit; trailing
+ * elements past the source length are padded with zeros so the destination
+ * is fully initialised. */
+void kgpc_ansistr_to_widechararray(uint16_t *dest, const char *src,
+                                   size_t dest_count) {
+  if (dest == NULL || dest_count == 0)
+    return;
+
+  size_t src_len = (src == NULL) ? 0 : kgpc_string_known_length(src);
+  size_t copy_len = (src_len < dest_count) ? src_len : dest_count;
+  for (size_t i = 0; i < copy_len; i++)
+    dest[i] = (uint16_t)(unsigned char)src[i];
+  if (copy_len < dest_count)
+    memset(dest + copy_len, 0,
+           (dest_count - copy_len) * sizeof(uint16_t));
+}
+
 /* Copy a string literal to a char array (fixed-size buffer)
  * Fills the entire array. If the string is shorter, pads with nulls.
  * If the string is longer, truncates to fit.
@@ -1169,6 +1202,24 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size) {
   dest[0] = (char)copy_len;
 
   /* Copy characters starting at index 1 */
+  if (copy_len > 0)
+    memcpy(dest + 1, src, copy_len);
+}
+
+/* PChar → ShortString conversion: treat `src` as a NUL-terminated C string
+ * (no shortstring header heuristic). Used by FPC's Win RTL `paramstr_li`
+ * (`Result := argv[l]`) and any other ShortString := PChar assignment. */
+void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size) {
+  if (dest == NULL || dest_size < 2)
+    return;
+  if (src == NULL) {
+    dest[0] = 0;
+    return;
+  }
+  size_t src_len = strlen(src);
+  size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+  size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+  dest[0] = (char)copy_len;
   if (copy_len > 0)
     memcpy(dest + 1, src, copy_len);
 }
@@ -2439,6 +2490,44 @@ uint16_t *kgpc_unicodestring_from_string(const char *value) {
   if (result == NULL)
     return kgpc_alloc_empty_unicodestring();
   return result;
+}
+
+/* Assign a raw PWideChar (NUL-terminated UTF-16) to a managed UnicodeString.
+ * `value` may be unmanaged (e.g. an entry of FPC RTL's argvw or any other
+ * external PWideChar buffer); we compute its length via kgpc_widechar_length
+ * and copy through kgpc_setstring_unicode so the target ends up with a
+ * proper managed header.  Without this helper the codegen would route a
+ * `UnicodeString := PWideChar` assignment through
+ * kgpc_unicodestring_assign_from_string, which mis-treats the UTF-16 bytes
+ * as a single-byte ANSI string (strlen stops at the first NUL byte of the
+ * first widechar). */
+void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
+                                             const uint16_t *value) {
+  if (target == NULL)
+    return;
+
+  if (value == NULL) {
+    uint16_t *current = *target;
+    if (current != NULL)
+      kgpc_string_release((char *)current);
+    *target = kgpc_alloc_empty_unicodestring();
+    return;
+  }
+
+  KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
+  if (hdr != NULL && hdr->elementsize == 2) {
+    uint16_t *current = *target;
+    if (current == value)
+      return;
+    kgpc_string_retain((const char *)value);
+    if (current != NULL)
+      kgpc_string_release((char *)current);
+    *target = (uint16_t *)value;
+    return;
+  }
+
+  int64_t len = kgpc_widechar_length(value);
+  kgpc_setstring_unicode(target, value, len);
 }
 
 void kgpc_unicodestring_assign_from_string(uint16_t **target,

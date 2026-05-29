@@ -356,6 +356,46 @@ The generated compiler also supports a quick startup check:
 ./tests/output/pp_bootstrap -h
 ```
 
+## Native Windows (MSYS2 / win11) build of `pp.pas`
+
+The win-target `pp.pas` is compiled to assembly by KGPC (run natively on the
+Windows host) via `scripts/cross_compile_pp_win.py`, which emits
+`/tmp/pp_win.s`. That assembly is then assembled and linked into `pp_win.exe`
+by `scripts/native_build_pp_win.sh`.
+
+**Toolchain — use `/mingw64`, never `/usr/bin`.** On MSYS2, `/usr/bin/gcc` is
+the MSYS *POSIX* compiler (a Cygwin fork): it defines `__MSYS__` / `__CYGWIN__`
+/ `__unix__` and does **not** define `_WIN32` / `_WIN64` / `__MINGW64__`.
+Building KGPC's C runtime with it is fatal in two ways:
+
+1. `KGPC/runtime_fpc_init.c`'s Win64 indirect-entry-information shim
+   (`kgpc_fpc_init_win_entry_info`, which points `_FPC_SysInstance`,
+   `_FPC_TlsKey`, and `WStrInitTablesTable` at backing storage before any
+   Pascal init runs) is guarded on `_WIN32`/`_WIN64`/`__MINGW*`, so under the
+   MSYS gcc it compiles as a **no-op**. `_FPC_SysInstance` then stays NULL when
+   `rtl/win64/system.pp`'s initialization runs, and the very first
+   `FPCSysInstance^ := getmodulehandle(nil)` (system.pp:436) **SIGSEGVs**
+   writing to address 0 — before any output.
+2. The runtime objects are Cygwin-ABI, mismatched against the Win64-PE
+   `pp_win.o`; the resulting memory corruption garbles command-line filenames
+   (`hi.pas` → `??.pas`) and the startup banner. This was long mistaken for a
+   KGPC codegen "UAF"; it is purely a build-toolchain mismatch.
+
+`scripts/native_build_pp_win.sh` hard-codes `/mingw64` (override with
+`MINGW_PREFIX`) and refuses to run if the selected gcc does not define
+`_WIN64`. Build and smoke-test:
+
+```bash
+# on the Windows host, after cross_compile_pp_win.py has produced /tmp/pp_win.s
+bash scripts/native_build_pp_win.sh          # -> /tmp/pp_win.exe
+/tmp/pp_win.exe                              # prints clean banner, exit 0
+/tmp/pp_win.exe doesnotexist.pas             # Fatal: Cannot open file "doesnotexist.pas"
+```
+
+The cross-host counterpart (linking from Linux with the
+`x86_64-w64-mingw32` toolchain) is `scripts/cross_build_pp_win.sh`; it is
+correct for the same reason — that prefix also defines `__MINGW64__`.
+
 ### Cleaning generated bootstrap outputs
 
 Bootstrap and FPC RTL runs generate large local artifacts under `tests/output/`.

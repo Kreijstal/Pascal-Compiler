@@ -1404,7 +1404,12 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
           expr->line_num);
       error_count++;
     } else {
-      mangled_name = "kgpc_text_eof";
+      /* A binary File stores its FILE* in the FileRec's KGPCFilePrivate,
+       * not at the TextRec private_data offset (the two differ on Win64),
+       * so route it to the FileRec-aware eof. */
+      mangled_name = kgpc_type_equals_tag(file_kgpc_type, FILE_TYPE)
+                         ? "kgpc_file_eof"
+                         : "kgpc_text_eof";
       if (file_expr != NULL && file_expr->type != EXPR_ADDR) {
         args->cur = mk_addressof(file_expr->line_num, file_expr);
       }

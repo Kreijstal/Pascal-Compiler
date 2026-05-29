@@ -31,6 +31,38 @@ typedef enum {
  * x86_64 Linux).  See `KGPC/textrec_layout.h` for the C-only mirror
  * and the `_Static_assert` that locks the byte offsets.
  */
+#if defined(_WIN64) || defined(_WIN32) || defined(KGPC_WIN64_ABI)
+/* Win64: FPC's THandle = QWord (8 bytes) per rtl/win/sysosh.inc.  The
+ * Handle field grows by 4 bytes and 4 bytes of padding before BufSize
+ * push the total layout to 648 bytes.  KGPC_WIN64_ABI is defined by the
+ * build on windows hosts whose gcc does not predefine _WIN32 (MSYS), where
+ * the compiled code still targets Win64. */
+typedef struct KGPCTextRec {
+  int64_t handle;
+  int32_t mode;
+  uint32_t _pad_bufsize;
+  int64_t bufsize;
+  int64_t private_data;
+  int64_t bufpos;
+  int64_t bufend;
+  char *bufptr;
+  void *openfunc;
+  void *inoutfunc;
+  void *flushfunc;
+  void *closefunc;
+  unsigned char userdata[32];
+  char name[256];
+  char line_end[4];
+  char buffer[256];
+  uint16_t codepage;
+  unsigned char _pad_fullname[2];
+  void *fullname;
+} KGPCTextRec;
+
+_Static_assert(
+    sizeof(KGPCTextRec) == 648,
+    "KGPCTextRec size must be 648 on Win64 to match TEXT_TYPE in SemCheck_sizeof.c");
+#else
 typedef struct KGPCTextRec {
   int32_t handle;
   int32_t mode;
@@ -55,6 +87,7 @@ typedef struct KGPCTextRec {
 _Static_assert(
     sizeof(KGPCTextRec) == 640,
     "KGPCTextRec size must be 640 to match TEXT_TYPE in SemCheck_sizeof.c");
+#endif
 
 /** @brief Runtime representation of a Pascal typed/untyped binary `File` variable. */
 typedef struct KGPCFileRec {
@@ -355,5 +388,18 @@ void kgpc_string_setlength(char **target, int64_t new_length);
  * including the length byte at index 0).  Truncates on overflow.
  */
 void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size);
+
+/* PChar (NUL-terminated C string) -> ShortString conversion. */
+void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size);
+
+/* PWideChar (NUL-terminated UTF-16) -> UnicodeString assignment. */
+void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
+                                             const uint16_t *value);
+
+/* AnsiString -> array of WideChar.  @p dest_count is the WideChar element
+ * count (NOT byte length).  Widens each source byte to UTF-16 and pads any
+ * unused trailing elements with zero. */
+void kgpc_ansistr_to_widechararray(uint16_t *dest, const char *src,
+                                   size_t dest_count);
 
 #endif /* KGPC_RUNTIME_INTERNAL_H */

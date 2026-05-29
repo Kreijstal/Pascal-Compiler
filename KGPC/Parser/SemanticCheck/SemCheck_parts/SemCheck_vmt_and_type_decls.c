@@ -2993,6 +2993,17 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls) {
   }
 
   /* Post-pass: resolve forward pointer aliases now that all types are in scope.
+   *
+   * Two scenarios:
+   *   1. The forward pointer's points_to is still NULL — bind it now.
+   *   2. The points_to was bound during the first pass to a candidate from
+   *      a unit other than the alias's own unit (because the local pointee
+   *      record was declared further down and hadn't been processed yet),
+   *      but the alias's own unit now declares a same-named record.  In
+   *      that case re-resolution prefers the same-unit candidate and we
+   *      swap.  This matters when an upstream unit (e.g. the RTL System
+   *      unit's sysos.inc TSystemInfo) shadows a forward-declared local
+   *      pointer like `psysteminfo = ^tsysteminfo` in compiler/systems.pas.
    */
   cur = type_decls;
   while (cur != NULL) {
@@ -3016,8 +3027,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls) {
         symtab, tree->tree_data.type_decl_data.id,
         tree->tree_data.type_decl_data.defined_in_unit);
     if (alias_node == NULL || alias_node->type == NULL ||
-        !kgpc_type_is_pointer(alias_node->type) ||
-        alias_node->type->info.points_to != NULL) {
+        !kgpc_type_is_pointer(alias_node->type)) {
       cur = cur->next;
       continue;
     }
@@ -3029,9 +3039,47 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls) {
       pointee_node = semcheck_find_preferred_type_node(
           symtab, post_alias->pointer_type_id);
     }
-    if (pointee_node != NULL && pointee_node->type != NULL) {
+    if (pointee_node == NULL || pointee_node->type == NULL) {
+      cur = cur->next;
+      continue;
+    }
+    KgpcType *current = alias_node->type->info.points_to;
+    if (current == NULL) {
       kgpc_type_retain(pointee_node->type);
       alias_node->type->info.points_to = pointee_node->type;
+    } else if (current != pointee_node->type) {
+      /* Re-bind only when:
+       *   - both the current and proposed pointees are records (the
+       *     shadowing scenarios this fix targets involve same-named
+       *     records of different layouts; primitive pointees like
+       *     PChar = ^Char must never be retargeted), and
+       *   - the new candidate is from the alias's own source unit
+       *     while the current binding is from a different unit.
+       */
+      struct RecordType *cur_rec = kgpc_type_get_record(current);
+      struct RecordType *new_rec = kgpc_type_get_record(pointee_node->type);
+      if (cur_rec == NULL || new_rec == NULL) {
+        cur = cur->next;
+        continue;
+      }
+      int alias_unit = alias_node->source_unit_index;
+      int new_unit = pointee_node->source_unit_index;
+      int cur_unit = 0;
+      ListNode_t *matches = FindAllIdents(symtab, post_alias->pointer_type_id);
+      for (ListNode_t *m = matches; m != NULL; m = m->next) {
+        HashNode_t *cand = (HashNode_t *)m->cur;
+        if (cand != NULL && cand->type == current) {
+          cur_unit = cand->source_unit_index;
+          break;
+        }
+      }
+      if (matches != NULL)
+        DestroyList(matches);
+      if (alias_unit > 0 && new_unit == alias_unit && cur_unit != alias_unit) {
+        kgpc_type_retain(pointee_node->type);
+        alias_node->type->info.points_to = pointee_node->type;
+        destroy_kgpc_type(current);
+      }
     }
     cur = cur->next;
   }

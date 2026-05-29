@@ -794,6 +794,28 @@ static int codegen_expr_is_wide_string_value(const struct Expression *expr) {
   return 0;
 }
 
+/* Does this argument-typecast expression represent a managed-string encoding
+ * change (AnsiString↔UnicodeString) that needs a runtime conversion call? */
+static int
+codegen_arg_typecast_changes_string_encoding(const struct Expression *expr) {
+  if (expr == NULL || expr->type != EXPR_TYPECAST ||
+      expr->expr_data.typecast_data.target_type_id == NULL ||
+      expr->expr_data.typecast_data.expr == NULL)
+    return 0;
+  const char *target_id = expr->expr_data.typecast_data.target_type_id;
+  const struct Expression *inner = expr->expr_data.typecast_data.expr;
+  int target_is_wide = (pascal_identifier_equals(target_id, "UnicodeString") ||
+                        pascal_identifier_equals(target_id, "WideString"));
+  int target_is_ansi = (pascal_identifier_equals(target_id, "AnsiString") ||
+                        pascal_identifier_equals(target_id, "RawByteString") ||
+                        pascal_identifier_equals(target_id, "string"));
+  int inner_is_wide = codegen_expr_is_wide_string_value(inner);
+  int inner_is_ansi = !inner_is_wide && (expr_has_type_tag(inner, STRING_TYPE) ||
+                                         inner->type == EXPR_STRING);
+  return (target_is_wide && inner_is_ansi) ||
+         (target_is_ansi && inner_is_wide);
+}
+
 static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab) {
   if (decl == NULL)
     return UNKNOWN_TYPE;
@@ -1745,6 +1767,56 @@ ListNode_t *codegen_pass_arguments(
       is_var_param =
           (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
            formal_arg_decl->tree_data.var_decl_data.is_untyped_param);
+      /* `const T` with T = record passes by reference in FPC.  Without this,
+       * `const lpFileTime: TFileTime` in FPC Win RTL's
+       * `function FileTimeToLocalFileTime(const lpFileTime: TFileTime; ...)`
+       * gets lowered as an 8-byte value copy — but the kernel32 import is
+       * `LPFILETIME` (pointer-to-FILETIME), so passing the FILETIME's bytes
+       * as the integer value of rcx page-faults inside ntdll.  Restrictions:
+       *   - actual argument must be addressable (function-call returns and
+       *     operator chains still need value-mode lowering);
+       *   - actual argument's type must itself be a matching record (avoids
+       *     the `Supports(Obj, IObserver, Obs)` case where the interface
+       *     identifier is rewritten to a TGUID by semantic check — passing
+       *     by reference would try to take the address of the interface
+       *     symbol and trip "Unresolved non-local symbol IObserver"). */
+      if (!is_var_param && arg_expr != NULL &&
+          formal_arg_decl->tree_data.var_decl_data.is_const_param &&
+          codegen_expr_is_addressable(arg_expr)) {
+        KgpcType *formal_kgpc =
+            formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type;
+        if (formal_kgpc == NULL &&
+            formal_arg_decl->tree_data.var_decl_data.type_id != NULL &&
+            ctx != NULL && ctx->symtab != NULL) {
+          HashNode_t *type_node = NULL;
+          if (FindSymbol(&type_node, ctx->symtab,
+                         formal_arg_decl->tree_data.var_decl_data.type_id) !=
+                  0 &&
+              type_node != NULL)
+            formal_kgpc = type_node->type;
+        }
+        if (formal_kgpc != NULL && kgpc_type_is_record(formal_kgpc)) {
+          KgpcType *arg_kgpc = expr_get_kgpc_type(arg_expr);
+          /* Exclude EXPR_VAR_ID where the identifier resolves to a TYPE
+           * rather than a VAR — KGPC's semcheck rewrites
+           * `Supports(Obj, IInterfaceType, Obs)` so the middle argument's
+           * resolved_kgpc_type becomes TGUID, but the EXPR_VAR_ID still
+           * carries the interface type name as its id.  Taking the address
+           * of an interface-type symbol is not meaningful (semcheck handles
+           * the GUID literal substitution at the call site).  */
+          int arg_is_type_name = 0;
+          if (arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
+              ctx != NULL && ctx->symtab != NULL) {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
+                node != NULL && node->hash_type == HASHTYPE_TYPE)
+              arg_is_type_name = 1;
+          }
+          if (!arg_is_type_name && arg_kgpc != NULL &&
+              kgpc_type_is_record(arg_kgpc))
+            is_var_param = 1;
+        }
+      }
     }
     if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
       is_var_param = 0;
@@ -3375,6 +3447,24 @@ ListNode_t *codegen_pass_arguments(
             /* ShortString to AnsiString typecast: build_expr_tree
              * strips EXPR_TYPECAST nodes, losing the conversion.
              * Use codegen_expr_tree_value which handles this. */
+            Register_t *value_reg = NULL;
+            inst_list =
+                codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL) {
+              if (arg_infos != NULL)
+                free(arg_infos);
+              return inst_list;
+            }
+            top_reg = value_reg;
+          } else if (arg_expr->type == EXPR_TYPECAST &&
+                     arg_expr->expr_data.typecast_data.expr != NULL &&
+                     arg_expr->expr_data.typecast_data.target_type_id != NULL &&
+                     codegen_arg_typecast_changes_string_encoding(arg_expr)) {
+            /* Managed-string encoding typecast (AnsiString↔UnicodeString) as
+             * an argument: build_expr_tree strips EXPR_TYPECAST, so the
+             * generic gencode_expr_tree path would pass the inner expression
+             * value with the wrong encoding to the callee.  Route through
+             * codegen_expr_tree_value which has the encoding-cast handler. */
             Register_t *value_reg = NULL;
             inst_list =
                 codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);

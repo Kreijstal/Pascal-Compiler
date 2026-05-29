@@ -76,8 +76,17 @@ def _has_explicit_target_flag(flags):
 # The compiler is built by Meson now, so this function is not needed.
 
 
-def run_compiler(input_file, output_file, flags=None, timeout=None):
-    """Runs the KGPC compiler with the given arguments."""
+def run_compiler(input_file, output_file, flags=None, timeout=None,
+                 extra_env=None):
+    """Runs the KGPC compiler with the given arguments.
+
+    ``extra_env`` is merged into the environment of this single compiler
+    subprocess only.  Tests MUST use it instead of mutating ``os.environ``:
+    the harness runs tests in parallel threads that share one process
+    environment, so a global ``os.environ`` change (e.g. a forced register
+    limit) would leak into every other test's compiler invocation running at
+    the same time.
+    """
     if flags is None:
         flags = []
     else:
@@ -119,6 +128,10 @@ def run_compiler(input_file, output_file, flags=None, timeout=None):
             "text": True,
             "timeout": timeout,
         }
+        if extra_env:
+            merged_env = dict(os.environ)
+            merged_env.update(extra_env)
+            run_kwargs["env"] = merged_env
         with COMPILER_PARALLEL_SEMAPHORE:
             result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start

@@ -78,6 +78,13 @@ ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list,
                                                    Register_t *addr_reg,
                                                    Register_t *value_reg,
                                                    int array_size);
+ListNode_t *codegen_call_ansistr_to_widechararray(ListNode_t *inst_list,
+                                                  CodeGenContext *ctx,
+                                                  Register_t *addr_reg,
+                                                  Register_t *value_reg,
+                                                  int dest_count);
+int codegen_dest_widechar_array_count(const struct Expression *expr,
+                                      CodeGenContext *ctx);
 ListNode_t *codegen_call_string_assign(ListNode_t *inst_list,
                                        CodeGenContext *ctx,
                                        Register_t *addr_reg,
@@ -102,6 +109,11 @@ ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list,
                                                Register_t *addr_reg,
                                                Register_t *value_reg,
                                                int array_size);
+ListNode_t *codegen_call_pchar_to_shortstring(ListNode_t *inst_list,
+                                              CodeGenContext *ctx,
+                                              Register_t *addr_reg,
+                                              Register_t *value_reg,
+                                              int array_size);
 int codegen_expr_is_mp_integer(struct Expression *expr);
 int codegen_expr_is_shortstring_array(const struct Expression *expr);
 int codegen_expr_is_shortstring_rhs(const struct Expression *expr,

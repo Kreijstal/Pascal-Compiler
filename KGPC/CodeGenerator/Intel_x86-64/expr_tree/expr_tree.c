@@ -1054,20 +1054,56 @@ codegen_builtin_length_type_fallback(struct Expression *expr,
 
   HashNode_t *type_node = NULL;
   if (FindSymbol(&type_node, ctx->symtab, arg_expr->expr_data.id) == 0 ||
-      type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+      type_node == NULL)
     return NULL;
 
+  /* Accept either a type identifier (Length(SomeArrayType)) or a variable
+   * whose type is a fixed-size non-shortstring array (Length(buf), buf:
+   * array[0..N] of WideChar / LongInt / etc.).  Without the variable case
+   * the codegen falls through to a generic call to kgpc_shortstring_length,
+   * which reads buf[0] as a length byte and yields garbage. */
+  KgpcType *resolved_type = NULL;
+  struct TypeAlias *type_alias = NULL;
+  if (type_node->hash_type == HASHTYPE_TYPE) {
+    resolved_type = type_node->type;
+    type_alias = hashnode_get_type_alias(type_node);
+  } else if (type_node->hash_type == HASHTYPE_VAR ||
+             type_node->hash_type == HASHTYPE_ARRAY) {
+    resolved_type = type_node->type;
+    if (resolved_type != NULL)
+      type_alias = kgpc_type_get_type_alias(resolved_type);
+    /* Restrict the variable path to fixed-size arrays of non-shortstring
+     * element types — shortstring vars must keep the runtime length read,
+     * and dynamic arrays / classes need the existing call path.  The
+     * is_shortstring flag is only sometimes set on local-var `string[N]`
+     * declarations, so we additionally detect the shortstring shape by
+     * the actual storage: an array starting at index 0 whose element
+     * type is 1-byte Char and whose upper bound is at most 255. */
+    if (resolved_type == NULL || !kgpc_type_is_array(resolved_type) ||
+        kgpc_type_is_shortstring(resolved_type))
+      return NULL;
+    if (type_alias != NULL && type_alias->is_shortstring)
+      return NULL;
+    KgpcType *elem = resolved_type->info.array_info.element_type;
+    long long low = resolved_type->info.array_info.start_index;
+    long long high = resolved_type->info.array_info.end_index;
+    if (elem != NULL && kgpc_type_is_char(elem) && kgpc_type_sizeof(elem) == 1 &&
+        low == 0 && high >= 0 && high <= 255)
+      return NULL;
+  } else {
+    return NULL;
+  }
+  if (type_alias == NULL && resolved_type != NULL)
+    type_alias = kgpc_type_get_type_alias(resolved_type);
+
   long long length_value = -1;
-  struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
-  if (type_alias == NULL && type_node->type != NULL)
-    type_alias = kgpc_type_get_type_alias(type_node->type);
   if (type_alias != NULL && type_alias->is_shortstring)
     length_value = (type_alias->array_end - type_alias->array_start) + 1;
-  else if (type_node->type != NULL && kgpc_type_is_shortstring(type_node->type))
-    length_value = kgpc_type_sizeof(type_node->type);
-  else if (type_node->type != NULL && kgpc_type_is_array(type_node->type)) {
-    long long low = type_node->type->info.array_info.start_index;
-    long long high = type_node->type->info.array_info.end_index;
+  else if (resolved_type != NULL && kgpc_type_is_shortstring(resolved_type))
+    length_value = kgpc_type_sizeof(resolved_type);
+  else if (resolved_type != NULL && kgpc_type_is_array(resolved_type)) {
+    long long low = resolved_type->info.array_info.start_index;
+    long long high = resolved_type->info.array_info.end_index;
     if (high >= low)
       length_value = (high - low) + 1;
   }

@@ -1,0 +1,6 @@
+[PASS] bare empty except swallows
+[PASS] empty on-handler swallows
+[PASS] nested empty handler swallows
+Passed: 3
+Failed: 0
+All tests passed!

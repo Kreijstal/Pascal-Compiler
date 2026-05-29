@@ -165,8 +165,32 @@ runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
 runtime_sources += 'runtime_fpc_pchar_to_shortstr_upper.c'
 runtime_sources += 'runtime_fpc_assign.c'
 runtime_sources += 'runtime_fpc_init.c'
+if host_machine.system().startswith('windows')
+  # Default definitions of the FPC entry-info globals (EntryInformation,
+  # _FPC_SysInstance/_FPC_TlsKey, WStrInitTablesTable,
+  # _FPC_ResourceStringTables) that the Win64 entry shim populates.  Pulled
+  # from the archive only for native KGPC programs; FPC-RTL programs define
+  # these in system.pp/objpas, so the member stays unreferenced there.
+  runtime_sources += 'runtime_fpc_win_entry_globals.c'
+endif
 runtime_deps = []
 runtime_c_args = ['-O2']
+
+# The runtime's ABI structs (KGPCTextRec / KgpcTextRecLayout) must match the
+# target the compiled Pascal code uses, which on every windows-flavoured host
+# is Win64 (the harness compiles with --target-windows, so TEXT_TYPE in
+# SemCheck_sizeof.c is 648 bytes).  Native MinGW/UCRT/CLANG already define
+# _WIN32, so their struct gate is satisfied.  The MSYS2 "MSYS" environment is
+# Cygwin-derived: its gcc does NOT define _WIN32 (meson reports the host as
+# cygwin, not windows) yet the harness still drives it with --target-windows.
+# Detect that case via the compiler's own __CYGWIN__/__MSYS__ predefines and
+# define KGPC_WIN64_ABI so the struct gates select the 648-byte Win64 layout
+# and stay consistent with the generated code.
+if host_machine.system().startswith('windows') or \
+   compiler.get_define('__CYGWIN__') != '' or \
+   compiler.get_define('__MSYS__') != ''
+  runtime_c_args += ['-DKGPC_WIN64_ABI=1']
+endif
 
 if gmp_dep.found()
   runtime_sources += ['runtime_gmp.c']

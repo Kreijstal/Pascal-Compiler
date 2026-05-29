@@ -120,6 +120,20 @@ static struct {
   void *tables[1];
 } kgpc_fpc_wstr_init_tables = {0, {NULL}};
 
+/* count=0 init/final and resource-string tables for EntryInformation.
+ * TInitFinalTable layout: TableCount, InitCount, then Procs[].  FPC's
+ * FPC_INITIALIZEUNITS / FPC_FINALIZEUNITS loop `for i := 1 to TableCount`
+ * and `while InitCount > 0`; both exit immediately when zero. */
+static struct {
+  uint64_t TableCount;
+  uint64_t InitCount;
+} kgpc_fpc_init_final_table = {0, 0};
+
+static struct {
+  int64_t count;
+  void *tables[1];
+} kgpc_fpc_resourcestring_tables = {0, {NULL}};
+
 /* Backing storage for the indirection pointers.                       */
 static uint64_t kgpc_fpc_sys_instance_storage;
 static uint32_t kgpc_fpc_tlskey_storage = 0xFFFFFFFFu; /* matches FPC's
@@ -135,10 +149,47 @@ extern uint64_t *kgpc_fpc_sys_instance_ptr __asm__("_FPC_SysInstance");
 extern uint32_t *kgpc_fpc_tlskey_ptr __asm__("_FPC_TlsKey");
 extern void *WStrInitTablesTable;
 
+/* objpas reads the resource-string table directly through the global
+ * `_FPC_ResourceStringTables` (rtl/objpas/objpas.pp:426
+ * `ResourceStringTable : PResourceStringTableList; external name
+ * '_FPC_ResourceStringTables'`).  Its finalization section does
+ * `with ResourceStringTable^ do for i:=0 to Count-1 ...`, so a NULL global
+ * faults at program shutdown.  Normally SetupEntryInformation copies
+ * info.ResourceStringTables into this global, but KGPC bypasses that chain,
+ * leaving it NULL — every normally-exiting program (i.e. any successful
+ * compile, as opposed to the abort path which exits via ExitProcess and
+ * skips FPC finalization) then SIGSEGVs in finalizeresourcetables.  Point it
+ * at the same count=0 table used for EntryInformation so the finalize loop is
+ * a no-op. */
+extern void *kgpc_fpc_resstr_tables_ptr __asm__("_FPC_ResourceStringTables");
+
+/* EntryInformation: TEntryInformation global in FPC system.pp (declared
+ * in rtl/inc/system.inc:76 as `EntryInformation: TEntryInformation`).
+ * Normally populated by sysinit.pp's SetupEntryInformation chain, which
+ * KGPC bypasses.  The struct layout lives in the shared header so the
+ * native-program default definition (runtime_fpc_win_entry_globals.c)
+ * matches it.  For an FPC-RTL program system.pp provides the symbol; for
+ * a native KGPC program runtime_fpc_win_entry_globals.c does. */
+#include "runtime_fpc_win_entryinfo.h"
+
+extern KgpcFPCEntryInformation EntryInformation;
+
 void kgpc_fpc_init_win_entry_info(void) {
   kgpc_fpc_sys_instance_ptr = &kgpc_fpc_sys_instance_storage;
   kgpc_fpc_tlskey_ptr = &kgpc_fpc_tlskey_storage;
   WStrInitTablesTable = &kgpc_fpc_wstr_init_tables;
+  kgpc_fpc_resstr_tables_ptr = &kgpc_fpc_resourcestring_tables;
+
+  EntryInformation.InitFinalTable = &kgpc_fpc_init_final_table;
+  EntryInformation.ThreadvarTablesTable = &FPC_THREADVARTABLES;
+  EntryInformation.ResourceStringTables = &kgpc_fpc_resourcestring_tables;
+  EntryInformation.ResStrInitTables = NULL;
+  EntryInformation.ResLocation = NULL;
+  EntryInformation.PascalMain = NULL;
+  EntryInformation.valgrind_used = 0;
+  EntryInformation.OS_TlsKeyAddr = &kgpc_fpc_tlskey_storage;
+  EntryInformation.OS_SysInstance = &kgpc_fpc_sys_instance_storage;
+  EntryInformation.OS_WideInitTables = &kgpc_fpc_wstr_init_tables;
 }
 
 #else /* !Windows */

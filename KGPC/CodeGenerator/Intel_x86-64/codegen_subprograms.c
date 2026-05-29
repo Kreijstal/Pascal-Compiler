@@ -379,12 +379,18 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx,
          * broken code isn't cached. */
         if (mangled_id != NULL && ctx->cache_output != NULL &&
             source_unit_index != 0) {
+          /* COFF/PE gas rejects ELF "ax",@progbits section syntax; keep
+           * Windows code in a single .text (see codegen_function_header). */
+          if (codegen_target_is_windows())
+            fprintf(ctx->cache_output, "\t.text\n");
+          else
+            fprintf(ctx->cache_output,
+                    "\t.section\t.text.%s,\"ax\",@progbits\n", mangled_id);
           fprintf(ctx->cache_output,
-                  "\t.section\t.text.%s,\"ax\",@progbits\n"
                   "\t.globl\t%s\n"
                   "%s:\n"
                   "\tud2\n",
-                  mangled_id, mangled_id, mangled_id);
+                  mangled_id, mangled_id);
         }
         /* Reset register allocator to recover from leaked registers */
         reset_reg_stack();
@@ -395,8 +401,11 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx,
          * section headers so --gc-sections can strip unused ones. */
         if (ctx->cache_output != NULL && source_unit_index != 0 &&
             mangled_id != NULL) {
-          fprintf(ctx->cache_output, "\t.section\t.text.%s,\"ax\",@progbits\n",
-                  mangled_id);
+          if (codegen_target_is_windows())
+            fprintf(ctx->cache_output, "\t.text\n");
+          else
+            fprintf(ctx->cache_output,
+                    "\t.section\t.text.%s,\"ax\",@progbits\n", mangled_id);
           fwrite(membuf, 1, membuf_size, ctx->cache_output);
         }
       }
