@@ -366,6 +366,10 @@ struct Statement *convert_statement(ast_t *stmt_node) {
     list_builder_init(&try_builder);
     list_builder_init(&finally_builder);
     list_builder_init(&except_builder);
+    /* Whether the source had an `except` clause at all.  A bare `try ...
+     * except end` with no handler statements still catches and swallows
+     * every exception, so it must not be collapsed to its plain try body. */
+    int saw_except_block = 0;
 
     ast_t *cur = stmt_node->child;
     while (cur != NULL) {
@@ -376,6 +380,8 @@ struct Statement *convert_statement(ast_t *stmt_node) {
       }
       if (unwrapped->typ == PASCAL_T_FINALLY_BLOCK ||
           unwrapped->typ == PASCAL_T_EXCEPT_BLOCK) {
+        if (unwrapped->typ == PASCAL_T_EXCEPT_BLOCK)
+          saw_except_block = 1;
         ListBuilder *target = (unwrapped->typ == PASCAL_T_FINALLY_BLOCK)
                                   ? &finally_builder
                                   : &except_builder;
@@ -425,19 +431,24 @@ struct Statement *convert_statement(ast_t *stmt_node) {
               on_child = on_child->next;
             }
 
-            /* Convert the statement */
-            if (on_child != NULL) {
-              struct Statement *inner_stmt =
-                  convert_statement(unwrap_pascal_node(on_child));
-              if (inner_stmt != NULL) {
-                struct Statement *on_stmt =
-                    mk_on_exception(stmt_node->line, exception_var_name,
-                                    exception_type_name, inner_stmt);
-                list_builder_append(target, on_stmt, LIST_STMT);
-                exception_var_name = NULL;
-                exception_type_name = NULL;
-              }
-            }
+            /* Convert the statement.  An empty handler body (`on E do ;`)
+             * still catches and swallows the matching exception, so the
+             * on-clause must be preserved even when its body converts to
+             * nothing — substitute an empty compound statement rather than
+             * dropping the handler (which would lose the catch entirely and,
+             * via the empty-except collapse below, remove the try barrier). */
+            struct Statement *inner_stmt =
+                (on_child != NULL)
+                    ? convert_statement(unwrap_pascal_node(on_child))
+                    : NULL;
+            if (inner_stmt == NULL)
+              inner_stmt = mk_compoundstatement(stmt_node->line, NULL);
+            struct Statement *on_stmt =
+                mk_on_exception(stmt_node->line, exception_var_name,
+                                exception_type_name, inner_stmt);
+            list_builder_append(target, on_stmt, LIST_STMT);
+            exception_var_name = NULL;
+            exception_type_name = NULL;
             if (exception_var_name != NULL)
               free(exception_var_name);
             if (exception_type_name != NULL)
@@ -462,6 +473,11 @@ struct Statement *convert_statement(ast_t *stmt_node) {
     ListNode_t *except_stmts = list_builder_finish(&except_builder);
 
     if (finally_stmts == NULL && except_stmts == NULL) {
+      /* A bare `except` clause with no handler statements still swallows
+       * exceptions — keep the try_except barrier rather than collapsing to
+       * the plain try body. */
+      if (saw_except_block)
+        return mk_tryexcept(stmt_node->line, try_stmts, NULL, NULL, NULL);
       if (try_stmts == NULL)
         return NULL;
       if (try_stmts->next == NULL) {
