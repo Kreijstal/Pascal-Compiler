@@ -494,14 +494,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_callee_r13 = ctx->callee_save_r13_offset;
     int prev_callee_r14 = ctx->callee_save_r14_offset;
     int prev_callee_r15 = ctx->callee_save_r15_offset;
-    /* While emitting THIS subprogram's body, identifier resolution for
-     * cross-unit references (typed-consts, file-level consts) must prefer
-     * the subprogram's own owning unit before falling back to the
-     * program-wide symtab (which is last-write-wins for colliding names
-     * across units, e.g. `msg` declared identically in two units, or
-     * FPC's `ait_const2str` declared in both aggas.pas and agx86nsm.pas).
-     * Save the caller's unit_index so it is restored after the body. */
-    int prev_unit_index = symtab->current_unit_index;
 
     push_stackscope();
     inst_list = NULL;
@@ -541,12 +533,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_record_return_size = 0;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
-    /* Bind unit-of-origin so per-unit lookups (e.g. codegen_find_var_decl_for_unit
-     * for same-named typed-const arrays declared in multiple units) target the
-     * subprogram's OWN unit while its body is being emitted, not whichever unit
-     * was active when the program reached this subprogram. */
-    if (proc->source_unit_index > 0)
-        symtab->current_unit_index = proc->source_unit_index;
     codegen_register_local_types(proc->type_declarations, symtab);
     codegen_register_decl_list(ctx, proc->args_var, symtab, 1);
     codegen_register_decl_list(ctx, proc->declarations, symtab, 0);
@@ -849,8 +835,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
-    /* Restore caller's unit-of-origin context. */
-    symtab->current_unit_index = prev_unit_index;
 
     ctx->is_nostackframe = prev_is_nostackframe;
     ctx->asm_param_count = prev_asm_param_count;
@@ -940,9 +924,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_callee_r13 = ctx->callee_save_r13_offset;
     int prev_callee_r14 = ctx->callee_save_r14_offset;
     int prev_callee_r15 = ctx->callee_save_r15_offset;
-    /* Save the caller's unit-index; we'll bind it to the function's own
-     * source_unit_index below.  See codegen_procedure for rationale. */
-    int prev_unit_index = symtab->current_unit_index;
 
     push_stackscope();
     inst_list = NULL;
@@ -982,11 +963,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_record_return_size = 0;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
-    /* Bind unit-of-origin so per-unit lookups (e.g. for same-named
-     * typed-const arrays declared in multiple units) target the
-     * function's OWN unit while its body is being emitted. */
-    if (func->source_unit_index > 0)
-        symtab->current_unit_index = func->source_unit_index;
     codegen_register_local_types(func->type_declarations, symtab);
     codegen_register_decl_list(ctx, func->args_var, symtab, 1);
     codegen_register_decl_list(ctx, func->declarations, symtab, 0);
@@ -1872,8 +1848,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     free_inst_list(inst_list);
     pop_stackscope();
     LeaveScope(symtab);
-    /* Restore caller's unit-of-origin context. */
-    symtab->current_unit_index = prev_unit_index;
 
     ctx->is_nostackframe = prev_is_nostackframe;
     ctx->asm_param_count = prev_asm_param_count;
