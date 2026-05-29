@@ -1841,6 +1841,8 @@ static const char *semcheck_get_error_path(void) {
 
 static void semcheck_print_error_prefix(const char *file_path, int line_num,
                                         int col_num) {
+  if (file_path == NULL)
+    file_path = "<unknown>";
   fprintf(stderr, "%s:%d", file_path, line_num);
   if (col_num > 0) {
     fprintf(stderr, ":%d", col_num);

@@ -31,6 +31,10 @@ cppcheck \
   --enable=warning,performance,portability \
   --inline-suppr \
   --suppress=missingIncludeSystem \
+  `# libunwind.h guards its body with an arch #if/#error; cppcheck defines no` \
+  `# target arch macro so it trips that #error. It is a third-party system` \
+  `# header we do not control, so silence just that directive there.` \
+  --suppress='preprocessorErrorDirective:*libunwind.h' \
   --suppress='*:*/tests/test_cases/*' \
   --suppress='*:*/cparser/acutest.h' \
   --suppress='*:*/build*/*' \
