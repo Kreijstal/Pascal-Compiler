@@ -165,6 +165,14 @@ runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
 runtime_sources += 'runtime_fpc_pchar_to_shortstr_upper.c'
 runtime_sources += 'runtime_fpc_assign.c'
 runtime_sources += 'runtime_fpc_init.c'
+if host_machine.system().startswith('windows')
+  # Default definitions of the FPC entry-info globals (EntryInformation,
+  # _FPC_SysInstance/_FPC_TlsKey, WStrInitTablesTable,
+  # _FPC_ResourceStringTables) that the Win64 entry shim populates.  Pulled
+  # from the archive only for native KGPC programs; FPC-RTL programs define
+  # these in system.pp/objpas, so the member stays unreferenced there.
+  runtime_sources += 'runtime_fpc_win_entry_globals.c'
+endif
 runtime_deps = []
 runtime_c_args = ['-O2']
 

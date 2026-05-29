@@ -166,32 +166,11 @@ extern void *kgpc_fpc_resstr_tables_ptr __asm__("_FPC_ResourceStringTables");
 /* EntryInformation: TEntryInformation global in FPC system.pp (declared
  * in rtl/inc/system.inc:76 as `EntryInformation: TEntryInformation`).
  * Normally populated by sysinit.pp's SetupEntryInformation chain, which
- * KGPC bypasses.  Layout per rtl/inc/systemh.inc:722 with
- * HAS_ENTRYINFORMATION_OS on Win64 (rtl/win/sysosh.inc:54):
- *   InitFinalTable (Pointer @ 0)
- *   ThreadvarTablesTable (Pointer @ 8)
- *   ResourceStringTables (Pointer @ 16)
- *   ResStrInitTables (Pointer @ 24)
- *   ResLocation (Pointer @ 32)
- *   PascalMain (Procedure @ 40)
- *   valgrind_used (Boolean @ 48) + 7 bytes padding
- *   OS.TlsKeyAddr (PDWord @ 56)
- *   OS.SysInstance (PQWord @ 64)
- *   OS.WideInitTables (Pointer @ 72)
- * Total 80 bytes. */
-typedef struct {
-  void *InitFinalTable;
-  void *ThreadvarTablesTable;
-  void *ResourceStringTables;
-  void *ResStrInitTables;
-  void *ResLocation;
-  void *PascalMain;
-  uint8_t valgrind_used;
-  uint8_t _pad_os[7];
-  void *OS_TlsKeyAddr;
-  void *OS_SysInstance;
-  void *OS_WideInitTables;
-} KgpcFPCEntryInformation;
+ * KGPC bypasses.  The struct layout lives in the shared header so the
+ * native-program default definition (runtime_fpc_win_entry_globals.c)
+ * matches it.  For an FPC-RTL program system.pp provides the symbol; for
+ * a native KGPC program runtime_fpc_win_entry_globals.c does. */
+#include "runtime_fpc_win_entryinfo.h"
 
 extern KgpcFPCEntryInformation EntryInformation;
 
