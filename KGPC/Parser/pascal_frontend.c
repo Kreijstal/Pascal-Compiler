@@ -790,6 +790,19 @@ static char *compute_ast_cache_path(const char *source_path) {
                            strlen(g_user_defines[i])) ^
              hash;
   }
+  /* Mix in the target ABI.  --target-windows defines WIN64/WINDOWS, which
+   * units select on via {$ifdef WIN64} (e.g. system.p's TextRec.Handle
+   * width), so the parsed AST differs by target.  These are built-in
+   * defines, not -D flags, so without this a Windows-target AST and a
+   * native AST for the same source collide on one cache file when a build
+   * shares a --pp-cache-dir across targets. */
+  {
+    const char *target_tag =
+        target_windows_flag() ? "kgpc-target:win64" : "kgpc-target:sysv";
+    hash = fnv1a64_bytes((const unsigned char *)target_tag,
+                         strlen(target_tag)) ^
+           hash;
+  }
   if (g_compiler_mtime_known) {
     char compiler_stamp[64];
     snprintf(compiler_stamp, sizeof(compiler_stamp), "%lld.%09ld",
