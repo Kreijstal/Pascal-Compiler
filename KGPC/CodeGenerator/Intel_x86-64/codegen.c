@@ -3762,10 +3762,19 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx,
   assert(ctx != NULL);
   codegen_emit_function_debug_comments(func_name, ctx);
   /* Emit per-function .text section when --function-sections is enabled,
-   * allowing the linker's --gc-sections to strip unused functions. */
-  if (function_sections_flag())
-    fprintf(ctx->output_file, "\t.section\t.text.%s,\"ax\",@progbits\n",
-            func_name);
+   * allowing the linker's --gc-sections to strip unused functions.
+   * COFF/PE gas rejects the ELF "ax",@progbits section syntax, and Windows ld
+   * has no --gc-sections equivalent, so on Windows all code stays in a single
+   * .text section.  This also keeps each function's .seh_proc/.seh_endproc in
+   * the same section (a .rodata detour resumes to .text, so the proc must open
+   * in .text too) — otherwise gas reports a segment mismatch at .seh_endproc. */
+  if (function_sections_flag()) {
+    if (codegen_target_is_windows())
+      fprintf(ctx->output_file, "\t.text\n");
+    else
+      fprintf(ctx->output_file, "\t.section\t.text.%s,\"ax\",@progbits\n",
+              func_name);
+  }
   /* When using cached unit .o (skip-unit-codegen), program-level functions
    * (defined_in_unit == 0) must be local to avoid clashing with same-named
    * unit functions in the cache .o.  All program code is in the same .s,

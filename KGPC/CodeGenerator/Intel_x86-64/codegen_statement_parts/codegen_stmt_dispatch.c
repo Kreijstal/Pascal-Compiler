@@ -1,5 +1,84 @@
 #include "../codegen_stmt_internal.h"
 
+/* Normalise jump/call branches in an AT&T-syntax inline-asm buffer for GNU as
+ * on x86-64.  FPC's att-mode RTL asm uses forms gas rejects or warns on:
+ *   - a size suffix on a direct jump:      jmpl foo      -> jmp foo
+ *   - indirect jmp/call without the `*`:   jmp 56(%rcx)  -> jmp *56(%rcx)
+ *                                          call 40(%rdx) -> call *40(%rdx)
+ *                                          jmp %rax      -> jmp *%rax
+ * An operand is indirect when it starts with a register (`%`) or references a
+ * base register (`(%`); a bare label/symbol is a direct branch and is left as
+ * `jmp`/`call` with no `*`.  Returns a newly malloc'd buffer (caller frees) or
+ * NULL on allocation failure. */
+static char *att_normalize_branches(const char *src) {
+  size_t len = strlen(src);
+  char *out = malloc(len * 2 + 64);
+  if (out == NULL)
+    return NULL;
+  size_t o = 0, i = 0;
+  while (i < len) {
+    size_t ls = i;
+    while (i < len && (src[i] == ' ' || src[i] == '\t'))
+      i++;
+    size_t ms = i;
+    while (i < len && (isalnum((unsigned char)src[i]) || src[i] == '_'))
+      i++;
+    size_t mlen = i - ms;
+    int is_jmp = (mlen == 3 && strncmp(src + ms, "jmp", 3) == 0) ||
+                 (mlen == 4 && (strncmp(src + ms, "jmpl", 4) == 0 ||
+                                strncmp(src + ms, "jmpq", 4) == 0));
+    int is_call = (mlen == 4 && strncmp(src + ms, "call", 4) == 0) ||
+                  (mlen == 5 && (strncmp(src + ms, "calll", 5) == 0 ||
+                                 strncmp(src + ms, "callq", 5) == 0));
+    if ((is_jmp || is_call) && i < len &&
+        (src[i] == ' ' || src[i] == '\t')) {
+      size_t os = i;
+      while (os < len && (src[os] == ' ' || src[os] == '\t'))
+        os++;
+      size_t oe = os;
+      while (oe < len && src[oe] != '\n')
+        oe++;
+      size_t ope = oe;
+      while (ope > os && (src[ope - 1] == ' ' || src[ope - 1] == '\t' ||
+                          src[ope - 1] == '\r'))
+        ope--;
+      int already_star = (os < ope && src[os] == '*');
+      int starts_reg = (os < ope && src[os] == '%');
+      int has_base = 0;
+      for (size_t k = os; k + 1 < ope; k++)
+        if (src[k] == '(' && src[k + 1] == '%') {
+          has_base = 1;
+          break;
+        }
+      int indirect = !already_star && (starts_reg || has_base);
+      for (size_t k = ls; k < ms; k++)
+        out[o++] = src[k];
+      const char *mn = is_jmp ? "jmp" : "call";
+      size_t mnl = is_jmp ? 3 : 4;
+      memcpy(out + o, mn, mnl);
+      o += mnl;
+      out[o++] = ' ';
+      if (indirect)
+        out[o++] = '*';
+      memcpy(out + o, src + os, ope - os);
+      o += ope - os;
+      i = ope;
+      while (i < len && src[i] != '\n')
+        out[o++] = src[i++];
+      if (i < len)
+        out[o++] = src[i++];
+    } else {
+      i = ls;
+      while (i < len && src[i] != '\n')
+        out[o++] = src[i++];
+      if (i < len)
+        out[o++] = src[i++];
+    }
+  }
+  out[o] = '\0';
+  return out;
+}
+
 int codegen_dynamic_array_element_size(CodeGenContext *ctx,
                                        StackNode_t *array_node,
                                        struct Expression *array_expr) {
@@ -839,6 +918,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
         cleaned[j] = '\0';
       }
       free(stripped_src);
+
+      /* Normalise AT&T jump/call forms (jmpl->jmp, add `*` to indirect
+       * branches) that FPC's att-mode RTL asm uses but GNU as rejects. */
+      if (!is_intel_syntax) {
+        char *normalized = att_normalize_branches(cleaned);
+        if (normalized != NULL) {
+          free(cleaned);
+          cleaned = normalized;
+        }
+      }
 
       /* Resolve identifiers in asm blocks:
          1. For nostackframe: substitute parameter names → ABI registers

@@ -3823,6 +3823,16 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list,
       pascal_identifier_equals(call_target, "fpc_in_prefetch_var")) {
     return codegen_builtin_prefetch(stmt, inst_list, ctx);
   }
+  /* Initialize/Finalize are backed by fixed-case runtime stubs (runtime.c).
+   * Pascal identifiers are case-insensitive, so the source may spell them
+   * lowercase (FPC's text.inc uses `finalize(...)`), which would otherwise
+   * emit an undefined `call finalize`.  Canonicalise to the runtime symbol. */
+  if (call_target != NULL) {
+    if (pascal_identifier_equals(call_target, "Finalize"))
+      call_target = "Finalize";
+    else if (pascal_identifier_equals(call_target, "Initialize"))
+      call_target = "Initialize";
+  }
   if (call_target == NULL)
     call_target = "";
   snprintf(buffer, 50, "\tcall\t%s\n", call_target);

@@ -102,6 +102,9 @@ _FPC_RTL_SHARED_FLAGS = [
 if IS_NATIVE_WINDOWS:
     _FPC_RTL_TARGET_FLAGS = [
         "-I" + os.path.join(FPC_RTL_DIR, "win"),
+        # windows.pp ({$i base.inc} etc.) pulls its includes from rtl/win/wininc,
+        # matching FPC's own build where wininc is on the unit include path.
+        "-I" + os.path.join(FPC_RTL_DIR, "win", "wininc"),
         "-I" + os.path.join(FPC_RTL_DIR, "win64"),
         "-I" + os.path.join(FPC_RTL_DIR, "win64", "x86_64"),
         "-Fu" + os.path.join(FPC_RTL_DIR, "win"),
