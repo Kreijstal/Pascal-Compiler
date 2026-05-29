@@ -685,6 +685,7 @@ static HashNode_t *create_hash_node(char *id, char *mangled_id,
   hash_node->mutated = 0;
   hash_node->is_constant = 0;
   hash_node->is_typed_const = 0;
+  hash_node->is_builtin_default = 0;
   hash_node->const_int_value = 0;
   hash_node->const_string_value = NULL;
   hash_node->const_set_value = NULL;
