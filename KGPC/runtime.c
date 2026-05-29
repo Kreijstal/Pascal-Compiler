@@ -1286,6 +1286,28 @@ int kgpc_tfile_blockread(KGPCFileRec *file, void *buffer, size_t count,
   return 1;
 }
 
+/* eof() on a binary (typed/untyped) File.  A binary file must NOT be
+ * routed through kgpc_text_eof: that reads the FILE* from the TextRec
+ * layout, whereas a File stores its FILE* in the KGPCFilePrivate at the
+ * FileRec private_data offset.  The two offsets coincide on x86_64 Linux
+ * but diverge on Win64 (TextRec.Handle widens to 8 bytes), so reusing the
+ * text path read the stream pointer from the wrong offset and reported
+ * spurious EOF.  Peek one byte on the same buffered stream that
+ * kgpc_tfile_blockread (fread) uses and push it back, so the position is
+ * not advanced and the two stay consistent. */
+int kgpc_file_eof(KGPCFileRec *file) {
+  if (file == NULL)
+    return 1;
+  KGPCFilePrivate priv = kgpc_file_private_get(file);
+  if (priv.handle == NULL)
+    return 1;
+  int ch = fgetc(priv.handle);
+  if (ch == EOF)
+    return 1;
+  ungetc(ch, priv.handle);
+  return 0;
+}
+
 int kgpc_tfile_blockwrite(KGPCFileRec *file, const void *buffer, size_t count,
                           long long *actual_written) {
   if (file == NULL || buffer == NULL) {
