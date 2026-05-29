@@ -1292,13 +1292,39 @@ int kgpc_tfile_blockread(KGPCFileRec *file, void *buffer, size_t count,
  * FileRec private_data offset.  The two offsets coincide on x86_64 Linux
  * but diverge on Win64 (TextRec.Handle widens to 8 bytes), so reusing the
  * text path read the stream pointer from the wrong offset and reported
- * spurious EOF.  Peek one byte on the same buffered stream that
- * kgpc_tfile_blockread (fread) uses and push it back, so the position is
- * not advanced and the two stay consistent. */
+ * spurious EOF.
+ *
+ * This mirrors kgpc_text_eof's two-path logic.  Fast path: when no stdio
+ * FILE* has been engaged yet, check eof directly on the kernel fd via
+ * lseek+fstat.  This is essential for files that FPC reads via raw
+ * syscalls (FileRead/BlockRead) — e.g. the compiler's own scanner — where
+ * fgetc's read-ahead would advance the kernel position and make the next
+ * raw read silently skip a buffer's worth of data (manifesting as a
+ * spurious "Unexpected end of file").  Once stdio owns the buffer
+ * (priv.handle != NULL), peek one byte on the same stream
+ * kgpc_tfile_blockread (fread) uses and push it back, so eof reflects what
+ * the stdio reader will see and the position is left unchanged. */
 int kgpc_file_eof(KGPCFileRec *file) {
   if (file == NULL)
     return 1;
   KGPCFilePrivate priv = kgpc_file_private_get(file);
+#ifndef _WIN32
+  if (priv.handle == NULL && file->handle >= 0 && file->mode != 0 &&
+      file->mode != (int32_t)0xD7B0) {
+    int fd = file->handle;
+    int saved_errno = errno;
+    off_t pos = lseek(fd, 0, SEEK_CUR);
+    if (pos != (off_t)-1) {
+      struct stat st;
+      if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        errno = saved_errno;
+        return pos >= st.st_size ? 1 : 0;
+      }
+    }
+    errno = saved_errno;
+    /* Non-seekable or non-regular: fall through. */
+  }
+#endif
   if (priv.handle == NULL)
     return 1;
   int ch = fgetc(priv.handle);
