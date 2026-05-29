@@ -468,6 +468,19 @@ char *kgpc_windows_get_hostname_string(void) {
   }
   return kgpc_alloc_empty_string();
 #else
+  /* MSYS targets Win64 but its gcc builds against a POSIX libc with no
+   * Win32 API, so GetComputerNameA is unavailable.  Fall back to POSIX
+   * gethostname() so the Windows unit's GetHostName still returns the real
+   * host name there.  On a genuine non-Windows target the Unix unit's
+   * GetHostName (kgpc_unix_get_hostname_string) is used instead, so this
+   * branch is reached only when windows.p is compiled without _WIN32. */
+  char buffer[256];
+  if (gethostname(buffer, sizeof(buffer)) == 0) {
+    buffer[sizeof(buffer) - 1] = '\0';
+    for (size_t i = 0; buffer[i] != '\0'; i++)
+      buffer[i] = (char)tolower((unsigned char)buffer[i]);
+    return kgpc_string_duplicate(buffer);
+  }
   return kgpc_alloc_empty_string();
 #endif
 }
