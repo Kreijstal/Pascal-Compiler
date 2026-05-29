@@ -149,6 +149,20 @@ extern uint64_t *kgpc_fpc_sys_instance_ptr __asm__("_FPC_SysInstance");
 extern uint32_t *kgpc_fpc_tlskey_ptr __asm__("_FPC_TlsKey");
 extern void *WStrInitTablesTable;
 
+/* objpas reads the resource-string table directly through the global
+ * `_FPC_ResourceStringTables` (rtl/objpas/objpas.pp:426
+ * `ResourceStringTable : PResourceStringTableList; external name
+ * '_FPC_ResourceStringTables'`).  Its finalization section does
+ * `with ResourceStringTable^ do for i:=0 to Count-1 ...`, so a NULL global
+ * faults at program shutdown.  Normally SetupEntryInformation copies
+ * info.ResourceStringTables into this global, but KGPC bypasses that chain,
+ * leaving it NULL — every normally-exiting program (i.e. any successful
+ * compile, as opposed to the abort path which exits via ExitProcess and
+ * skips FPC finalization) then SIGSEGVs in finalizeresourcetables.  Point it
+ * at the same count=0 table used for EntryInformation so the finalize loop is
+ * a no-op. */
+extern void *kgpc_fpc_resstr_tables_ptr __asm__("_FPC_ResourceStringTables");
+
 /* EntryInformation: TEntryInformation global in FPC system.pp (declared
  * in rtl/inc/system.inc:76 as `EntryInformation: TEntryInformation`).
  * Normally populated by sysinit.pp's SetupEntryInformation chain, which
@@ -185,6 +199,7 @@ void kgpc_fpc_init_win_entry_info(void) {
   kgpc_fpc_sys_instance_ptr = &kgpc_fpc_sys_instance_storage;
   kgpc_fpc_tlskey_ptr = &kgpc_fpc_tlskey_storage;
   WStrInitTablesTable = &kgpc_fpc_wstr_init_tables;
+  kgpc_fpc_resstr_tables_ptr = &kgpc_fpc_resourcestring_tables;
 
   EntryInformation.InitFinalTable = &kgpc_fpc_init_final_table;
   EntryInformation.ThreadvarTablesTable = &FPC_THREADVARTABLES;
