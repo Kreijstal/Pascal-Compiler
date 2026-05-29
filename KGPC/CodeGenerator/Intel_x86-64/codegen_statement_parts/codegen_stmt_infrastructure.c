@@ -2508,7 +2508,6 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
             set_copy_size > 4 && set_copy_size <= INT_MAX) {
           Register_t *dest_reg = NULL;
           Register_t *src_reg = NULL;
-          Register_t *count_reg = NULL;
 
           if (field->value->resolved_kgpc_type == NULL ||
               kgpc_type_sizeof(field->value->resolved_kgpc_type) <= 4) {
@@ -2536,26 +2535,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
             goto cleanup;
           }
 
-          count_reg = get_free_reg(get_reg_stack(), &inst_list);
-          if (count_reg == NULL)
-            count_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-          if (count_reg == NULL) {
-            free_reg(get_reg_stack(), src_reg);
-            free_reg(get_reg_stack(), dest_reg);
-            codegen_destroy_synthetic_record_access_keep_record(field_access);
-            inst_list = codegen_fail_register(
-                ctx, inst_list, NULL,
-                "ERROR: Unable to allocate register for large set copy size.");
-            goto cleanup;
-          }
-
-          {
-            char tmpl[96];
-            snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%0\n", set_copy_size);
-            Register_t *d[] = {count_reg};
-            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
-          }
-
+          /* The byte count is a compile-time constant, so load it straight
+           * into the ABI count register (%r8 on Win64, %rdx on SysV) instead
+           * of allocating a scratch register.  This keeps the set copy from
+           * needing a third register, so it can't fail (or spill the live
+           * dest/src registers) under register pressure.  Emit the immediate
+           * load last, after dest/src have been moved out, in case either
+           * physically aliases the count register. */
           if (codegen_target_is_windows()) {
             {
               Register_t *u[] = {dest_reg};
@@ -2568,9 +2554,10 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
                                       "\tmovq\t%0, %rdx\n");
             }
             {
-              Register_t *u[] = {count_reg};
-              inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
-                                      "\tmovq\t%0, %r8\n");
+              char tmpl[64];
+              snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%r8\n",
+                       set_copy_size);
+              inst_list = add_inst(inst_list, tmpl);
             }
           } else {
             {
@@ -2584,15 +2571,15 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
                                       "\tmovq\t%0, %rsi\n");
             }
             {
-              Register_t *u[] = {count_reg};
-              inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
-                                      "\tmovq\t%0, %rdx\n");
+              char tmpl[64];
+              snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%rdx\n",
+                       set_copy_size);
+              inst_list = add_inst(inst_list, tmpl);
             }
           }
 
           inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
           free_arg_regs();
-          free_reg(get_reg_stack(), count_reg);
           free_reg(get_reg_stack(), src_reg);
           free_reg(get_reg_stack(), dest_reg);
           codegen_destroy_synthetic_record_access_keep_record(field_access);

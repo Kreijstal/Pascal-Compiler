@@ -1721,15 +1721,11 @@ sys.exit(3)
         """Ensures spilled registers are correctly reloaded when register pressure is high."""
         input_file, asm_file, executable_file = self._get_test_paths("register_spill_limit")
 
-        prev_limit = os.environ.get("KGPC_FORCE_REGISTER_LIMIT")
-        os.environ["KGPC_FORCE_REGISTER_LIMIT"] = "2"
-        try:
-            run_compiler(input_file, asm_file)
-        finally:
-            if prev_limit is None:
-                os.environ.pop("KGPC_FORCE_REGISTER_LIMIT", None)
-            else:
-                os.environ["KGPC_FORCE_REGISTER_LIMIT"] = prev_limit
+        # Scope the forced register limit to this one compiler subprocess.
+        # Mutating os.environ would leak into other tests compiling in
+        # parallel threads (they share this process's environment).
+        run_compiler(input_file, asm_file,
+                     extra_env={"KGPC_FORCE_REGISTER_LIMIT": "2"})
 
         self.compile_executable(asm_file, executable_file)
 
@@ -1747,15 +1743,11 @@ sys.exit(3)
         """Ensures div/mod lowering survives when the general register pool is constrained."""
         input_file, asm_file, executable_file = self._get_test_paths("fixed_register_div_pressure")
 
-        prev_limit = os.environ.get("KGPC_FORCE_REGISTER_LIMIT")
-        os.environ["KGPC_FORCE_REGISTER_LIMIT"] = "2"
-        try:
-            run_compiler(input_file, asm_file)
-        finally:
-            if prev_limit is None:
-                os.environ.pop("KGPC_FORCE_REGISTER_LIMIT", None)
-            else:
-                os.environ["KGPC_FORCE_REGISTER_LIMIT"] = prev_limit
+        # Scope the forced register limit to this one compiler subprocess.
+        # Mutating os.environ would leak into other tests compiling in
+        # parallel threads (they share this process's environment).
+        run_compiler(input_file, asm_file,
+                     extra_env={"KGPC_FORCE_REGISTER_LIMIT": "2"})
 
         self.compile_executable(asm_file, executable_file)
 

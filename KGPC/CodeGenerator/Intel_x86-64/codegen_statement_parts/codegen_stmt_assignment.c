@@ -1881,34 +1881,18 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
   }
 
-  /* Get register for size */
-  Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-  if (count_reg == NULL) {
-    free_reg(get_reg_stack(), dest_reg);
-    free_reg(get_reg_stack(), src_reg);
-    return codegen_fail_register(
-        ctx, inst_list, NULL,
-        "ERROR: Unable to allocate register for array copy size.");
-  }
-
-  {
-    char tmpl[96];
-    snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%0\n", array_size);
-    Register_t *d[] = {count_reg};
-    inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
-  }
-
-  /* Call memcpy(dest, src, size) */
-  /* NOTE: We must be careful about register conflicts. Load arguments in
-   * reverse order to avoid clobbering source registers before we've moved them
-   * to their destinations. */
+  /* Call memcpy(dest, src, size).  The byte count is a compile-time constant,
+   * so load it straight into the ABI count register (%r8 on Win64, %rdx on
+   * SysV) rather than allocating a scratch register — the array copy then
+   * needs no extra register and can't fail under register pressure.  Move
+   * dest/src to their ABI registers first, then load the immediate last, in
+   * case a pool register physically aliases the count register. */
   if (codegen_target_is_windows()) {
-    /* Windows calling convention: RCX (dest), RDX (src), R8 (size)
-     * Move in reverse order to avoid conflicts */
+    /* Windows calling convention: RCX (dest), RDX (src), R8 (size) */
     {
-      Register_t *u[] = {count_reg};
+      Register_t *u[] = {dest_reg};
       inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n");
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
     }
     {
       Register_t *u[] = {src_reg};
@@ -1916,17 +1900,16 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
           add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
     }
     {
-      Register_t *u[] = {dest_reg};
-      inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%r8\n", array_size);
+      inst_list = add_inst(inst_list, tmpl);
     }
   } else {
-    /* System V calling convention: RDI (dest), RSI (src), RDX (size)
-     * Move in reverse order to avoid conflicts */
+    /* System V calling convention: RDI (dest), RSI (src), RDX (size) */
     {
-      Register_t *u[] = {count_reg};
+      Register_t *u[] = {dest_reg};
       inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
     }
     {
       Register_t *u[] = {src_reg};
@@ -1934,15 +1917,14 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
           add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
     }
     {
-      Register_t *u[] = {dest_reg};
-      inst_list =
-          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%lld, %%rdx\n", array_size);
+      inst_list = add_inst(inst_list, tmpl);
     }
   }
 
   inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
 
-  free_reg(get_reg_stack(), count_reg);
   free_reg(get_reg_stack(), src_reg);
   free_reg(get_reg_stack(), dest_reg);
   free_arg_regs();
@@ -2704,22 +2686,13 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
       }
 
       /* src_reg now contains the address of the temporary set buffer */
-      /* Copy 32 bytes from src to dest using memcpy */
-      Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-      if (count_reg == NULL) {
-        free_reg(get_reg_stack(), dest_reg);
-        free_reg(get_reg_stack(), src_reg);
-        return codegen_fail_register(
-            ctx, inst_list, NULL,
-            "ERROR: Unable to allocate register for set copy size.");
-      }
-
-      {
-        Register_t *d[] = {count_reg};
-        inst_list =
-            add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t$32, %0\n");
-      }
-
+      /* Copy 32 bytes from src to dest via kgpc_memcpy_wrapper(dest, src, 32).
+       * The byte count is the compile-time constant 32, so load it straight
+       * into the ABI count register (%r8 on Win64, %rdx on SysV) rather than
+       * allocating a scratch register for it — this keeps the set copy from
+       * needing a third register and so it never fails under register
+       * pressure.  Emit the immediate load last, after dest/src have been
+       * moved out, in case either physically aliases the count register. */
       if (codegen_target_is_windows()) {
         {
           Register_t *u[] = {dest_reg};
@@ -2727,15 +2700,11 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
         }
         {
-          Register_t *u[] = {count_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %r8\n");
-        }
-        {
           Register_t *u[] = {src_reg};
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
         }
+        inst_list = add_inst(inst_list, "\tmovq\t$32, %r8\n");
       } else {
         {
           Register_t *u[] = {dest_reg};
@@ -2747,16 +2716,11 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
         }
-        {
-          Register_t *u[] = {count_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
-        }
+        inst_list = add_inst(inst_list, "\tmovq\t$32, %rdx\n");
       }
 
       inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
 
-      free_reg(get_reg_stack(), count_reg);
       free_reg(get_reg_stack(), src_reg);
       free_reg(get_reg_stack(), dest_reg);
       free_arg_regs();
