@@ -123,6 +123,10 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id) {
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
                                                       const char *type_id,
                                                       int defined_in_unit);
+static HashNode_t *
+kgpc_find_type_node_with_unit_flag_owner(SymTab_t *symtab, const char *type_id,
+                                         int defined_in_unit,
+                                         int owner_unit_idx);
 static long long kgpc_type_get_array_scalar_element_size(KgpcType *type);
 
 static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id,
@@ -493,9 +497,10 @@ static int hashnode_is_unknown_type_stub(const HashNode_t *node) {
           node->type->info.primitive_type_tag == UNKNOWN_TYPE);
 }
 
-static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
-                                                      const char *type_id,
-                                                      int defined_in_unit) {
+static HashNode_t *
+kgpc_find_type_node_with_unit_flag_owner(SymTab_t *symtab, const char *type_id,
+                                         int defined_in_unit,
+                                         int owner_unit_idx) {
   if (symtab == NULL || type_id == NULL)
     return NULL;
 
@@ -544,7 +549,14 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
    * source (pinned during semcheck of the enclosing unit/program). The
    * active scope-tree walk is a fallback because subprogram scopes
    * inside a unit typically have unit_index == 0. */
-  int caller_unit_idx = symtab->current_unit_index;
+  /* An explicit owner unit (e.g. the home unit of the subprogram whose
+   * parameter type we are resolving) takes priority: a parameter type name
+   * must resolve in the unit that declared the parameter, not in the
+   * consumer's scope. Otherwise fall back to the unit currently being
+   * semchecked, then to the active scope chain. */
+  int caller_unit_idx = owner_unit_idx;
+  if (caller_unit_idx == 0)
+    caller_unit_idx = symtab->current_unit_index;
   if (caller_unit_idx == 0) {
     for (ScopeNode *sc = symtab->current_scope; sc != NULL; sc = sc->parent) {
       if (sc->unit_index > 0) {
@@ -681,6 +693,13 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
   }
 
   return fallback;
+}
+
+static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
+                                                      const char *type_id,
+                                                      int defined_in_unit) {
+  return kgpc_find_type_node_with_unit_flag_owner(symtab, type_id,
+                                                  defined_in_unit, 0);
 }
 
 /* Forward declarations for TypeAlias copy functions */
@@ -1462,9 +1481,13 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
 
   const char *decl_type_id = NULL;
   int decl_defined_in_unit = 0;
+  int decl_source_unit_index = 0;
   if (var_decl->type == TREE_VAR_DECL) {
     decl_type_id = var_decl->tree_data.var_decl_data.type_id;
     decl_defined_in_unit = var_decl->tree_data.var_decl_data.defined_in_unit;
+    decl_source_unit_index = var_decl->tree_data.var_decl_data.source_unit_index;
+  } else if (var_decl->type == TREE_ARR_DECL) {
+    decl_source_unit_index = var_decl->tree_data.arr_decl_data.source_unit_index;
   }
 
   /* Prefer declaration-time type cache to avoid late scope shadowing
@@ -1491,8 +1514,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
     if (decl_type_id != NULL && symtab != NULL &&
         !kgpc_type_is_array(
             var_decl->tree_data.var_decl_data.cached_kgpc_type)) {
-      struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
-          symtab, decl_type_id, decl_defined_in_unit);
+      struct HashNode *type_node = kgpc_find_type_node_with_unit_flag_owner(
+          symtab, decl_type_id, decl_defined_in_unit, decl_source_unit_index);
       if (type_node != NULL) {
         struct TypeAlias *alias = hashnode_get_type_alias(type_node);
         if (alias != NULL && alias->is_array) {
@@ -1545,8 +1568,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
       KgpcType *pointee_type = NULL;
       int pointee_shared = 0;
       if (symtab != NULL) {
-        struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
-            symtab, decl_type_id, decl_defined_in_unit);
+        struct HashNode *type_node = kgpc_find_type_node_with_unit_flag_owner(
+            symtab, decl_type_id, decl_defined_in_unit, decl_source_unit_index);
         if (type_node != NULL && type_node->type != NULL) {
           pointee_type = type_node->type;
           pointee_shared = 1;
@@ -1653,9 +1676,10 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
       elem_type = create_primitive_type(elem_type_tag);
     } else if (elem_type_id != NULL && symtab != NULL) {
       /* Look up named element type in symbol table */
-      struct HashNode *elem_node = kgpc_find_type_node_with_unit_flag(
+      struct HashNode *elem_node = kgpc_find_type_node_with_unit_flag_owner(
           symtab, elem_type_id,
-          var_decl->tree_data.arr_decl_data.defined_in_unit);
+          var_decl->tree_data.arr_decl_data.defined_in_unit,
+          decl_source_unit_index);
       if (elem_node != NULL && elem_node->type != NULL) {
         elem_type = elem_node->type;
         elem_type_borrowed = 1;
@@ -1714,8 +1738,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
     KgpcType *pointee_type = NULL;
     int pointee_shared = 0;
     if (symtab != NULL) {
-      struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
-          symtab, type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
+      struct HashNode *type_node = kgpc_find_type_node_with_unit_flag_owner(
+          symtab, type_id, var_decl->tree_data.var_decl_data.defined_in_unit,
+          decl_source_unit_index);
       if (type_node != NULL && type_node->type != NULL) {
         pointee_type = type_node->type;
         pointee_shared = 1;
@@ -1779,8 +1804,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
      * kgpc_find_type_node_with_unit_flag already prefers class types over
      * plain record aliases when the same name resolves to both (e.g.
      * TTimeZone = timezone struct alias vs TTimeZone = class abstract). */
-    struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(
-        symtab, type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
+    struct HashNode *type_node = kgpc_find_type_node_with_unit_flag_owner(
+        symtab, type_id, var_decl->tree_data.var_decl_data.defined_in_unit,
+        decl_source_unit_index);
     if (type_node != NULL && type_node->type != NULL) {
       struct TypeAlias *alias = hashnode_get_type_alias(type_node);
       if (alias != NULL && alias->is_array &&
