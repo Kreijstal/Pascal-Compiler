@@ -176,6 +176,19 @@ endif
 runtime_deps = []
 runtime_c_args = ['-O2']
 
+# The runtime's ABI structs (KGPCTextRec / KgpcTextRecLayout) must match the
+# target the compiled Pascal code uses, which on every windows-flavoured host
+# is Win64 (the harness compiles with --target-windows, so TEXT_TYPE in
+# SemCheck_sizeof.c is 648 bytes).  Native MinGW/UCRT/CLANG and the mingw
+# cross toolchain already define _WIN32, but the MSYS environment's gcc is
+# POSIX-flavoured and does not, even though meson treats it as a windows host
+# (the entry-info globals above key on the same predicate).  Define
+# KGPC_WIN64_ABI there so the struct gates select the 648-byte Win64 layout
+# and stay consistent with the generated code.
+if host_machine.system().startswith('windows')
+  runtime_c_args += ['-DKGPC_WIN64_ABI=1']
+endif
+
 if gmp_dep.found()
   runtime_sources += ['runtime_gmp.c']
   runtime_deps += [gmp_dep]

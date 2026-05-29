@@ -34,7 +34,7 @@
  * Use `offsetof(KgpcTextRecLayout, <field>)` to get compile-time field
  * offsets without including the heavier full definition.
  */
-#if defined(_WIN64) || defined(_WIN32)
+#if defined(_WIN64) || defined(_WIN32) || defined(KGPC_WIN64_ABI)
 /* Win64 TextRec: THandle = QWord widens Handle to 8 bytes and inserts
  * 4 bytes of padding before BufSize.  See KGPCTextRec in
  * runtime_internal.h and SemCheck_sizeof.c TEXT_TYPE. */

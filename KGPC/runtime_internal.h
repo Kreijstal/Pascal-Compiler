@@ -31,10 +31,12 @@ typedef enum {
  * x86_64 Linux).  See `KGPC/textrec_layout.h` for the C-only mirror
  * and the `_Static_assert` that locks the byte offsets.
  */
-#if defined(_WIN64) || defined(_WIN32)
+#if defined(_WIN64) || defined(_WIN32) || defined(KGPC_WIN64_ABI)
 /* Win64: FPC's THandle = QWord (8 bytes) per rtl/win/sysosh.inc.  The
  * Handle field grows by 4 bytes and 4 bytes of padding before BufSize
- * push the total layout to 648 bytes. */
+ * push the total layout to 648 bytes.  KGPC_WIN64_ABI is defined by the
+ * build on windows hosts whose gcc does not predefine _WIN32 (MSYS), where
+ * the compiled code still targets Win64. */
 typedef struct KGPCTextRec {
   int64_t handle;
   int32_t mode;
