@@ -1026,10 +1026,14 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
           /* Skip whitespace after mnemonic */
           while (*p != '\0' && *p != '\n' && isspace((unsigned char)*p))
             p++;
-          /* Extract operand: a symbol name before (, or end of line/comma */
+          /* Extract operand: a symbol name before (, or end of line/comma.
+           * Stop at '\r' too: on a CRLF checkout (e.g. the native msys2 CI)
+           * the inline-asm text ends each line with "\r\n", and without this
+           * the trailing '\r' is appended to the symbol name, the map lookup
+           * misses, and DCE wrongly drops the referenced body. */
           const char *sym_start = p;
-          while (*p != '\0' && *p != '\n' && *p != '(' && *p != ',' &&
-                 *p != ' ' && *p != '\t')
+          while (*p != '\0' && *p != '\n' && *p != '\r' && *p != '(' &&
+                 *p != ',' && *p != ' ' && *p != '\t')
             p++;
           size_t sym_len = (size_t)(p - sym_start);
           if (sym_len > 0 && sym_len < 256) {
