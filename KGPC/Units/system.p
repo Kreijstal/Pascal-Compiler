@@ -353,7 +353,17 @@ type
   PResourceStringRecord = ^TResourceStringRecord;
 
   TextRec = record
+    {$ifdef WIN64}
+    { On Win64 FPC's TextRec.Handle is THandle = QWord (8 bytes) per
+      rtl/win/sysosh.inc; the wider field plus 4 bytes of natural padding
+      before BufSize push Mode to offset 8 and the record to 648 bytes,
+      matching KGPCTextRec / KgpcTextRecLayout in the runtime and the
+      TEXT_TYPE size in SemCheck_sizeof.c.  FileRec keeps the 4-byte
+      THandle: the runtime KGPCFileRec is not widened on Win64. }
+    Handle: QWord;
+    {$else}
     Handle: THandle;
+    {$endif}
     Mode: LongInt;
     BufSize: SizeInt;
     PrivateData: SizeInt;
