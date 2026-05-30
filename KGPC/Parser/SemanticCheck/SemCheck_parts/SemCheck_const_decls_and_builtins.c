@@ -1606,17 +1606,25 @@ void semcheck_add_builtins(SymTab_t *symtab) {
   add_builtin_type_owned(symtab, "OleVariant",
                          create_primitive_type_with_size(VARIANT_TYPE, 16));
 
-  /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
-  add_builtin_type_owned(symtab, "file",
-                         create_primitive_type_with_size(FILE_TYPE, 368));
-  add_builtin_type_owned(symtab, "File",
-                         create_primitive_type_with_size(FILE_TYPE, 368));
-  add_builtin_type_owned(symtab, "TypedFile",
-                         create_primitive_type_with_size(FILE_TYPE, 368));
-  add_builtin_type_owned(symtab, "text",
-                         create_primitive_type_with_size(TEXT_TYPE, 640));
-  add_builtin_type_owned(symtab, "Text",
-                         create_primitive_type_with_size(TEXT_TYPE, 640));
+  /* File/Text primitives (sizes align with system.p TextRec/FileRec layout).
+   * FileRec is target-dependent (376 Linux / 640 Win64); see
+   * kgpc_target_filerec_size().  A too-small size under-allocates file
+   * variables, so the RTL's InitFile FillChar(f, SizeOf(FileRec)) overruns. */
+  add_builtin_type_owned(
+      symtab, "file",
+      create_primitive_type_with_size(FILE_TYPE, kgpc_target_filerec_size()));
+  add_builtin_type_owned(
+      symtab, "File",
+      create_primitive_type_with_size(FILE_TYPE, kgpc_target_filerec_size()));
+  add_builtin_type_owned(
+      symtab, "TypedFile",
+      create_primitive_type_with_size(FILE_TYPE, kgpc_target_filerec_size()));
+  add_builtin_type_owned(
+      symtab, "text",
+      create_primitive_type_with_size(TEXT_TYPE, kgpc_target_textrec_size()));
+  add_builtin_type_owned(
+      symtab, "Text",
+      create_primitive_type_with_size(TEXT_TYPE, kgpc_target_textrec_size()));
 
   /* Builtin procedures — only true compiler intrinsics that need special
    * handling (variable args, type-dependent behavior, compile-time magic).

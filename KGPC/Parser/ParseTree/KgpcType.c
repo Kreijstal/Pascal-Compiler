@@ -20,6 +20,7 @@
 #else
 #define strcasecmp _stricmp
 #endif
+#include "../../flags.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
@@ -3438,13 +3439,11 @@ long long kgpc_type_sizeof(KgpcType *type) {
     case FILE_TYPE:
       if (type->size_in_bytes > 0)
         return type->size_in_bytes;
-      return 376; /* FPC x86_64:
-                     Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(256)+FullName(8)
-                   */
+      return kgpc_target_filerec_size(); /* FileRec: 376 (Linux) / 640 (Win64) */
     case TEXT_TYPE:
       if (type->size_in_bytes > 0)
         return type->size_in_bytes;
-      return 632;
+      return kgpc_target_textrec_size(); /* TextRec: 640 (Linux) / 904 (Win64) */
     case CHAR_TYPE:
     case BYTE_TYPE:
       return 1;

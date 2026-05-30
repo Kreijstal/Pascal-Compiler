@@ -120,6 +120,9 @@ void set_asm_debug_flag(void);
 void set_disable_dce_flag(void);
 /** @brief Mark the bundled stdlib as loaded (or not loaded). */
 void set_stdlib_loaded_flag(int loaded);
+/** @brief Record whether the bundled stdlib is skipped (`--no-stdlib`/`-Us`),
+ *  i.e. the program supplies its own RTL standard files. */
+void set_no_stdlib_flag(int no_stdlib);
 /** @brief Enter "compile system unit" mode (the `system.pp` self-build). */
 void set_compile_system_unit_flag(void);
 /** @brief Allow `goto` (off by default). */
@@ -153,6 +156,12 @@ int parse_only_flag(void);
 int time_passes_flag(void);
 /** @brief Get whether the target is Win64. */
 int target_windows_flag(void);
+/** @brief Storage size (bytes) of FPC's FileRec for the active target
+ *  (376 on Linux x86_64, 640 on Win64). */
+int kgpc_target_filerec_size(void);
+/** @brief Storage size (bytes) of FPC's TextRec for the active target
+ *  (640 on Linux x86_64, 904 on Win64). */
+int kgpc_target_textrec_size(void);
 /** @brief Get the active target ABI (`SYSTEM_V` or `WINDOWS`). */
 kgpc_target_abi_t current_target_abi(void);
 /** @brief Get the dump-AST output path, or NULL if unset. */
@@ -165,6 +174,8 @@ int asm_debug_flag(void);
 int disable_dce_flag(void);
 /** @brief Get the stdlib-loaded flag. */
 int stdlib_loaded_flag(void);
+/** @brief Get the no-stdlib flag (program supplies its own RTL std files). */
+int no_stdlib_flag(void);
 /** @brief Get the compile-system-unit flag. */
 int compile_system_unit_flag(void);
 /** @brief Get the goto-enabled flag. */

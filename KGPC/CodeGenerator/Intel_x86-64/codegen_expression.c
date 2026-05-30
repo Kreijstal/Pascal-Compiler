@@ -2748,9 +2748,9 @@ long long expr_effective_size_bytes(const struct Expression *expr) {
   case ENUM_TYPE:
     return 4;
   case FILE_TYPE:
-    return 368;
+    return kgpc_target_filerec_size();
   case TEXT_TYPE:
-    return 632;
+    return kgpc_target_textrec_size();
   case STRING_TYPE:
   case POINTER_TYPE:
   case REAL_TYPE:
