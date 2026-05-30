@@ -706,11 +706,14 @@ def _add_pp_pas_bootstrap_test():
         #     3. pp_bootstrap compiles pp.pas -> tests/output/pp_stage2/pp_stage2
         #     4. pp_stage2 starts and prints the expected help banner.
         #
-        # pp_bootstrap needs prebuilt same-source RTL .ppu files for program
-        # compilation and for pp.pas self-hosting. If CI has only the FPCSource
-        # checkout, build a same-source compiler first, then use it to build
-        # those units. A distro FPC can build incompatible .ppu files even when
-        # it is good enough to seed the compiler build.
+        # pp_bootstrap needs the RTL .ppu files for program compilation and for
+        # pp.pas self-hosting.  These are built by pp_bootstrap ITSELF from the
+        # FPCSource checkout — a genuine self-host, with no host Pascal compiler
+        # involved.  (This previously seeded a same-source `ppcx64` from a distro
+        # `fpc` and built the RTL with that, which made the "bootstrap" lean on
+        # an external compiler and hid every RTL-from-source codegen bug behind
+        # host-built .ppu.  Building the RTL with pp_bootstrap surfaces those
+        # bugs here instead.)
         helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
         assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
 
@@ -734,37 +737,15 @@ def _add_pp_pas_bootstrap_test():
             if os.path.isdir(prebuilt_units_dir):
                 shutil.rmtree(prebuilt_units_dir)
             make_bin = shutil.which("make")
-            fpc_bin = shutil.which("fpc")
             assert make_bin is not None, (
                 "make is required to build FPC RTL units for pp_bootstrap"
             )
-            assert fpc_bin is not None, (
-                "fpc is required to build prebuilt FPC RTL units for "
-                "pp_bootstrap helloworld verification"
-            )
-            compiler_dir = os.path.join(fpc_src, "compiler")
             rtl_linux_dir = os.path.join(fpc_src, "rtl", "linux")
-            same_source_fpc = os.path.join(
-                compiler_dir, "ppcx64" + (".exe" if os.name == "nt" else "")
-            )
-            try:
-                subprocess.run(
-                    [make_bin, "-C", compiler_dir, "ppcx64", "FPC=" + fpc_bin],
-                    check=True, capture_output=True, text=True, timeout=600,
-                )
-            except subprocess.CalledProcessError as e:
-                self.fail(
-                    "building same-source FPC compiler for pp_bootstrap failed\n"
-                    f"stdout:\n{(e.stdout or '')[:2000]}\n"
-                    f"stderr:\n{(e.stderr or '')[:2000]}"
-                )
-                return
-            except subprocess.TimeoutExpired:
-                self.fail("building same-source FPC compiler for pp_bootstrap timed out")
-                return
-            assert os.path.isfile(same_source_fpc), (
-                f"FPC compiler build did not produce {same_source_fpc}"
-            )
+            # Self-host: build the RTL .ppu with the just-built pp_bootstrap
+            # itself (no host fpc).  Any KGPC codegen bug in an RTL unit now
+            # fails the build here rather than being papered over by .ppu a
+            # distro compiler produced.
+            bootstrap_fpc = os.path.abspath(executable_file)
             try:
                 # `make all` (not `units`) is required: the `units` target
                 # only builds .ppu/.o pairs for Pascal units, but FPC's
@@ -779,19 +760,20 @@ def _add_pp_pas_bootstrap_test():
                         "-C",
                         rtl_linux_dir,
                         "all",
-                        "FPC=" + os.path.abspath(same_source_fpc),
+                        "FPC=" + bootstrap_fpc,
                     ],
-                    check=True, capture_output=True, text=True, timeout=600,
+                    check=True, capture_output=True, text=True, timeout=900,
                 )
             except subprocess.CalledProcessError as e:
                 self.fail(
-                    "building FPC RTL units for pp_bootstrap failed\n"
+                    "building FPC RTL units from source with pp_bootstrap "
+                    "failed (self-host RTL compile)\n"
                     f"stdout:\n{(e.stdout or '')[:2000]}\n"
                     f"stderr:\n{(e.stderr or '')[:2000]}"
                 )
                 return
             except subprocess.TimeoutExpired:
-                self.fail("building FPC RTL units for pp_bootstrap timed out")
+                self.fail("building FPC RTL units with pp_bootstrap timed out")
                 return
             assert os.path.isfile(prebuilt_system_ppu), (
                 f"FPC RTL build did not produce {prebuilt_system_ppu}"
