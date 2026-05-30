@@ -1,0 +1,6 @@
+0 len=5 ".byte"
+1 len=7 ".balign"
+2 len=8 ".p2align"
+3 len=5 ".long"
+match .balign: 1
+match .nope: 0

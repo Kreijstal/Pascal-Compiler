@@ -1446,33 +1446,77 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr,
         }
 
         if (row_is_string_initializer) {
-          int fill_count =
-              (inner_expected >= 0) ? inner_expected : inner_actual;
-          int inner_index = inner_start;
-          for (int byte_index = 0; byte_index < fill_count; ++byte_index) {
-            unsigned char byte = 0;
-            struct Expression *rhs;
-            struct Expression *lhs;
+          if (element_array_info.is_shortstring) {
+            /* ShortString element: KGPC models string[N] as the byte array
+             * [inner_start..inner_end] where inner_start holds the length and
+             * the N declared characters live at inner_start+1..inner_end.
+             * Initializing it like a plain char array (string data starting at
+             * inner_start) would overwrite the length byte with the first
+             * character and shift the text left by one, leaving every element
+             * with a bogus length.  Emit an explicit length byte plus 1-based
+             * character stores instead. */
+            int capacity = (inner_end >= inner_start) ? (inner_end - inner_start)
+                                                      : 0;
+            int ss_len = (int)row_string_initializer.len;
+            if (ss_len < 0)
+              ss_len = 0;
+            if (capacity > 0 && ss_len > capacity)
+              ss_len = capacity;
 
-            if ((size_t)byte_index < row_string_initializer.len &&
-                row_string_initializer.data != NULL)
-              byte = (unsigned char)row_string_initializer.data[byte_index];
-            rhs = mk_charcode(element->line, (unsigned int)byte);
-            lhs = mk_const_array_element_lhs(element->line, *id_ptr, index,
-                                             inner_index, is_multidim);
-            if (row_is_widechar_target) {
-              lhs->array_element_type = CHAR_TYPE;
-              lhs->array_element_size = 2;
-              lhs->array_element_type_id = strdup("WideChar");
-              lhs->array_lower_bound = inner_start;
-              lhs->array_upper_bound = (inner_expected >= 0)
-                                           ? inner_end
-                                           : (inner_start + fill_count - 1);
-            }
+            struct Expression *len_rhs =
+                mk_charcode(element->line, (unsigned int)ss_len);
+            struct Expression *len_lhs = mk_const_array_element_lhs(
+                element->line, *id_ptr, index, inner_start, is_multidim);
             list_builder_append(
                 &stmt_builder,
-                mk_varassign(element->line, element->col, lhs, rhs), LIST_STMT);
-            ++inner_index;
+                mk_varassign(element->line, element->col, len_lhs, len_rhs),
+                LIST_STMT);
+
+            for (int k = 0; k < ss_len; ++k) {
+              unsigned char byte =
+                  (row_string_initializer.data != NULL)
+                      ? (unsigned char)row_string_initializer.data[k]
+                      : 0;
+              struct Expression *rhs =
+                  mk_charcode(element->line, (unsigned int)byte);
+              struct Expression *lhs = mk_const_array_element_lhs(
+                  element->line, *id_ptr, index, inner_start + 1 + k,
+                  is_multidim);
+              list_builder_append(
+                  &stmt_builder,
+                  mk_varassign(element->line, element->col, lhs, rhs),
+                  LIST_STMT);
+            }
+          } else {
+            int fill_count =
+                (inner_expected >= 0) ? inner_expected : inner_actual;
+            int inner_index = inner_start;
+            for (int byte_index = 0; byte_index < fill_count; ++byte_index) {
+              unsigned char byte = 0;
+              struct Expression *rhs;
+              struct Expression *lhs;
+
+              if ((size_t)byte_index < row_string_initializer.len &&
+                  row_string_initializer.data != NULL)
+                byte = (unsigned char)row_string_initializer.data[byte_index];
+              rhs = mk_charcode(element->line, (unsigned int)byte);
+              lhs = mk_const_array_element_lhs(element->line, *id_ptr, index,
+                                               inner_index, is_multidim);
+              if (row_is_widechar_target) {
+                lhs->array_element_type = CHAR_TYPE;
+                lhs->array_element_size = 2;
+                lhs->array_element_type_id = strdup("WideChar");
+                lhs->array_lower_bound = inner_start;
+                lhs->array_upper_bound = (inner_expected >= 0)
+                                             ? inner_end
+                                             : (inner_start + fill_count - 1);
+              }
+              list_builder_append(
+                  &stmt_builder,
+                  mk_varassign(element->line, element->col, lhs, rhs),
+                  LIST_STMT);
+              ++inner_index;
+            }
           }
 
           ast_string_value_reset(&row_string_initializer);
