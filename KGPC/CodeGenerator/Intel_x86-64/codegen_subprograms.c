@@ -1469,6 +1469,28 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
     return_size = 8;
   }
 
+  /* Fallback for nested functions: func_node is looked up by name in the
+   * global symtab, but a nested function lives in its parent's local scope
+   * and is not found there, so func_node stays NULL and every size
+   * correction above is skipped — leaving an 8-byte class/pointer return
+   * defaulted to DOUBLEWORD, which truncates the result pointer to 32 bits
+   * in the return-value load (movl instead of movq).  The return *type*,
+   * however, is globally visible regardless of function nesting, so resolve
+   * it by name and take its storage size.  Only widens when the resolved
+   * type is genuinely larger (class/pointer/Int64), so scalar returns are
+   * unaffected. */
+  if (return_size == DOUBLEWORD && !has_record_return &&
+      !returns_dynamic_array && func->return_type_id != NULL &&
+      symtab != NULL) {
+    HashNode_t *rt_node = NULL;
+    FindSymbol(&rt_node, symtab, func->return_type_id);
+    if (rt_node != NULL && rt_node->type != NULL) {
+      int rt_size = codegen_return_storage_size(rt_node->type);
+      if (rt_size > return_size)
+        return_size = rt_size;
+    }
+  }
+
   if (returns_dynamic_array)
     return_var = add_dynamic_array(func->id, dynamic_array_element_size,
                                    dynamic_array_lower_bound, 0, NULL);
