@@ -2,34 +2,42 @@ program tdd_sysutils_path_ops;
 
 uses SysUtils;
 
+{ Normalise the platform path separator so one .expected works on every
+  target: IncludeTrailingPathDelimiter appends DirectorySeparator, which is
+  '\' on Windows and '/' on POSIX.  This replace is a no-op on POSIX. }
+procedure W(const S: AnsiString);
+begin
+  writeln(StringReplace(S, DirectorySeparator, '/', [rfReplaceAll]));
+end;
+
 begin
   { ExtractFileName }
-  writeln(ExtractFileName('/home/user/test.pas'));
-  writeln(ExtractFileName('test.pas'));
-  writeln(ExtractFileName('/home/user/'));
-  writeln(ExtractFileName(''));
+  W(ExtractFileName('/home/user/test.pas'));
+  W(ExtractFileName('test.pas'));
+  W(ExtractFileName('/home/user/'));
+  W(ExtractFileName(''));
 
   { ExtractFileExt }
-  writeln(ExtractFileExt('/home/user/test.pas'));
-  writeln(ExtractFileExt('noext'));
-  writeln(ExtractFileExt(''));
+  W(ExtractFileExt('/home/user/test.pas'));
+  W(ExtractFileExt('noext'));
+  W(ExtractFileExt(''));
 
   { ChangeFileExt }
-  writeln(ChangeFileExt('test.pas', '.txt'));
-  writeln(ChangeFileExt('test', '.txt'));
-  writeln(ChangeFileExt('dir/test.pas', ''));
+  W(ChangeFileExt('test.pas', '.txt'));
+  W(ChangeFileExt('test', '.txt'));
+  W(ChangeFileExt('dir/test.pas', ''));
 
   { ExtractFilePath }
-  writeln(ExtractFilePath('/home/user/test.pas'));
-  writeln(ExtractFilePath('test.pas'));
-  writeln(ExtractFilePath(''));
+  W(ExtractFilePath('/home/user/test.pas'));
+  W(ExtractFilePath('test.pas'));
+  W(ExtractFilePath(''));
 
   { IncludeTrailingPathDelimiter }
-  writeln(IncludeTrailingPathDelimiter('/home'));
-  writeln(IncludeTrailingPathDelimiter('/home/'));
+  W(IncludeTrailingPathDelimiter('/home'));
+  W(IncludeTrailingPathDelimiter('/home/'));
 
   { ExcludeTrailingPathDelimiter }
-  writeln(ExcludeTrailingPathDelimiter('/home/'));
-  writeln(ExcludeTrailingPathDelimiter('/'));
-  writeln(ExcludeTrailingPathDelimiter(''));
+  W(ExcludeTrailingPathDelimiter('/home/'));
+  W(ExcludeTrailingPathDelimiter('/'));
+  W(ExcludeTrailingPathDelimiter(''));
 end.

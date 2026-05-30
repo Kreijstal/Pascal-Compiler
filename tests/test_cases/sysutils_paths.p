@@ -4,7 +4,10 @@ uses SysUtils;
 
 procedure Print(const S: AnsiString);
 begin
-    Writeln(S);
+    { Normalise the platform path separator so one .expected works on every
+      target: IncludeTrailingPathDelimiter appends DirectorySeparator, which is
+      '\' on Windows and '/' on POSIX.  This replace is a no-op on POSIX. }
+    Writeln(StringReplace(S, DirectorySeparator, '/', [rfReplaceAll]));
 end;
 
 begin

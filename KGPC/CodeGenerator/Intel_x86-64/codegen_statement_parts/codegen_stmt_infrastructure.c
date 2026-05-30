@@ -1826,9 +1826,16 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
       }
     }
 
+    /* Under --no-stdlib the program's own RTL owns the standard text files
+     * (e.g. the FPC RTL binds StdErr to StdErrorHandle in OpenStdIO), so let
+     * StdErr/ErrOutput resolve to that real variable through the normal path
+     * below — exactly as Output/StdOut already do.  Only the bundled KGPC
+     * stdlib (which leaves its Pascal StdErr var uninitialised and relies on
+     * the C-runtime stderr_ptr) needs this hijack. */
     const char *builtin_file_ptr = NULL;
-    if (strcasecmp(expr->expr_data.id, "StdErr") == 0 ||
-        strcasecmp(expr->expr_data.id, "ErrOutput") == 0)
+    if (!no_stdlib_flag() &&
+        (strcasecmp(expr->expr_data.id, "StdErr") == 0 ||
+         strcasecmp(expr->expr_data.id, "ErrOutput") == 0))
       builtin_file_ptr = "stderr_ptr";
 
     if (builtin_file_ptr != NULL) {

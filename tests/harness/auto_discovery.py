@@ -265,6 +265,18 @@ KGPC_ONLY_TESTS = {
 POSIX_ONLY_TESTS = {
     "tdd_baseunix_fpsigaction",   # fpsigaction → POSIX sigaction(2)
     "unix_wait_helpers_demo",     # fpFork / waitpid
+    # The tests below `uses BaseUnix`/`uses Unix`.  In KGPC's own stdlib those
+    # resolve to the portable shim units (KGPC/Units/baseunix.p, unix.p backed
+    # by runtime_baseunix.c / runtime_unix.c), so they run on any ABI.  Under
+    # --no-stdlib + the FPC RTL, `BaseUnix`/`Unix` are FPC's real rtl/unix
+    # units, which only exist for POSIX targets (there is no rtl/win64
+    # baseunix.pp), so they cannot compile on a native Windows ABI.
+    "gap_fpread_devnull",                    # BaseUnix.fpRead
+    "gap_fpwrite_devnull",                   # BaseUnix.fpWrite
+    "reg_sysutils_fpread",                   # BaseUnix.fpRead
+    "siginfo_shadow_runtime",                # BaseUnix/Unix sigaction
+    "tdd_baseunix_fpgetcwd_decl",            # BaseUnix.fpgetcwd
+    "tdd_fpexecl_rawbytestring_array_literal",  # Unix.fpexecl
 }
 
 # Tests that emit hardcoded SysV-ABI inline assembly and cannot run on any
@@ -283,6 +295,13 @@ FPC_RTL_ONLY_TESTS = {
 # exercise implicit System/ObjPas/FPC bootstrap behavior.
 FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "bitsizeof_const_expr",
+    # Pin the Windows std-I/O fix: with --no-stdlib KGPC must set the RTL's
+    # IsConsole=true at startup (sysinit.pp is never linked) so SysInitStdIO
+    # binds the standard handles via OpenStdIO. A regression makes WriteLn(StdErr,
+    # ...) leak onto stdout / a Rewrite'd text file's WriteLn leak onto stdout.
+    # These programs use no explicit unit, so list them here to run under the RTL.
+    "tdd_win_stderr_no_leak",
+    "tdd_win_textfile_write_no_leak",
     # Pins the FreeMem-bypasses-RTL fix: with --no-stdlib + FPC RTL, a regression
     # would route FreeMem(p) through libc free instead of MemoryManager.FreeMem,
     # producing a "double free or corruption" SIGABRT. Two-arg FreeMem(p, size)
@@ -461,6 +480,16 @@ def _discover_and_add_fpc_rtl_tests():
         def make_fpc_rtl_test(test_base_name):
             def test_method(self):
                 """FPC RTL test case."""
+                # Same platform classification as the non-FPC-RTL path: skip
+                # SysV-ABI-only and POSIX-only tests on a native Windows ABI.
+                # Under the FPC RTL these are even less runnable than under the
+                # KGPC stdlib — `uses BaseUnix`/`uses Unix` map to FPC's real
+                # rtl/unix units, which have no Windows variant.
+                if test_base_name in SYSV_ABI_ONLY_TESTS and IS_WINDOWS_ABI:
+                    self.skipTest("Test uses hardcoded SysV ABI registers / calling convention")
+                if test_base_name in POSIX_ONLY_TESTS and IS_WINDOWS_ABI \
+                        and not PLATFORM_ID.startswith(("cygwin", "msys")):
+                    self.skipTest("Test requires POSIX runtime features unavailable on this Windows ABI")
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl{EXE_EXT}")

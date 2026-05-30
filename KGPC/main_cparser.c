@@ -1760,6 +1760,7 @@ static int batch_mode_main(int argc, char **argv) {
     return 1;
   }
   set_stdlib_loaded_flag(1);
+  set_no_stdlib_flag(use_stdlib ? 0 : 1);
 
   if (use_stdlib)
     unit_search_paths_set_vendor(&g_unit_paths, prelude_path);
@@ -2392,6 +2393,22 @@ static void codegen_cache_check(const char *input_file) {
   if (g_codegen_cache_dir == NULL)
     return;
 
+  /* The codegen cache relies on mark-all-used (emit every unit function for a
+   * reusable .o) plus the linker's --gc-sections to strip the functions a
+   * given program does not reach.  On Windows/COFF that strip never happens:
+   * `ld --gc-sections` does not collect externally-visible (.globl) symbols,
+   * so every emitted unit function survives — including ones that reference
+   * un-instantiated generics (TMarshaller.FixArray<T>) or unimplemented
+   * codegen paths (for-in over large array elements).  Those dangling
+   * references break every link.  Until per-symbol smartlinking lands (one
+   * object per routine in an archive, the only PE-portable way to drop unused
+   * code), disable the codegen cache on Windows and fall back to reachability-
+   * based emission: only functions the program actually reaches are emitted,
+   * so no dead references reach the linker.  The parse/semcheck AST cache is
+   * unaffected and still avoids the expensive RTL front-end work. */
+  if (target_windows_flag())
+    return;
+
   g_codegen_cache_forced_function_sections = 0;
   g_codegen_cache_forced_skip_unit_codegen = 0;
 
@@ -2728,6 +2745,18 @@ static void emit_link_args(void) {
 
   if (!target_windows_flag()) {
     used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lm");
+  } else {
+    /* FPC's Win64 RTL (System/SysUtils/Classes/Windows) imports functions from
+     * Windows system DLLs via `external 'x.dll'` directives — e.g. CoCreateGuid
+     * from ole32, VerQueryValue/GetFileVersionInfo from version,
+     * WNetGetUniversalName from mpr.  FPC's internal linker builds the import
+     * table directly from those directives, but KGPC emits the imports as plain
+     * undefined references, so the system linker needs the matching import
+     * libraries named explicitly.  Import libraries only contribute the symbols
+     * actually referenced, so naming the standard set is safe. */
+    used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                             " -lkernel32 -luser32 -lversion -lmpr -lole32"
+                             " -loleaut32 -ladvapi32 -lws2_32");
   }
 
   /* Runtime requires pthread (thread manager in runtime_fpc_assign.c).
@@ -2886,6 +2915,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   set_stdlib_loaded_flag(1);
+  set_no_stdlib_flag(use_stdlib ? 0 : 1);
 
   if (!g_ast_cache_explicit) {
     char *default_cache_dir = build_default_ast_cache_dir(argv[0]);

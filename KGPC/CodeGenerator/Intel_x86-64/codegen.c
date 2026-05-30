@@ -4688,6 +4688,14 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx) {
     fprintf(ctx->output_file, "\t.seh_endprologue\n");
   fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
   fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
+  /* Windows --no-stdlib: text writes to an explicit Text file are routed
+   * through the FPC RTL, which buffers std files when their handle is not a
+   * console device (e.g. redirected stdout/stderr).  FPC's exit path calls
+   * SysFlushStdIO to flush them; KGPC exits via C exit() and bypasses that, so
+   * call it here before exit so redirected std output is not lost.  Matches
+   * rtl/inc/system.inc:1251.  mark_used seeds SysFlushStdIO for emission. */
+  if (codegen_target_is_windows() && no_stdlib_flag())
+    fprintf(ctx->output_file, "\tcall\tsysflushstdio_void\n");
   if (codegen_target_is_windows())
     fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
   else
@@ -5202,6 +5210,24 @@ char *codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
   }
   inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration,
                                               symtab);
+
+  /* Windows FPC-RTL startup: mark the program a console application before any
+   * unit initialization section runs.  In a normal FPC build the console entry
+   * stub sysinit.pp `_mainCRTStartup` sets `IsConsole:=true` (rtl/win64/
+   * sysinit.pp:100) before the system unit's initialization executes; KGPC
+   * generates its own entry and never links sysinit.pp, so the FPC system
+   * unit's `IsConsole : boolean = false` default survives into SysInitStdIO
+   * (rtl/win/syswin.inc:595).  That takes the `if not IsConsole` branch and
+   * AssignError's Output/StdErr/Input instead of binding them to the real
+   * standard handles via OpenStdIO — every write then leaks to stdout.  The
+   * global data-init above has just (re)set operatingsystem_isconsole to its
+   * declared default, so emit the override here, after data-init and before
+   * the init sections.  Only for --no-stdlib Windows programs, where the FPC
+   * system unit defines this symbol. */
+  if (codegen_target_is_windows() && no_stdlib_flag()) {
+    inst_list = add_inst(
+        inst_list, "\tmovb\t$1, operatingsystem_isconsole(%rip)\n");
+  }
 
   /* Emit unit initialization blocks in dependency (load) order.
    * Switch current_scope to each unit's ScopeNode so identifier lookups
