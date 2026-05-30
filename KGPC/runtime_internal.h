@@ -396,6 +396,13 @@ void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size);
 void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
                                              const uint16_t *value);
 
+/* Fixed (unmanaged) `array of WideChar` -> UnicodeString assignment.  Scans at
+ * most @p max_count widechars for a NUL terminator; does not probe for a string
+ * header. */
+void kgpc_unicodestring_assign_from_widechar_array(uint16_t **target,
+                                                   const uint16_t *value,
+                                                   int64_t max_count);
+
 /* AnsiString -> array of WideChar.  @p dest_count is the WideChar element
  * count (NOT byte length).  Widens each source byte to UTF-16 and pads any
  * unused trailing elements with zero. */

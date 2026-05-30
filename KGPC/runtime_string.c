@@ -2530,6 +2530,30 @@ void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
   kgpc_setstring_unicode(target, value, len);
 }
 
+/* Assign a fixed `array of WideChar` (e.g. FPC's TWin32FindDataW.cFileName) to
+ * a managed UnicodeString.  Unlike kgpc_unicodestring_assign_from_widechar,
+ * `value` is the base of an *unmanaged* widechar array with no string header,
+ * so we must NOT probe kgpc_string_header(value) (the bytes preceding the array
+ * are unrelated stack/global data and may spuriously look like a managed
+ * header).  We scan at most `max_count` widechars for a NUL terminator and copy
+ * the prefix through kgpc_setstring_unicode. */
+void kgpc_unicodestring_assign_from_widechar_array(uint16_t **target,
+                                                   const uint16_t *value,
+                                                   int64_t max_count) {
+  if (target == NULL)
+    return;
+
+  if (value == NULL || max_count <= 0) {
+    kgpc_setstring_unicode(target, NULL, 0);
+    return;
+  }
+
+  int64_t len = 0;
+  while (len < max_count && value[len] != 0)
+    len++;
+  kgpc_setstring_unicode(target, value, len);
+}
+
 void kgpc_unicodestring_assign_from_string(uint16_t **target,
                                            const char *value) {
   if (target == NULL)

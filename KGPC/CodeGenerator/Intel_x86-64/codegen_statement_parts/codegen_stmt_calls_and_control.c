@@ -1205,6 +1205,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           source_is_raw_pwidechar = 1;
         }
       }
+      /* Whole-array assignment of a fixed `array of WideChar` to a wide string,
+       * e.g. FPC's `Name := f.FindData.cFileName` in the Win RTL's FindMatch.
+       * The element is a 2-byte WideChar, but KGPC tags such an array as a
+       * string-like local, so codegen_expr_is_shortstring_rhs flags it as a
+       * ShortString and the dispatch below would route it to
+       * kgpc_string_assign_from_shortstring — which reads the first low byte of
+       * the UTF-16 payload as a length byte (e.g. 'i'=0x69 -> length 105) and
+       * corrupts every enumerated filename.  Treat it as a raw NUL-terminated
+       * PWideChar instead: value_reg already holds the array base address, and
+       * kgpc_unicodestring_assign_from_widechar walks the packed UTF-16,
+       * independent of KGPC's (over-wide) notion of the array element stride. */
+      int source_is_widechar_array = 0;
+      int widechar_array_count = 0;
+      if (!source_is_raw_pwidechar && target_is_wide_string) {
+        /* codegen_dest_widechar_array_count resolves a fixed `array of WideChar`
+         * across VAR_ID, RECORD_ACCESS and element-type aliases
+         * (TFileTextRecChar -> UnicodeChar on Win64), so it fires for the real
+         * victim `Name := F.FindData.cFileName` where expr_get_kgpc_type does
+         * not surface the array element type. */
+        int count = codegen_dest_widechar_array_count(assign_expr, ctx);
+        if (count > 0) {
+          source_is_widechar_array = 1;
+          widechar_array_count = count;
+          inner_is_shortstring = 0;
+        }
+      }
       int source_needs_wide_promotion = (!source_is_wide_string);
       if (!source_needs_wide_promotion && assign_expr != NULL &&
           assign_expr->type == EXPR_TYPECAST &&
@@ -1219,10 +1245,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
            assign_expr->expr_data.typecast_data.expr->type == EXPR_STRING)) {
         source_needs_wide_promotion = 1;
       }
-      if (!inner_is_shortstring && assign_type == CHAR_TYPE) {
+      /* A fixed `array of WideChar` source is tagged CHAR_TYPE (its element
+       * type), but value_reg holds the array base address, not a single char —
+       * promoting it would convert only the first element.  Skip promotion;
+       * codegen_call_unicodestring_assign_from_widechar_array consumes the
+       * array base directly. */
+      if (!source_is_widechar_array && !inner_is_shortstring &&
+          assign_type == CHAR_TYPE) {
         inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
-      } else if (!inner_is_shortstring && assign_expr != NULL &&
-                 assign_expr->type == EXPR_TYPECAST &&
+      } else if (!source_is_widechar_array && !inner_is_shortstring &&
+                 assign_expr != NULL && assign_expr->type == EXPR_TYPECAST &&
                  assign_expr->expr_data.typecast_data.expr != NULL &&
                  expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) ==
                      CHAR_TYPE) {
@@ -1232,9 +1264,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
       int rhs_lower = 0;
       int rhs_upper = -1;
       int rhs_is_shortstring = 0;
-      if (codegen_get_char_array_bounds(assign_expr, ctx, &rhs_lower,
-                                        &rhs_upper, &rhs_is_shortstring) &&
-          !rhs_is_shortstring) {
+      int rhs_is_char_array = codegen_get_char_array_bounds(
+          assign_expr, ctx, &rhs_lower, &rhs_upper, &rhs_is_shortstring);
+      if (source_is_widechar_array ||
+          (rhs_is_char_array && !rhs_is_shortstring)) {
         Register_t *addr_reg = NULL;
         Register_t *src_reg = NULL;
         inst_list =
@@ -1250,11 +1283,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           return inst_list;
         }
 
-        int src_len = rhs_upper - rhs_lower + 1;
-        if (src_len < 0)
-          src_len = 0;
-        inst_list = codegen_call_string_assign_from_char_array(
-            inst_list, ctx, addr_reg, src_reg, src_len);
+        if (source_is_widechar_array) {
+          /* `array of WideChar` -> UnicodeString: copy the packed UTF-16 prefix
+           * (NUL-bounded) rather than byte-copying as ANSI. */
+          inst_list = codegen_call_unicodestring_assign_from_widechar_array(
+              inst_list, ctx, addr_reg, src_reg, widechar_array_count);
+        } else {
+          int src_len = rhs_upper - rhs_lower + 1;
+          if (src_len < 0)
+            src_len = 0;
+          inst_list = codegen_call_string_assign_from_char_array(
+              inst_list, ctx, addr_reg, src_reg, src_len);
+        }
         free_reg(get_reg_stack(), addr_reg);
         free_reg(get_reg_stack(), src_reg);
         return inst_list;

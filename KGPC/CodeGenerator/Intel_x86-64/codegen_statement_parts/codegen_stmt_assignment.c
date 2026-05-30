@@ -449,6 +449,51 @@ ListNode_t *codegen_call_string_assign_from_char_array(ListNode_t *inst_list,
   return inst_list;
 }
 
+/* Call kgpc_unicodestring_assign_from_widechar_array(dest, src, max_count) to
+ * convert a fixed `array of WideChar` into a managed UnicodeString. */
+ListNode_t *codegen_call_unicodestring_assign_from_widechar_array(
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *addr_reg,
+    Register_t *value_reg, int max_count) {
+  if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+    return inst_list;
+
+  if (codegen_target_is_windows()) {
+    {
+      Register_t *u[] = {addr_reg};
+      inst_list =
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+    }
+    {
+      Register_t *u[] = {value_reg};
+      inst_list =
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+    }
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", max_count);
+    inst_list = add_inst(inst_list, buffer);
+  } else {
+    {
+      Register_t *u[] = {addr_reg};
+      inst_list =
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+    }
+    {
+      Register_t *u[] = {value_reg};
+      inst_list =
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+    }
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", max_count);
+    inst_list = add_inst(inst_list, buffer);
+  }
+
+  inst_list = codegen_vect_reg(inst_list, 0);
+  inst_list = codegen_call_with_shadow_space(
+      inst_list, "kgpc_unicodestring_assign_from_widechar_array");
+  free_arg_regs();
+  return inst_list;
+}
+
 /* Check if an array access expression targets a shortstring element.
  * This handles cases like Names[0] where Names is array[...] of ShortString. */
 int codegen_array_access_targets_shortstring(const struct Expression *expr,
