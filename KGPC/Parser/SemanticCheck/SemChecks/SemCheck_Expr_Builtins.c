@@ -3350,6 +3350,26 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
   }
 
   if (kgpc_type_is_string(arg_kgpc_type) && !arg_expr->is_array_expr) {
+    /* ShortString has a fixed capacity, so Low/High are compile-time
+     * constants of the declared type: Low(s)=0, High(s)=capacity (255 for a
+     * plain ShortString, N for string[N]).  Only dynamic strings
+     * (Ansi/Wide/Unicode) have Low=1 and High=Length(s).  Folding a
+     * ShortString's High to Length is wrong and silently breaks RTL scanners
+     * such as text.inc's NextChar (`if length(s) < high(s) then {append}`):
+     * with High==Length the guard is always false, so nothing is appended and
+     * fpc_Read_Text_SInt/Float read an empty buffer and return 0. */
+    if (semcheck_expr_is_shortstring_ctx(arg_expr, symtab)) {
+      long long ss_high = 255;
+      if (kgpc_type_is_shortstring(arg_kgpc_type)) {
+        long long sz = kgpc_type_sizeof(arg_kgpc_type);
+        if (sz > 1 && sz <= 256)
+          ss_high = sz - 1;
+      }
+      semcheck_replace_call_with_integer_literal(expr, is_high ? ss_high : 0);
+      *type_return = LONGINT_TYPE;
+      return 0;
+    }
+
     if (!is_high) {
       semcheck_replace_call_with_integer_literal(expr, 1);
       *type_return = LONGINT_TYPE;
