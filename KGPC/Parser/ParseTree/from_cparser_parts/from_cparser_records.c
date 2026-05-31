@@ -1186,6 +1186,7 @@ struct RecordType *convert_class_type_ex(const char *class_name,
       NULL; /* Methods list will be populated during semantic checking */
   record->is_class = 1;
   record->is_interface = 0;
+  record->is_object = 0;
   record->is_packed = 0;
   record->is_type_helper = 0;
   record->helper_base_type_id = NULL;
@@ -2107,6 +2108,7 @@ struct RecordType *convert_record_type_ex(ast_t *record_node,
   record->method_templates = list_builder_finish(&method_template_builder);
   record->is_class = 0;
   record->is_interface = 0;
+  record->is_object = (record_node->typ == PASCAL_T_OBJECT_TYPE);
   record->is_packed =
       (record_node->sym != NULL && record_node->sym->name != NULL &&
        (strcasecmp(record_node->sym->name, "packed") == 0 ||

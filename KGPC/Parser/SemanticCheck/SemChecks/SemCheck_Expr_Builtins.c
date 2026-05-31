@@ -3350,6 +3350,26 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
   }
 
   if (kgpc_type_is_string(arg_kgpc_type) && !arg_expr->is_array_expr) {
+    /* ShortString has a fixed capacity, so Low/High are compile-time
+     * constants of the declared type: Low(s)=0, High(s)=capacity (255 for a
+     * plain ShortString, N for string[N]).  Only dynamic strings
+     * (Ansi/Wide/Unicode) have Low=1 and High=Length(s).  Folding a
+     * ShortString's High to Length is wrong and silently breaks RTL scanners
+     * such as text.inc's NextChar (`if length(s) < high(s) then {append}`):
+     * with High==Length the guard is always false, so nothing is appended and
+     * fpc_Read_Text_SInt/Float read an empty buffer and return 0. */
+    if (semcheck_expr_is_shortstring_ctx(arg_expr, symtab)) {
+      long long ss_high = 255;
+      if (kgpc_type_is_shortstring(arg_kgpc_type)) {
+        long long sz = kgpc_type_sizeof(arg_kgpc_type);
+        if (sz > 1 && sz <= 256)
+          ss_high = sz - 1;
+      }
+      semcheck_replace_call_with_integer_literal(expr, is_high ? ss_high : 0);
+      *type_return = LONGINT_TYPE;
+      return 0;
+    }
+
     if (!is_high) {
       semcheck_replace_call_with_integer_literal(expr, 1);
       *type_return = LONGINT_TYPE;
@@ -3438,7 +3458,11 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         } else if (pascal_identifier_equals(target_name, "QWord") ||
                    pascal_identifier_equals(target_name, "UInt64")) {
           low = 0;
-          high = 9223372036854775807LL;
+          /* High(QWord)=$FFFFFFFFFFFFFFFF stored as its raw 64-bit pattern;
+           * INT64_MAX truncated the limit and broke unsigned guards such as
+           * fpc_val_int64_shortstr's `lim:=High(lim)` (high bit cleared made
+           * every $8.. hex literal report "Error converting hexadecimal"). */
+          high = (long long)0xFFFFFFFFFFFFFFFFULL;
           have_bounds = 1;
           result_type = QWORD_TYPE;
         } else if (pascal_identifier_equals(target_name, "Boolean")) {
@@ -3505,8 +3529,12 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     return 0;
   }
   if (arg_type == QWORD_TYPE) {
+    /* High(QWord)=$FFFFFFFFFFFFFFFF.  i_num is signed long long, so store the
+     * raw 64-bit pattern (-1); the resolved QWord type makes codegen treat it
+     * as unsigned.  Using INT64_MAX here silently truncated the limit and broke
+     * unsigned overflow guards such as fpc_val_int64_shortstr's `lim:=High(lim)`. */
     semcheck_replace_call_with_integer_literal(
-        expr, is_high ? 9223372036854775807LL : 0LL);
+        expr, is_high ? (long long)0xFFFFFFFFFFFFFFFFULL : 0LL);
     semcheck_expr_set_resolved_type(expr, QWORD_TYPE);
     *type_return = QWORD_TYPE;
     return 0;

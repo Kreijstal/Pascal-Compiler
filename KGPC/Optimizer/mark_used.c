@@ -393,6 +393,19 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
     const char *lookup_id = expr->expr_data.function_call_data.mangled_id;
     if (lookup_id == NULL)
       lookup_id = expr->expr_data.function_call_data.id;
+    /* Windows --no-stdlib: codegen retargets the kgpc_text_eof / kgpc_file_eof
+     * runtime call to the FPC RTL Eof (eof_t / eof_f) so a win64 Reset'd file's
+     * CreateFile HANDLE is reachable (see codegen_resolve_function_call_target).
+     * The AST still carries the kgpc_ mangled_id, so seed the RTL Eof here —
+     * exactly where Eof is used — or DCE would drop it (undefined reference).
+     * mark_subprograms_by_id matches the secondary index, keyed by the unmangled
+     * source id "eof" (shared by all Eof overloads), so seeding "eof" marks both
+     * eof_t and eof_f. */
+    if (lookup_id != NULL && target_windows_flag() && no_stdlib_flag() &&
+        (strcmp(lookup_id, "kgpc_text_eof") == 0 ||
+         strcmp(lookup_id, "kgpc_file_eof") == 0)) {
+      mark_subprograms_by_id(map, "eof");
+    }
     Tree_t *called_sub = NULL;
     if (trace_tfplistenum_flag() &&
         expr->expr_data.function_call_data.is_constructor_call) {
@@ -696,6 +709,48 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
   }
 }
 
+/* Windows --no-stdlib: KGPC normally lowers Write/WriteLn to its own
+ * kgpc_write_* C runtime, so the FPC RTL text-write compilerprocs are never
+ * referenced and mark_used would prune them.  On Windows codegen routes a
+ * Write to an explicit Text file through the RTL instead (so the file's
+ * CreateFile HANDLE is written via the RTL FileWriteFunc->WriteFile rather
+ * than KGPC's FILE*-only path, which can't reach a win64 HANDLE).  Seed the
+ * RTL write entry points as roots here so they (and their transitive deps
+ * Write_Str / Str_real / fpc_WriteBuffer / FileWriteFunc / do_write) are
+ * emitted.  Matched case-insensitively against the parsed RTL source names. */
+static void seed_rtl_text_write_functions(SubprogramMap *map) {
+  static const char *const fns[] = {
+      "fpc_Write_Text_ShortStr",         "fpc_Write_Text_AnsiStr",
+      "fpc_Write_Text_PChar_As_Pointer", "fpc_Write_Text_UnicodeStr",
+      "fpc_Write_Text_Char",             "fpc_Write_Text_Boolean",
+      "fpc_Write_Text_Float",            "fpc_Write_Text_SInt",
+      "fpc_Write_Text_UInt",             "fpc_Write_Text_Pchar_as_Array",
+      "fpc_Writeln_End",                 "fpc_Write_End",
+      /* Flushed at program exit (codegen emits the call) so RTL-buffered std
+       * writes reach a redirected stdout/stderr, matching FPC's InternalExit. */
+      "SysFlushStdIO"};
+  for (size_t i = 0; i < sizeof(fns) / sizeof(fns[0]); ++i)
+    mark_subprograms_by_id(map, fns[i]);
+}
+
+/* Symmetric to seed_rtl_text_write_functions: KGPC lowers Read/ReadLn to its
+ * own kgpc_text_readln_into C runtime, so the FPC RTL text-read compilerprocs
+ * would be pruned.  On Windows codegen routes an AnsiString Read/ReadLn from an
+ * explicit Text file through the RTL (a win64 Reset'd file's CreateFile HANDLE
+ * can't be reached by KGPC's FILE*-only read path — every read would see
+ * immediate EOF).  Seed the RTL read entry points so they and their transitive
+ * deps (ReadPCharLen / fpc_ReadBuffer / FileReadFunc / do_read) are emitted.
+ * Only the AnsiString reader plus the line/record terminators are routed (see
+ * route_rtl in codegen_builtin_read_like); Eof is seeded separately in
+ * mark_expr_calls (it is an expression, and its kgpc_text_eof mangled_id is
+ * retargeted to eof_t only in codegen). */
+static void seed_rtl_text_read_functions(SubprogramMap *map) {
+  static const char *const fns[] = {"fpc_Read_Text_AnsiStr", "fpc_ReadLn_End",
+                                    "fpc_Read_End"};
+  for (size_t i = 0; i < sizeof(fns) / sizeof(fns[0]); ++i)
+    mark_subprograms_by_id(map, fns[i]);
+}
+
 static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
   if (stmt == NULL)
     return;
@@ -705,6 +760,19 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
     const char *lookup_id = stmt->stmt_data.procedure_call_data.mangled_id;
     if (lookup_id == NULL)
       lookup_id = stmt->stmt_data.procedure_call_data.id;
+    /* Seed the FPC RTL text-write subsystem for a Write/WriteLn on a Windows
+     * --no-stdlib build (see the helper).  Codegen only routes Text-file
+     * writes through the RTL; for a fileless-only program the seeded functions
+     * are emitted but never called (harmless — PE ld does not gc them). */
+    if (target_windows_flag() && no_stdlib_flag()) {
+      const char *pid = stmt->stmt_data.procedure_call_data.id;
+      if (pid != NULL &&
+          (strcasecmp(pid, "write") == 0 || strcasecmp(pid, "writeln") == 0))
+        seed_rtl_text_write_functions(map);
+      if (pid != NULL &&
+          (strcasecmp(pid, "read") == 0 || strcasecmp(pid, "readln") == 0))
+        seed_rtl_text_read_functions(map);
+    }
     Tree_t *called_sub = NULL;
     if (lookup_id != NULL) {
       called_sub = map_find(map, lookup_id);
@@ -1013,8 +1081,15 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
         int is_ref_insn = 0;
         if ((mnem_len == 4 && strncmp(mnem_start, "call", 4) == 0) ||
             (mnem_len == 5 && strncmp(mnem_start, "callq", 5) == 0) ||
-            (mnem_len == 3 && strncmp(mnem_start, "jmp", 3) == 0) ||
-            (mnem_len == 4 && strncmp(mnem_start, "jmpq", 4) == 0) ||
+            /* The whole jump family takes a label/symbol target: jmp/jmpq and
+             * every conditional jcc (jg, jle, jne, jae, js, ...).  Inline-asm
+             * RTL routines branch to sibling helpers this way — e.g. FillChar's
+             * `jg FillXxxx_MoreThanTwoXmms` — so the conditional jumps must be
+             * scanned too, not just jmp, or the target body is never marked
+             * used and DCE drops it (undefined reference at link).  No
+             * non-branch x86 mnemonic begins with 'j'; branches to local `.L`
+             * labels simply miss the subprogram map and are harmless. */
+            (mnem_len >= 2 && mnem_len <= 6 && mnem_start[0] == 'j') ||
             (mnem_len == 4 && strncmp(mnem_start, "leaq", 4) == 0) ||
             (mnem_len == 4 && strncmp(mnem_start, "movq", 4) == 0) ||
             (mnem_len == 3 && strncmp(mnem_start, "lea", 3) == 0) ||

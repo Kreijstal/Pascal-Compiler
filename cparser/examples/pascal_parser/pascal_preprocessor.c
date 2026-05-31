@@ -1376,6 +1376,10 @@ static bool handle_directive(PascalPreprocessor *pp, const char *filename,
         strcmp(keyword, "ALIGN") == 0 || strcmp(keyword, "PACKRECORDS") == 0 ||
         strcmp(keyword, "ASMMODE") == 0 || strcmp(keyword, "PACKENUM") == 0 ||
         strcmp(keyword, "PACKSET") == 0 || strcmp(keyword, "BITPACKING") == 0 ||
+        strcmp(keyword, "MINENUMSIZE") == 0 || strcmp(keyword, "PUSH") == 0 ||
+        strcmp(keyword, "POP") == 0 || strcmp(keyword, "SCOPEDENUMS") == 0 ||
+        strcmp(keyword, "Z") == 0 || strcmp(keyword, "Z1") == 0 ||
+        strcmp(keyword, "Z2") == 0 || strcmp(keyword, "Z4") == 0 ||
         strcmp(keyword, "ASSERTIONS") == 0 ||
         strcmp(keyword, "OPTIMIZATION") == 0 ||
         strcmp(keyword, "INLINE") == 0 || strcmp(keyword, "GOTO") == 0 ||
@@ -1452,6 +1456,10 @@ static bool handle_directive(PascalPreprocessor *pp, const char *filename,
         strcmp(keyword, "ALIGN") == 0 || strcmp(keyword, "PACKRECORDS") == 0 ||
         strcmp(keyword, "PACKENUM") == 0 || strcmp(keyword, "PACKSET") == 0 ||
         strcmp(keyword, "BITPACKING") == 0 ||
+        strcmp(keyword, "MINENUMSIZE") == 0 || strcmp(keyword, "PUSH") == 0 ||
+        strcmp(keyword, "POP") == 0 || strcmp(keyword, "SCOPEDENUMS") == 0 ||
+        strcmp(keyword, "Z") == 0 || strcmp(keyword, "Z1") == 0 ||
+        strcmp(keyword, "Z2") == 0 || strcmp(keyword, "Z4") == 0 ||
         strcmp(keyword, "ASSERTIONS") == 0 ||
         strcmp(keyword, "OPTIMIZATION") == 0 ||
         strcmp(keyword, "INLINE") == 0 || strcmp(keyword, "GOTO") == 0 ||

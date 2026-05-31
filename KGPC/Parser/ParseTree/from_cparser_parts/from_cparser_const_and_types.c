@@ -3257,6 +3257,8 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
       type_info->is_enum = 1;
       type_info->enum_is_scoped =
           from_cparser_scopedenums_enabled_at_line(spec_node->line);
+      type_info->enum_min_size =
+          from_cparser_packenum_min_at_index(spec_node->index);
       ListBuilder enum_builder;
       ListBuilder enum_value_builder;
       list_builder_init(&enum_builder);

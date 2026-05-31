@@ -2622,7 +2622,48 @@ static ListNode_t *codegen_builtin_dispose(struct Statement *stmt,
   }
 
   Register_t *addr_reg = NULL;
-  inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+  /* kgpc_dispose takes a void** (the address of the pointer slot) so it can
+   * free *slot and nil the slot.  For an addressable target that slot is the
+   * variable itself.  But a non-addressable rvalue argument — e.g.
+   * Dispose(pderef(List[i])) where List[i] is a default-indexed property whose
+   * getter returns the pointer by value — has no storage of its own.  Evaluate
+   * it to the pointer value, spill that into a stack temp, and pass the temp's
+   * address: kgpc_dispose then frees the correct pointer and nils the dead
+   * temp (FPC's Dispose does not nil the source anyway).  Doing this only here,
+   * rather than in codegen_address_for_expr, keeps the address-of a
+   * non-addressable class/record rvalue (whose value already serves as its
+   * address) unchanged for every other caller. */
+  if (!codegen_expr_is_addressable(target_expr)) {
+    Register_t *value_reg = NULL;
+    inst_list = codegen_evaluate_expr(target_expr, inst_list, ctx, &value_reg);
+    if (codegen_had_error(ctx) || value_reg == NULL)
+      return inst_list;
+    StackNode_t *temp_slot = add_l_t_bytes("dispose_rvalue_tmp", 8);
+    if (temp_slot == NULL) {
+      free_reg(get_reg_stack(), value_reg);
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate temp slot for Dispose argument.");
+      return inst_list;
+    }
+    {
+      Register_t *u[] = {value_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n",
+               temp_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+    }
+    {
+      Register_t *d[] = {value_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+               temp_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+    }
+    addr_reg = value_reg;
+  } else {
+    inst_list =
+        codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+  }
   if (codegen_had_error(ctx) || addr_reg == NULL)
     return inst_list;
 
@@ -2807,8 +2848,27 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt,
     }
 
     const int expr_is_real = (expr_type == REAL_TYPE);
-    const char *file_dest64 = current_arg_reg64(0);
-    const char *width_dest64 = current_arg_reg64(1);
+    /* Windows --no-stdlib: route a write to an explicit Text file through the
+     * FPC RTL fpc_Write_Text_* path instead of KGPC's kgpc_write_*.  KGPC's
+     * runtime can only output via a FILE*, and a win64 Rewrite'd file's
+     * TextRec.Handle is a CreateFile HANDLE (not a CRT fd / GetStdHandle
+     * value), so kgpc_textrec_get_stream can't map it and the write leaks to
+     * stdout.  The RTL's FileWriteFunc->WriteFile uses the HANDLE directly.
+     * (mark_used seeds these RTL functions so they are emitted.)  The RTL ABI
+     * is (Len:Longint; var f:Text; value): Len=arg0, @f=arg1, value=arg2 —
+     * value lands in arg2 in the kgpc ABI too, so the value marshalling below
+     * is reused; only arg0/arg1 swap (Len<->file), the no-width default (0 vs
+     * -1) and the call target differ.  REAL (stacked float arg) and plain
+     * char-arrays (open-array ABI) are not yet mapped, so they keep the kgpc
+     * path. */
+    const int route_rtl =
+        has_file_arg && no_stdlib_flag() && codegen_target_is_windows() &&
+        !expr_is_real &&
+        !(expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr &&
+          expr->array_element_type == CHAR_TYPE &&
+          !codegen_expr_is_shortstring_array(expr));
+    const char *file_dest64 = current_arg_reg64(route_rtl ? 1 : 0);
+    const char *width_dest64 = current_arg_reg64(route_rtl ? 0 : 1);
     const char *precision_dest64 = current_arg_reg64(2);
     const char *value_dest64 = current_arg_reg64(expr_is_real ? 3 : 2);
 
@@ -2935,7 +2995,10 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt,
         inst_list = add_inst(inst_list, buffer);
       }
     } else {
-      snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+      /* No field width: kgpc_write_* takes -1 (its "unspecified" sentinel);
+       * the FPC RTL fpc_Write_Text_* takes 0 (non-iso default Len). */
+      snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+               route_rtl ? "$0" : "$-1", width_dest64);
       inst_list = add_inst(inst_list, buffer);
     }
 
@@ -3074,6 +3137,38 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt,
       call_target =
           "kgpc_write_integer"; // Print pointers as integers (addresses)
 
+    /* Remap the kgpc_write_* target to the matching FPC RTL fpc_Write_Text_*
+     * entry point when routing a Text-file write through the RTL (see the
+     * route_rtl note above).  Same (Len, @f, value) ABI; the value already
+     * sits in arg2.  Strings use fpc_Write_Text_PChar_As_Pointer, which takes
+     * a plain PAnsiChar — exactly KGPC's C-string/ansistring-data pointer — so
+     * no FPC-ansistring materialisation is needed.  KGPC emits these RTL
+     * compilerprocs under their plain source names (and the [Public,Alias]
+     * uppercase names for ShortStr/AnsiStr). */
+    if (route_rtl) {
+      /* On a 64-bit target FPC compiles only the ValSInt/ValUInt (64-bit)
+       * integer writers; the longint/longword/int64/qword variants are
+       * {$ifdef}-gated out (text.inc).  The value is already sign/zero-extended
+       * to 64 bits in arg2 by the marshalling above, so all integer widths map
+       * to SInt/UInt. */
+      if (expr_type == POINTER_TYPE)
+        call_target = "fpc_Write_Text_UInt";
+      else if (strcmp(call_target, "kgpc_write_shortstring") == 0)
+        call_target = "FPC_WRITE_TEXT_SHORTSTR";
+      else if (strcmp(call_target, "kgpc_write_string") == 0)
+        call_target = "fpc_Write_Text_PChar_As_Pointer";
+      else if (strcmp(call_target, "kgpc_write_unicodestring") == 0)
+        call_target = "fpc_Write_Text_UnicodeStr";
+      else if (strcmp(call_target, "kgpc_write_boolean") == 0)
+        call_target = "fpc_Write_Text_Boolean";
+      else if (strcmp(call_target, "kgpc_write_char") == 0)
+        call_target = "fpc_Write_Text_Char";
+      else if (strcmp(call_target, "kgpc_write_unsigned") == 0)
+        call_target = "fpc_Write_Text_UInt";
+      else if (strcmp(call_target, "kgpc_write_integer") == 0)
+        call_target = "fpc_Write_Text_SInt";
+    }
+
     if (has_file_arg && (file_spill != NULL || file_reg != NULL)) {
       if (file_spill != NULL) {
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
@@ -3143,7 +3238,15 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt,
 
     inst_list = codegen_vect_reg(inst_list, 0);
 
-    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_write_newline");
+    /* When the value args were routed to the FPC RTL (Windows --no-stdlib with
+     * an explicit Text file), terminate the line via the RTL fpc_Writeln_End
+     * (var f) so the EOL + flush go through the same TextRec buffer/handle the
+     * values did.  fpc_Writeln_End takes @f in arg0, already set above. */
+    if (has_file_arg && no_stdlib_flag() && codegen_target_is_windows())
+      inst_list = codegen_call_with_shadow_space(inst_list, "fpc_Writeln_End");
+    else
+      inst_list =
+          codegen_call_with_shadow_space(inst_list, "kgpc_write_newline");
 
     free_arg_regs();
   }
@@ -3209,6 +3312,38 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt,
     }
   }
 
+  /* Windows --no-stdlib: route a read from an explicit Text file through the
+   * FPC RTL fpc_Read_Text_AnsiStr / fpc_ReadLn_End path instead of KGPC's
+   * kgpc_text_readln_into.  Symmetric to the write routing (see
+   * codegen_builtin_write_like): a win64 Reset'd file's TextRec.Handle is a
+   * CreateFile HANDLE (not a CRT fd / GetStdHandle value), so KGPC's
+   * FILE*-only read path can't reach it and every read sees immediate EOF.
+   * The RTL reads through TextRec.InOutFunc->FileReadFunc on the HANDLE.
+   * fpc_Read_Text_AnsiStr is (var f; out s; cp) — @f in arg0, @s in arg1 — the
+   * (file, addr) layout KGPC already sets up; only the call target and a
+   * trailing codepage arg are added.  mark_used seeds the RTL functions.
+   *
+   * Scope: only AnsiString reads (and Eof, routed in codegen/mark_used) are
+   * routed.  The FPC numeric readers (fpc_Read_Text_SInt/Float) and the
+   * shortstring reader were verified to misbehave through this path (the
+   * numeric value parser returns 0), and KGPC types `string[N]` as CHAR_TYPE,
+   * so a blanket char route would corrupt a shortstring target — those stay on
+   * the kgpc path (still pending for win64, like the write side's deferral of
+   * REAL / open-array).  route_rtl therefore requires EVERY value argument to
+   * be a plain AnsiString, so the value reads and the fpc_ReadLn_End tail
+   * always agree on the path. */
+  int route_rtl =
+      has_file_arg && no_stdlib_flag() && codegen_target_is_windows();
+  if (route_rtl) {
+    for (ListNode_t *scan = args; scan != NULL; scan = scan->next) {
+      struct Expression *a = (struct Expression *)scan->cur;
+      if (a == NULL || expr_get_type_tag(a) != STRING_TYPE) {
+        route_rtl = 0;
+        break;
+      }
+    }
+  }
+
   /* Process each argument to read */
   while (args != NULL) {
     struct Expression *expr = (struct Expression *)args->cur;
@@ -3269,10 +3404,26 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt,
                addr_spill->offset, string_dest64);
       inst_list = add_inst(inst_list, buffer);
 
-      /* Call kgpc_text_readln_into for string reading */
-      inst_list = codegen_vect_reg(inst_list, 0);
-      inst_list =
-          codegen_call_with_shadow_space(inst_list, "kgpc_text_readln_into");
+      if (route_rtl) {
+        /* fpc_Read_Text_AnsiStr(var f; out s : RawByteString; cp) reads the
+         * rest of the line (no EOL consumed) into the ansistring at @s.  cp =
+         * CP_ACP (0): TranslatePlaceholderCP maps it to DefaultSystemCodePage,
+         * which equals the file's TextRec.CodePage, so no recoding pass runs —
+         * the same value FPC's own compiler passes for Read(text, ansistring).
+         * The trailing EOL is consumed by fpc_ReadLn_End (the readln-end tail
+         * below), so read_consumed_line is left clear unlike the kgpc path. */
+        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n",
+                 current_arg_reg32(2), current_arg_reg32(2));
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list,
+                                                   "FPC_READ_TEXT_ANSISTR");
+      } else {
+        /* Call kgpc_text_readln_into for string reading */
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list =
+            codegen_call_with_shadow_space(inst_list, "kgpc_text_readln_into");
+      }
       free_arg_regs();
 
       /* Invalidate static link cache after call */
@@ -3282,7 +3433,9 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt,
         ctx->static_link_reg_level = 0;
       }
 
-      if (read_line)
+      /* kgpc_text_readln_into already consumes the EOL; the RTL path defers
+       * that to fpc_ReadLn_End in the readln-end tail. */
+      if (read_line && !route_rtl)
         read_consumed_line = 1;
 
       args = args->next;
@@ -3343,7 +3496,10 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt,
     const char *file_dest64 = current_arg_reg64(0);
     const char *addr_dest64 = current_arg_reg64(1);
 
-    /* Determine which read function to call based on type */
+    /* Determine which read function to call based on type.  These scalar reads
+     * stay on the kgpc path even on Windows --no-stdlib: route_rtl only becomes
+     * true when every value argument is a plain AnsiString (see its note), so a
+     * non-string read here is never RTL-routed. */
     const char *read_func = NULL;
     switch (expr_type) {
     case INT_TYPE:
@@ -3409,8 +3565,11 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt,
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list =
-        codegen_call_with_shadow_space(inst_list, "kgpc_text_readln_discard");
+    /* RTL-routed reads leave the trailing EOL in the buffer (fpc_Read_Text_*
+     * stop at it without consuming); fpc_ReadLn_End(var f) skips it through the
+     * same TextRec the value reads used.  @f is already in arg0. */
+    inst_list = codegen_call_with_shadow_space(
+        inst_list, route_rtl ? "FPC_READLN_END" : "kgpc_text_readln_discard");
     free_arg_regs();
   }
 

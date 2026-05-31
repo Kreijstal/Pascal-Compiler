@@ -26,6 +26,14 @@ static int FLAG_ASM_DEBUG_COMMENTS = 0;
 static int FLAG_DISABLE_DCE = 0;
 static int FLAG_STDLIB_LOADED = 0;
 
+/* Flag set when the bundled KGPC stdlib is skipped (--no-stdlib / -Us): the
+ * program supplies its own RTL (e.g. the FPC RTL from source).  In that mode
+ * KGPC must NOT substitute its C-runtime stdio for the RTL's own standard text
+ * files (Input/Output/StdErr/...): the RTL initialises them itself (on Win64
+ * via OpenStdIO binding StdErr to StdErrorHandle), and hijacking them to the C
+ * runtime sends WriteLn(stderr,...) to the wrong OS handle. */
+static int FLAG_NO_STDLIB = 0;
+
 /* Flag for compiling the System unit (FPC -Us flag) */
 static int FLAG_COMPILE_SYSTEM_UNIT = 0;
 
@@ -71,6 +79,7 @@ void set_asm_debug_flag(void) { FLAG_ASM_DEBUG_COMMENTS = 1; }
 void set_disable_dce_flag(void) { FLAG_DISABLE_DCE = 1; }
 
 void set_stdlib_loaded_flag(int loaded) { FLAG_STDLIB_LOADED = loaded ? 1 : 0; }
+void set_no_stdlib_flag(int no_stdlib) { FLAG_NO_STDLIB = no_stdlib ? 1 : 0; }
 bool set_dump_ast_path(const char *path) {
   if (FLAG_DUMP_AST_PATH != NULL) {
     free(FLAG_DUMP_AST_PATH);
@@ -106,6 +115,8 @@ int disable_dce_flag(void) { return FLAG_DISABLE_DCE; }
 
 int stdlib_loaded_flag(void) { return FLAG_STDLIB_LOADED; }
 
+int no_stdlib_flag(void) { return FLAG_NO_STDLIB; }
+
 const char *dump_ast_path(void) { return FLAG_DUMP_AST_PATH; }
 
 void clear_dump_ast_path(void) {
@@ -120,6 +131,60 @@ int target_windows_flag(void) {
 }
 
 kgpc_target_abi_t current_target_abi(void) { return FLAG_TARGET_ABI; }
+
+int kgpc_target_filerec_size(void) {
+  /* Storage size of FPC's FileRec (rtl/inc/filerec.inc), which a typed/untyped
+   * file variable must reserve and which the RTL's InitFile zeroes with
+   * FillChar(f, SizeOf(FileRec), 0).  The layout is target-dependent:
+   *
+   *   field      | Linux x86_64        | Win64
+   *   -----------+---------------------+--------------------------
+   *   Handle     | THandle = Longint 4 | THandle = QWord 8 (+4 pad)
+   *   Mode       | longint 4           | longint 4
+   *   RecSize    | SizeInt 8           | SizeInt 8
+   *   _private   | 64                  | 64
+   *   UserData   | 32                  | 32
+   *   name       | AnsiChar[0..255]256 | UnicodeChar[0..255] 512
+   *   FullName   | Pointer 8           | Pointer 8
+   *   -----------+---------------------+--------------------------
+   *   total      | 376                 | 640
+   *
+   * `name`'s element type is TFileTextRecChar (systemh.inc): AnsiChar on
+   * Unix (FPC_ANSI_TEXTFILEREC) and UnicodeChar on Windows.  FullName is
+   * present on both targets (USE_FILEREC_FULLNAME follows
+   * FPC_HAS_FEATURE_UNICODESTRINGS).  A wrong size here under-allocates the
+   * file variable so InitFile's zero-fill overruns into the adjacent symbol. */
+  return target_windows_flag() ? 640 : 376;
+}
+
+int kgpc_target_textrec_size(void) {
+  /* Storage size of FPC's TextRec (rtl/inc/textrec.inc), which a Text
+   * variable must reserve and which the RTL's text init zeroes.  Like
+   * FileRec the layout is target-dependent:
+   *
+   *   field      | Linux x86_64        | Win64
+   *   -----------+---------------------+--------------------------
+   *   Handle     | THandle = Longint 4 | THandle = QWord 8 (+4 pad)
+   *   Mode       | longint 4           | longint 4
+   *   bufsize..  | 6 * SizeInt/ptr 48  | 6 * SizeInt/ptr 48
+   *   4 funcptrs | 32                  | 32
+   *   UserData   | 32                  | 32
+   *   name       | AnsiChar[0..255]256 | UnicodeChar[0..255] 512
+   *   LineEnd    | string[3] 4         | string[3] 4
+   *   buffer     | AnsiChar[0..255]256 | AnsiChar[0..255] 256
+   *   CodePage   | Word 2 (+pad)       | Word 2 (+pad)
+   *   FullName   | Pointer 8           | Pointer 8
+   *   -----------+---------------------+--------------------------
+   *   total      | 640                 | 904
+   *
+   * As with FileRec, `name`'s element is TFileTextRecChar — AnsiChar on
+   * Unix, UnicodeChar (2 bytes) on Windows — so on Win64 it grows by 256
+   * bytes; together with the wider THandle (+4) and its alignment pad (+4)
+   * that lifts the record from 640 to 904.  The `buffer` field (256 bytes)
+   * makes a wrong size here especially dangerous: writing a Text var's
+   * buffer overruns far past the allocation into adjacent symbols. */
+  return target_windows_flag() ? 904 : 640;
+}
 
 void set_compile_system_unit_flag(void) { FLAG_COMPILE_SYSTEM_UNIT = 1; }
 

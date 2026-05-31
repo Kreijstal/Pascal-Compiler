@@ -289,25 +289,16 @@ static long long fpc_set_storage_size_from_alias(SymTab_t *symtab,
 
 static long long
 fpc_enum_storage_size_from_alias(const struct TypeAlias *alias) {
-  if (alias != NULL && alias->storage_size > 0)
-    return alias->storage_size;
-  if (alias != NULL && alias->range_known) {
-    if (alias->range_start >= 0 && alias->range_end <= 0xff)
-      return 1;
-    if (alias->range_start >= 0 && alias->range_end <= 0xffff)
-      return 2;
+  /* FPC's default minimum enumeration size is 4 bytes ({$PACKENUM 4}/{$Z4}).
+   * Under {$PACKENUM 1}/{$Z1} (or 2) an enum shrinks to the smallest size that
+   * holds its ordinal range, but never below the directive minimum. Delegates
+   * to kgpc_enum_storage_size_for so this stays in sync with KgpcType.c. */
+  if (alias == NULL)
     return 4;
-  }
-  if (alias != NULL && alias->enum_literals != NULL) {
-    int count = list_length(alias->enum_literals);
-    if (count <= 0)
-      return 4;
-    if (count <= 0x100)
-      return 1;
-    if (count <= 0x10000)
-      return 2;
-  }
-  return 4;
+  if (alias->storage_size > 0)
+    return alias->storage_size;
+  return kgpc_enum_storage_size_for(alias->enum_min_size, alias->range_known,
+                                    alias->range_start, alias->range_end);
 }
 
 long long sizeof_from_type_tag(int type_tag) {
@@ -343,13 +334,9 @@ long long sizeof_from_type_tag(int type_tag) {
   case ENUM_TYPE:
     return 4;
   case FILE_TYPE:
-    return 368;
+    return kgpc_target_filerec_size();
   case TEXT_TYPE:
-    /* On Win64 FPC's TextRec.Handle is THandle = QWord (8 bytes) per
-     * rtl/win/sysosh.inc; the field grows by 4 bytes and 4 bytes of
-     * padding before BufSize push the total layout to 648 bytes.  On
-     * Linux THandle = LongInt (4 bytes) and the record fits in 640. */
-    return target_windows_flag() ? 648 : 640;
+    return kgpc_target_textrec_size();
   case PROCEDURE:
     return POINTER_SIZE_BYTES;
   case SHORTSTRING_TYPE:
@@ -544,15 +531,17 @@ static int get_record_alignment(SymTab_t *symtab, struct RecordType *record,
   if (depth > SIZEOF_RECURSION_LIMIT)
     return 1;
 
-  /* If size is already cached, derive alignment from it to avoid
-   * re-walking potentially cyclic type graphs. */
-  if (record->has_cached_size) {
-    int align = fpc_size_to_alignment(record->cached_size);
-    if (align > POINTER_SIZE_BYTES)
-      align = POINTER_SIZE_BYTES;
-    return align;
-  }
-
+  /* A record's alignment is the maximum alignment of its members, NOT a value
+   * derived from its total size: e.g. FILETIME = record lo, hi: DWORD end has
+   * size 8 but alignment 4 (its widest member is a 4-byte DWORD).  Deriving
+   * alignment from size (fpc_size_to_alignment(8) -> 8) over-aligns such
+   * records and corrupts the layout of any struct embedding them — under
+   * {$PACKRECORDS C}, WIN32_FIND_DATAW's three FILETIME fields then push
+   * cFileName from offset 44 to 48, so FindFirstFileW's filenames are read
+   * 2 widechars short.  By-value record cycles are illegal in Pascal (pointer
+   * and class fields short-circuit to POINTER_SIZE_BYTES without recursing),
+   * and SIZEOF_RECURSION_LIMIT backstops any pathological nesting, so it is
+   * safe to always walk the members rather than shortcut on cached size. */
   int max_alignment = 1;
   if (record->parent_class_name != NULL && !record->parent_fields_merged &&
       symtab != NULL) {
@@ -568,15 +557,25 @@ static int get_record_alignment(SymTab_t *symtab, struct RecordType *record,
   }
 
   for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next) {
-    if (cur->type != LIST_RECORD_FIELD)
-      continue;
-    struct RecordField *field = (struct RecordField *)cur->cur;
-    /* Class variables are stored as globals, not in the instance layout */
-    if (field != NULL && field->is_class_var)
-      continue;
-    int field_align = get_field_alignment(symtab, field, depth + 1, line_num);
-    if (field_align > max_alignment)
-      max_alignment = field_align;
+    if (cur->type == LIST_RECORD_FIELD) {
+      struct RecordField *field = (struct RecordField *)cur->cur;
+      /* Class variables are stored as globals, not in the instance layout */
+      if (field != NULL && field->is_class_var)
+        continue;
+      int field_align = get_field_alignment(symtab, field, depth + 1, line_num);
+      if (field_align > max_alignment)
+        max_alignment = field_align;
+    } else if (cur->type == LIST_VARIANT_PART && cur->cur != NULL) {
+      /* The variant part's branches carry their own alignment (e.g. a
+       * `case ... of t_sym:(sym:Pointer)` branch is 8-aligned); without this
+       * the whole-record alignment would ignore pointer-sized variant fields
+       * and under-align records like tdwarfoper. */
+      struct VariantPart *variant = (struct VariantPart *)cur->cur;
+      int variant_align =
+          get_variant_part_alignment(symtab, variant, depth + 1, line_num);
+      if (variant_align > max_alignment)
+        max_alignment = variant_align;
+    }
   }
 
   return max_alignment;
@@ -635,6 +634,38 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field,
 
   if (field->type == RECORD_TYPE && field->type_id == NULL)
     return 1;
+
+  /* An anonymous `set of <named enum>` field stores the element type in
+   * set_element_type_id (the field's own type_id names no symbol).  Without
+   * this branch the fallthrough below resolves via sizeof_from_type_tag,
+   * which reports SET_TYPE as 4 bytes and therefore aligns the field to 4.
+   * FPC sizes a set whose largest member is >= 32 as 32 bytes and aligns it
+   * to the pointer size, so the natural-size path must resolve the real set
+   * width here.  This mirrors the field-size computation that already
+   * resolves set_element_type_id in compute_field_size_uncached. */
+  if (field->type == SET_TYPE && field->set_element_type_id != NULL &&
+      symtab != NULL) {
+    long long set_size = -1;
+    HashNode_t *elem_node =
+        semcheck_find_preferred_type_node(symtab, field->set_element_type_id);
+    if (elem_node != NULL) {
+      struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+      if (elem_alias != NULL) {
+        if (elem_alias->is_enum && elem_alias->enum_literals != NULL) {
+          int count = list_length(elem_alias->enum_literals);
+          if (count > 0)
+            set_size = fpc_default_set_storage_size_for_high((long long)count -
+                                                             1);
+        } else if (elem_alias->range_known)
+          set_size =
+              fpc_default_set_storage_size_for_high(elem_alias->range_end);
+      }
+    }
+    if (set_size > 0) {
+      int align = fpc_size_to_alignment(set_size);
+      return (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
+    }
+  }
 
   {
     int align = 1;

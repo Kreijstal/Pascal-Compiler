@@ -2591,6 +2591,43 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
                                mutating);
 }
 
+/* Returns non-zero when the WITH context that resolved field `id` is the
+ * synthetic `with Self do` wrapper KGPC inserts around instance method
+ * bodies.  Such a context behaves as if opened outside the method's own
+ * parameters/locals/result-var, so a same-named scope-0 symbol must shadow
+ * the Self member.  A user-written explicit WITH, by contrast, nests inside
+ * the function body and its fields shadow same-named scope-0 locals.
+ * The match is located the same innermost-first way semcheck_with_try_resolve
+ * scans the stack, so the flag reflects the WITH that actually resolved. */
+static int semcheck_with_match_is_synthetic_self(const char *id,
+                                                  SymTab_t *symtab,
+                                                  int line_num) {
+  for (size_t index = with_context_count; index > 0; --index) {
+    WithContextEntry *entry = &with_context_stack[index - 1];
+    if (entry->record_type == NULL)
+      continue;
+
+    struct RecordField *field_desc = NULL;
+    long long offset = 0;
+    int matches =
+        (resolve_record_field(symtab, entry->record_type, id, &field_desc,
+                              &offset, line_num, 1) == 0 &&
+         field_desc != NULL) ||
+        (semcheck_find_class_property(symtab, entry->record_type, id, NULL) !=
+         NULL) ||
+        (semcheck_find_class_method(symtab, entry->record_type, id, NULL) !=
+         NULL);
+    if (!matches)
+      continue;
+
+    struct Expression *ctx = entry->context_expr;
+    return (ctx != NULL && ctx->type == EXPR_VAR_ID &&
+            ctx->expr_data.id != NULL &&
+            pascal_identifier_equals(ctx->expr_data.id, "Self"));
+  }
+  return 0;
+}
+
 int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
                    int max_scope_lev, int mutating) {
   int return_val, scope_return;
@@ -2671,8 +2708,17 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
   int direct_value_scope = 0;
   HashNode_t *direct_value_node =
       semcheck_find_preferred_value_ident(symtab, id, &direct_value_scope);
-  int direct_current_scope_value =
+  /* A value symbol declared in the current (innermost) scope, i.e. scope 0. */
+  int has_current_scope_value =
       (direct_value_node != NULL && direct_value_scope == 0);
+  /* Whether the matching WITH is the synthetic `with Self do` wrapper that
+   * KGPC inserts around every instance method body.  See below: a
+   * user-written explicit WITH opens its record's fields as an inner scope
+   * that shadows the enclosing function locals/params (so the field wins
+   * over a same-named scope-0 local), whereas the synthetic Self wrapper is
+   * conceptually outside the method's own params/locals/result-var (so those
+   * win over a same-named Self member).  Determined per matched WITH below. */
+  int direct_current_scope_value = 0;
 
   struct Expression *with_expr = NULL;
   if (kgpc_getenv("KGPC_DEBUG_WITH") != NULL &&
@@ -2685,6 +2731,13 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
   }
   int with_status =
       semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
+  /* A same-named scope-0 symbol only shadows the WITH field when the matching
+   * WITH is the synthetic `with Self do` wrapper (method param/local/result
+   * shadows a Self member).  For a user-written explicit WITH the field
+   * shadows the scope-0 local, matching FPC. */
+  if (has_current_scope_value && with_context_count > 0 &&
+      semcheck_with_match_is_synthetic_self(id, symtab, expr->line_num))
+    direct_current_scope_value = 1;
   if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL && id != NULL &&
       pascal_identifier_equals(id, "_MonitorData")) {
     fprintf(

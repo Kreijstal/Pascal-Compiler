@@ -265,6 +265,18 @@ KGPC_ONLY_TESTS = {
 POSIX_ONLY_TESTS = {
     "tdd_baseunix_fpsigaction",   # fpsigaction → POSIX sigaction(2)
     "unix_wait_helpers_demo",     # fpFork / waitpid
+    # The tests below `uses BaseUnix`/`uses Unix`.  In KGPC's own stdlib those
+    # resolve to the portable shim units (KGPC/Units/baseunix.p, unix.p backed
+    # by runtime_baseunix.c / runtime_unix.c), so they run on any ABI.  Under
+    # --no-stdlib + the FPC RTL, `BaseUnix`/`Unix` are FPC's real rtl/unix
+    # units, which only exist for POSIX targets (there is no rtl/win64
+    # baseunix.pp), so they cannot compile on a native Windows ABI.
+    "gap_fpread_devnull",                    # BaseUnix.fpRead
+    "gap_fpwrite_devnull",                   # BaseUnix.fpWrite
+    "reg_sysutils_fpread",                   # BaseUnix.fpRead
+    "siginfo_shadow_runtime",                # BaseUnix/Unix sigaction
+    "tdd_baseunix_fpgetcwd_decl",            # BaseUnix.fpgetcwd
+    "tdd_fpexecl_rawbytestring_array_literal",  # Unix.fpexecl
 }
 
 # Tests that emit hardcoded SysV-ABI inline assembly and cannot run on any
@@ -283,6 +295,13 @@ FPC_RTL_ONLY_TESTS = {
 # exercise implicit System/ObjPas/FPC bootstrap behavior.
 FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "bitsizeof_const_expr",
+    # Pin the Windows std-I/O fix: with --no-stdlib KGPC must set the RTL's
+    # IsConsole=true at startup (sysinit.pp is never linked) so SysInitStdIO
+    # binds the standard handles via OpenStdIO. A regression makes WriteLn(StdErr,
+    # ...) leak onto stdout / a Rewrite'd text file's WriteLn leak onto stdout.
+    # These programs use no explicit unit, so list them here to run under the RTL.
+    "tdd_win_stderr_no_leak",
+    "tdd_win_textfile_write_no_leak",
     # Pins the FreeMem-bypasses-RTL fix: with --no-stdlib + FPC RTL, a regression
     # would route FreeMem(p) through libc free instead of MemoryManager.FreeMem,
     # producing a "double free or corruption" SIGABRT. Two-arg FreeMem(p, size)
@@ -461,6 +480,16 @@ def _discover_and_add_fpc_rtl_tests():
         def make_fpc_rtl_test(test_base_name):
             def test_method(self):
                 """FPC RTL test case."""
+                # Same platform classification as the non-FPC-RTL path: skip
+                # SysV-ABI-only and POSIX-only tests on a native Windows ABI.
+                # Under the FPC RTL these are even less runnable than under the
+                # KGPC stdlib — `uses BaseUnix`/`uses Unix` map to FPC's real
+                # rtl/unix units, which have no Windows variant.
+                if test_base_name in SYSV_ABI_ONLY_TESTS and IS_WINDOWS_ABI:
+                    self.skipTest("Test uses hardcoded SysV ABI registers / calling convention")
+                if test_base_name in POSIX_ONLY_TESTS and IS_WINDOWS_ABI \
+                        and not PLATFORM_ID.startswith(("cygwin", "msys")):
+                    self.skipTest("Test requires POSIX runtime features unavailable on this Windows ABI")
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl{EXE_EXT}")
@@ -677,11 +706,14 @@ def _add_pp_pas_bootstrap_test():
         #     3. pp_bootstrap compiles pp.pas -> tests/output/pp_stage2/pp_stage2
         #     4. pp_stage2 starts and prints the expected help banner.
         #
-        # pp_bootstrap needs prebuilt same-source RTL .ppu files for program
-        # compilation and for pp.pas self-hosting. If CI has only the FPCSource
-        # checkout, build a same-source compiler first, then use it to build
-        # those units. A distro FPC can build incompatible .ppu files even when
-        # it is good enough to seed the compiler build.
+        # pp_bootstrap needs the RTL .ppu files for program compilation and for
+        # pp.pas self-hosting.  These are built by pp_bootstrap ITSELF from the
+        # FPCSource checkout — a genuine self-host, with no host Pascal compiler
+        # involved.  (This previously seeded a same-source `ppcx64` from a distro
+        # `fpc` and built the RTL with that, which made the "bootstrap" lean on
+        # an external compiler and hid every RTL-from-source codegen bug behind
+        # host-built .ppu.  Building the RTL with pp_bootstrap surfaces those
+        # bugs here instead.)
         helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
         assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
 
@@ -705,37 +737,15 @@ def _add_pp_pas_bootstrap_test():
             if os.path.isdir(prebuilt_units_dir):
                 shutil.rmtree(prebuilt_units_dir)
             make_bin = shutil.which("make")
-            fpc_bin = shutil.which("fpc")
             assert make_bin is not None, (
                 "make is required to build FPC RTL units for pp_bootstrap"
             )
-            assert fpc_bin is not None, (
-                "fpc is required to build prebuilt FPC RTL units for "
-                "pp_bootstrap helloworld verification"
-            )
-            compiler_dir = os.path.join(fpc_src, "compiler")
             rtl_linux_dir = os.path.join(fpc_src, "rtl", "linux")
-            same_source_fpc = os.path.join(
-                compiler_dir, "ppcx64" + (".exe" if os.name == "nt" else "")
-            )
-            try:
-                subprocess.run(
-                    [make_bin, "-C", compiler_dir, "ppcx64", "FPC=" + fpc_bin],
-                    check=True, capture_output=True, text=True, timeout=600,
-                )
-            except subprocess.CalledProcessError as e:
-                self.fail(
-                    "building same-source FPC compiler for pp_bootstrap failed\n"
-                    f"stdout:\n{(e.stdout or '')[:2000]}\n"
-                    f"stderr:\n{(e.stderr or '')[:2000]}"
-                )
-                return
-            except subprocess.TimeoutExpired:
-                self.fail("building same-source FPC compiler for pp_bootstrap timed out")
-                return
-            assert os.path.isfile(same_source_fpc), (
-                f"FPC compiler build did not produce {same_source_fpc}"
-            )
+            # Self-host: build the RTL .ppu with the just-built pp_bootstrap
+            # itself (no host fpc).  Any KGPC codegen bug in an RTL unit now
+            # fails the build here rather than being papered over by .ppu a
+            # distro compiler produced.
+            bootstrap_fpc = os.path.abspath(executable_file)
             try:
                 # `make all` (not `units`) is required: the `units` target
                 # only builds .ppu/.o pairs for Pascal units, but FPC's
@@ -750,19 +760,20 @@ def _add_pp_pas_bootstrap_test():
                         "-C",
                         rtl_linux_dir,
                         "all",
-                        "FPC=" + os.path.abspath(same_source_fpc),
+                        "FPC=" + bootstrap_fpc,
                     ],
-                    check=True, capture_output=True, text=True, timeout=600,
+                    check=True, capture_output=True, text=True, timeout=900,
                 )
             except subprocess.CalledProcessError as e:
                 self.fail(
-                    "building FPC RTL units for pp_bootstrap failed\n"
+                    "building FPC RTL units from source with pp_bootstrap "
+                    "failed (self-host RTL compile)\n"
                     f"stdout:\n{(e.stdout or '')[:2000]}\n"
                     f"stderr:\n{(e.stderr or '')[:2000]}"
                 )
                 return
             except subprocess.TimeoutExpired:
-                self.fail("building FPC RTL units for pp_bootstrap timed out")
+                self.fail("building FPC RTL units with pp_bootstrap timed out")
                 return
             assert os.path.isfile(prebuilt_system_ppu), (
                 f"FPC RTL build did not produce {prebuilt_system_ppu}"

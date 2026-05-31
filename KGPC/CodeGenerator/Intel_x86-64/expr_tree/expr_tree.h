@@ -37,4 +37,13 @@ int expr_tree_is_leaf(expr_node_t *);
 void print_expr_tree(expr_node_t *, int num_indent, FILE *);
 void free_expr_tree(expr_node_t *);
 
+/* Emit a NUL-terminated (or length-prefixed when emit_shortstring) string
+ * literal into rodata and load its address into target_reg.  Exposed so the
+ * assignment codegen can materialize a char literal as a PChar buffer. */
+ListNode_t *expr_tree_emit_string_literal_address(ListNode_t *inst_list,
+                                                  CodeGenContext *ctx,
+                                                  Register_t *target_reg,
+                                                  const char *value,
+                                                  int emit_shortstring);
+
 #endif

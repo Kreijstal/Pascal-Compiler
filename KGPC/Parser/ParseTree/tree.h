@@ -148,6 +148,10 @@ typedef struct Tree {
       int is_static_method;    /* 1 if method is static (no implicit Self) */
       int nostackframe; /* 1 if declared with nostackframe directive (skip
                            prologue/epilogue) */
+      int is_assembler; /* 1 if declared with the assembler directive: the asm
+                           body is solely responsible for the return value, so
+                           codegen must not emit a result-load epilogue that
+                           would clobber the register set by the asm block. */
       int is_varargs; /* 1 if declared with varargs directive (C-style variadic)
                        */
       int is_operator; /* 1 if declared with operator keyword (class operator,

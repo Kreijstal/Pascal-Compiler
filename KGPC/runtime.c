@@ -724,6 +724,27 @@ FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *default_stream) {
       return stream;
     }
   }
+#ifdef _WIN32
+  /* Win64 FPC RTL stores a Windows HANDLE in TextRec.Handle (from
+   * GetStdHandle/CreateFile), NOT a CRT fd, so the fd-based handling above
+   * cannot resolve it and falls through here.  Recognise the three standard
+   * handles and return the matching CRT stream — writing to C stderr/stdout
+   * reaches the same OS standard handle the RTL bound via OpenStdIO.  (KGPC's
+   * own stdlib stores CRT fds 0/1/2, which are handled above and never reach
+   * this point, so this is purely the external-RTL path.)  Reads the full
+   * 64-bit handle, not the truncated `h`. */
+  if (file->mode != 0 && file->mode != (int32_t)0xD7B0) {
+    HANDLE wh = (HANDLE)(intptr_t)file->handle;
+    if (wh != NULL && wh != INVALID_HANDLE_VALUE) {
+      if (wh == GetStdHandle(STD_OUTPUT_HANDLE))
+        return stdout;
+      if (wh == GetStdHandle(STD_ERROR_HANDLE))
+        return stderr;
+      if (wh == GetStdHandle(STD_INPUT_HANDLE))
+        return stdin;
+    }
+  }
+#endif
   return default_stream;
 }
 

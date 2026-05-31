@@ -62,6 +62,39 @@ typedef struct RecordParamWork {
   int arg_index;
 } RecordParamWork;
 
+/* An "assembler" subprogram is one whose entire body is an inline asm block.
+ * For such routines the asm body is solely responsible for the return value
+ * (FPC semantics): codegen must not emit a result-load epilogue, which would
+ * either clobber the register the asm set (framed assembler routine) or read
+ * from an uninitialized %rbp slot.  FPC accepts both the explicit `assembler`
+ * directive and the bare `asm ... end` body form, so detect the body shape
+ * rather than relying on the directive keyword surviving into the AST. */
+static int subprogram_body_is_pure_asm(struct Statement *body) {
+  if (body == NULL)
+    return 0;
+  if (body->type == STMT_ASM_BLOCK)
+    return 1;
+  if (body->type == STMT_COMPOUND_STATEMENT) {
+    ListNode_t *cur = body->stmt_data.compound_statement;
+    /* Pure-asm bodies wrap exactly one asm block.  A compound containing
+     * Pascal statements alongside an asm block is a regular routine that
+     * still uses the normal result-load epilogue. */
+    int seen_asm = 0;
+    while (cur != NULL) {
+      if (cur->type == LIST_STMT && cur->cur != NULL) {
+        struct Statement *child = (struct Statement *)cur->cur;
+        if (child->type == STMT_ASM_BLOCK)
+          seen_asm = 1;
+        else
+          return 0;
+      }
+      cur = cur->next;
+    }
+    return seen_asm;
+  }
+  return 0;
+}
+
 static const char *alloc_integer_arg_reg(int use_64bit, int *next_index) {
   if (next_index == NULL)
     return NULL;
@@ -1148,10 +1181,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
     if (return_type != NULL) {
       if (kgpc_type_is_record(return_type)) {
         struct RecordType *record_desc = kgpc_type_get_record(return_type);
+        /* A fieldless record/object is legitimately zero bytes (e.g. the FPC
+         * compiler's `TCondRegs = object` with only a constructor/destructor).
+         * Accept a successful size of 0 rather than treating it as a sizing
+         * failure; has_record_return then stays false (Self is returned in a
+         * register, not via a hidden sret pointer). */
         if (record_desc != NULL &&
             codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record_desc,
                                           &record_return_size) == 0 &&
-            record_return_size > 0 && record_return_size <= INT_MAX) {
+            record_return_size >= 0 && record_return_size <= INT_MAX) {
           has_record_return = (record_return_size > 8);
         } else {
           long long fallback_size = kgpc_type_sizeof(return_type);
@@ -1197,7 +1235,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
       /* Get size from record */
       if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record,
                                         &record_return_size) != 0 ||
-          record_return_size <= 0 || record_return_size > INT_MAX) {
+          record_return_size < 0 || record_return_size > INT_MAX) {
         long long fallback_size = kgpc_type_sizeof(func_node->type);
         if (fallback_size > 0 && fallback_size <= INT_MAX) {
           record_return_size = fallback_size;
@@ -1397,6 +1435,30 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
   if (ctx->current_return_type == NULL && func->return_type == SHORTSTRING_TYPE)
     ctx->current_return_type = codegen_canonical_shortstring_type();
 
+  /* An advanced-record constructor returns Self (the constructed instance) in
+   * %rax, exactly like a class constructor, and never through a hidden
+   * by-value record sret pointer. For such a constructor whose record exceeds
+   * 8 bytes the return-type checks above would otherwise set has_record_return,
+   * inserting an sret parameter that shifts Self out of argument register 0 and
+   * corrupts every call site (the call sites pass the destination directly as
+   * Self). Suppress the record-return/sret treatment so the >8-byte case
+   * behaves like the <=8-byte case, which already returns Self in %rax.
+   *
+   * TP `object` constructors are excluded: they keep the sret+Self convention
+   * that New(p, Ctor(...)) and instance-receiver calls rely on. */
+  if (func->is_constructor && has_record_return && func->owner_class != NULL &&
+      symtab != NULL) {
+    HashNode_t *owner_node = NULL;
+    struct RecordType *owner_rec = NULL;
+    if (FindSymbol(&owner_node, symtab, func->owner_class) != 0 &&
+        owner_node != NULL)
+      owner_rec = hashnode_get_record_type(owner_node);
+    if (owner_rec == NULL || !owner_rec->is_object) {
+      has_record_return = 0;
+      record_return_size = 0;
+    }
+  }
+
   int will_need_static_link =
       (!is_class_method && is_nested_function &&
        (func_tree->tree_data.subprogram_data.requires_static_link ||
@@ -1467,6 +1529,28 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
   if (return_size == DOUBLEWORD && func_node != NULL &&
       func_node->type != NULL && func_node->type->kind == TYPE_KIND_POINTER) {
     return_size = 8;
+  }
+
+  /* Fallback for nested functions: func_node is looked up by name in the
+   * global symtab, but a nested function lives in its parent's local scope
+   * and is not found there, so func_node stays NULL and every size
+   * correction above is skipped — leaving an 8-byte class/pointer return
+   * defaulted to DOUBLEWORD, which truncates the result pointer to 32 bits
+   * in the return-value load (movl instead of movq).  The return *type*,
+   * however, is globally visible regardless of function nesting, so resolve
+   * it by name and take its storage size.  Only widens when the resolved
+   * type is genuinely larger (class/pointer/Int64), so scalar returns are
+   * unaffected. */
+  if (return_size == DOUBLEWORD && !has_record_return &&
+      !returns_dynamic_array && func->return_type_id != NULL &&
+      symtab != NULL) {
+    HashNode_t *rt_node = NULL;
+    FindSymbol(&rt_node, symtab, func->return_type_id);
+    if (rt_node != NULL && rt_node->type != NULL) {
+      int rt_size = codegen_return_storage_size(rt_node->type);
+      if (rt_size > return_size)
+        return_size = rt_size;
+    }
   }
 
   if (returns_dynamic_array)
@@ -1640,10 +1724,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
                                                  ctx, symtab);
   inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
 
-  /* For nostackframe+assembler functions, the asm block handles the return
-   * value entirely.  Skip the compiler-generated return-value epilogue,
-   * which would read from an invalid %rbp offset. */
-  if (func->nostackframe) {
+  /* For assembler functions, the asm block handles the return value
+   * entirely.  Skip the compiler-generated return-value epilogue: it would
+   * overwrite the register the asm body set (for a framed assembler routine)
+   * or read from an invalid %rbp offset (for a nostackframe one). */
+  if (func->nostackframe || func->is_assembler ||
+      subprogram_body_is_pure_asm(func->statement_list)) {
     /* Skip return value loading — asm is responsible */
   } else if (returns_dynamic_array) {
 #if KGPC_ENABLE_REG_DEBUG

@@ -1,0 +1,4 @@
+read i=1 a=12345 b=678
+read i=2 a=12345 b=678
+read i=3 a=12345 b=678
+write a=999 b=-4

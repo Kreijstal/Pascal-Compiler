@@ -382,6 +382,70 @@ ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
   return inst_list;
 }
 
+/* True when `type` is a single-byte char pointer (PChar / PAnsiChar). */
+static int codegen_type_is_ansichar_pointer(const KgpcType *type) {
+  if (type == NULL || !kgpc_type_is_pointer(type))
+    return 0;
+  const KgpcType *pointee = type->info.points_to;
+  if (pointee == NULL)
+    return 0;
+  return kgpc_type_is_char(pointee) && kgpc_type_sizeof(pointee) == 1;
+}
+
+/* A char literal assigned to a PChar/PAnsiChar must lower to a pointer to a
+ * static NUL-terminated 1-char buffer, not to the raw character ordinal.
+ * Pascal's single-quote literal `'.'` is parsed as a Char (EXPR_CHAR_CODE),
+ * so without this the char ordinal (e.g. 46) is stored straight into the
+ * pointer slot and any later dereference segfaults.  Mirrors the established
+ * ShortString-field char promotion path above, but emits a static rodata
+ * literal so no AnsiString is allocated/leaked.  Returns 1 when handled. */
+static int codegen_try_char_literal_to_pchar(struct Expression *var_expr,
+                                              struct Expression *assign_expr,
+                                              CodeGenContext *ctx,
+                                              ListNode_t **inst_list_io) {
+  if (var_expr == NULL || assign_expr == NULL || ctx == NULL)
+    return 0;
+  if (assign_expr->type != EXPR_CHAR_CODE)
+    return 0;
+  if (!codegen_type_is_ansichar_pointer(expr_get_kgpc_type(var_expr)))
+    return 0;
+
+  ListNode_t *inst_list = *inst_list_io;
+
+  /* Build the one-character literal value. */
+  char literal[2];
+  literal[0] = (char)(unsigned char)assign_expr->expr_data.char_code;
+  literal[1] = '\0';
+
+  Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+  if (value_reg == NULL) {
+    *inst_list_io = inst_list;
+    return 1;
+  }
+  inst_list = expr_tree_emit_string_literal_address(inst_list, ctx, value_reg,
+                                                    literal, 0);
+
+  Register_t *addr_reg = NULL;
+  inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+  if (codegen_had_error(ctx) || addr_reg == NULL) {
+    free_reg(get_reg_stack(), value_reg);
+    if (addr_reg != NULL)
+      free_reg(get_reg_stack(), addr_reg);
+    *inst_list_io = inst_list;
+    return 1;
+  }
+
+  {
+    Register_t *u[] = {value_reg, addr_reg};
+    inst_list =
+        add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
+  }
+  free_reg(get_reg_stack(), value_reg);
+  free_reg(get_reg_stack(), addr_reg);
+  *inst_list_io = inst_list;
+  return 1;
+}
+
 /* Code generation for a variable assignment */
 ListNode_t *codegen_var_assignment(struct Statement *stmt,
                                    ListNode_t *inst_list, CodeGenContext *ctx) {
@@ -540,6 +604,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
     free_arg_regs();
     return inst_list;
   }
+
+  if (codegen_try_char_literal_to_pchar(var_expr, assign_expr, ctx, &inst_list))
+    return inst_list;
 
   int dest_is_static_array =
       (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr)) ||
@@ -1205,6 +1272,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           source_is_raw_pwidechar = 1;
         }
       }
+      /* Whole-array assignment of a fixed `array of WideChar` to a wide string,
+       * e.g. FPC's `Name := f.FindData.cFileName` in the Win RTL's FindMatch.
+       * The element is a 2-byte WideChar, but KGPC tags such an array as a
+       * string-like local, so codegen_expr_is_shortstring_rhs flags it as a
+       * ShortString and the dispatch below would route it to
+       * kgpc_string_assign_from_shortstring — which reads the first low byte of
+       * the UTF-16 payload as a length byte (e.g. 'i'=0x69 -> length 105) and
+       * corrupts every enumerated filename.  Treat it as a raw NUL-terminated
+       * PWideChar instead: value_reg already holds the array base address, and
+       * kgpc_unicodestring_assign_from_widechar walks the packed UTF-16,
+       * independent of KGPC's (over-wide) notion of the array element stride. */
+      int source_is_widechar_array = 0;
+      int widechar_array_count = 0;
+      if (!source_is_raw_pwidechar && target_is_wide_string) {
+        /* codegen_dest_widechar_array_count resolves a fixed `array of WideChar`
+         * across VAR_ID, RECORD_ACCESS and element-type aliases
+         * (TFileTextRecChar -> UnicodeChar on Win64), so it fires for the real
+         * victim `Name := F.FindData.cFileName` where expr_get_kgpc_type does
+         * not surface the array element type. */
+        int count = codegen_dest_widechar_array_count(assign_expr, ctx);
+        if (count > 0) {
+          source_is_widechar_array = 1;
+          widechar_array_count = count;
+          inner_is_shortstring = 0;
+        }
+      }
       int source_needs_wide_promotion = (!source_is_wide_string);
       if (!source_needs_wide_promotion && assign_expr != NULL &&
           assign_expr->type == EXPR_TYPECAST &&
@@ -1219,10 +1312,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
            assign_expr->expr_data.typecast_data.expr->type == EXPR_STRING)) {
         source_needs_wide_promotion = 1;
       }
-      if (!inner_is_shortstring && assign_type == CHAR_TYPE) {
+      /* A fixed `array of WideChar` source is tagged CHAR_TYPE (its element
+       * type), but value_reg holds the array base address, not a single char —
+       * promoting it would convert only the first element.  Skip promotion;
+       * codegen_call_unicodestring_assign_from_widechar_array consumes the
+       * array base directly. */
+      if (!source_is_widechar_array && !inner_is_shortstring &&
+          assign_type == CHAR_TYPE) {
         inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
-      } else if (!inner_is_shortstring && assign_expr != NULL &&
-                 assign_expr->type == EXPR_TYPECAST &&
+      } else if (!source_is_widechar_array && !inner_is_shortstring &&
+                 assign_expr != NULL && assign_expr->type == EXPR_TYPECAST &&
                  assign_expr->expr_data.typecast_data.expr != NULL &&
                  expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) ==
                      CHAR_TYPE) {
@@ -1232,9 +1331,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
       int rhs_lower = 0;
       int rhs_upper = -1;
       int rhs_is_shortstring = 0;
-      if (codegen_get_char_array_bounds(assign_expr, ctx, &rhs_lower,
-                                        &rhs_upper, &rhs_is_shortstring) &&
-          !rhs_is_shortstring) {
+      int rhs_is_char_array = codegen_get_char_array_bounds(
+          assign_expr, ctx, &rhs_lower, &rhs_upper, &rhs_is_shortstring);
+      if (source_is_widechar_array ||
+          (rhs_is_char_array && !rhs_is_shortstring)) {
         Register_t *addr_reg = NULL;
         Register_t *src_reg = NULL;
         inst_list =
@@ -1250,11 +1350,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           return inst_list;
         }
 
-        int src_len = rhs_upper - rhs_lower + 1;
-        if (src_len < 0)
-          src_len = 0;
-        inst_list = codegen_call_string_assign_from_char_array(
-            inst_list, ctx, addr_reg, src_reg, src_len);
+        if (source_is_widechar_array) {
+          /* `array of WideChar` -> UnicodeString: copy the packed UTF-16 prefix
+           * (NUL-bounded) rather than byte-copying as ANSI. */
+          inst_list = codegen_call_unicodestring_assign_from_widechar_array(
+              inst_list, ctx, addr_reg, src_reg, widechar_array_count);
+        } else {
+          int src_len = rhs_upper - rhs_lower + 1;
+          if (src_len < 0)
+            src_len = 0;
+          inst_list = codegen_call_string_assign_from_char_array(
+              inst_list, ctx, addr_reg, src_reg, src_len);
+        }
         free_reg(get_reg_stack(), addr_reg);
         free_reg(get_reg_stack(), src_reg);
         return inst_list;
@@ -5655,10 +5762,17 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst_du(inst_list, ctx, du, 1, u, 1, "\taddq\t%1, %0\n");
   }
 
-  // Now array_base_reg points to the element - load it
+  // Now array_base_reg points to the element.  For scalar-sized elements
+  // (1/2/4/8 bytes) load the value into the register; for larger elements
+  // (records, big arrays) keep the register pointing AT the element and copy
+  // it into the loop variable with memcpy below.
   Register_t *element_reg = array_base_reg; // Reuse the register
   free_reg(get_reg_stack(), index_reg);
   index_reg = NULL;
+
+  bool large_element =
+      (element_size != 1 && element_size != 2 && element_size != 4 &&
+       element_size != 8);
 
   if (element_size == 1) {
     char tmpl[64];
@@ -5681,13 +5795,8 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       inst_list =
           add_inst_du(inst_list, ctx, du, 1, du, 1, "\tmovq\t(%0), %0\n");
     }
-  } else {
-    codegen_report_error(
-        ctx, "ERROR: FOR-IN with large array elements not yet supported");
-    free_reg(get_reg_stack(), element_reg);
-    codegen_pop_loop(ctx);
-    return inst_list;
   }
+  // else: element_reg holds the element's address; copied via memcpy below.
 
   // Assign element value to loop variable
   // Get address of loop variable
@@ -5701,7 +5810,49 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
   }
 
   // Store element to loop variable (using proper byte/word/dword/qword)
-  if (element_size == 1) {
+  if (large_element) {
+    // Large element: memcpy(loop_var, element_addr, element_size).  Move the
+    // dest/src pointers into the ABI argument registers, then load the byte
+    // count immediate last (it is a compile-time constant), mirroring the
+    // array-assignment copy in codegen_stmt_assignment.c.
+    if (codegen_target_is_windows()) {
+      // Win64: RCX (dest), RDX (src), R8 (size)
+      {
+        Register_t *u[] = {loop_var_addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+      }
+      {
+        Register_t *u[] = {element_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdx\n");
+      }
+      {
+        char tmpl[64];
+        snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%d, %%r8\n", element_size);
+        inst_list = add_inst(inst_list, tmpl);
+      }
+    } else {
+      // SysV: RDI (dest), RSI (src), RDX (size)
+      {
+        Register_t *u[] = {loop_var_addr_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+      }
+      {
+        Register_t *u[] = {element_reg};
+        inst_list =
+            add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rsi\n");
+      }
+      {
+        char tmpl[64];
+        snprintf(tmpl, sizeof(tmpl), "\tmovq\t$%d, %%rdx\n", element_size);
+        inst_list = add_inst(inst_list, tmpl);
+      }
+    }
+    inst_list =
+        codegen_call_with_shadow_space(inst_list, "kgpc_memcpy_wrapper");
+  } else if (element_size == 1) {
     const char *byte_reg = register_name8(element_reg);
     if (byte_reg == NULL) {
       codegen_report_error(ctx, "codegen_for_in: unable to get 8-bit register "

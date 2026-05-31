@@ -454,6 +454,31 @@ static char *kgpc_string_duplicate_length(const char *value, size_t length) {
   return copy;
 }
 
+#if !defined(_WIN32) && defined(__CYGWIN__)
+/* On the MSYS2 "MSYS" / Cygwin hybrid the Pascal code targets Win64 and the
+ * Windows unit links ws2_32 (it exports Winsock-backed networking), yet the C
+ * runtime is built against the Cygwin POSIX libc with no _WIN32.  Once ws2_32
+ * is on the link line Cygwin's gethostname() routes through Winsock, which
+ * returns -1 until WSAStartup() has been called for the process, so the
+ * Windows unit's GetHostName would otherwise yield an empty string.  Initialise
+ * Winsock once before the first such call.  winsock2.h cannot be included here
+ * (it conflicts with the POSIX headers this file already uses -- e.g. select(),
+ * fd_set), so declare the two entry points we need by hand; ws2_32 is already
+ * linked by any program that pulls in the Windows unit. */
+__attribute__((stdcall)) int WSAStartup(unsigned short version_requested,
+                                        void *wsa_data);
+static void kgpc_cygwin_ensure_winsock(void) {
+  static int initialised = 0;
+  if (initialised)
+    return;
+  initialised = 1;
+  /* WSADATA is < 512 bytes on every Windows version; over-allocate so the
+   * struct layout never matters. */
+  unsigned char wsa_data[512];
+  WSAStartup(0x0202 /* MAKEWORD(2, 2) */, wsa_data);
+}
+#endif
+
 char *kgpc_windows_get_hostname_string(void) {
 #ifdef _WIN32
   char buffer[256];
@@ -474,6 +499,9 @@ char *kgpc_windows_get_hostname_string(void) {
    * host name there.  On a genuine non-Windows target the Unix unit's
    * GetHostName (kgpc_unix_get_hostname_string) is used instead, so this
    * branch is reached only when windows.p is compiled without _WIN32. */
+#ifdef __CYGWIN__
+  kgpc_cygwin_ensure_winsock();
+#endif
   char buffer[256];
   if (gethostname(buffer, sizeof(buffer)) == 0) {
     buffer[sizeof(buffer) - 1] = '\0';
@@ -2530,6 +2558,30 @@ void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
   kgpc_setstring_unicode(target, value, len);
 }
 
+/* Assign a fixed `array of WideChar` (e.g. FPC's TWin32FindDataW.cFileName) to
+ * a managed UnicodeString.  Unlike kgpc_unicodestring_assign_from_widechar,
+ * `value` is the base of an *unmanaged* widechar array with no string header,
+ * so we must NOT probe kgpc_string_header(value) (the bytes preceding the array
+ * are unrelated stack/global data and may spuriously look like a managed
+ * header).  We scan at most `max_count` widechars for a NUL terminator and copy
+ * the prefix through kgpc_setstring_unicode. */
+void kgpc_unicodestring_assign_from_widechar_array(uint16_t **target,
+                                                   const uint16_t *value,
+                                                   int64_t max_count) {
+  if (target == NULL)
+    return;
+
+  if (value == NULL || max_count <= 0) {
+    kgpc_setstring_unicode(target, NULL, 0);
+    return;
+  }
+
+  int64_t len = 0;
+  while (len < max_count && value[len] != 0)
+    len++;
+  kgpc_setstring_unicode(target, value, len);
+}
+
 void kgpc_unicodestring_assign_from_string(uint16_t **target,
                                            const char *value) {
   if (target == NULL)
@@ -2929,9 +2981,16 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
    * long long.  Without this, positive inputs above LLONG_MAX silently wrap
    * to negative values (e.g. "9223372036854775808" became LLONG_MIN with
    * code=0), and similarly for negative overflow. */
+  /* Non-decimal literals ($hex, %binary, &octal) are unsigned bit patterns of
+   * the destination type's width: FPC accepts the full unsigned range and
+   * reinterprets the high bit as the sign (e.g. Int64 of $FFFFFFFFFFFFFFF0 is
+   * -16).  Only decimal literals are bounded by the signed range. */
+  int is_decimal = (base == 10);
   unsigned long long max_magnitude;
   if (negative)
     max_magnitude = (unsigned long long)(-(min_value + 1)) + 1ULL;
+  else if (!is_decimal)
+    max_magnitude = (unsigned long long)max_value * 2ULL + 1ULL;
   else
     max_magnitude = (unsigned long long)max_value;
 
@@ -2944,6 +3003,22 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
       value = LLONG_MIN;
     else
       value = -(long long)uvalue;
+  } else if (!is_decimal && uvalue > (unsigned long long)max_value) {
+    /* High bit set: reinterpret the unsigned bit pattern as a negative
+     * two's-complement value of the destination width.  Compute the result
+     * with signed-safe arithmetic instead of casting an out-of-range unsigned
+     * to long long, which is implementation-defined before C23. */
+    if (max_value == LLONG_MAX) {
+      /* Full 64-bit width: value = uvalue - 2^64. */
+      if (uvalue == (1ULL << 63))
+        value = LLONG_MIN; /* 2^64 - 2^63 == 2^63 does not fit in long long */
+      else
+        value = -(long long)(ULLONG_MAX - uvalue + 1ULL);
+    } else {
+      /* Narrower width: 2^width - uvalue fits, negate after the cast. */
+      unsigned long long width_mod = (unsigned long long)max_value * 2ULL + 2ULL;
+      value = -(long long)(width_mod - uvalue);
+    }
   } else
     value = (long long)uvalue;
 
@@ -3045,13 +3120,43 @@ long long kgpc_val_real(const char *text, double *out_value) {
   return code;
 }
 
+/* Extended (80-bit long double) variant: parse with strtold so values that
+ * overflow a 64-bit double but fit in the 80-bit extended range (e.g. the
+ * 1e320..1e4932 constants in FPC's genmath.inc pow tables) round-trip
+ * correctly instead of saturating to +Inf and reporting a range error. */
+static long long kgpc_val_parse_real_ext(const char *text, long double *out_value) {
+  if (text == NULL)
+    text = "";
+
+  errno = 0;
+  char *endptr = NULL;
+  long double value = strtold(text, &endptr);
+  if (endptr == text)
+    return 1;
+
+  /* strtold reports ERANGE for BOTH overflow (result is ±Inf) and underflow
+   * (result is a denormal or 0). FPC's Val only treats overflow as an error;
+   * an underflowing magnitude such as the 80-bit denormal Epsilon constant
+   * 3.64519953188247460253e-4951 in sysutils/syshelph.inc is a valid Extended
+   * value and must round-trip with code 0. Distinguish the two by the result:
+   * infinite means genuine overflow, finite means underflow we accept. */
+  if (errno == ERANGE && isinf(value))
+    return kgpc_val_error_position(text, endptr);
+
+  const char *rest = kgpc_val_skip_trailing_whitespace(endptr);
+  if (rest != NULL && *rest != '\0')
+    return kgpc_val_error_position(text, rest);
+
+  if (out_value != NULL)
+    *out_value = value;
+  return 0;
+}
+
 long long kgpc_val_extended(const char *text, void *out_value) {
-  double parsed = 0.0;
-  long long code = kgpc_val_parse_real(text, &parsed);
-  if (out_value != NULL) {
-    long double ext = (long double)parsed;
-    memcpy(out_value, &ext, 10);
-  }
+  long double parsed = 0.0L;
+  long long code = kgpc_val_parse_real_ext(text, &parsed);
+  if (out_value != NULL)
+    memcpy(out_value, &parsed, 10);
   return code;
 }
 

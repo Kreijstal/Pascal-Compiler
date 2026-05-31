@@ -59,9 +59,14 @@ typedef struct KGPCTextRec {
   void *fullname;
 } KGPCTextRec;
 
+/* This C struct mirrors only the leading TextRec fields the runtime actually
+ * touches (handle/mode/bufsize/bufpos/bufend/bufptr/...), whose offsets match
+ * FPC's real Win64 TextRec.  A Pascal Text variable reserves the FULL FPC
+ * TextRec (kgpc_target_textrec_size() == 904 on Win64, where `name` is
+ * UnicodeChar[256] = 512 bytes); the two sizes intentionally differ. */
 _Static_assert(
     sizeof(KGPCTextRec) == 648,
-    "KGPCTextRec size must be 648 on Win64 to match TEXT_TYPE in SemCheck_sizeof.c");
+    "KGPCTextRec must mirror FPC's leading Win64 TextRec fields at 648 bytes");
 #else
 typedef struct KGPCTextRec {
   int32_t handle;
@@ -395,6 +400,13 @@ void kgpc_pchar_to_shortstring(char *dest, const char *src, size_t dest_size);
 /* PWideChar (NUL-terminated UTF-16) -> UnicodeString assignment. */
 void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
                                              const uint16_t *value);
+
+/* Fixed (unmanaged) `array of WideChar` -> UnicodeString assignment.  Scans at
+ * most @p max_count widechars for a NUL terminator; does not probe for a string
+ * header. */
+void kgpc_unicodestring_assign_from_widechar_array(uint16_t **target,
+                                                   const uint16_t *value,
+                                                   int64_t max_count);
 
 /* AnsiString -> array of WideChar.  @p dest_count is the WideChar element
  * count (NOT byte length).  Widens each source byte to UTF-16 and pads any

@@ -937,7 +937,14 @@ static ListNode_t *codegen_materialize_extended_arg_spill(
   if (codegen_expr_is_extended_storage_arg(arg_expr) &&
       codegen_expr_is_addressable(arg_expr)) {
     Register_t *src_addr = NULL;
+    /* Under high register pressure the general pool can be empty here; fall
+     * back to spilling (the established pattern in this file via
+     * codegen_try_get_reg) instead of failing.  The FPC compiler's float
+     * argument lowering hit this when passing Extended values from deeply
+     * nested expressions. */
     Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
+    if (dest_addr == NULL)
+      dest_addr = get_reg_with_spill(get_reg_stack(), &inst_list);
     if (dest_addr == NULL) {
       codegen_report_error(ctx, "ERROR: Unable to allocate register for "
                                 "Extended argument destination.");
@@ -987,6 +994,8 @@ static ListNode_t *codegen_materialize_extended_arg_spill(
     free_reg(get_reg_stack(), dest_addr);
   } else {
     Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
+    if (dest_addr == NULL)
+      dest_addr = get_reg_with_spill(get_reg_stack(), &inst_list);
     if (dest_addr == NULL) {
       codegen_report_error(
           ctx,
@@ -2755,18 +2764,15 @@ ListNode_t *codegen_pass_arguments(
       } else if (formal_is_char_set && arg_expr != NULL &&
                  expr_has_type_tag(arg_expr, SET_TYPE)) {
         Register_t *addr_reg = NULL;
-        if (arg_expr->type == EXPR_SET) {
-          inst_list =
-              codegen_set_literal(arg_expr, inst_list, ctx, &addr_reg, 1);
-        } else {
-          if (!codegen_expr_is_addressable(arg_expr)) {
-            codegen_report_error(
-                ctx, "ERROR: Unsupported expression type for set parameter.");
-            return inst_list;
-          }
-          inst_list =
-              codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
-        }
+        /* Char-set value argument: obtain the address of the set.
+         * codegen_char_set_address handles all forms — a set literal (forced
+         * into char-set mode), a directly addressable variable, and computed
+         * set expressions (s1+s2, s1*s2, s1-s2, ...) which it materialises into
+         * a 32-byte temp via the kgpc_set_*_256 runtime helpers.  Previously a
+         * non-addressable computed set raised "Unsupported expression type for
+         * set parameter"; the FPC compiler passes such expressions (e.g. in
+         * the optimizer's register-set handling). */
+        inst_list = codegen_char_set_address(arg_expr, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || addr_reg == NULL)
           return inst_list;
 

@@ -20,6 +20,7 @@
 #else
 #define strcasecmp _stricmp
 #endif
+#include "../../flags.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
@@ -3357,6 +3358,54 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias) {
   return 4;
 }
 
+long long kgpc_enum_storage_size_for(int enum_min_size, int range_known,
+                                     long long range_start,
+                                     long long range_end) {
+  /* FPC's default minimum enumeration size is 4 bytes (equivalent to
+   * {$PACKENUM 4} / {$Z4}). Under {$PACKENUM 1}/{$Z1} (or 2) the enum shrinks
+   * to the smallest power-of-two size that can hold its full ordinal range,
+   * but never below the directive's minimum. This must match FPC exactly, as
+   * every record/typed-const layout that embeds an enum field depends on it.
+   * enum_min_size of 0 means "unset" => use FPC's default minimum of 4. */
+  int min_size = (enum_min_size == 1 || enum_min_size == 2) ? enum_min_size : 4;
+
+  /* Enumerations whose ordinals exceed the 32-bit range always require 8
+   * bytes regardless of the requested minimum. */
+  if (range_known && range_end > 0xffffffffLL)
+    return 8;
+
+  if (min_size >= 4)
+    return 4;
+
+  /* Determine the smallest size (>= min_size) that holds the ordinal range.
+   * FPC sizes enums based on their highest ordinal (and lowest, if negative,
+   * choosing a signed-capable size). */
+  long long lo = range_known ? range_start : 0;
+  long long hi = range_known ? range_end : 0;
+
+  long long needed = 1;
+  if (lo < 0) {
+    /* signed range */
+    if (lo >= -128 && hi <= 127)
+      needed = 1;
+    else if (lo >= -32768 && hi <= 32767)
+      needed = 2;
+    else
+      needed = 4;
+  } else {
+    if (hi <= 0xff)
+      needed = 1;
+    else if (hi <= 0xffff)
+      needed = 2;
+    else
+      needed = 4;
+  }
+
+  if (needed < min_size)
+    needed = min_size;
+  return needed;
+}
+
 static long long kgpc_enum_storage_size(const struct TypeAlias *alias) {
   if (alias == NULL)
     return 4;
@@ -3364,23 +3413,8 @@ static long long kgpc_enum_storage_size(const struct TypeAlias *alias) {
   if (alias->storage_size > 0)
     return alias->storage_size;
 
-  if (alias->range_known) {
-    if (alias->range_start >= 0 && alias->range_end <= 0xff)
-      return 1;
-    if (alias->range_start >= 0 && alias->range_end <= 0xffff)
-      return 2;
-    return 4;
-  }
-
-  if (alias->enum_literals != NULL) {
-    int count = kgpc_list_length(alias->enum_literals);
-    if (count > 0 && count <= 0x100)
-      return 1;
-    if (count > 0 && count <= 0x10000)
-      return 2;
-  }
-
-  return 4;
+  return kgpc_enum_storage_size_for(alias->enum_min_size, alias->range_known,
+                                    alias->range_start, alias->range_end);
 }
 
 long long kgpc_type_sizeof(KgpcType *type) {
@@ -3438,13 +3472,11 @@ long long kgpc_type_sizeof(KgpcType *type) {
     case FILE_TYPE:
       if (type->size_in_bytes > 0)
         return type->size_in_bytes;
-      return 376; /* FPC x86_64:
-                     Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(256)+FullName(8)
-                   */
+      return kgpc_target_filerec_size(); /* FileRec: 376 (Linux) / 640 (Win64) */
     case TEXT_TYPE:
       if (type->size_in_bytes > 0)
         return type->size_in_bytes;
-      return 632;
+      return kgpc_target_textrec_size(); /* TextRec: 640 (Linux) / 904 (Win64) */
     case CHAR_TYPE:
     case BYTE_TYPE:
       return 1;
@@ -4342,6 +4374,7 @@ static struct TypeAlias *copy_type_alias(const struct TypeAlias *src) {
   dst->is_enum = src->is_enum;
   dst->enum_is_scoped = src->enum_is_scoped;
   dst->enum_has_explicit_values = src->enum_has_explicit_values;
+  dst->enum_min_size = src->enum_min_size;
   dst->is_file = src->is_file;
   dst->file_type = src->file_type;
   dst->is_range = src->is_range;

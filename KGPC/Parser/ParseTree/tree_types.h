@@ -104,6 +104,9 @@ struct TypeAlias {
   int enum_is_scoped;           /* 1 if declared under {$SCOPEDENUMS ON} */
   int enum_has_explicit_values; /* 1 if any literal had an explicit assigned
                                    value */
+  int enum_min_size; /* Active {$PACKENUM}/{$Z}/{$MINENUMSIZE} minimum size in
+                        bytes (1/2/4) at the enum's declaration; 0 = unset
+                        (treated as FPC default 4) */
   ListNode_t *enum_literals;
   ListNode_t *enum_values; /* Stringified ordinal for each enum literal */
   int is_file;
@@ -252,6 +255,9 @@ struct RecordType {
       *method_templates; /* Template methods captured from declarations */
   int is_class;          /* 1 if this record represents a class */
   int is_interface;      /* 1 if this record represents an interface */
+  int is_object;         /* 1 if declared with the TP `object` keyword (as
+                            opposed to an advanced `record`); they differ in the
+                            constructor calling convention */
   int is_packed;         /* 1 if declared as packed/bitpacked record/object */
   int is_type_helper;    /* 1 if this record represents a type helper */
   char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */

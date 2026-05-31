@@ -285,7 +285,31 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     }
 
     /* btl with memory operand auto-computes byte offset for bit positions
-       beyond 31, so we can test any bit 0..255 directly. Only 2 regs needed. */
+       beyond 31, so we can test any bit 0..255 directly. Only 2 regs needed.
+
+       A char set holds 256 bits (0..255).  Pascal requires that any element
+       outside the set's domain test as false, so an element value > 255 (or
+       < 0) must NOT be fed to btl: btl with such an index would walk past the
+       32-byte set storage and read arbitrary memory, yielding a garbage
+       result.  Bound-check the element first and force false when it is out
+       of the 0..255 domain. */
+    char cs_oob[24];
+    char cs_done[24];
+    gen_label(cs_oob, sizeof(cs_oob), ctx);
+    gen_label(cs_done, sizeof(cs_done), ctx);
+    {
+      Register_t *u[] = {left_reg};
+      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
+    }
+    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", cs_oob);
+    inst_list = add_inst(inst_list, buffer);
+    {
+      Register_t *u[] = {left_reg};
+      inst_list =
+          add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$255, %0\n");
+    }
+    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", cs_oob);
+    inst_list = add_inst(inst_list, buffer);
     {
       char buffer_tmpl[128];
       snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tbtl\t%%0, (%s)\n",
@@ -299,6 +323,18 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       inst_list =
           add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tsbbl\t%0, %1\n");
     }
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", cs_done);
+    inst_list = add_inst(inst_list, buffer);
+    /* out-of-domain: force the element register to 0 (false) */
+    snprintf(buffer, sizeof(buffer), "%s:\n", cs_oob);
+    inst_list = add_inst(inst_list, buffer);
+    {
+      Register_t *d[] = {left_reg};
+      Register_t *u[] = {left_reg};
+      inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, "\txorl\t%1, %0\n");
+    }
+    snprintf(buffer, sizeof(buffer), "%s:\n", cs_done);
+    inst_list = add_inst(inst_list, buffer);
     {
       Register_t *u[] = {left_reg, left_reg};
       inst_list =

@@ -1251,6 +1251,19 @@ void codegen_add_class_vars_for_method(const char *owner_class,
       /* Calculate field size */
       int field_size = codegen_class_var_field_size(symtab, field);
 
+      /* Align the running offset to this field's natural alignment BEFORE
+       * building its label. The CLASSVAR storage emitter
+       * (codegen_emit_*_classvar_storage in codegen_vmt.c) and the semantic
+       * offset computation (find_field_in_members in SemCheck_sizeof.c) both
+       * align each class-var field to its alignment before placing it, so a
+       * pointer-sized field (e.g. an AnsiString) lands at an 8-byte boundary.
+       * Registering the label at the un-aligned offset would point class-var
+       * reads/writes at the padding bytes preceding the field, handing the RTL
+       * a garbage AnsiString pointer (RTE 216). */
+      int field_alignment = codegen_record_field_alignment(field, field_size);
+      current_offset =
+          (current_offset + field_alignment - 1) & ~(field_alignment - 1);
+
       /* Build the static label for this field: ClassName_CLASSVAR+offset */
       /* We register it with offset information */
       /* Buffer size: classvar_label + "+" + max_digits(long long) + null
@@ -1294,10 +1307,7 @@ void codegen_add_class_vars_for_method(const char *owner_class,
         free(field_static_label);
       }
 
-      /* Advance offset with alignment (using standard power-of-two alignment
-       * formula) */
-      int alignment = codegen_record_field_alignment(field, field_size);
-      current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
+      /* Advance past this field; the offset was already aligned above. */
       current_offset += field_size;
     }
     field_node = field_node->next;
@@ -4688,6 +4698,14 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx) {
     fprintf(ctx->output_file, "\t.seh_endprologue\n");
   fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
   fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
+  /* Windows --no-stdlib: text writes to an explicit Text file are routed
+   * through the FPC RTL, which buffers std files when their handle is not a
+   * console device (e.g. redirected stdout/stderr).  FPC's exit path calls
+   * SysFlushStdIO to flush them; KGPC exits via C exit() and bypasses that, so
+   * call it here before exit so redirected std output is not lost.  Matches
+   * rtl/inc/system.inc:1251.  mark_used seeds SysFlushStdIO for emission. */
+  if (codegen_target_is_windows() && no_stdlib_flag())
+    fprintf(ctx->output_file, "\tcall\tsysflushstdio_void\n");
   if (codegen_target_is_windows())
     fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
   else
@@ -5202,6 +5220,24 @@ char *codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
   }
   inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration,
                                               symtab);
+
+  /* Windows FPC-RTL startup: mark the program a console application before any
+   * unit initialization section runs.  In a normal FPC build the console entry
+   * stub sysinit.pp `_mainCRTStartup` sets `IsConsole:=true` (rtl/win64/
+   * sysinit.pp:100) before the system unit's initialization executes; KGPC
+   * generates its own entry and never links sysinit.pp, so the FPC system
+   * unit's `IsConsole : boolean = false` default survives into SysInitStdIO
+   * (rtl/win/syswin.inc:595).  That takes the `if not IsConsole` branch and
+   * AssignError's Output/StdErr/Input instead of binding them to the real
+   * standard handles via OpenStdIO — every write then leaks to stdout.  The
+   * global data-init above has just (re)set operatingsystem_isconsole to its
+   * declared default, so emit the override here, after data-init and before
+   * the init sections.  Only for --no-stdlib Windows programs, where the FPC
+   * system unit defines this symbol. */
+  if (codegen_target_is_windows() && no_stdlib_flag()) {
+    inst_list = add_inst(
+        inst_list, "\tmovb\t$1, operatingsystem_isconsole(%rip)\n");
+  }
 
   /* Emit unit initialization blocks in dependency (load) order.
    * Switch current_scope to each unit's ScopeNode so identifier lookups

@@ -74,3 +74,7 @@ for l in err[-40:]:
     print(l)
 errcount = sum(1 for l in (out + err) if "is not declared" in l)
 print("not_declared_count=", errcount)
+
+# Propagate KGPC's exit status so CI/automation sees a real failure instead of
+# a false green when the compile fails.
+sys.exit(r.returncode)

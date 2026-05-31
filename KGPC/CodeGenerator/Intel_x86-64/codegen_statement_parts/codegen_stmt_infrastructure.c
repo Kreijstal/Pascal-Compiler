@@ -1826,9 +1826,16 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
       }
     }
 
+    /* Under --no-stdlib the program's own RTL owns the standard text files
+     * (e.g. the FPC RTL binds StdErr to StdErrorHandle in OpenStdIO), so let
+     * StdErr/ErrOutput resolve to that real variable through the normal path
+     * below — exactly as Output/StdOut already do.  Only the bundled KGPC
+     * stdlib (which leaves its Pascal StdErr var uninitialised and relies on
+     * the C-runtime stderr_ptr) needs this hijack. */
     const char *builtin_file_ptr = NULL;
-    if (strcasecmp(expr->expr_data.id, "StdErr") == 0 ||
-        strcasecmp(expr->expr_data.id, "ErrOutput") == 0)
+    if (!no_stdlib_flag() &&
+        (strcasecmp(expr->expr_data.id, "StdErr") == 0 ||
+         strcasecmp(expr->expr_data.id, "ErrOutput") == 0))
       builtin_file_ptr = "stderr_ptr";
 
     if (builtin_file_ptr != NULL) {
@@ -2021,15 +2028,39 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
 
           char label[20];
           snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
-          char add_rodata[1024];
           const char *readonly_section = codegen_readonly_section_directive();
-          char escaped_const[512];
+          const char *text_resume = codegen_text_section_resume();
+          /* Size both buffers from the source length so long string constants
+           * are not silently truncated.  escape_string expands each byte to at
+           * most two characters, so 2*len+1 is the worst case. */
+          size_t src_len = strlen(str_const_node->const_string_value);
+          size_t esc_cap = src_len * 2 + 1;
+          char *escaped_const = (char *)malloc(esc_cap);
+          if (escaped_const == NULL) {
+            free_reg(get_reg_stack(), addr_reg);
+            inst_list = codegen_fail_register(
+                ctx, inst_list, out_reg,
+                "ERROR: Unable to allocate escaped string buffer.");
+            goto cleanup;
+          }
           escape_string(escaped_const, str_const_node->const_string_value,
-                        sizeof(escaped_const));
-          snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
-                   readonly_section, label, escaped_const,
-                   codegen_text_section_resume());
+                        esc_cap);
+          size_t rodata_cap = strlen(readonly_section) + strlen(label) +
+                              esc_cap + strlen(text_resume) + 32;
+          char *add_rodata = (char *)malloc(rodata_cap);
+          if (add_rodata == NULL) {
+            free(escaped_const);
+            free_reg(get_reg_stack(), addr_reg);
+            inst_list = codegen_fail_register(
+                ctx, inst_list, out_reg,
+                "ERROR: Unable to allocate rodata buffer for string constant.");
+            goto cleanup;
+          }
+          snprintf(add_rodata, rodata_cap, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                   readonly_section, label, escaped_const, text_resume);
           inst_list = add_inst(inst_list, add_rodata);
+          free(add_rodata);
+          free(escaped_const);
 
           {
             char tmpl[96];
@@ -2756,13 +2787,43 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
     goto cleanup;
   } else if (expr->type == EXPR_AS) {
-    if (expr->expr_data.as_data.expr != NULL) {
+    struct Expression *as_src = expr->expr_data.as_data.expr;
+    if (as_src != NULL) {
       Register_t *operand_addr = NULL;
-      inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr,
-                                           inst_list, ctx, &operand_addr);
+      inst_list =
+          codegen_address_for_expr(as_src, inst_list, ctx, &operand_addr);
       if (operand_addr != NULL) {
-        inst_list = codegen_emit_class_cast_check_from_address(
-            (struct Expression *)expr, inst_list, ctx, operand_addr);
+        if (codegen_expr_is_addressable(as_src)) {
+          /* (src as T) denotes the same storage as src; for an addressable
+           * source codegen_address_for_expr returned the address of the slot
+           * holding the instance pointer.  The runtime cast check dereferences
+           * that slot to obtain the instance pointer and clobbers the register
+           * it is handed, so run it on a scratch copy and return the slot
+           * address unchanged.  Returning the already-dereferenced instance
+           * pointer instead made callers (e.g. record-field access, which
+           * dereferences this result exactly once) load through the object's
+           * VMT rather than the object itself. */
+          Register_t *check_reg = get_free_reg(get_reg_stack(), &inst_list);
+          if (check_reg == NULL)
+            check_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+          if (check_reg != NULL) {
+            Register_t *cdefs[] = {check_reg};
+            Register_t *cuses[] = {operand_addr};
+            inst_list = add_inst_du(inst_list, ctx, cdefs, 1, cuses, 1,
+                                    "\tmovq\t%1, %0\n");
+            inst_list = codegen_emit_class_cast_check_from_address(
+                (struct Expression *)expr, inst_list, ctx, check_reg);
+            free_reg(get_reg_stack(), check_reg);
+          } else {
+            inst_list = codegen_emit_class_cast_check_from_address(
+                (struct Expression *)expr, inst_list, ctx, operand_addr);
+          }
+        } else {
+          /* Non-addressable source: codegen_address_for_expr materialised the
+           * instance pointer itself, so check it in place. */
+          inst_list = codegen_emit_class_cast_check_from_address(
+              (struct Expression *)expr, inst_list, ctx, operand_addr);
+        }
         *out_reg = operand_addr;
         goto cleanup;
       }

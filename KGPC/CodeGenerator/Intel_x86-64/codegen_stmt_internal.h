@@ -94,6 +94,9 @@ ListNode_t *codegen_call_string_assign_from_char_array(ListNode_t *inst_list,
                                                        Register_t *addr_reg,
                                                        Register_t *value_reg,
                                                        int src_len);
+ListNode_t *codegen_call_unicodestring_assign_from_widechar_array(
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *addr_reg,
+    Register_t *value_reg, int max_count);
 ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list,
                                             CodeGenContext *ctx,
                                             Register_t *addr_reg,

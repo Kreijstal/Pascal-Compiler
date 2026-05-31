@@ -414,6 +414,35 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
       DestroyList(candidates);
   }
 
+  /* Windows --no-stdlib: Eof on a Text/binary File is lowered by semcheck to
+   * the kgpc_text_eof / kgpc_file_eof C runtime, which maps the record to a
+   * FILE* / CRT fd.  A win64 file opened via Reset goes through the FPC RTL's
+   * do_open and its Handle is a CreateFile HANDLE, not a CRT fd (and the
+   * KGPCFileRec.handle field is only int32 — it cannot even hold the 64-bit
+   * Windows HANDLE), so the mapping fails and Eof reports immediate
+   * end-of-file.  Retarget to the RTL's own Eof:
+   *   - eof_t (text): tests the TextRec buffer and refills via InOutFunc — the
+   *     read-side counterpart of the fpc_Read_Text_AnsiStr / FPC_READLN_END
+   *     routing in codegen_builtin_read_like.
+   *   - eof_f (binary File): FileSize(f) <= FilePos(f) (file.inc) — both
+   *     do_filesize / do_filepos use SetFilePointer on the HANDLE directly and
+   *     already work on win64, so this is exactly the file.inc fix for the
+   *     pp.pas scanner's `eof(FHandle:File)` truncation (a >32KB include was
+   *     read as EOF after the first 32KB chunk because kgpc_file_eof's _WIN32
+   *     path returns true once no stdio FILE* is engaged).
+   * The call ABI is identical (a single var-file pointer in arg0, Boolean
+   * result), so only the symbol changes.  Done here rather than in semcheck
+   * because a non-"kgpc_"-prefixed mangled_id would be re-run through Pascal
+   * overload resolution and collapse to the parameterless Eof (eof_void);
+   * keeping the kgpc_ name through semcheck and swapping the literal target
+   * here avoids that.  mark_used seeds eof_t / eof_f so they are emitted. */
+  if (call_target != NULL && target_windows_flag() && no_stdlib_flag()) {
+    if (strcmp(call_target, "kgpc_text_eof") == 0)
+      call_target = "eof_t";
+    else if (strcmp(call_target, "kgpc_file_eof") == 0)
+      call_target = "eof_f";
+  }
+
   return call_target;
 }
 
