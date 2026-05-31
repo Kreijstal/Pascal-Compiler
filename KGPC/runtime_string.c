@@ -454,6 +454,31 @@ static char *kgpc_string_duplicate_length(const char *value, size_t length) {
   return copy;
 }
 
+#if !defined(_WIN32) && defined(__CYGWIN__)
+/* On the MSYS2 "MSYS" / Cygwin hybrid the Pascal code targets Win64 and the
+ * Windows unit links ws2_32 (it exports Winsock-backed networking), yet the C
+ * runtime is built against the Cygwin POSIX libc with no _WIN32.  Once ws2_32
+ * is on the link line Cygwin's gethostname() routes through Winsock, which
+ * returns -1 until WSAStartup() has been called for the process, so the
+ * Windows unit's GetHostName would otherwise yield an empty string.  Initialise
+ * Winsock once before the first such call.  winsock2.h cannot be included here
+ * (it conflicts with the POSIX headers this file already uses -- e.g. select(),
+ * fd_set), so declare the two entry points we need by hand; ws2_32 is already
+ * linked by any program that pulls in the Windows unit. */
+__attribute__((stdcall)) int WSAStartup(unsigned short version_requested,
+                                        void *wsa_data);
+static void kgpc_cygwin_ensure_winsock(void) {
+  static int initialised = 0;
+  if (initialised)
+    return;
+  initialised = 1;
+  /* WSADATA is < 512 bytes on every Windows version; over-allocate so the
+   * struct layout never matters. */
+  unsigned char wsa_data[512];
+  WSAStartup(0x0202 /* MAKEWORD(2, 2) */, wsa_data);
+}
+#endif
+
 char *kgpc_windows_get_hostname_string(void) {
 #ifdef _WIN32
   char buffer[256];
@@ -474,6 +499,9 @@ char *kgpc_windows_get_hostname_string(void) {
    * host name there.  On a genuine non-Windows target the Unix unit's
    * GetHostName (kgpc_unix_get_hostname_string) is used instead, so this
    * branch is reached only when windows.p is compiled without _WIN32. */
+#ifdef __CYGWIN__
+  kgpc_cygwin_ensure_winsock();
+#endif
   char buffer[256];
   if (gethostname(buffer, sizeof(buffer)) == 0) {
     buffer[sizeof(buffer) - 1] = '\0';
