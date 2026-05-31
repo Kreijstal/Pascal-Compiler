@@ -1452,25 +1452,33 @@ static void unbuild_combined_program_view(CompilationContext *comp_ctx) {
 }
 
 static void load_units_from_list(CompilationContext *comp_ctx, ListNode_t *uses,
-                                 UnitSet *visited);
+                                 UnitSet *visited, bool required);
 
 static void load_prelude_uses(CompilationContext *comp_ctx, Tree_t *prelude,
                               UnitSet *visited) {
   if (prelude == NULL || visited == NULL)
     return;
+  /* The prelude's uses clause is a real dependency list; a missing unit
+   * here is a genuine error, not an optional auto-load. */
   if (prelude->type == TREE_PROGRAM_TYPE) {
     load_units_from_list(comp_ctx, prelude->tree_data.program_data.uses_units,
-                         visited);
+                         visited, true);
   } else if (prelude->type == TREE_UNIT) {
     load_units_from_list(comp_ctx, prelude->tree_data.unit_data.interface_uses,
-                         visited);
+                         visited, true);
     load_units_from_list(
-        comp_ctx, prelude->tree_data.unit_data.implementation_uses, visited);
+        comp_ctx, prelude->tree_data.unit_data.implementation_uses, visited,
+        true);
   }
 }
 
+/* required == true when the unit comes from a real `uses` clause (program,
+ * interface, implementation or prelude): a missing source is then fatal, as
+ * in FPC.  required == false for the compiler's optional auto-loads (System
+ * under --no-stdlib, ObjPas under {$mode objfpc}), which degrade silently
+ * when no source is present. */
 static void load_unit(CompilationContext *comp_ctx, const char *unit_name,
-                      UnitSet *visited) {
+                      UnitSet *visited, bool required) {
   Tree_t *program = comp_ctx->program;
   SymTab_t *symtab = comp_ctx->symtab;
   if (unit_name == NULL || visited == NULL)
@@ -1490,15 +1498,22 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name,
   if (path == NULL && normalized != NULL && strcmp(unit_name, normalized) != 0)
     path = build_unit_path(normalized);
   if (path == NULL) {
-    /* Silently skipping a `uses` reference hides real bugs (e.g. a unit
-     * source file missing from the search path).  Emit a warning under
-     * KGPC_DEBUG_UNIT_LOAD=1 so investigations can see the elision
-     * without spamming stderr in normal builds. */
+    if (required) {
+      /* A `uses` reference that cannot be resolved on any search path is a
+       * hard error, exactly as FPC reports it.  Silently skipping the unit
+       * hides real bugs (e.g. a unit source file missing from the -Fu path)
+       * and lets compilation continue with an incomplete symbol table. */
+      fprintf(stderr, "Fatal: Can't find unit %s used in this compilation\n",
+              unit_name);
+      exit(1);
+    }
+    /* Optional auto-load (System/ObjPas): no source on the path is fine when
+     * the relevant feature is provided by builtins.  Surface the elision only
+     * under KGPC_DEBUG_UNIT_LOAD=1 so investigations can see it. */
     if (getenv("KGPC_DEBUG_UNIT_LOAD") != NULL)
       fprintf(stderr,
-              "Warning: unit %s referenced via `uses` but no "
-              "source found on the unit search path; "
-              "skipping load.\n",
+              "Warning: optional unit %s not found on the unit search path; "
+              "skipping auto-load.\n",
               unit_name);
     return;
   }
@@ -1561,15 +1576,16 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name,
   }
 
   load_units_from_list(comp_ctx, unit_tree->tree_data.unit_data.interface_uses,
-                       visited);
+                       visited, true);
   load_units_from_list(
-      comp_ctx, unit_tree->tree_data.unit_data.implementation_uses, visited);
+      comp_ctx, unit_tree->tree_data.unit_data.implementation_uses, visited,
+      true);
 
   /* {$mode objfpc} and {$mode delphi} implicitly require the ObjPas unit */
   if (!pascal_identifier_equals(unit_tree->tree_data.unit_data.unit_id,
                                 "objpas") &&
       pascal_frontend_is_objfpc_mode()) {
-    load_unit(comp_ctx, "objpas", visited);
+    load_unit(comp_ctx, "objpas", visited, false);
     int has_objpas = 0;
     for (ListNode_t *cur = unit_tree->tree_data.unit_data.interface_uses;
          cur != NULL; cur = cur->next) {
@@ -1670,11 +1686,11 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name,
 }
 
 static void load_units_from_list(CompilationContext *comp_ctx, ListNode_t *uses,
-                                 UnitSet *visited) {
+                                 UnitSet *visited, bool required) {
   ListNode_t *cur = uses;
   while (cur != NULL) {
     if (cur->type == LIST_STRING && cur->cur != NULL)
-      load_unit(comp_ctx, (const char *)cur->cur, visited);
+      load_unit(comp_ctx, (const char *)cur->cur, visited, required);
     cur = cur->next;
   }
 }
@@ -2066,7 +2082,7 @@ static int compile_single_program(const char *input_file,
   if (!use_stdlib) {
     double system_load_start =
         profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    load_unit(&g_comp_ctx, "System", &visited_units);
+    load_unit(&g_comp_ctx, "System", &visited_units, false);
     emit_profile_stage("program: auto-load System",
                        current_time_seconds() - system_load_start);
   }
@@ -2074,14 +2090,14 @@ static int compile_single_program(const char *input_file,
       profile_pipeline_flag() ? current_time_seconds() : 0.0;
   load_units_from_list(&g_comp_ctx,
                        user_tree->tree_data.program_data.uses_units,
-                       &visited_units);
+                       &visited_units, true);
   emit_profile_stage("program: load uses units",
                      current_time_seconds() - uses_load_start);
 
   if (pascal_frontend_is_objfpc_mode()) {
     double objpas_start =
         profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    load_unit(&g_comp_ctx, "objpas", &visited_units);
+    load_unit(&g_comp_ctx, "objpas", &visited_units, false);
     ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
     if (objpas_node != NULL) {
       objpas_node->next = user_tree->tree_data.program_data.uses_units;
@@ -3145,7 +3161,7 @@ int main(int argc, char **argv) {
                            user_tree->tree_data.unit_data.unit_id, "System")) {
       double system_load_start =
           profile_pipeline_flag() ? current_time_seconds() : 0.0;
-      load_unit(&unit_comp_ctx, "System", &visited_units);
+      load_unit(&unit_comp_ctx, "System", &visited_units, false);
       emit_profile_stage("unit compile: auto-load System",
                          current_time_seconds() - system_load_start);
     }
@@ -3153,14 +3169,14 @@ int main(int argc, char **argv) {
         profile_pipeline_flag() ? current_time_seconds() : 0.0;
     load_units_from_list(&unit_comp_ctx,
                          user_tree->tree_data.unit_data.interface_uses,
-                         &visited_units);
+                         &visited_units, true);
     emit_profile_stage("unit compile: load interface uses",
                        current_time_seconds() - interface_uses_start);
     double implementation_uses_start =
         profile_pipeline_flag() ? current_time_seconds() : 0.0;
     load_units_from_list(&unit_comp_ctx,
                          user_tree->tree_data.unit_data.implementation_uses,
-                         &visited_units);
+                         &visited_units, true);
     emit_profile_stage("unit compile: load implementation uses",
                        current_time_seconds() - implementation_uses_start);
 
@@ -3171,7 +3187,7 @@ int main(int argc, char **argv) {
     if (pascal_frontend_is_objfpc_mode()) {
       double objpas_start =
           profile_pipeline_flag() ? current_time_seconds() : 0.0;
-      load_unit(&unit_comp_ctx, "objpas", &visited_units);
+      load_unit(&unit_comp_ctx, "objpas", &visited_units, false);
       /* Add ObjPas to interface_uses for semcheck_is_unit_name to recognize it
        */
       ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
@@ -3451,7 +3467,7 @@ int main(int argc, char **argv) {
   if (!use_stdlib) {
     double system_load_start =
         profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    load_unit(&g_comp_ctx, "System", &visited_units);
+    load_unit(&g_comp_ctx, "System", &visited_units, false);
     emit_profile_stage("program: auto-load System",
                        current_time_seconds() - system_load_start);
   }
@@ -3459,7 +3475,7 @@ int main(int argc, char **argv) {
       profile_pipeline_flag() ? current_time_seconds() : 0.0;
   load_units_from_list(&g_comp_ctx,
                        user_tree->tree_data.program_data.uses_units,
-                       &visited_units);
+                       &visited_units, true);
   emit_profile_stage("program: load uses units",
                      current_time_seconds() - uses_load_start);
 
@@ -3470,7 +3486,7 @@ int main(int argc, char **argv) {
   if (pascal_frontend_is_objfpc_mode()) {
     double objpas_start =
         profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    load_unit(&g_comp_ctx, "objpas", &visited_units);
+    load_unit(&g_comp_ctx, "objpas", &visited_units, false);
     /* Add ObjPas to uses list for semcheck_is_unit_name to recognize it */
     ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
     if (objpas_node != NULL) {

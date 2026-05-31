@@ -94,6 +94,40 @@ static long long expr_tree_set_size_bytes(const struct Expression *expr) {
   return 0;
 }
 
+/* A managed string (AnsiString/UnicodeString/WideString/RawByteString) is
+ * represented by a pointer.  When such an operand is a *variable* reference,
+ * gencode_leaf_var hands back the variable's storage slot — a global static
+ * (OPKIND_LABEL, e.g. "var_s(%rip)") or a stack/frame slot (OPKIND_MEMORY).
+ * The string-comparison helper needs the pointer VALUE that lives in that
+ * slot, not the address of the slot, so a static global must be loaded with
+ * movq (OPKIND_MEMORY), never leaq (OPKIND_LABEL).
+ *
+ * This must NOT fire for string *constants* (whose rodata label address is the
+ * char pointer to pass) nor for ShortStrings / char arrays (whose storage
+ * address is what kgpc_string_compare expects).  Those keep their leaq. */
+static int operand_is_managed_string_var_slot(const struct Expression *expr,
+                                              CodeGenContext *ctx,
+                                              int is_shortstring) {
+  if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID ||
+      expr->expr_data.id == NULL)
+    return 0;
+  if (is_shortstring || expr_is_char_array_expr(expr))
+    return 0;
+  if (!expr_has_type_tag(expr, STRING_TYPE)) {
+    KgpcType *t = expr_get_kgpc_type(expr);
+    if (t == NULL || !kgpc_type_is_string(t) || kgpc_type_is_shortstring(t))
+      return 0;
+  }
+  /* Reject constants: a named string constant's label address IS the value. */
+  if (ctx->symtab != NULL) {
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+        node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_constant))
+      return 0;
+  }
+  return 1;
+}
+
 ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                              CodeGenContext *ctx, char *buffer, int buf_len,
                              OperandKind *out_kind) {
@@ -1932,6 +1966,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
         const char *arg1 = current_arg_reg64(1);
         if (arg0 == NULL || arg1 == NULL)
           break;
+        /* A managed-string variable operand is a storage slot holding the
+         * string pointer; load that pointer VALUE (movq) instead of taking the
+         * slot's address (leaq).  gencode_leaf_var classifies a global static
+         * slot as OPKIND_LABEL, which would otherwise pass &var to
+         * kgpc_string_compare. */
+        if (l_kind == OPKIND_LABEL && l_reg == NULL &&
+            operand_is_managed_string_var_slot(left_expr, ctx,
+                                               left_is_shortstring))
+          l_kind = OPKIND_MEMORY;
+        if (r_kind == OPKIND_LABEL && r_reg == NULL &&
+            operand_is_managed_string_var_slot(right_expr, ctx,
+                                               right_is_shortstring))
+          r_kind = OPKIND_MEMORY;
         inst_list =
             emit_move_ptr_operand_kind(inst_list, l_op, l_reg, l_kind, arg0);
         inst_list =

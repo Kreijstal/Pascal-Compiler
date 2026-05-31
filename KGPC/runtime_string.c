@@ -2953,9 +2953,16 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
    * long long.  Without this, positive inputs above LLONG_MAX silently wrap
    * to negative values (e.g. "9223372036854775808" became LLONG_MIN with
    * code=0), and similarly for negative overflow. */
+  /* Non-decimal literals ($hex, %binary, &octal) are unsigned bit patterns of
+   * the destination type's width: FPC accepts the full unsigned range and
+   * reinterprets the high bit as the sign (e.g. Int64 of $FFFFFFFFFFFFFFF0 is
+   * -16).  Only decimal literals are bounded by the signed range. */
+  int is_decimal = (base == 10);
   unsigned long long max_magnitude;
   if (negative)
     max_magnitude = (unsigned long long)(-(min_value + 1)) + 1ULL;
+  else if (!is_decimal)
+    max_magnitude = (unsigned long long)max_value * 2ULL + 1ULL;
   else
     max_magnitude = (unsigned long long)max_value;
 
@@ -2968,6 +2975,12 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
       value = LLONG_MIN;
     else
       value = -(long long)uvalue;
+  } else if (!is_decimal && uvalue > (unsigned long long)max_value) {
+    /* High bit set: reinterpret modulo 2^width.  width_mod wraps to 0 for a
+     * 64-bit type, so the subtraction is a no-op there and the cast already
+     * yields the correct negative value. */
+    unsigned long long width_mod = (unsigned long long)max_value * 2ULL + 2ULL;
+    value = (long long)(uvalue - width_mod);
   } else
     value = (long long)uvalue;
 
@@ -3069,13 +3082,43 @@ long long kgpc_val_real(const char *text, double *out_value) {
   return code;
 }
 
+/* Extended (80-bit long double) variant: parse with strtold so values that
+ * overflow a 64-bit double but fit in the 80-bit extended range (e.g. the
+ * 1e320..1e4932 constants in FPC's genmath.inc pow tables) round-trip
+ * correctly instead of saturating to +Inf and reporting a range error. */
+static long long kgpc_val_parse_real_ext(const char *text, long double *out_value) {
+  if (text == NULL)
+    text = "";
+
+  errno = 0;
+  char *endptr = NULL;
+  long double value = strtold(text, &endptr);
+  if (endptr == text)
+    return 1;
+
+  /* strtold reports ERANGE for BOTH overflow (result is ±Inf) and underflow
+   * (result is a denormal or 0). FPC's Val only treats overflow as an error;
+   * an underflowing magnitude such as the 80-bit denormal Epsilon constant
+   * 3.64519953188247460253e-4951 in sysutils/syshelph.inc is a valid Extended
+   * value and must round-trip with code 0. Distinguish the two by the result:
+   * infinite means genuine overflow, finite means underflow we accept. */
+  if (errno == ERANGE && isinf(value))
+    return kgpc_val_error_position(text, endptr);
+
+  const char *rest = kgpc_val_skip_trailing_whitespace(endptr);
+  if (rest != NULL && *rest != '\0')
+    return kgpc_val_error_position(text, rest);
+
+  if (out_value != NULL)
+    *out_value = value;
+  return 0;
+}
+
 long long kgpc_val_extended(const char *text, void *out_value) {
-  double parsed = 0.0;
-  long long code = kgpc_val_parse_real(text, &parsed);
-  if (out_value != NULL) {
-    long double ext = (long double)parsed;
-    memcpy(out_value, &ext, 10);
-  }
+  long double parsed = 0.0L;
+  long long code = kgpc_val_parse_real_ext(text, &parsed);
+  if (out_value != NULL)
+    memcpy(out_value, &parsed, 10);
   return code;
 }
 

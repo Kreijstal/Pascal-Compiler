@@ -3458,7 +3458,11 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         } else if (pascal_identifier_equals(target_name, "QWord") ||
                    pascal_identifier_equals(target_name, "UInt64")) {
           low = 0;
-          high = 9223372036854775807LL;
+          /* High(QWord)=$FFFFFFFFFFFFFFFF stored as its raw 64-bit pattern;
+           * INT64_MAX truncated the limit and broke unsigned guards such as
+           * fpc_val_int64_shortstr's `lim:=High(lim)` (high bit cleared made
+           * every $8.. hex literal report "Error converting hexadecimal"). */
+          high = (long long)0xFFFFFFFFFFFFFFFFULL;
           have_bounds = 1;
           result_type = QWORD_TYPE;
         } else if (pascal_identifier_equals(target_name, "Boolean")) {
@@ -3525,8 +3529,12 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     return 0;
   }
   if (arg_type == QWORD_TYPE) {
+    /* High(QWord)=$FFFFFFFFFFFFFFFF.  i_num is signed long long, so store the
+     * raw 64-bit pattern (-1); the resolved QWord type makes codegen treat it
+     * as unsigned.  Using INT64_MAX here silently truncated the limit and broke
+     * unsigned overflow guards such as fpc_val_int64_shortstr's `lim:=High(lim)`. */
     semcheck_replace_call_with_integer_literal(
-        expr, is_high ? 9223372036854775807LL : 0LL);
+        expr, is_high ? (long long)0xFFFFFFFFFFFFFFFFULL : 0LL);
     semcheck_expr_set_resolved_type(expr, QWORD_TYPE);
     *type_return = QWORD_TYPE;
     return 0;

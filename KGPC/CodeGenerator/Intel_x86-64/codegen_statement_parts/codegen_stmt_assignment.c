@@ -2388,6 +2388,64 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             pascal_identifier_equals(first_arg->expr_data.id, "Self"))
           is_constructor = 0;
       }
+      /* Record constructor invoked via the type name (e.g. TRec.Create(...)):
+       * the constructor's hidden Self parameter receives the address of the
+       * assignment destination (return-value optimization). The constructor
+       * writes the fields in place and has no separate return value, so this is
+       * neither the class-constructor (heap-allocating) path nor the sret path.
+       * Mirror the instance form r.Create(...) where Self = &r. The semantic
+       * checker marks this with is_constructor_call and inserts an EXPR_NIL Self
+       * placeholder as the first argument (see SemCheck_funccall_method.c). */
+      if (is_constructor && expr_has_type_tag(dest_expr, RECORD_TYPE) &&
+          src_expr->expr_data.function_call_data.args_expr != NULL) {
+        struct Expression *self_arg =
+            (struct Expression *)
+                src_expr->expr_data.function_call_data.args_expr->cur;
+        if (self_arg != NULL && self_arg->type == EXPR_NIL) {
+          StackNode_t *dest_save_slot =
+              add_l_x("__record_ctor_dest__", CODEGEN_POINTER_SIZE_BYTES);
+          if (dest_save_slot == NULL) {
+            codegen_report_error(ctx, "ERROR: Unable to reserve stack slot for "
+                                      "record constructor destination.");
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+          }
+          {
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n",
+                     dest_save_slot->offset);
+            Register_t *u[] = {dest_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+          }
+          free_reg(get_reg_stack(), dest_reg);
+
+          /* Pass the user arguments (the list after the NIL Self placeholder)
+           * into arg registers 1, 2, ... leaving register 0 for Self. The
+           * placeholder list node itself must be skipped, otherwise it would be
+           * emitted into the first user-argument register. */
+          inst_list = codegen_pass_arguments(
+              src_expr->expr_data.function_call_data.args_expr->next, inst_list,
+              ctx, func_type, func_id, 1, src_expr, 0);
+
+          /* Load the destination address into the Self register (arg reg 0)
+           * after argument evaluation so it cannot be clobbered. */
+          {
+            const char *self_reg = current_arg_reg64(0);
+            char tmpl[96];
+            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %s\n",
+                     dest_save_slot->offset, self_reg);
+            inst_list = add_inst(inst_list, tmpl);
+          }
+
+          char buffer[128];
+          snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
+                   func_mangled_name ? func_mangled_name : func_id);
+          inst_list = add_inst(inst_list, buffer);
+          inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+          codegen_release_function_call_mangled_id(src_expr);
+          return inst_list;
+        }
+      }
       /* Record static factories can also be named Create but they are not
        * class constructors and must not use constructor/sret calling paths. */
       if (is_constructor && expr_has_type_tag(dest_expr, RECORD_TYPE))

@@ -1,0 +1,8 @@
+ansi=ansi equal -> TRUE
+ansi=ansi diff  -> FALSE
+short=ansi equal -> TRUE
+short=ansi diff  -> FALSE
+ansi=short equal -> TRUE
+ansi=short diff  -> FALSE
+cond and ansi=ansi equal -> TRUE
+cond and ansi=ansi diff  -> FALSE

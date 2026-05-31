@@ -3168,6 +3168,28 @@ void test_pascal_advanced_record_class_var(void) {
     bool found_value_field = false;
     for (ast_t *field = record_type->child; field != NULL;
          field = field->next) {
+      /* A `class var` section is parsed as a PASCAL_T_CLASS_MEMBER wrapping the
+       * `class`/`var` keyword nodes and the field declaration(s), so descend
+       * into it when scanning for the class var.  Plain instance fields remain
+       * direct PASCAL_T_FIELD_DECL children. */
+      if (field->typ == PASCAL_T_CLASS_MEMBER) {
+        for (ast_t *member = field->child; member != NULL;
+             member = member->next) {
+          if (member->typ != PASCAL_T_FIELD_DECL)
+            continue;
+          if (field_decl_has_identifier(member, "FInstance")) {
+            found_class_var = true;
+          }
+          /* FPC's `class var` block continues until the next section/visibility
+           * specifier, so `Value` here is part of the same class var section
+           * (SizeOf of the record is 0).  Both declarations live inside the
+           * PASCAL_T_CLASS_MEMBER wrapper. */
+          if (field_decl_has_identifier(member, "Value")) {
+            found_value_field = true;
+          }
+        }
+        continue;
+      }
       if (field->typ != PASCAL_T_FIELD_DECL) {
         continue;
       }

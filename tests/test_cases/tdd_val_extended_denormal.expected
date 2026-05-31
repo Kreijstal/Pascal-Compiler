@@ -1,0 +1,6 @@
+denormal code=0
+denormal recovered >1=TRUE
+1e400 code=0
+overflow code<>0=TRUE
+normal code=0 val=1.5
+bad code<>0=TRUE

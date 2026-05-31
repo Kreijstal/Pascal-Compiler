@@ -2066,6 +2066,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type) {
       clone_method_template_list(record_type->method_templates);
   clone->is_class = record_type->is_class;
   clone->is_interface = record_type->is_interface;
+  clone->is_object = record_type->is_object;
   clone->is_packed = record_type->is_packed;
   clone->is_type_helper = record_type->is_type_helper;
   clone->helper_base_type_id = record_type->helper_base_type_id
@@ -2425,6 +2426,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args,
       0; /* Mark_used will set reachable routines */
   new_tree->tree_data.subprogram_data.is_constructor = 0;
   new_tree->tree_data.subprogram_data.nostackframe = 0;
+  new_tree->tree_data.subprogram_data.is_assembler = 0;
   new_tree->tree_data.subprogram_data.is_varargs = 0;
   new_tree->tree_data.subprogram_data.is_static_method = 0;
 
@@ -2472,6 +2474,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args,
       0; /* Mark_used will set reachable routines */
   new_tree->tree_data.subprogram_data.is_constructor = 0;
   new_tree->tree_data.subprogram_data.nostackframe = 0;
+  new_tree->tree_data.subprogram_data.is_assembler = 0;
   new_tree->tree_data.subprogram_data.is_varargs = 0;
   new_tree->tree_data.subprogram_data.is_static_method = 0;
 

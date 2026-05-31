@@ -823,6 +823,7 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info,
         alias->is_enum = 1;
         alias->enum_is_scoped = type_info->enum_is_scoped;
         alias->enum_has_explicit_values = type_info->enum_has_explicit_values;
+        alias->enum_min_size = type_info->enum_min_size;
         alias->enum_literals = type_info->enum_literals;
         alias->enum_values = type_info->enum_values;
         alias->range_known = type_info->range_known;
@@ -1059,19 +1060,72 @@ Tree_t *convert_method_impl(ast_t *method_node) {
               list_builder_init(&op_label_builder);
               ListNode_t *op_nested_subs = NULL;
               ListNode_t *op_type_decls = NULL;
-              ast_t *body_cursor =
-                  return_type_node ? return_type_node->next : param_node->next;
-              while (body_cursor != NULL) {
-                if (body_cursor->typ == PASCAL_T_BEGIN_BLOCK) {
-                  body = convert_block(body_cursor);
+              /* The grammar parses standalone operator bodies with
+               * `method_body`, a PASCAL_T_NONE sequence whose local var/const/
+               * type/label sections are spliced in as *siblings* of the
+               * begin-block rather than wrapped in a PASCAL_T_FUNCTION_BODY.
+               * Walk every trailing sibling and route each section the same
+               * way the qualified-method path does, so operator locals are not
+               * dropped (which previously left them as unresolved non-local
+               * symbols in codegen). */
+              ast_t *op_type_section_ast = NULL;
+              for (ast_t *body_cursor =
+                       return_type_node ? return_type_node->next
+                                        : param_node->next;
+                   body_cursor != NULL; body_cursor = body_cursor->next) {
+                ast_t *bnode = unwrap_pascal_node(body_cursor);
+                if (bnode == NULL)
+                  bnode = body_cursor;
+                switch (bnode->typ) {
+                case PASCAL_T_TYPE_SECTION:
+                  append_type_decls_from_section(bnode, &op_type_decls,
+                                                 &op_nested_subs,
+                                                 &op_const_decls,
+                                                 &op_var_builder, NULL);
+                  op_type_section_ast = bnode;
                   break;
-                } else if (body_cursor->typ == PASCAL_T_FUNCTION_BODY) {
-                  convert_routine_body(body_cursor, &op_const_decls,
-                                       &op_var_builder, &op_label_builder,
-                                       &op_nested_subs, &body, &op_type_decls);
+                case PASCAL_T_CONST_SECTION:
+                  append_const_decls_from_section(bnode, &op_const_decls,
+                                                  &op_var_builder,
+                                                  op_type_section_ast);
+                  break;
+                case PASCAL_T_VAR_SECTION:
+                  list_builder_extend(&op_var_builder,
+                                      convert_var_section(bnode));
+                  break;
+                case PASCAL_T_LABEL_SECTION:
+                  append_labels_from_section(bnode, &op_label_builder);
+                  break;
+                case PASCAL_T_FUNCTION_DECL:
+                case PASCAL_T_PROCEDURE_DECL: {
+                  Tree_t *sub = (bnode->typ == PASCAL_T_PROCEDURE_DECL)
+                                    ? convert_procedure(bnode)
+                                    : convert_function(bnode);
+                  append_subprogram_node(&op_nested_subs, sub);
                   break;
                 }
-                body_cursor = body_cursor->next;
+                case PASCAL_T_FUNCTION_BODY:
+                  convert_routine_body(bnode, &op_const_decls, &op_var_builder,
+                                       &op_label_builder, &op_nested_subs,
+                                       &body, &op_type_decls);
+                  break;
+                case PASCAL_T_BEGIN_BLOCK:
+                  body = convert_block(bnode);
+                  break;
+                case PASCAL_T_ASM_BLOCK: {
+                  struct Statement *stmt = convert_statement(bnode);
+                  ListBuilder stmts_builder;
+                  list_builder_init(&stmts_builder);
+                  if (stmt != NULL)
+                    list_builder_append(&stmts_builder, stmt, LIST_STMT);
+                  body = mk_compoundstatement(bnode->line,
+                                              list_builder_finish(
+                                                  &stmts_builder));
+                  break;
+                }
+                default:
+                  break;
+                }
               }
 
               /* Create the function tree: use base_id as the
@@ -1628,6 +1682,8 @@ Tree_t *convert_method_impl(ast_t *method_node) {
     is_nostackframe = ast_has_routine_directive(method_node, "nostackframe", 8);
   if (tree != NULL && is_nostackframe)
     tree->tree_data.subprogram_data.nostackframe = 1;
+  if (tree != NULL && ast_has_routine_directive(method_node, "assembler", 8))
+    tree->tree_data.subprogram_data.is_assembler = 1;
   if (tree != NULL) {
     if (has_return_type)
       tree->tree_data.subprogram_data.return_type_ref =
@@ -2055,6 +2111,8 @@ static void finalize_subprogram_tree(Tree_t *tree, ast_t *node,
     s->is_nostackframe = ast_has_routine_directive(node, "nostackframe", 8);
   if (tree != NULL && s->is_nostackframe)
     tree->tree_data.subprogram_data.nostackframe = 1;
+  if (tree != NULL && ast_has_routine_directive(node, "assembler", 8))
+    tree->tree_data.subprogram_data.is_assembler = 1;
   if (tree != NULL && s->is_varargs)
     tree->tree_data.subprogram_data.is_varargs = 1;
   if (tree != NULL && s->is_external && s->external_alias == NULL &&

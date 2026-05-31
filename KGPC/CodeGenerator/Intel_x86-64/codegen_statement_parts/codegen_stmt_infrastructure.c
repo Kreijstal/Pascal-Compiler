@@ -2763,13 +2763,43 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr,
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
     goto cleanup;
   } else if (expr->type == EXPR_AS) {
-    if (expr->expr_data.as_data.expr != NULL) {
+    struct Expression *as_src = expr->expr_data.as_data.expr;
+    if (as_src != NULL) {
       Register_t *operand_addr = NULL;
-      inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr,
-                                           inst_list, ctx, &operand_addr);
+      inst_list =
+          codegen_address_for_expr(as_src, inst_list, ctx, &operand_addr);
       if (operand_addr != NULL) {
-        inst_list = codegen_emit_class_cast_check_from_address(
-            (struct Expression *)expr, inst_list, ctx, operand_addr);
+        if (codegen_expr_is_addressable(as_src)) {
+          /* (src as T) denotes the same storage as src; for an addressable
+           * source codegen_address_for_expr returned the address of the slot
+           * holding the instance pointer.  The runtime cast check dereferences
+           * that slot to obtain the instance pointer and clobbers the register
+           * it is handed, so run it on a scratch copy and return the slot
+           * address unchanged.  Returning the already-dereferenced instance
+           * pointer instead made callers (e.g. record-field access, which
+           * dereferences this result exactly once) load through the object's
+           * VMT rather than the object itself. */
+          Register_t *check_reg = get_free_reg(get_reg_stack(), &inst_list);
+          if (check_reg == NULL)
+            check_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+          if (check_reg != NULL) {
+            Register_t *cdefs[] = {check_reg};
+            Register_t *cuses[] = {operand_addr};
+            inst_list = add_inst_du(inst_list, ctx, cdefs, 1, cuses, 1,
+                                    "\tmovq\t%1, %0\n");
+            inst_list = codegen_emit_class_cast_check_from_address(
+                (struct Expression *)expr, inst_list, ctx, check_reg);
+            free_reg(get_reg_stack(), check_reg);
+          } else {
+            inst_list = codegen_emit_class_cast_check_from_address(
+                (struct Expression *)expr, inst_list, ctx, operand_addr);
+          }
+        } else {
+          /* Non-addressable source: codegen_address_for_expr materialised the
+           * instance pointer itself, so check it in place. */
+          inst_list = codegen_emit_class_cast_check_from_address(
+              (struct Expression *)expr, inst_list, ctx, operand_addr);
+        }
         *out_reg = operand_addr;
         goto cleanup;
       }

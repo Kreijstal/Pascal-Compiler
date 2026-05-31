@@ -2622,6 +2622,14 @@ KgpcType *expr_get_kgpc_type(const struct Expression *expr) {
   case EXPR_BOOL:
     tag = BOOL;
     break;
+  case EXPR_TYPECAST:
+    /* A char-valued typecast (char(65), char(byte(x))) yields CHAR_TYPE so
+     * downstream char->string promotion fires correctly. Other typecasts are
+     * left to resolved_kgpc_type (checked above) / fall through to NULL,
+     * preserving prior behaviour. */
+    if (expr->expr_data.typecast_data.target_type == CHAR_TYPE)
+      tag = CHAR_TYPE;
+    break;
   case EXPR_NIL:
     return create_pointer_type(NULL);
   case EXPR_TYPEINFO:

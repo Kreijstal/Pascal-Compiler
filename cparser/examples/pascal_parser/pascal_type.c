@@ -1760,18 +1760,41 @@ static ParseResult record_type_fn(input_t *in, void *args, char *parser_name) {
   // directives)
   combinator_t *adv_property_decl = create_property_decl_parser();
 
-  // Constructor/destructor headers inside a record (with optional class prefix
-  // and method directives)
-  combinator_t *adv_ctor_decl =
+  // Constructor/destructor headers inside a record (with method directives).
+  //
+  // A `class constructor` / `class destructor` is a static type initializer
+  // (no Self, run once at unit init/finalization), NOT an instance
+  // constructor.  It must stay a PASCAL_T_METHOD_DECL so the class-constructor
+  // machinery handles it (the keyword-based pass in convert sets
+  // kind=CONSTRUCTOR plus is_class_method/is_static).  Only the instance forms
+  // below are tagged PASCAL_T_CONSTRUCTOR_DECL / PASCAL_T_DESTRUCTOR_DECL,
+  // whose codegen builds an instance and returns Self via the type-name
+  // invocation path; routing a class constructor through that path would give
+  // it an instance frame (Self-relative locals, Self return) and crash.
+  // The class-prefixed variants are listed first in adv_member so they claim
+  // the `class` keyword before the bare forms are tried.
+  combinator_t *adv_class_ctor_decl =
       seq(new_combinator(), PASCAL_T_METHOD_DECL,
-          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+          token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+          token(keyword_ci("constructor")), token(cident(PASCAL_T_IDENTIFIER)),
+          create_pascal_param_parser(), token(match(";")),
+          record_method_directives, (combinator_t *)NULL);
+
+  combinator_t *adv_class_dtor_decl =
+      seq(new_combinator(), PASCAL_T_METHOD_DECL,
+          token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+          token(keyword_ci("destructor")), token(cident(PASCAL_T_IDENTIFIER)),
+          create_pascal_param_parser(), token(match(";")),
+          record_method_directives, (combinator_t *)NULL);
+
+  combinator_t *adv_ctor_decl =
+      seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
           token(keyword_ci("constructor")), token(cident(PASCAL_T_IDENTIFIER)),
           create_pascal_param_parser(), token(match(";")),
           record_method_directives, (combinator_t *)NULL);
 
   combinator_t *adv_dtor_decl =
-      seq(new_combinator(), PASCAL_T_METHOD_DECL,
-          optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
+      seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
           token(keyword_ci("destructor")), token(cident(PASCAL_T_IDENTIFIER)),
           create_pascal_param_parser(), token(match(";")),
           record_method_directives, (combinator_t *)NULL);
@@ -1860,15 +1883,38 @@ static ParseResult record_type_fn(input_t *in, void *args, char *parser_name) {
       seq(new_combinator(), PASCAL_T_VAR_SECTION, token(keyword_ci("var")),
           many(adv_var_decl), (combinator_t *)NULL);
 
+  // Class var SECTION: a single `class var` keyword followed by MANY field
+  // declarations, e.g. TTimeSpan's
+  //     strict private class var
+  //       FMinValue: TTimeSpan;
+  //       FMaxValue: TTimeSpan;
+  //       FZero: TTimeSpan;
+  // adv_class_var_decl below only captures the single declaration immediately
+  // after `class var`, so the 2nd and later declarations fall through to
+  // adv_field_decl and become ordinary instance fields.  When their type is the
+  // record's own type, that makes the sizeof/alignment walk recurse into the
+  // record forever (compiler hang).  Mirror the class-grammar's
+  // class_var_section: emit `class`/`var` as IDENTIFIER nodes (so
+  // convert_record_members marks every captured field is_class_var) and accept
+  // many declarations.  Placed before adv_class_var_decl so it claims the whole
+  // section; it also subsumes the single-declaration form.
+  combinator_t *adv_class_var_section =
+      seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
+          token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
+          token(create_keyword_parser("var", PASCAL_T_IDENTIFIER)),
+          many(adv_var_decl), (combinator_t *)NULL);
+
   combinator_t *adv_member =
       multi(new_combinator(), PASCAL_T_NONE, access_modifier,
             adv_nested_type_section,  // Support nested type sections
             adv_nested_const_section, // Support nested const sections
+            adv_class_var_section, // `class var` section (one keyword, many decls)
             adv_class_var_decl,       // Support class var declarations
             adv_var_section,          // Support plain var sections
             variant_part, // Allow variant sections after visibility blocks
-            adv_field_decl, adv_proc_decl, adv_func_decl, adv_ctor_decl,
-            adv_dtor_decl, adv_operator_decl, adv_property_decl, (combinator_t *)NULL);
+            adv_field_decl, adv_proc_decl, adv_func_decl, adv_class_ctor_decl,
+            adv_class_dtor_decl, adv_ctor_decl, adv_dtor_decl,
+            adv_operator_decl, adv_property_decl, (combinator_t *)NULL);
 
   combinator_t *adv_members = many(adv_member);
   if (getenv("KGPC_DEBUG_RECORD") != NULL) {

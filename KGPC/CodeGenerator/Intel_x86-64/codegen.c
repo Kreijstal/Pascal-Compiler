@@ -1251,6 +1251,19 @@ void codegen_add_class_vars_for_method(const char *owner_class,
       /* Calculate field size */
       int field_size = codegen_class_var_field_size(symtab, field);
 
+      /* Align the running offset to this field's natural alignment BEFORE
+       * building its label. The CLASSVAR storage emitter
+       * (codegen_emit_*_classvar_storage in codegen_vmt.c) and the semantic
+       * offset computation (find_field_in_members in SemCheck_sizeof.c) both
+       * align each class-var field to its alignment before placing it, so a
+       * pointer-sized field (e.g. an AnsiString) lands at an 8-byte boundary.
+       * Registering the label at the un-aligned offset would point class-var
+       * reads/writes at the padding bytes preceding the field, handing the RTL
+       * a garbage AnsiString pointer (RTE 216). */
+      int field_alignment = codegen_record_field_alignment(field, field_size);
+      current_offset =
+          (current_offset + field_alignment - 1) & ~(field_alignment - 1);
+
       /* Build the static label for this field: ClassName_CLASSVAR+offset */
       /* We register it with offset information */
       /* Buffer size: classvar_label + "+" + max_digits(long long) + null
@@ -1294,10 +1307,7 @@ void codegen_add_class_vars_for_method(const char *owner_class,
         free(field_static_label);
       }
 
-      /* Advance offset with alignment (using standard power-of-two alignment
-       * formula) */
-      int alignment = codegen_record_field_alignment(field, field_size);
-      current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
+      /* Advance past this field; the offset was already aligned above. */
       current_offset += field_size;
     }
     field_node = field_node->next;

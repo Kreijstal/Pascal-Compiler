@@ -905,6 +905,136 @@ int from_cparser_scopedenums_enabled_at_line(int target_line) {
   return scoped;
 }
 
+/* Parse a {$PACKENUM ...} / {$Z...} / {$MINENUMSIZE ...} directive argument and
+ * return the requested minimum enum size in bytes (1, 2, or 4). Returns 0 if
+ * the argument is not a recognised size (caller leaves the current value
+ * unchanged). DEFAULT/NORMAL restore FPC's default minimum of 4.
+ *
+ * Only the first whitespace-delimited token is significant: FPC treats any
+ * trailing text inside the directive braces as a comment (e.g. typinfo.pp's
+ * "{$MINENUMSIZE 1   this saves a lot of memory }"), so we must match the
+ * leading token and ignore the rest rather than require an exact string. */
+static int from_cparser_parse_packenum_arg(const char *arg) {
+  while (*arg == ' ' || *arg == '\t')
+    ++arg;
+
+  /* End of the first token: whitespace or NUL terminates it. */
+  size_t tok_len = 0;
+  while (arg[tok_len] != '\0' && arg[tok_len] != ' ' && arg[tok_len] != '\t')
+    ++tok_len;
+
+  if (tok_len == 7 && strncasecmp(arg, "DEFAULT", 7) == 0)
+    return 4;
+  if (tok_len == 6 && strncasecmp(arg, "NORMAL", 6) == 0)
+    return 4;
+  if (tok_len == 1) {
+    if (arg[0] == '1')
+      return 1;
+    if (arg[0] == '2')
+      return 2;
+    if (arg[0] == '4')
+      return 4;
+    if (arg[0] == '8')
+      return 4; /* FPC clamps the minimum at 4 even for {$PACKENUM 8} */
+  }
+  return 0;
+}
+
+/* Apply a single {$...} directive token (already extracted, NUL-terminated and
+ * trimmed) to the running PACKENUM minimum state. */
+static void from_cparser_apply_packenum_directive(const char *directive,
+                                                  int *min_size, int *min_stack,
+                                                  int *min_sp, int stack_cap) {
+  if (strcasecmp(directive, "PUSH") == 0) {
+    if (*min_sp < stack_cap)
+      min_stack[(*min_sp)++] = *min_size;
+  } else if (strcasecmp(directive, "POP") == 0) {
+    if (*min_sp > 0)
+      *min_size = min_stack[--(*min_sp)];
+  } else if (strncasecmp(directive, "PACKENUM", 8) == 0) {
+    int v = from_cparser_parse_packenum_arg(directive + 8);
+    if (v != 0)
+      *min_size = v;
+  } else if (strncasecmp(directive, "MINENUMSIZE", 11) == 0) {
+    int v = from_cparser_parse_packenum_arg(directive + 11);
+    if (v != 0)
+      *min_size = v;
+  } else if ((directive[0] == 'Z' || directive[0] == 'z') &&
+             (directive[1] == '1' || directive[1] == '2' ||
+              directive[1] == '4') &&
+             directive[2] == '\0') {
+    /* {$Z1}/{$Z2}/{$Z4} (no space) */
+    *min_size = directive[1] - '0';
+  } else if ((directive[0] == 'Z' || directive[0] == 'z') &&
+             (directive[1] == ' ' || directive[1] == '\t')) {
+    /* {$Z 1} / {$Z 4} (space-separated) */
+    int v = from_cparser_parse_packenum_arg(directive + 1);
+    if (v != 0)
+      *min_size = v;
+  }
+}
+
+/* Determine the active minimum enumeration size (the {$PACKENUM}/{$Z}/
+ * {$MINENUMSIZE} setting; FPC's default minimum is 4 bytes) at a given byte
+ * offset in the preprocessed source. We key on the byte offset rather than the
+ * logical line number because byte offsets are unambiguous and monotonic,
+ * whereas logical line numbers reset at every {$i}-included file (so a target
+ * line like 34 matches many positions across the buffer). A line-based scan
+ * that stops at the first place the tracked line exceeds the target therefore
+ * misses {$MINENUMSIZE 1} directives that live inside an included file (e.g.
+ * rttih.inc's TTypeKind), sizing those enums at the 4-byte default and
+ * corrupting every record/RTTI layout that embeds them. The preprocessed
+ * source has all includes expanded, so every directive in scope precedes the
+ * node's offset and is seen by this scan. */
+int from_cparser_packenum_min_at_index(int target_index) {
+  const int default_min = 4;
+  if (target_index <= 0)
+    return default_min;
+
+  const char *buffer = preprocessed_source;
+  size_t length = preprocessed_length;
+  if (buffer == NULL || length == 0)
+    return default_min;
+
+  size_t limit = (size_t)target_index;
+  if (limit > length)
+    limit = length;
+
+  int min_size = default_min;
+  int min_stack[64];
+  int min_sp = 0;
+  const int stack_cap = (int)(sizeof(min_stack) / sizeof(min_stack[0]));
+
+  size_t scan = 0;
+  while (scan + 1 < limit) {
+    /* Only {$...} compiler directives affect the enum-size state; {#line ...}
+     * markers start with "{#" and are skipped by the '$' check below. */
+    if (buffer[scan] != '{' || buffer[scan + 1] != '$') {
+      ++scan;
+      continue;
+    }
+    size_t inner_start = scan + 2;
+    size_t close = inner_start;
+    while (close < length && buffer[close] != '}')
+      ++close;
+    if (close >= length)
+      break; /* unterminated directive */
+
+    size_t inner_len = close - inner_start;
+    if (inner_len > 0 && inner_len < 256) {
+      char directive[256];
+      memcpy(directive, buffer + inner_start, inner_len);
+      directive[inner_len] = '\0';
+      from_cparser_trim_ascii(directive);
+      from_cparser_apply_packenum_directive(directive, &min_size, min_stack,
+                                            &min_sp, stack_cap);
+    }
+    scan = close + 1;
+  }
+
+  return min_size;
+}
+
 /* Reset the frontend error counter */
 void from_cparser_reset_error_count(void) { g_frontend_error_count = 0; }
 

@@ -112,6 +112,7 @@ typedef struct {
   int is_enum;
   int enum_is_scoped;
   int enum_has_explicit_values;
+  int enum_min_size; /* Active {$PACKENUM}/{$Z}/{$MINENUMSIZE} minimum (1/2/4) */
   ListNode_t *enum_literals;
   ListNode_t *enum_values;
   int is_file;
@@ -311,6 +312,7 @@ int enum_registry_lookup(const char *name, int *out_start, int *out_end);
 void enum_registry_scan_type_section(ast_t *type_section);
 const char *find_class_for_method(const char *method_name);
 int from_cparser_scopedenums_enabled_at_line(int target_line);
+int from_cparser_packenum_min_at_index(int target_index);
 void frontend_error(const char *format, ...);
 char *generate_anonymous_method_name(int is_function);
 int is_external_directive(const char *directive);

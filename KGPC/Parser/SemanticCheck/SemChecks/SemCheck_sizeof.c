@@ -289,25 +289,16 @@ static long long fpc_set_storage_size_from_alias(SymTab_t *symtab,
 
 static long long
 fpc_enum_storage_size_from_alias(const struct TypeAlias *alias) {
-  if (alias != NULL && alias->storage_size > 0)
-    return alias->storage_size;
-  if (alias != NULL && alias->range_known) {
-    if (alias->range_start >= 0 && alias->range_end <= 0xff)
-      return 1;
-    if (alias->range_start >= 0 && alias->range_end <= 0xffff)
-      return 2;
+  /* FPC's default minimum enumeration size is 4 bytes ({$PACKENUM 4}/{$Z4}).
+   * Under {$PACKENUM 1}/{$Z1} (or 2) an enum shrinks to the smallest size that
+   * holds its ordinal range, but never below the directive minimum. Delegates
+   * to kgpc_enum_storage_size_for so this stays in sync with KgpcType.c. */
+  if (alias == NULL)
     return 4;
-  }
-  if (alias != NULL && alias->enum_literals != NULL) {
-    int count = list_length(alias->enum_literals);
-    if (count <= 0)
-      return 4;
-    if (count <= 0x100)
-      return 1;
-    if (count <= 0x10000)
-      return 2;
-  }
-  return 4;
+  if (alias->storage_size > 0)
+    return alias->storage_size;
+  return kgpc_enum_storage_size_for(alias->enum_min_size, alias->range_known,
+                                    alias->range_start, alias->range_end);
 }
 
 long long sizeof_from_type_tag(int type_tag) {
@@ -643,6 +634,38 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field,
 
   if (field->type == RECORD_TYPE && field->type_id == NULL)
     return 1;
+
+  /* An anonymous `set of <named enum>` field stores the element type in
+   * set_element_type_id (the field's own type_id names no symbol).  Without
+   * this branch the fallthrough below resolves via sizeof_from_type_tag,
+   * which reports SET_TYPE as 4 bytes and therefore aligns the field to 4.
+   * FPC sizes a set whose largest member is >= 32 as 32 bytes and aligns it
+   * to the pointer size, so the natural-size path must resolve the real set
+   * width here.  This mirrors the field-size computation that already
+   * resolves set_element_type_id in compute_field_size_uncached. */
+  if (field->type == SET_TYPE && field->set_element_type_id != NULL &&
+      symtab != NULL) {
+    long long set_size = -1;
+    HashNode_t *elem_node =
+        semcheck_find_preferred_type_node(symtab, field->set_element_type_id);
+    if (elem_node != NULL) {
+      struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+      if (elem_alias != NULL) {
+        if (elem_alias->is_enum && elem_alias->enum_literals != NULL) {
+          int count = list_length(elem_alias->enum_literals);
+          if (count > 0)
+            set_size = fpc_default_set_storage_size_for_high((long long)count -
+                                                             1);
+        } else if (elem_alias->range_known)
+          set_size =
+              fpc_default_set_storage_size_for_high(elem_alias->range_end);
+      }
+    }
+    if (set_size > 0) {
+      int align = fpc_size_to_alignment(set_size);
+      return (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
+    }
+  }
 
   {
     int align = 1;

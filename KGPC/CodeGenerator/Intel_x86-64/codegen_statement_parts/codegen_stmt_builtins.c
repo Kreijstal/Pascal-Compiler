@@ -2622,7 +2622,48 @@ static ListNode_t *codegen_builtin_dispose(struct Statement *stmt,
   }
 
   Register_t *addr_reg = NULL;
-  inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+  /* kgpc_dispose takes a void** (the address of the pointer slot) so it can
+   * free *slot and nil the slot.  For an addressable target that slot is the
+   * variable itself.  But a non-addressable rvalue argument — e.g.
+   * Dispose(pderef(List[i])) where List[i] is a default-indexed property whose
+   * getter returns the pointer by value — has no storage of its own.  Evaluate
+   * it to the pointer value, spill that into a stack temp, and pass the temp's
+   * address: kgpc_dispose then frees the correct pointer and nils the dead
+   * temp (FPC's Dispose does not nil the source anyway).  Doing this only here,
+   * rather than in codegen_address_for_expr, keeps the address-of a
+   * non-addressable class/record rvalue (whose value already serves as its
+   * address) unchanged for every other caller. */
+  if (!codegen_expr_is_addressable(target_expr)) {
+    Register_t *value_reg = NULL;
+    inst_list = codegen_evaluate_expr(target_expr, inst_list, ctx, &value_reg);
+    if (codegen_had_error(ctx) || value_reg == NULL)
+      return inst_list;
+    StackNode_t *temp_slot = add_l_t_bytes("dispose_rvalue_tmp", 8);
+    if (temp_slot == NULL) {
+      free_reg(get_reg_stack(), value_reg);
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate temp slot for Dispose argument.");
+      return inst_list;
+    }
+    {
+      Register_t *u[] = {value_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n",
+               temp_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+    }
+    {
+      Register_t *d[] = {value_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+               temp_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+    }
+    addr_reg = value_reg;
+  } else {
+    inst_list =
+        codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+  }
   if (codegen_had_error(ctx) || addr_reg == NULL)
     return inst_list;
 

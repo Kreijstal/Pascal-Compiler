@@ -2877,7 +2877,25 @@ int semcheck_resolve_overload(HashNode_t **best_match_out, int *num_best_out,
               }
             }
             if (cast_target == POINTER_TYPE) {
-              if (formal_tag == POINTER_TYPE) {
+              /* A class typecast (e.g. TProc(d)) also resolves to
+               * POINTER_TYPE, but it carries a concrete class identity.
+               * In that case classify_match has already compared the cast
+               * target's record_info against the formal's class via
+               * are_types_compatible_for_assignment and produced the correct
+               * verdict (EXACT / PROMOTION / INCOMPATIBLE), so we must NOT
+               * blindly upgrade it to MATCH_EXACT here — doing so would make
+               * every class-pointer overload look exact and destroy the
+               * ability to pick the right one.  Only apply the typecast
+               * "exact pointer" boost for casts to a non-class (generic or
+               * typed) pointer such as Pointer / PChar / PTypeInfo. */
+              struct RecordType *cast_rec =
+                  (cast_target_id != NULL)
+                      ? semcheck_lookup_record_type(symtab, cast_target_id)
+                      : NULL;
+              int cast_is_class =
+                  (cast_rec != NULL && record_type_is_class(cast_rec));
+              if (formal_tag == POINTER_TYPE && !cast_is_class &&
+                  quality.kind != MATCH_INCOMPATIBLE) {
                 quality.kind = MATCH_EXACT;
                 if (formal_kgpc != NULL &&
                     formal_kgpc->kind == TYPE_KIND_POINTER) {

@@ -1087,6 +1087,39 @@ int semcheck_typecast(int *type_return, SymTab_t *symtab,
     }
   }
 
+  /* Primitive-to-record typecast via operator overload — the mirror of the
+   * record-to-primitive case above.  When the target is a record with an
+   * `operator := (Source): Record` overload (e.g. `Tconstexprint(qword)` in
+   * the compiler's own constexp.pas), an explicit cast must invoke that
+   * operator rather than reinterpret-bitcasting the scalar into the record
+   * (which yields a garbage value and overflow flag — the root cause of the
+   * FPC pp.pas bootstrap heap.inc(552) "Overflow in arithmetic operation").
+   *
+   * As in the record-to-primitive path, morph the INNER expression into the
+   * operator call and PRESERVE the outer EXPR_TYPECAST (a redundant
+   * record-to-same-record cast over the call result).  This is robust to the
+   * expression's later re-semcheck passes; replacing the typecast node itself
+   * is not.  semcheck_try_record_conversion_expression only rewrites when a
+   * compatible operator returning the target record actually exists, so plain
+   * same-size record reinterpret casts are unaffected. */
+  if (target_type == RECORD_TYPE && inner_kgpc_type != NULL &&
+      expr->resolved_kgpc_type != NULL &&
+      expr->expr_data.typecast_data.expr != NULL &&
+      inner_kgpc_type->kind != TYPE_KIND_RECORD &&
+      !(inner_kgpc_type->kind == TYPE_KIND_POINTER &&
+        inner_kgpc_type->info.points_to != NULL &&
+        inner_kgpc_type->info.points_to->kind == TYPE_KIND_RECORD) &&
+      inner_type != RECORD_TYPE) {
+    KgpcType *converted_source = inner_kgpc_type;
+    int converted_owned = 0;
+    if (semcheck_try_record_conversion_expression(
+            symtab, &expr->expr_data.typecast_data.expr, NULL,
+            expr->resolved_kgpc_type, &converted_source, &converted_owned)) {
+      if (converted_owned && converted_source != NULL)
+        destroy_kgpc_type(converted_source);
+    }
+  }
+
   (void)inner_type;
   return error_count;
 }

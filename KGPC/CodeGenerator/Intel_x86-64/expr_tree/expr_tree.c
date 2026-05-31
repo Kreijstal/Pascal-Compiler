@@ -1213,11 +1213,11 @@ expr_tree_should_emit_shortstring_literal(const struct Expression *expr,
   return 0;
 }
 
-static ListNode_t *expr_tree_emit_string_literal_address(ListNode_t *inst_list,
-                                                         CodeGenContext *ctx,
-                                                         Register_t *target_reg,
-                                                         const char *value,
-                                                         int emit_shortstring) {
+ListNode_t *expr_tree_emit_string_literal_address(ListNode_t *inst_list,
+                                                  CodeGenContext *ctx,
+                                                  Register_t *target_reg,
+                                                  const char *value,
+                                                  int emit_shortstring) {
   if (ctx == NULL || target_reg == NULL || value == NULL)
     return inst_list;
 
@@ -1696,6 +1696,32 @@ int expr_is_single_real_with_symtab(const struct Expression *expr,
   return 0;
 }
 
+/* In the expr-tree evaluator, operands of string / shortstring / char-array /
+ * record type are materialised as a POINTER (the address of the data) in their
+ * register, never as an inline value.  When such a register is spilled and
+ * reloaded across a sibling operand's evaluation, the full 64-bit pointer must
+ * be transferred; sizing the spill/reload from the operand's logical element
+ * type (which can be a 1- or 2-byte char/index type — e.g. a shortstring array
+ * indexed by a byte-sized subrange) truncates the address and corrupts it.
+ * This was the root cause of the shortstring array-element address being
+ * truncated to a single byte in a value-context string comparison such as
+ * FPC's rax86int findreg_by_intname (int_regname_table[int_regname_index[r]]=s),
+ * crashing kgpc_shortstring_to_string with a bogus pointer. */
+static int expr_tree_operand_reg_is_address(const struct Expression *expr) {
+  if (expr == NULL)
+    return 0;
+  if (expr_has_type_tag(expr, STRING_TYPE) ||
+      expr_has_type_tag(expr, SHORTSTRING_TYPE) ||
+      expr_has_type_tag(expr, RECORD_TYPE))
+    return 1;
+  if (expr->resolved_kgpc_type != NULL &&
+      (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+       kgpc_type_is_record(expr->resolved_kgpc_type) ||
+       kgpc_type_is_array(expr->resolved_kgpc_type)))
+    return 1;
+  return 0;
+}
+
 static ListNode_t *emit_store_to_stack(ListNode_t *inst_list,
                                        const Register_t *reg,
                                        const struct Expression *expr,
@@ -1704,7 +1730,8 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list,
     return inst_list;
 
   int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
-                  codegen_type_uses_qword(type_tag);
+                  codegen_type_uses_qword(type_tag) ||
+                  expr_tree_operand_reg_is_address(expr);
   /* Note: do NOT downgrade to 32-bit for Single locals here.
    * This function spills register values that may have already been
    * promoted to double (via cvtss2sd), so the full 64 bits must be saved. */
@@ -1727,7 +1754,8 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list,
     return inst_list;
 
   int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
-                  codegen_type_uses_qword(type_tag);
+                  codegen_type_uses_qword(type_tag) ||
+                  expr_tree_operand_reg_is_address(expr);
   /* Note: do NOT downgrade to 32-bit for Single locals here.
    * This function reloads spilled register values that may have already been
    * promoted to double (via cvtss2sd), so the full 64 bits must be loaded. */
@@ -2262,6 +2290,15 @@ build_expr_tree_internal(struct Expression *expr,
       preserve_leaf_typecast = 1;
     } else if (preserve_narrowing_in_arithmetic &&
                (tc_target == BYTE_TYPE || tc_target == WORD_TYPE)) {
+      preserve_leaf_typecast = 1;
+    }
+    /* Char-valued typecast (e.g. char(65), char(byte(x))) feeding a string
+     * concatenation operand. If we strip the typecast here, the operand node
+     * carries the inner integer's type (INT_TYPE) and the concat's
+     * char->string promotion never fires, so the raw ordinal is handed to
+     * kgpc_string_concat as a pointer. Preserve as a leaf so the resolved
+     * type stays CHAR_TYPE and gencode_case0 materialises the byte value. */
+    else if (preserve_narrowing_in_arithmetic && tc_target == CHAR_TYPE) {
       preserve_leaf_typecast = 1;
     }
     /* Widening typecast Int64(longint_var) / QWord(longint_var) must
@@ -4082,6 +4119,21 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
      * 1. Skip the first argument in the list (class type)
      * 2. Shift register allocation by 1 to make room for Self */
     ListNode_t *args_to_pass = expr->expr_data.function_call_data.args_expr;
+    /* Record constructor invoked via the type name (e.g. TRect.Create(...)):
+     * the semantic checker marks it with is_constructor_call and inserts an
+     * EXPR_NIL Self placeholder as the first argument, but a record (advanced
+     * record) is returned by value, so is_constructor was cleared above and
+     * this goes through the sret path. The hidden sret pointer occupies arg
+     * register 0 and doubles as the constructor's Self, so the NIL placeholder
+     * must be skipped — otherwise it would be emitted as a (record-typed) user
+     * argument and rejected by codegen_pass_arguments. */
+    if (!is_constructor && has_record_return &&
+        expr->expr_data.function_call_data.is_constructor_call &&
+        args_to_pass != NULL) {
+      struct Expression *fa = (struct Expression *)args_to_pass->cur;
+      if (fa != NULL && fa->type == EXPR_NIL)
+        args_to_pass = args_to_pass->next;
+    }
     if (is_constructor && constructor_instance_reg != NULL) {
       /* Place the hidden return pointer (sret) in the first argument slot */
       if (ctor_has_record_return) {
@@ -4827,6 +4879,24 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", word_mask,
                target_reg->bit_32);
 
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+  } else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             expr->expr_data.typecast_data.target_type == CHAR_TYPE) {
+    /* Char-valued typecast preserved as a leaf (see build_expr_tree_internal):
+     * evaluate the inner ordinal and narrow it to a single byte. The result
+     * is a CHAR_TYPE value that downstream char->string promotion can detect
+     * and convert before passing it to a string-concat runtime call. */
+    struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+    expr_node_t *inner_tree = build_expr_tree(inner_expr);
+    if (inner_tree == NULL)
+      return inst_list;
+
+    inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+    free_expr_tree(inner_tree);
+
+    snprintf(buffer, sizeof(buffer), "\tandl\t$255, %s\n", target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     return inst_list;
   } else if (expr->type == EXPR_TYPECAST &&

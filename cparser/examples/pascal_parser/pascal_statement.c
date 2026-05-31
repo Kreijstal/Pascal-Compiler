@@ -183,18 +183,33 @@ static bool peek_assignment_operator(input_t *in) {
         kw_end++;
       }
       size_t kw_len = (size_t)(kw_end - kw_start);
-      if (kw_len >= 2 && kw_len <= 9) {
-        /* Check for statement-terminating keywords (case-insensitive) */
+      if (kw_len >= 2 && kw_len <= 14) {
+        /* Check for statement-terminating keywords (case-insensitive).  These
+         * keywords cannot appear inside an assignment target, so encountering
+         * one before a ':=' means the current statement is not an assignment.
+         * The section/block keywords ('begin', 'finalization',
+         * 'initialization', 'implementation') are crucial: without them the
+         * scan would bleed past a section boundary into the next section's
+         * body and latch onto an unrelated ':=' there, mis-routing the final
+         * (unterminated) statement of an initialization section to the
+         * assignment parser. */
         if ((kw_len == 4 && strncasecmp(buffer + kw_start, "else", 4) == 0) ||
             (kw_len == 4 && strncasecmp(buffer + kw_start, "then", 4) == 0) ||
             (kw_len == 2 && strncasecmp(buffer + kw_start, "do", 2) == 0) ||
             (kw_len == 3 && strncasecmp(buffer + kw_start, "end", 3) == 0) ||
             (kw_len == 5 && strncasecmp(buffer + kw_start, "until", 5) == 0) ||
+            (kw_len == 5 && strncasecmp(buffer + kw_start, "begin", 5) == 0) ||
             (kw_len == 6 && strncasecmp(buffer + kw_start, "except", 6) == 0) ||
             (kw_len == 7 &&
              strncasecmp(buffer + kw_start, "finally", 7) == 0) ||
             (kw_len == 9 &&
-             strncasecmp(buffer + kw_start, "otherwise", 9) == 0)) {
+             strncasecmp(buffer + kw_start, "otherwise", 9) == 0) ||
+            (kw_len == 12 &&
+             strncasecmp(buffer + kw_start, "finalization", 12) == 0) ||
+            (kw_len == 14 &&
+             strncasecmp(buffer + kw_start, "initialization", 14) == 0) ||
+            (kw_len == 14 &&
+             strncasecmp(buffer + kw_start, "implementation", 14) == 0)) {
           return false;
         }
       }

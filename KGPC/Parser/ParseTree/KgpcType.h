@@ -178,6 +178,13 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
  */
 long long kgpc_type_sizeof(KgpcType *type);
 
+/* Compute the storage size (in bytes) of an enumeration given the active
+ * {$PACKENUM}/{$Z}/{$MINENUMSIZE} minimum (1/2/4; 0 = FPC default 4) and the
+ * enum's ordinal range. Shared between layout and sizeof code paths. */
+long long kgpc_enum_storage_size_for(int enum_min_size, int range_known,
+                                     long long range_start,
+                                     long long range_end);
+
 /* Check if a type is an array type. */
 int kgpc_type_is_array(const KgpcType *type);
 int kgpc_type_is_array_of_const(const KgpcType *type);

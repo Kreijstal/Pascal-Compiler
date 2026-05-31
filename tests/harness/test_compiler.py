@@ -856,6 +856,18 @@ class TestCompiler(unittest.TestCase):
         # Should report incompatible types
         self.assertIn("incompatible", stderr.lower())
 
+    def test_uses_missing_unit_reports_error(self):
+        """A `uses` of a unit with no source must fail with 'Can't find unit'."""
+        input_file, asm_file, _ = self._get_test_paths("uses_missing_unit_reports_error")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        lower = stderr.lower()
+        self.assertIn("can't find unit", lower)
+        self.assertIn("this_unit_definitely_does_not_exist_xyz", lower)
+
     def test_bitwise_operations_execute(self):
         """Bitwise shifts and rotates should execute correctly and match expected output."""
         input_file, asm_file, executable_file = self._get_test_paths("bitwise_ops")
