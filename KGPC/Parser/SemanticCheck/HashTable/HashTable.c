@@ -675,6 +675,8 @@ static HashNode_t *create_hash_node(char *id, char *mangled_id,
   if (mangled_id != NULL) {
     hash_node->mangled_id = strdup(mangled_id);
     if (hash_node->mangled_id == NULL) {
+      if (type != NULL)
+        kgpc_type_release(type);
       free(hash_node);
       return NULL;
     }
@@ -687,6 +689,7 @@ static HashNode_t *create_hash_node(char *id, char *mangled_id,
   hash_node->is_typed_const = 0;
   hash_node->is_builtin_default = 0;
   hash_node->const_int_value = 0;
+  hash_node->const_real_value = 0.0;
   hash_node->const_string_value = NULL;
   hash_node->const_set_value = NULL;
   hash_node->const_set_size = 0;
@@ -710,6 +713,8 @@ static HashNode_t *create_hash_node(char *id, char *mangled_id,
   if (hash_node->id == NULL) {
     if (hash_node->mangled_id != NULL)
       free(hash_node->mangled_id);
+    if (type != NULL)
+      kgpc_type_release(type);
     free(hash_node);
     return NULL;
   }

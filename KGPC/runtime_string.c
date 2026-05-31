@@ -3004,11 +3004,21 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
     else
       value = -(long long)uvalue;
   } else if (!is_decimal && uvalue > (unsigned long long)max_value) {
-    /* High bit set: reinterpret modulo 2^width.  width_mod wraps to 0 for a
-     * 64-bit type, so the subtraction is a no-op there and the cast already
-     * yields the correct negative value. */
-    unsigned long long width_mod = (unsigned long long)max_value * 2ULL + 2ULL;
-    value = (long long)(uvalue - width_mod);
+    /* High bit set: reinterpret the unsigned bit pattern as a negative
+     * two's-complement value of the destination width.  Compute the result
+     * with signed-safe arithmetic instead of casting an out-of-range unsigned
+     * to long long, which is implementation-defined before C23. */
+    if (max_value == LLONG_MAX) {
+      /* Full 64-bit width: value = uvalue - 2^64. */
+      if (uvalue == (1ULL << 63))
+        value = LLONG_MIN; /* 2^64 - 2^63 == 2^63 does not fit in long long */
+      else
+        value = -(long long)(ULLONG_MAX - uvalue + 1ULL);
+    } else {
+      /* Narrower width: 2^width - uvalue fits, negate after the cast. */
+      unsigned long long width_mod = (unsigned long long)max_value * 2ULL + 2ULL;
+      value = -(long long)(width_mod - uvalue);
+    }
   } else
     value = (long long)uvalue;
 
