@@ -1554,6 +1554,65 @@ skip_type_receiver_rewrite:
       struct RecordType *actual_method_owner = NULL;
       HashNode_t *method_node = semcheck_find_class_method(
           symtab, record_info, method_name, &actual_method_owner);
+
+      /* semcheck_find_class_method resolves by name only and returns a single
+       * (typically last-registered) overload.  When the method is overloaded,
+       * that arbitrary pick can have the wrong arity/signature for this call —
+       * e.g. a 2-argument `obj.Foo(a, b)` binding to a 4-argument `Foo`
+       * overload, which then drives the wrong VMT slot and parameter layout in
+       * codegen and corrupts the call.  Resolve against the actual call
+       * arguments (the args after the receiver) when more than one overload of
+       * this name is visible on the resolved owner class. */
+      if (method_node != NULL && method_name != NULL) {
+        struct RecordType *overload_owner =
+            (actual_method_owner != NULL) ? actual_method_owner : record_info;
+        if (overload_owner != NULL && overload_owner->type_id != NULL) {
+          size_t owner_len = strlen(overload_owner->type_id);
+          size_t mname_len = strlen(method_name);
+          char *base_key = (char *)malloc(owner_len + 2 + mname_len + 1);
+          if (base_key != NULL) {
+            snprintf(base_key, owner_len + 2 + mname_len + 1, "%s__%s",
+                     overload_owner->type_id, method_name);
+            ListNode_t *method_overloads = FindAllIdents(symtab, base_key);
+            if (method_overloads != NULL &&
+                ListLength(method_overloads) > 1) {
+              /* args_given->cur is the receiver instance; the real call args
+               * follow it.  Candidate params include the implicit Self, which
+               * semcheck_resolve_overload accounts for via its Self-aware
+               * arity handling. */
+              ListNode_t *call_args =
+                  (args_given != NULL) ? args_given->next : NULL;
+              HashNode_t *best_overload = NULL;
+              int num_best = 0;
+              struct Expression call_stub;
+              memset(&call_stub, 0, sizeof(call_stub));
+              call_stub.line_num = stmt->line_num;
+              call_stub.type = EXPR_FUNCTION_CALL;
+              int ov_status = semcheck_resolve_overload(
+                  &best_overload, &num_best, method_overloads, call_args, symtab,
+                  &call_stub, max_scope_lev, 0);
+              if (ov_status == 0 && best_overload != NULL && num_best == 1) {
+                method_node = best_overload;
+                /* Pin the statement's mangled id to the resolved overload.
+                 * semcheck_stmt_try_set_method_mangled_id below refuses to set
+                 * it for overloaded names, and the downstream mangled-name
+                 * match (which drives resolved_proc and virtual-dispatch arity)
+                 * would otherwise keep an arbitrary overload's signature. */
+                if (best_overload->mangled_id != NULL) {
+                  if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                  stmt->stmt_data.procedure_call_data.mangled_id =
+                      strdup(best_overload->mangled_id);
+                }
+              }
+            }
+            if (method_overloads != NULL)
+              DestroyList(method_overloads);
+            free(base_key);
+          }
+        }
+      }
+
       int is_static =
           from_cparser_is_method_static(record_info->type_id, method_name);
       if (method_node == NULL && !record_info->is_type_helper) {
@@ -2959,8 +3018,16 @@ skip_method_placeholder_resolution:
             break;
           }
         }
+        /* Fall back to the first virtual override of this name ONLY when the
+         * resolved call's parameter count is unknown.  When we do know the
+         * arity (resolved_param_count >= 0) and no virtual override has that
+         * arity, the resolved target is a non-virtual overload (e.g. a
+         * 2-argument overload sharing the name with a 4-argument virtual one),
+         * and must be dispatched directly — taking the unrelated virtual VMT
+         * slot here would call the wrong method with a mismatched argument
+         * layout. */
         if (!stmt->stmt_data.procedure_call_data.is_virtual_call &&
-            first_virtual_match != NULL) {
+            first_virtual_match != NULL && resolved_param_count < 0) {
           stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
           stmt->stmt_data.procedure_call_data.vmt_index =
               first_virtual_match->vmt_index;
