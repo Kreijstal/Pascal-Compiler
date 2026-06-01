@@ -3687,6 +3687,25 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list,
         callee_is_method_pointer = 1;
     }
 
+    /* A typecast callee (e.g. FPC's `tprocedureofobject(r)()` where r is a
+     * TMethod record, or `TProcPtr(p)()` reinterpreting a pointer-typed
+     * value) is a pure bit reinterpretation of the inner value's storage:
+     * the code pointer (and, for a method pointer, the Self pointer) live in
+     * the inner expression's bytes.  The cast's own resolved type already
+     * drives the method-pointer detection above.  Unwrap to the inner
+     * addressable expression so the descriptor/code-pointer is loaded from
+     * memory with the full 64-bit `movq` below — otherwise this falls through
+     * to codegen_evaluate_expr, which strips the cast and materialises the
+     * inner record/value with a 32-bit `movl`, truncating the pointer and
+     * jumping to a bad address. */
+    if (callee_expr->type == EXPR_TYPECAST &&
+        callee_expr->expr_data.typecast_data.expr != NULL) {
+      struct Expression *cast_inner = callee_expr->expr_data.typecast_data.expr;
+      if (codegen_expr_is_addressable(cast_inner)) {
+        callee_expr = cast_inner;
+      }
+    }
+
     if (callee_expr->type == EXPR_RECORD_ACCESS ||
         callee_expr->type == EXPR_ARRAY_ACCESS ||
         callee_expr->type == EXPR_POINTER_DEREF) {
