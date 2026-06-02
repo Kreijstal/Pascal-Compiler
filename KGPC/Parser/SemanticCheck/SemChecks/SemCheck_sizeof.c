@@ -5,6 +5,7 @@
     resolving record fields and their offsets.
 */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -364,10 +365,39 @@ static long long narrowing_alias_storage_size(SymTab_t *symtab,
   HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
   struct TypeAlias *alias =
       (type_node != NULL) ? get_type_alias_from_node(type_node) : NULL;
-  if (alias != NULL && alias->storage_size > 0 &&
-      alias->storage_size < tag_size && !alias->is_array && !alias->is_set &&
-      !alias->is_enum && !alias->is_file && !alias->is_pointer)
-    return alias->storage_size;
+  if (alias == NULL || alias->is_array || alias->is_set || alias->is_enum ||
+      alias->is_file || alias->is_pointer)
+    return 0;
+
+  /* The explicit storage_size of a narrow ordinal alias (SmallInt = 2,
+   * ShortInt = 1) is populated lazily from its declared subrange by
+   * sync_alias_range_bounds().  When a packed record field of such a type is
+   * sized before that lazy pass has run for the alias, storage_size is still
+   * 0, so the caller falls back to the wider tag size (INT_TYPE = 4) and
+   * compute_field_size() caches that wrong width on the field permanently --
+   * every later layout consumer then reads the poisoned 4 and the record is
+   * over-sized (e.g. FPC's coffsymbol.section:smallint pushing the 18-byte
+   * COFF symbol to 20).  Derive the width from the known range bounds here so
+   * the first sizing is correct regardless of evaluation order, using the
+   * exact thresholds of sync_alias_range_bounds() and writing the result back
+   * so every path agrees. */
+  long long width = alias->storage_size;
+  if (width <= 0 && alias->range_known) {
+    long long lo = alias->range_start;
+    long long hi = alias->range_end;
+    if (lo >= -128 && hi <= 127)
+      width = 1;
+    else if (lo >= -32768 && hi <= 32767)
+      width = 2;
+    else if (lo >= INT32_MIN && hi <= INT32_MAX)
+      width = 4;
+    else
+      width = 8;
+    alias->storage_size = width;
+  }
+
+  if (width > 0 && width < tag_size)
+    return width;
   return 0;
 }
 
