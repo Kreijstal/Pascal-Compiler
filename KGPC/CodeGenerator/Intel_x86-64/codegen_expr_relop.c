@@ -570,6 +570,42 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     return inst_list;
   }
 
+  /* A comparison against the nil literal is a pointer/reference test, never a
+   * textual one.  A dynamic `array of char` (FPC's TAnsiCharDynArray, e.g.
+   * ogcoff's FCoffStrs) is classified char-array-like further down and
+   * materialised as its *address* (always nonzero), then routed through
+   * kgpc_string_compare -- so `(FCoffStrs = nil)` could never be true, which
+   * broke the win64 internal linker's COFF string-table reader.  Plain
+   * pointers and non-char dynamic arrays already reach the generic
+   * integer/pointer compare correctly; handle the char-array-like case here by
+   * loading the reference's pointer value (the deref of its storage slot) and
+   * comparing it to 0.  Flags are left set the same way the generic EQ/NE path
+   * leaves them, so the caller's sete/setne conversion is unchanged. */
+  if ((relop_kind == EQ || relop_kind == NE)) {
+    struct Expression *ref_side = NULL;
+    if (left_expr != NULL && left_expr->type == EXPR_NIL)
+      ref_side = right_expr;
+    else if (right_expr != NULL && right_expr->type == EXPR_NIL)
+      ref_side = left_expr;
+    if (ref_side != NULL && ref_side->type != EXPR_NIL &&
+        codegen_expr_is_char_array_like_ctx(ref_side, ctx) &&
+        codegen_expr_is_addressable(ref_side)) {
+      Register_t *addr_reg = NULL;
+      inst_list = codegen_address_for_expr(ref_side, inst_list, ctx, &addr_reg);
+      if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+      snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64,
+               addr_reg->bit_64);
+      inst_list = add_inst(inst_list, buffer);
+      snprintf(buffer, sizeof(buffer), "\tcmpq\t$0, %s\n", addr_reg->bit_64);
+      inst_list = add_inst(inst_list, buffer);
+      free_reg(get_reg_stack(), addr_reg);
+      if (relop_type != NULL)
+        *relop_type = relop_kind;
+      return inst_list;
+    }
+  }
+
   /* For floating-point comparisons, use expr_tree-based evaluation with
    * spilling to preserve the left operand across function calls that may occur
    * when evaluating the right operand. Without this, caller-saved registers
