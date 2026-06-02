@@ -346,6 +346,31 @@ long long sizeof_from_type_tag(int type_tag) {
   }
 }
 
+/* Some fixed-width scalar builtins (SmallInt, ShortInt) have no dedicated
+ * legacy type tag, so they are recorded with a generic INT_TYPE base_type
+ * whose tag-derived size (4) is wider than their true width.  Their alias
+ * carries the authoritative storage_size (2 and 1).  When a type_id names
+ * such an alias and its explicit storage_size is NARROWER than the tag's
+ * natural size, the alias width wins — this is what keeps packed records
+ * such as FPC's coffsymbol.section:smallint at the correct 18-byte layout.
+ * Only narrowing is honored, so width-varying aliases like Integer/LongInt
+ * (storage_size == tag size) are unaffected and the cross-unit aliasing the
+ * tag short-circuit guards against cannot be reintroduced. */
+static long long narrowing_alias_storage_size(SymTab_t *symtab,
+                                              const char *type_id,
+                                              long long tag_size) {
+  if (type_id == NULL || symtab == NULL || tag_size <= 0)
+    return 0;
+  HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+  struct TypeAlias *alias =
+      (type_node != NULL) ? get_type_alias_from_node(type_node) : NULL;
+  if (alias != NULL && alias->storage_size > 0 &&
+      alias->storage_size < tag_size && !alias->is_array && !alias->is_set &&
+      !alias->is_enum && !alias->is_file && !alias->is_pointer)
+    return alias->storage_size;
+  return 0;
+}
+
 int sizeof_from_type_ref(SymTab_t *symtab, int type_tag, const char *type_id,
                          long long *size_out, int depth, int line_num) {
   if (size_out == NULL)
@@ -366,7 +391,9 @@ int sizeof_from_type_ref(SymTab_t *symtab, int type_tag, const char *type_id,
       type_tag != ENUM_TYPE && type_tag != SET_TYPE) {
     long long base_size = sizeof_from_type_tag(type_tag);
     if (base_size >= 0) {
-      *size_out = base_size;
+      long long narrowed =
+          narrowing_alias_storage_size(symtab, type_id, base_size);
+      *size_out = (narrowed > 0) ? narrowed : base_size;
       return 0;
     }
   }
@@ -1276,6 +1303,9 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
     long long size = sizeof_from_type_tag(type_tag);
     if (size > 0) {
       /* SET_TYPE is excluded above, so no SET_TYPE-specific cap here. */
+      long long narrowed = narrowing_alias_storage_size(symtab, type_id, size);
+      if (narrowed > 0)
+        size = narrowed;
       *align_out = fpc_type_alignment_from_size(size, type_tag);
       return 0;
     }
