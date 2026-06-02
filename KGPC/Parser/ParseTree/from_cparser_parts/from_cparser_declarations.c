@@ -998,21 +998,23 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr,
     }
   } else if (tuple_node->typ != PASCAL_T_TUPLE) {
   wrap_single_element_into_tuple:
-    /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
-     * The parser parses (expr) as a parenthesized expression rather than
-     * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
-    ast_t *wrapper = new_ast();
-    wrapper->typ = PASCAL_T_TUPLE;
-    wrapper->child = tuple_node;
-    wrapper->next = NULL;
-    /* Detach from any sibling chain so iteration sees exactly 1 element */
-    ast_t *saved_next = tuple_node->next;
-    tuple_node->next = NULL;
-    tuple_node = wrapper;
-    synthetic_tuple_wrapper = wrapper;
-    /* saved_next is unused — single-element array consts only have one value.
-     */
-    (void)saved_next;
+    {
+      /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
+       * The parser parses (expr) as a parenthesized expression rather than
+       * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
+      ast_t *wrapper = new_ast();
+      ast_t *saved_next = tuple_node->next;
+      wrapper->typ = PASCAL_T_TUPLE;
+      wrapper->child = tuple_node;
+      wrapper->next = NULL;
+      /* Detach from any sibling chain so iteration sees exactly 1 element */
+      tuple_node->next = NULL;
+      tuple_node = wrapper;
+      synthetic_tuple_wrapper = wrapper;
+      /* saved_next is unused — single-element array consts only have one
+       * value. */
+      (void)saved_next;
+    }
   }
 
   int start = type_info->start;

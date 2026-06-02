@@ -1453,27 +1453,14 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
   } else {
     int remaining = skip_pascal_layout_preview(input, input->start);
     if (remaining < input->length) {
-      ParseError *err = (ParseError *)calloc(1, sizeof(ParseError));
-      if (err != NULL) {
-        err->line = input->line;
-        err->col = input->col;
-        err->index = remaining;
-        err->message = strdup("Unexpected trailing input after program.");
-        /* parser_name is a borrowed/static reference per free_error contract —
-         * do not strdup. */
-        err->parser_name = "pascal_frontend";
-        err->committed = true;
-        ensure_parse_error_contexts(err, input);
-        if (error_out != NULL)
-          *error_out = err;
-        else
-          free_error(err);
-      }
-      free_ast(result.value.ast);
-      drain_parser_parse_pools();
-      free_input(input);
-      free(buffer);
-      return false;
+      /* A complete program/unit was parsed through its terminating `end.`.
+       * FPC's scanner stops there and silently ignores anything that follows
+       * (some upstream sources, e.g. FPC 3.2.2's compiler/ncginl.pas, ship a
+       * stray token after `end.`). Match that behavior: warn but do not fail. */
+      fprintf(stderr,
+              "Warning: ignoring trailing input after end of program/unit in "
+              "%s (line %d, column %d).\n",
+              path, input->line, input->col);
     }
 
     if (convert_to_tree) {
