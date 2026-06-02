@@ -1001,9 +1001,18 @@ int codegen_get_char_array_bounds(const struct Expression *expr,
           codegen_lookup_record_field((struct Expression *)expr);
       if (field != NULL && field->type == SHORTSTRING_TYPE)
         *is_shortstring_out = 1;
-      else if (field != NULL)
-        *is_shortstring_out = 0;
-      else {
+      else if (field != NULL) {
+        /* A field declared with a named alias to `string[N]` keeps its
+         * RecordField->type as the unresolved alias rather than
+         * SHORTSTRING_TYPE.  Consult the resolved KgpcType, which carries
+         * the shortstring nature via a primitive SHORTSTRING_TYPE or an
+         * array whose type alias has is_shortstring set.  This is a true
+         * shortstring test (kgpc_type_is_shortstring), so it does NOT
+         * misclassify plain `array[0..255] of AnsiChar` fields like
+         * TextRec.Name, which have no shortstring alias. */
+        *is_shortstring_out =
+            kgpc_type_is_shortstring(expr_get_kgpc_type(expr)) ? 1 : 0;
+      } else {
         /* Field lookup failed — conservatively treat as not-shortstring
          * to avoid false positives on plain char array[0..255] fields
          * like TextRec.Name.  codegen_expr_is_shortstring_array already
