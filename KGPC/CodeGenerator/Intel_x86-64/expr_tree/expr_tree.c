@@ -5440,7 +5440,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
     long long storage_size = 0;
-    if (stack_node != NULL && !stack_node->is_array &&
+    /* For by-reference (var/out/constref) parameters the stack slot holds a
+     * pointer, so stack_node->size is the slot/pointer width (4 or 8), not the
+     * width of the pointed-to value.  Using it to size the dereferencing load
+     * reads too many bytes for narrow types (e.g. a `var shortint` read as a
+     * 4-byte movl picks up adjacent bytes).  Derive the load width from the
+     * value's own type instead. */
+    if (stack_node != NULL && !stack_node->is_reference && !stack_node->is_array &&
         !stack_node->is_dynamic && stack_node->size > 0)
       storage_size = stack_node->size;
     if (storage_size <= 0)
