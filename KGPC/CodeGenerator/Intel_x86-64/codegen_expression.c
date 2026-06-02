@@ -4417,11 +4417,51 @@ ListNode_t *codegen_expr_tree_value(struct Expression *expr,
         (expr_has_type_tag(tc_inner, STRING_TYPE) ||
          tc_inner->type == EXPR_STRING);
 
+    /* `string(p)` / `AnsiString(p)` where p is a PChar (^Char).  Without a
+     * real conversion the typecast is a no-op and the raw C-string pointer
+     * flows downstream as if it were a managed string.  Any later
+     * ShortString consumer then reaches kgpc_string_to_shortstring, whose
+     * C-string heuristic guesses a length from src[0] and silently drops the
+     * first character whenever (unsigned char)src[0] == strlen-1 (e.g. a
+     * 47-char name beginning with '.' = 46).  This is FPC's ogcoff.pas
+     * Read_str (`secname := string(PChar(@FCoffStrs[..]))`); the dropped
+     * leading '.' made a COFF section name miss the Win64 link-script glob
+     * and raised Internal error 202102001 in the KGPC->FPC self-host.
+     * Materialise a genuine managed AnsiString via StrPas so the value is
+     * correctly length-tracked everywhere. */
+    int inner_is_pchar = 0;
+    {
+      KgpcType *inner_kt = expr_get_kgpc_type(tc_inner);
+      if (inner_kt != NULL && kgpc_type_is_pointer(inner_kt) &&
+          inner_kt->info.points_to != NULL &&
+          inner_kt->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+          inner_kt->info.points_to->info.primitive_type_tag == CHAR_TYPE)
+        inner_is_pchar = 1;
+    }
+
+    /* In the compiler's default $H- world `string` is a ShortString, so a
+     * `string(p)` cast records SHORTSTRING_TYPE as its target.  Treat that the
+     * same as the AnsiString case: convert the PChar to a genuine managed
+     * string here.  The managed result then flows into the surrounding
+     * ShortString assignment through kgpc_string_to_shortstring, which copies
+     * managed sources verbatim (no C-string length heuristic), preserving the
+     * leading character. */
+    int target_is_shortstring_cast =
+        (tc_target == SHORTSTRING_TYPE &&
+         (expr->expr_data.typecast_data.target_type_id == NULL ||
+          pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "string") ||
+          pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id,
+                                   "ShortString")));
+
     const char *enc_helper = NULL;
     if (target_is_wide && inner_is_ansi_string)
       enc_helper = "kgpc_unicodestring_from_string";
     else if (target_is_ansi_string && inner_is_wide)
       enc_helper = "kgpc_string_from_unicodestring";
+    else if ((target_is_ansi_string || target_is_shortstring_cast) &&
+             inner_is_pchar)
+      enc_helper = "kgpc_strpas_string";
 
     if (enc_helper != NULL) {
       Register_t *inner_reg = NULL;
