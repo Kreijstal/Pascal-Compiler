@@ -641,6 +641,51 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id) {
   return NULL;
 }
 
+/* True iff `owner__method` resolves to more than one DISTINCT method signature.
+ *
+ * FindAllIdents collects matches from every reachable scope, so the same method
+ * can appear multiple times under one class-qualified key -- e.g. a unit's
+ * interface and implementation symbol tables both expose tdef.size.  Those
+ * duplicates share a mangled id and are NOT overloads; counting raw entries
+ * mistook them for overloads and suppressed virtual dispatch at the affected
+ * call sites (a bare-Self call to an abstract virtual like tdef.size emitted a
+ * direct call to the bodyless symbol).  Genuine overloads have distinct mangled
+ * ids, so dedup by mangled id before deciding.  Returns 0 when the name is
+ * absent or resolves to a single signature. */
+int QualifiedMethodIsOverloaded(SymTab_t *symtab, const char *owner,
+                                const char *method) {
+  if (symtab == NULL || owner == NULL || method == NULL)
+    return 0;
+  char qualified[256];
+  snprintf(qualified, sizeof(qualified), "%s__%s", owner, method);
+  ListNode_t *idents = FindAllIdents(symtab, qualified);
+  if (idents == NULL)
+    return 0;
+  int distinct = 0;
+  for (ListNode_t *a = idents; a != NULL && distinct <= 1; a = a->next) {
+    HashNode_t *ha = (HashNode_t *)a->cur;
+    const char *ma = (ha != NULL) ? ha->mangled_id : NULL;
+    int seen = 0;
+    for (ListNode_t *b = idents; b != a; b = b->next) {
+      HashNode_t *hb = (HashNode_t *)b->cur;
+      const char *mb = (hb != NULL) ? hb->mangled_id : NULL;
+      if (ma != NULL && mb != NULL) {
+        if (strcmp(ma, mb) == 0) {
+          seen = 1;
+          break;
+        }
+      } else if (ma == mb) { /* both NULL: treat as the same signature */
+        seen = 1;
+        break;
+      }
+    }
+    if (!seen)
+      distinct++;
+  }
+  DestroyList(idents);
+  return distinct > 1;
+}
+
 ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id) {
   assert(symtab != NULL);
   assert(id != NULL);

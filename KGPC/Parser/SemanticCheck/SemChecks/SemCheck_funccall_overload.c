@@ -980,7 +980,29 @@ FunccallState funccall_state_overload_resolve(FunccallCtx *ctx) {
               }
             }
           }
-          if (picked == NULL) {
+          /* Fallback to first-by-name+count when the exact mangled-name pass
+           * found nothing.  This is REQUIRED for ordinary virtual dispatch
+           * whenever the resolved overload's mangled id does not literally
+           * appear in the VMT method list -- e.g. an abstract base method like
+           * tdef.size (virtual;abstract), whose only concrete symbols are the
+           * subclass overrides.  Without it the call is emitted as a direct
+           * call to a bodyless symbol and the link fails.
+           *
+           * It MUST be suppressed only for a genuinely OVERLOADED method name.
+           * class_record->methods keeps a single entry per name (the
+           * VMT-slotted overload), so a non-virtual resolved overload that
+           * shares its name with a virtual sibling -- e.g. the non-virtual
+           * MemPos_ExeSection(exesec) next to the virtual
+           * MemPos_ExeSection(const aname:string) in FPC's TExeOutput -- would
+           * otherwise be routed through the sibling's VMT slot, reinterpreting
+           * the argument under a mismatched type.  For an overloaded name with
+           * no exact mangled match the resolved overload is the non-virtual
+           * one, so leaving picked==NULL keeps it a direct call.  Overloadedness
+           * is deduped by signature: the same method registered under one key
+           * across interface+implementation scopes is not an overload. */
+          int name_is_overloaded = QualifiedMethodIsOverloaded(
+              ctx->symtab, best_match->owner_class, best_match->method_name);
+          if (picked == NULL && !name_is_overloaded) {
             for (ListNode_t *me = class_record->methods; me != NULL;
                  me = me->next) {
               struct MethodInfo *mi = (struct MethodInfo *)me->cur;

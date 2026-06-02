@@ -467,17 +467,14 @@ FunccallState funccall_state_self(FunccallCtx *ctx) {
            * loses parent-class candidates due to scope filtering. */
           if (!early_overload_resolved && self_record != NULL &&
               self_record->type_id != NULL && ctx->id != NULL) {
-            char overload_name[256];
-            snprintf(overload_name, sizeof(overload_name), "%s__%s",
-                     self_record->type_id, ctx->id);
-            ListNode_t *method_overloads =
-                FindAllIdents(ctx->symtab, overload_name);
-            if (method_overloads != NULL) {
-              method_is_overloaded = (method_overloads->next != NULL);
-              if (method_is_overloaded)
-                ctx->overload_candidates = method_overloads;
-              else
-                DestroyList(method_overloads);
+            method_is_overloaded = QualifiedMethodIsOverloaded(
+                ctx->symtab, self_record->type_id, ctx->id);
+            if (method_is_overloaded) {
+              char overload_name[256];
+              snprintf(overload_name, sizeof(overload_name), "%s__%s",
+                       self_record->type_id, ctx->id);
+              ctx->overload_candidates =
+                  FindAllIdents(ctx->symtab, overload_name);
             }
           }
           if (method_is_overloaded && ctx->mangled_name != NULL) {
@@ -640,7 +637,15 @@ FunccallState funccall_state_self(FunccallCtx *ctx) {
                   method_param_count = 0;
               }
             }
-            if (class_name != NULL &&
+            /* An overloaded method name cannot have its virtual-ness or VMT
+             * slot decided by name + parameter COUNT: equal-arity overloads
+             * (e.g. a virtual P(const aname:string) beside a non-virtual
+             * P(sec:TSec)) are indistinguishable here, and locking in the
+             * first same-arity virtual sibling's slot dispatches the wrong
+             * overload.  Defer to full overload resolution (which keys on the
+             * resolved overload), exactly as the resolved_func/mangled_id
+             * assignments above already do for overloaded methods. */
+            if (!method_is_overloaded && class_name != NULL &&
                 !ctx->expr->expr_data.function_call_data.is_inherited_call &&
                 from_cparser_is_method_virtual_with_types(
                     class_name, ctx->id, method_param_count, NULL, 0) &&

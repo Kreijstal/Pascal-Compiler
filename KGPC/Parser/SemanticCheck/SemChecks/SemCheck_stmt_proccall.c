@@ -862,7 +862,23 @@ skip_type_receiver_rewrite:
             actual_arg_count -= 1; /* subtract Self */
           method_param_count = actual_arg_count;
         }
-        if (self_record->type_id != NULL && bare_method_name != NULL &&
+        /* If this method name is overloaded, the virtual decision cannot be
+         * made yet: matching by name + parameter COUNT (below) cannot tell
+         * apart equal-arity overloads such as a virtual P(const aname:string)
+         * next to a non-virtual P(sec:TSec) (FPC's TExeOutput.MemPos_ExeSection
+         * pattern).  Marking the call virtual here would lock in the first
+         * same-arity virtual sibling's VMT slot regardless of which overload
+         * the arguments actually select.  Defer to the post-resolution virtual
+         * marking (which keys on the resolved overload's mangled id). */
+        /* Detect overloading via the symbol table, NOT self_record->methods:
+         * the methods list carries only one entry per name (the VMT-slotted
+         * one, i.e. the virtual overload), so an equal-arity non-virtual
+         * sibling is invisible there.  FindAllIdents on the class-qualified
+         * name returns every declared overload. */
+        int method_is_overloaded = QualifiedMethodIsOverloaded(
+            symtab, self_record->type_id, bare_method_name);
+        if (!method_is_overloaded && self_record->type_id != NULL &&
+            bare_method_name != NULL &&
             from_cparser_is_method_virtual_with_types(
                 self_record->type_id, bare_method_name, method_param_count,
                 NULL, 0) &&
@@ -2991,6 +3007,15 @@ skip_method_placeholder_resolution:
           semcheck_lookup_record_type(symtab, resolved_proc->owner_class);
       if (class_record != NULL && record_type_is_class(class_record) &&
           class_record->methods != NULL) {
+        /* The exact-mangled-id discrimination below is needed ONLY to pick the
+         * right sibling of an OVERLOADED method name.  For a non-overloaded
+         * name (e.g. an abstract virtual procedure) the resolved mangled id is
+         * the abstract base's and need not equal the VMT entry's, so requiring
+         * a literal match would wrongly skip it and emit a direct call to a
+         * bodyless symbol.  Detect overloading via the class-qualified symbol
+         * key, not class_record->methods (one entry per name). */
+        int method_is_overloaded = QualifiedMethodIsOverloaded(
+            symtab, resolved_proc->owner_class, resolved_proc->method_name);
         struct MethodInfo *first_virtual_match = NULL;
         for (ListNode_t *me = class_record->methods; me != NULL;
              me = me->next) {
@@ -3000,8 +3025,25 @@ skip_method_placeholder_resolution:
               strcasecmp(mi->name, resolved_proc->method_name) == 0) {
             if (first_virtual_match == NULL)
               first_virtual_match = mi;
-            if (resolved_param_count >= 0 && mi->param_count >= 0 &&
-                resolved_param_count != mi->param_count) {
+            /* Only dispatch through this virtual method's VMT slot when it is
+             * the very overload that argument-based resolution already chose.
+             * Same-name methods are distinguished by name + parameter COUNT
+             * here, which cannot tell apart equal-arity overloads -- e.g. a
+             * virtual P(const aname:string) sitting next to a non-virtual
+             * P(sec:TSec) (exactly FPC's TExeOutput.MemPos_ExeSection).  When
+             * resolution picked the non-virtual overload, taking the virtual
+             * sibling's slot would call the wrong method and reinterpret the
+             * argument under a mismatched type.  Match on the fully resolved
+             * mangled id so the virtual path is taken only for the resolved
+             * overload itself; fall back to the arity filter only when the
+             * mangled ids are not both available. */
+            if (method_is_overloaded && resolved_proc->mangled_id != NULL &&
+                mi->resolved_mangled_id != NULL) {
+              if (strcmp(mi->resolved_mangled_id, resolved_proc->mangled_id) !=
+                  0)
+                continue;
+            } else if (resolved_param_count >= 0 && mi->param_count >= 0 &&
+                       resolved_param_count != mi->param_count) {
               continue;
             }
             stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
