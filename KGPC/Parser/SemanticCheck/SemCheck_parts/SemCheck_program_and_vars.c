@@ -2519,8 +2519,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls) {
               e++;
 
             long long start_val = 0;
+            int start_tmp = 0;
             if (resolve_const_identifier(symtab, s, &start_val) == 0)
               start_bound = (int)start_val;
+            else if (resolve_array_bound_expr(symtab, s, &start_tmp) == 0)
+              start_bound = start_tmp;
             else {
               char *endptr;
               long num = strtol(s, &endptr, 10);
@@ -2529,8 +2532,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls) {
             }
 
             long long end_val = 0;
+            int end_tmp = 0;
             if (resolve_const_identifier(symtab, e, &end_val) == 0)
               end_bound = (int)end_val;
+            else if (resolve_array_bound_expr(symtab, e, &end_tmp) == 0)
+              end_bound = end_tmp;
             else {
               char *endptr;
               long num = strtol(e, &endptr, 10);
