@@ -5349,12 +5349,22 @@ char *codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
   /* Emit INITFINAL table — FPC system unit references this to run unit
      init/finalization.  KGPC inlines that code into main, so emit a
      minimal table with TableCount = 0.
+
+     The FPC TInitFinalTable record begins with two ALUUInt fields,
+     TableCount then InitCount, each native-word sized (QWord = 8 bytes on
+     x86_64).  FPC_FINALIZEUNITS reads InitCount at offset 8 and loops over
+     Procs[InitCount+1].FinalProc until InitCount reaches 0.  Emitting only a
+     4-byte TableCount leaves InitCount (offset 8) reading adjacent data as a
+     garbage count, so the finalize loop dereferences a wild FinalProc pointer
+     and crashes on exit.  Emit both leading fields as zeroed 8-byte words so
+     TableCount = InitCount = 0 and FPC_FINALIZEUNITS becomes a no-op.
      */
   if (ctx->output_file != NULL) {
     fprintf(ctx->output_file, "\n.data\n");
     fprintf(ctx->output_file, ".globl\tINITFINAL\n");
     fprintf(ctx->output_file, "INITFINAL:\n");
-    fprintf(ctx->output_file, "\t.long\t0\n"); /* TableCount = 0 */
+    fprintf(ctx->output_file, "\t.quad\t0\n"); /* TableCount = 0 */
+    fprintf(ctx->output_file, "\t.quad\t0\n"); /* InitCount  = 0 */
   }
 
   /* Emit FPC_RESOURCESTRINGTABLES as a zero-length table (no resource strings).
