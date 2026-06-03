@@ -1,0 +1,1 @@
+      FData: Integer; static;

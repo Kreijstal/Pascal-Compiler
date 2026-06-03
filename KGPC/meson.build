@@ -266,6 +266,24 @@ test('Compiler tests', python,
   timeout: 1800,
 )
 
+# Standalone integration test for the AST cache include-path key.  It compiles
+# the same source twice in one cache dir under different -I configurations and
+# checks they do not collide; the auto-discovery harness compiles each case
+# once with fixed flags and cannot express that.
+cache_key_bash = find_program('bash', required: false)
+if cache_key_bash.found()
+  cache_key_env = environment()
+  cache_key_env.set('KGPC_BIN', kgpc_cparser_exe.full_path())
+  cache_key_env.set('KGPC_STDLIB', meson.project_source_root() / 'KGPC/Units/system.p')
+  cache_key_env.set('MESON_SOURCE_ROOT', meson.project_source_root())
+  test('AST cache include-path key', cache_key_bash,
+    args: [meson.project_source_root() / 'tests/test_data/ast_cache_include_key/test_ast_cache_include_key.sh'],
+    depends: kgpc_cparser_exe,
+    env: cache_key_env,
+    timeout: 120,
+  )
+endif
+
 if get_option('run_fpc_rtl_tests')
   fpc_rtl_env = environment()
   fpc_rtl_env.set('KGPC_FPC_RTL', '1')
