@@ -580,11 +580,19 @@ static const char *skip_whitespace_and_comments(const char *cursor,
     }
 
     if (ch == '{') {
+      /* Brace comments nest in FPC (it warns "Comment level N").  Track depth
+       * so a `{` inside the comment — e.g. a directive-shaped `{$i ...}`
+       * mentioned in prose — does not close it early and cause this unit/
+       * program detector to misread the file's leading comment. */
       ++cursor;
-      while (cursor < end && *cursor != '}')
+      int depth = 1;
+      while (cursor < end && depth > 0) {
+        if (*cursor == '{')
+          ++depth;
+        else if (*cursor == '}')
+          --depth;
         ++cursor;
-      if (cursor < end)
-        ++cursor;
+      }
       continue;
     }
 
