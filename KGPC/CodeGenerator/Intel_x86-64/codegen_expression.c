@@ -3949,6 +3949,25 @@ int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
   if (type_tag != UNKNOWN_TYPE) {
     long long base = get_type_tag_size(type_tag);
     if (base >= 0) {
+      /* Fixed-width scalar builtins (SmallInt, ShortInt, ...) carry a generic
+       * INT_TYPE tag whose natural size (4) is wider than their true width.
+       * The authoritative width lives on the named alias's storage_size.  When
+       * the type_id names such a narrowing alias, honor it so packed records
+       * (FPC's coffsymbol.section:smallint) get the correct 18-byte layout
+       * here, matching SemCheck_sizeof.c.  This keeps the codegen and semantic
+       * record-size caches consistent regardless of which path runs first.
+       * Only narrowing is honored, so width-varying aliases like Integer or
+       * LongInt (storage_size == tag size) are unaffected. */
+      if (type_id != NULL && ctx != NULL && ctx->symtab != NULL) {
+        HashNode_t *alias_node =
+            semcheck_find_preferred_type_node(ctx->symtab, type_id);
+        struct TypeAlias *alias =
+            (alias_node != NULL) ? hashnode_get_type_alias(alias_node) : NULL;
+        if (alias != NULL && alias->storage_size > 0 &&
+            alias->storage_size < base && !alias->is_array && !alias->is_set &&
+            !alias->is_enum && !alias->is_file && !alias->is_pointer)
+          base = alias->storage_size;
+      }
       *size_out = base;
       return 0;
     }
