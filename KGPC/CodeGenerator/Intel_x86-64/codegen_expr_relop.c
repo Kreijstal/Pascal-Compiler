@@ -68,11 +68,13 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr,
   if (expr == NULL)
     return 0;
 
+  int best = 0;
+
   KgpcType *expr_type = expr_get_kgpc_type(expr);
   if (expr_type != NULL && kgpc_type_is_set(expr_type)) {
     long long size = kgpc_type_sizeof(expr_type);
-    if (size > 0)
-      return (int)size;
+    if (size > best)
+      best = (int)size;
   }
 
   if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && ctx != NULL &&
@@ -80,18 +82,52 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr,
     HashNode_t *node = NULL;
     if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
         node != NULL) {
-      if (node->const_set_value != NULL && node->const_set_size > 0)
-        return node->const_set_size;
+      if (node->const_set_value != NULL && node->const_set_size > best)
+        best = node->const_set_size;
 
       if (node->type != NULL && kgpc_type_is_set(node->type)) {
         long long size = kgpc_type_sizeof(node->type);
-        if (size > 0)
-          return (int)size;
+        if (size > best)
+          best = (int)size;
       }
     }
   }
 
-  return 0;
+  /* A set binary operation (union/intersection/difference) may carry a
+   * KgpcType whose sizeof under-reports the true storage (the result type is
+   * often computed as the narrow 4-byte default even when an operand spans
+   * ordinals >= 32).  Its true storage width is at least the widest of its
+   * operands, so recurse and take the maximum -- never trust the node's own
+   * narrow type alone.  This lets the `in` test recognise e.g.
+   * (setA + [hi]) as a large set and materialise it via
+   * codegen_char_set_address instead of truncating it into a 32-bit
+   * register. */
+  if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE)) {
+    int l =
+        codegen_infer_set_storage_bytes(expr->expr_data.addop_data.left_expr,
+                                        ctx);
+    int r =
+        codegen_infer_set_storage_bytes(expr->expr_data.addop_data.right_term,
+                                        ctx);
+    if (l > best)
+      best = l;
+    if (r > best)
+      best = r;
+  }
+
+  if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE)) {
+    int l =
+        codegen_infer_set_storage_bytes(expr->expr_data.mulop_data.left_term,
+                                        ctx);
+    int r = codegen_infer_set_storage_bytes(
+        expr->expr_data.mulop_data.right_factor, ctx);
+    if (l > best)
+      best = l;
+    if (r > best)
+      best = r;
+  }
+
+  return best;
 }
 
 static int codegen_expr_is_large_set_ctx(const struct Expression *expr,

@@ -621,6 +621,29 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
   case EXPR_ADDOP:
     type = expr->expr_data.addop_data.addop_type;
     if (expr_get_type_tag(expr) == SET_TYPE) {
+      if (expr_tree_is_large_set_expr(expr, ctx)) {
+        /* Sets wider than 32 bits cannot be computed in a single register.
+         * Recompute the whole binary op as a 32-byte set value via
+         * codegen_char_set_address (which loops qword-by-qword over the
+         * operands and stores into a stack temp), then hand the address of
+         * that temp back as the result.  This matches the EXPR_MULOP set
+         * branch below and the large-set contract used by the relational
+         * and assignment paths: a large-set value is represented by the
+         * address of its 32-byte storage held in a register. */
+        Register_t *set_addr_reg = NULL;
+        inst_list =
+            codegen_char_set_address(expr, inst_list, ctx, &set_addr_reg);
+        if (set_addr_reg != NULL && left_reg != NULL) {
+          if (set_addr_reg->reg_id != left_reg->reg_id) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                     set_addr_reg->bit_64, left_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+          }
+        }
+        if (set_addr_reg != NULL)
+          free_reg(get_reg_stack(), set_addr_reg);
+        break;
+      }
       /* Set operations use 32-bit instructions; ensure register names are
        * 32-bit */
       const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
@@ -1375,6 +1398,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
             if (sz > 0)
               set_storage_bytes = (int)sz;
           }
+        }
+
+        /* The right operand may itself be a runtime set-arithmetic expression
+         * (e.g. `x in (setA + [e44])`).  Such an EXPR_ADDOP/EXPR_MULOP node
+         * does not always carry a KgpcType whose sizeof reflects the true
+         * 256-bit storage, so the type-based width above can under-report and
+         * wrongly select the 32-bit register path.  When the operand is a
+         * large set, force the address+memory-form btl path and use the
+         * materialised 32-byte (256-bit) storage width. */
+        if (set_storage_bytes <= 4 && right_expr != NULL &&
+            expr_tree_is_large_set_expr(right_expr, ctx)) {
+          long long sz = expr_tree_set_size_bytes(right_expr);
+          set_storage_bytes = (sz > 4) ? (int)sz : 32;
         }
 
         if (set_storage_bytes > 4 && left32 != NULL && left8 != NULL) {
