@@ -971,7 +971,15 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
 
         return success;
       }
-      g_ast_cache_reads_enabled = false;
+      /* Cache miss on THIS file.  Do not disable cache reads for sibling
+       * files: every cache entry is independently keyed (source path +
+       * defines + target + include paths) and independently validated for
+       * freshness, so one stale or missing entry says nothing about the
+       * others.  The compiler prelude is queried first and is invalidated by
+       * every compiler rebuild, so poisoning all subsequent reads on its miss
+       * forced the entire FPC RTL (~20 units) to re-parse from source on the
+       * first compile after any rebuild — turning a few-second compile into a
+       * ~60s one and pushing the FPC RTL suite past its per-test timeout. */
       free(cache_path);
       /* Cache miss — proceed with normal parsing, save at the end */
     }
