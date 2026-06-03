@@ -3032,6 +3032,39 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt,
               add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
         }
       }
+      /* A Single (4-byte) array element or pointer dereference read leaves RAW
+       * single bits in the register (per the reg_holds_raw_single convention
+       * used by load_real_operand_into_xmm), not the promoted double bits that
+       * kgpc_write_real expects. (Record-field reads are already promoted to
+       * double by codegen_record_access.) Promote single->double here. */
+      if (expr_is_real) {
+        struct Expression *raw_w = expr;
+        while (raw_w != NULL && raw_w->type == EXPR_TYPECAST &&
+               raw_w->expr_data.typecast_data.target_type == REAL_TYPE &&
+               raw_w->expr_data.typecast_data.expr != NULL) {
+          raw_w = raw_w->expr_data.typecast_data.expr;
+        }
+        if (raw_w != NULL &&
+            (raw_w->type == EXPR_ARRAY_ACCESS ||
+             raw_w->type == EXPR_POINTER_DEREF) &&
+            expr_is_single_real_with_symtab(raw_w,
+                                            ctx != NULL ? ctx->symtab : NULL)) {
+          {
+            char tmpl2[64];
+            snprintf(tmpl2, sizeof(tmpl2), "\tmovd\t%s, %%xmm0\n",
+                     value_reg->bit_32);
+            Register_t *u[] = {value_reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl2);
+          }
+          inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+          {
+            char tmpl2[64];
+            snprintf(tmpl2, sizeof(tmpl2), "\tmovq\t%%xmm0, %%0\n");
+            Register_t *d[] = {value_reg};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl2);
+          }
+        }
+      }
       /* REAL_TYPE and POINTER_TYPE are 64-bit - use movq */
       {
         char tmpl2[64];

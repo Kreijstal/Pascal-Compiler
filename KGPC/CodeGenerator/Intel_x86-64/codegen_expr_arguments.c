@@ -3743,9 +3743,13 @@ ListNode_t *codegen_pass_arguments(
                      raw_arg_expr->expr_data.typecast_data.expr != NULL) {
                 raw_arg_expr = raw_arg_expr->expr_data.typecast_data.expr;
               }
+              /* Array elements and pointer derefs of Single leave RAW single
+               * bits; record-field reads are promoted to double on read (see
+               * codegen_record_access), so they are normal doubles here. */
               is_single_record_payload =
                   (raw_arg_expr != NULL &&
-                   raw_arg_expr->type == EXPR_RECORD_ACCESS);
+                   (raw_arg_expr->type == EXPR_ARRAY_ACCESS ||
+                    raw_arg_expr->type == EXPR_POINTER_DEREF));
             }
             if (is_real_arg && is_xmm) {
               if (expected_real_size == 4) {
@@ -4093,44 +4097,10 @@ ListNode_t *codegen_pass_arguments(
         free_reg(get_reg_stack(), stored_reg);
         continue;
       }
-      if (expected_type == REAL_TYPE && expected_real_size == 8 &&
-          arg_infos != NULL && arg_infos[i].assigned_class == ARG_CLASS_SSE) {
-        struct Expression *raw_source_expr = source_expr;
-        while (
-            raw_source_expr != NULL && raw_source_expr->type == EXPR_TYPECAST &&
-            raw_source_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
-            raw_source_expr->expr_data.typecast_data.expr != NULL) {
-          raw_source_expr = raw_source_expr->expr_data.typecast_data.expr;
-        }
-        if (raw_source_expr != NULL &&
-            raw_source_expr->type == EXPR_RECORD_ACCESS) {
-          long long field_size =
-              codegen_record_field_effective_size(raw_source_expr, ctx);
-          if (field_size == 4) {
-            {
-              char buffer_tmpl[128];
-              snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovd\t%s, %%xmm0\n",
-                       stored_reg->bit_32);
-              inst_list =
-                  add_inst_du(inst_list, ctx, NULL, 0, NULL, 0, buffer_tmpl);
-            }
-            inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
-            if (pass_on_stack) {
-              char stack_dest[64];
-              snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)",
-                       arg_infos[i].stack_offset);
-              snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n",
-                       stack_dest);
-            } else {
-              snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n",
-                       arg_reg_char);
-            }
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), stored_reg);
-            continue;
-          }
-        }
-      }
+      /* Note: single record fields are promoted to double on read (see
+       * codegen_record_access), so when passed to a double (size-8) SSE
+       * parameter they already hold proper double bits and are handled by the
+       * generic real-argument path below — no single->double narrowing here. */
       if (needs_int_to_long && arg_infos != NULL &&
           arg_infos[i].assigned_class == ARG_CLASS_INT) {
         inst_list = codegen_sign_extend32_to64(inst_list, stored_reg->bit_32,
@@ -4264,50 +4234,10 @@ ListNode_t *codegen_pass_arguments(
         continue;
       }
 
-      if (expected_type == REAL_TYPE && expected_real_size == 8 &&
-          arg_infos[i].assigned_class == ARG_CLASS_SSE) {
-        struct Expression *raw_source_expr = arg_infos[i].expr;
-        while (
-            raw_source_expr != NULL && raw_source_expr->type == EXPR_TYPECAST &&
-            raw_source_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
-            raw_source_expr->expr_data.typecast_data.expr != NULL) {
-          raw_source_expr = raw_source_expr->expr_data.typecast_data.expr;
-        }
-        if (raw_source_expr != NULL &&
-            raw_source_expr->type == EXPR_RECORD_ACCESS) {
-          long long field_size =
-              codegen_record_field_effective_size(raw_source_expr, ctx);
-          if (field_size == 4) {
-            temp_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (temp_reg == NULL)
-              return inst_list;
-            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
-                     arg_infos[i].spill->offset, temp_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            {
-              char buffer_tmpl[128];
-              snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovd\t%s, %%xmm0\n",
-                       temp_reg->bit_32);
-              inst_list =
-                  add_inst_du(inst_list, ctx, NULL, 0, NULL, 0, buffer_tmpl);
-            }
-            inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
-            if (pass_on_stack) {
-              char stack_dest[64];
-              snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)",
-                       arg_infos[i].stack_offset);
-              snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n",
-                       stack_dest);
-            } else {
-              snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n",
-                       arg_reg_char);
-            }
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), temp_reg);
-            continue;
-          }
-        }
-      }
+      /* Note: single record fields are promoted to double on read (see
+       * codegen_record_access), so a single field passed to a double (size-8)
+       * SSE parameter already holds proper double bits in the spill slot and
+       * is loaded by the standard size-8 spill path below. */
 
       if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT) {
         temp_reg = get_free_reg(get_reg_stack(), &inst_list);

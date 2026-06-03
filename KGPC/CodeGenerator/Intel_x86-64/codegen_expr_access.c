@@ -727,6 +727,30 @@ ListNode_t *codegen_record_access(struct Expression *expr,
   int type_tag = expr_get_type_tag(expr);
   int is_single_real_field =
       (expr_has_type_tag(expr, REAL_TYPE) && field_size == 4);
+  if (is_single_real_field) {
+    /* Single-precision real fields are stored as 4-byte floats, but KGPC keeps
+     * real values at double precision in GPRs (matching single *variable*
+     * reads, which promote via cvtss2sd, and the expectations of
+     * kgpc_write_real, double-precision arithmetic, comparisons and real
+     * function returns). Promote the 4-byte single to double on read so every
+     * consumer sees a uniform double-bit representation. */
+    {
+      char buffer_tmpl[64];
+      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovss\t(%s), %%xmm0\n",
+               addr_reg->bit_64);
+      Register_t *u[] = {addr_reg};
+      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+    }
+    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+    {
+      char buffer_tmpl[64];
+      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovq\t%%xmm0, %%0\n");
+      Register_t *d[] = {target_reg};
+      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, buffer_tmpl);
+    }
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+  }
   {
     char buffer_tmpl[64];
     if (!is_single_real_field &&

@@ -1992,8 +1992,11 @@ load_real_operand_into_xmm(CodeGenContext *ctx, struct Expression *operand_expr,
       int reg_holds_raw_single = 0;
       if (is_single_real && operand_expr != NULL) {
         int et = operand_expr->type;
-        if (et == EXPR_RECORD_ACCESS || et == EXPR_ARRAY_ACCESS ||
-            et == EXPR_POINTER_DEREF) {
+        /* Single-typed array elements and pointer dereferences leave RAW
+         * single bits in the register. Record-field reads, by contrast, are
+         * promoted to double on read (see codegen_record_access), so they are
+         * NOT raw-single here. */
+        if (et == EXPR_ARRAY_ACCESS || et == EXPR_POINTER_DEREF) {
           reg_holds_raw_single = 1;
         }
       }
