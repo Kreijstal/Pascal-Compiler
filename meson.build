@@ -1,5 +1,5 @@
 project('kgpc-project', 'c',
-  version : '0.0.1',
+  version : '0.0.3',
 )
 
 add_project_arguments('-DKGPC_VERSION="' + meson.project_version() + '"',
