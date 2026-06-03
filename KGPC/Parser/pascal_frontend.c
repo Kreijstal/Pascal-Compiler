@@ -803,6 +803,28 @@ static char *compute_ast_cache_path(const char *source_path) {
                          strlen(target_tag)) ^
            hash;
   }
+  /* Mix in the include search paths (-I).  A unit's parsed AST depends on
+   * which files its {$i <name>} directives resolve to, and that resolution
+   * is driven by the -I search list.  Without this, the same source compiled
+   * under two different -I configurations (e.g. two RTL trees, or different
+   * include search orders) collides on one cache file keyed only on
+   * source+defines+target.  Loading such a stale entry yields an AST whose
+   * class/record declarations no longer match their method bodies — which
+   * is exactly how a self-referential static dynamic-array field
+   * (FSystemEncodings: array of TEncoding; static;) ended up mis-typed,
+   * breaking SetLength/Length/High/Low and desyncing later parsing.  The
+   * order of -I entries matters (it determines which duplicate wins), so it
+   * is folded into the hash in sequence rather than commutatively. */
+  for (int i = 0; i < g_user_include_path_count; ++i) {
+    if (g_user_include_paths[i] == NULL)
+      continue;
+    /* Fold sequentially: rotate the accumulator so reordering changes the
+     * key, then mix this path in. */
+    hash = (hash << 1) | (hash >> 63);
+    hash = fnv1a64_bytes((const unsigned char *)g_user_include_paths[i],
+                         strlen(g_user_include_paths[i])) ^
+           hash;
+  }
   if (g_compiler_mtime_known) {
     char compiler_stamp[64];
     snprintf(compiler_stamp, sizeof(compiler_stamp), "%lld.%09ld",

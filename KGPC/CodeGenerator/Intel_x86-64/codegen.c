@@ -1028,6 +1028,15 @@ int codegen_class_var_field_size(SymTab_t *symtab,
   }
 
   if (field->is_array) {
+    /* A dynamic (open) array field is represented at runtime by an inline
+     * kgpc_dynarray_descriptor_t — { void *data; int64_t length; } — i.e. a
+     * 16-byte fat descriptor, NOT a single pointer.  SetLength receives the
+     * descriptor's address and Length reads descriptor->length at +8, so the
+     * class-var slot must reserve all 16 bytes; sizing it as count*elem_size
+     * (which collapses to 0 for an unbounded array) or as a lone 8-byte
+     * pointer leaves the +8 length word overlapping the next class var. */
+    if (field->array_is_open)
+      return 16; /* sizeof(kgpc_dynarray_descriptor_t): 8-byte data + 8-byte len */
     int elem_size = 0;
     if (field->array_element_type_id != NULL) {
       HashNode_t *elem_node = NULL;

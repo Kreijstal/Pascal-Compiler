@@ -3873,8 +3873,12 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
               KgpcArrayDimensionInfo info;
               int dimension_status =
                   kgpc_type_get_array_dimension_info(node->type, symtab, &info);
-              assert(dimension_status == 0 && info.total_size >= 0);
-              direct_size = info.total_size;
+              /* The dimension walk can legitimately fail to produce a static
+               * byte count (dynamic arrays, bounds it cannot resolve here);
+               * in that case leave direct_size negative and fall back to
+               * kgpc_type_sizeof below rather than aborting. */
+              if (dimension_status == 0 && info.total_size >= 0)
+                direct_size = info.total_size;
             }
             if (direct_size < 0)
               direct_size = kgpc_type_sizeof(node->type);
