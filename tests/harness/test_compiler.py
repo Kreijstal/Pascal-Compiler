@@ -466,15 +466,17 @@ class TestCompiler(unittest.TestCase):
             TEST_CASES_DIR, "tdd_win64_maxstacksize_link_reserve.p"
         )
 
-        # Windows target: the reserve/commit pair must reach the link args so
-        # the PE header carries a stack big enough for recursion-heavy programs
-        # (the FPC compiler asks for 512 MB; the default ~2 MB reserve overflows
-        # at startup with STATUS_STACK_OVERFLOW).
+        # Windows target: the reserve must reach the link args so the PE header
+        # carries a stack big enough for recursion-heavy programs (the FPC
+        # compiler asks for 512 MB; the default ~2 MB reserve overflows at
+        # startup with STATUS_STACK_OVERFLOW).  Only the reserve is emitted, as
+        # the larger of MAXSTACKSIZE/MINSTACKSIZE (here 64 MB > 2 MB); gcc's
+        # -Wl, comma-splitting rules out the reserve,commit form.
         asm_win = os.path.join(TEST_OUTPUT_DIR, "tdd_win64_maxstacksize_win.s")
         run_compiler(input_file, asm_win, flags=["--target-windows"])
         win_args = LINK_ARGS_BY_ASM.get(asm_win, [])
         self.assertIn(
-            "-Wl,--stack,64000000,2000000",
+            "-Wl,--stack,64000000",
             win_args,
             f"expected PE stack reserve in Windows link args, got {win_args}",
         )

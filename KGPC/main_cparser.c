@@ -2767,22 +2767,20 @@ static void emit_link_args(void) {
    * recursion-heavy programs (FPC's pp.pas asks for 512 MB) overflow the
    * linker's default ~2 MB reserve and crash at startup with
    * STATUS_STACK_OVERFLOW.  MAXSTACKSIZE is the reserve, MINSTACKSIZE the
-   * commit; ld's --stack takes reserve[,commit] and requires commit<=reserve.
-   * On POSIX these directives are irrelevant (the stack auto-grows), so skip. */
+   * initial commit; take the larger as the reserve (a lone MINSTACKSIZE still
+   * needs that much address space).  Emit only the reserve: gcc's -Wl, splits
+   * on every comma, so the `reserve,commit` form would hand ld the commit as a
+   * separate input file ("cannot find <commit>") — and the commit is just a
+   * lazy-fault optimisation, since Windows grows the stack on demand up to the
+   * reserve.  On POSIX the directive is irrelevant (the stack auto-grows). */
   if (target_windows_flag()) {
     long long stack_reserve = pascal_frontend_max_stack_size();
     long long stack_commit = pascal_frontend_min_stack_size();
-    if (stack_reserve > 0 || stack_commit > 0) {
-      if (stack_commit > stack_reserve)
-        stack_reserve = stack_commit;
-      if (stack_commit > 0)
-        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
-                                 " -Wl,--stack,%lld,%lld", stack_reserve,
-                                 stack_commit);
-      else
-        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
-                                 " -Wl,--stack,%lld", stack_reserve);
-    }
+    if (stack_commit > stack_reserve)
+      stack_reserve = stack_commit;
+    if (stack_reserve > 0)
+      used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                               " -Wl,--stack,%lld", stack_reserve);
   }
 
   if (!target_windows_flag()) {

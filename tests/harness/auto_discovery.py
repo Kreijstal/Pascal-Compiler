@@ -570,7 +570,13 @@ def _add_pp_pas_bootstrap_test():
 
     pp_flags = _kgpc_bootstrap_flags(fpc_src, include_compiler_dirs=True)
 
-    pp_expected_file = os.path.join(TEST_CASES_DIR, "pp_pas_bootstrap.expected")
+    # The compiler's own -h text is target-conditional: the Windows build omits
+    # Unix-only options (e.g. -ap "use pipes"), so it needs its own expected.
+    pp_expected_file = os.path.join(
+        TEST_CASES_DIR,
+        "pp_pas_bootstrap_win.expected" if IS_WINDOWS_ABI
+        else "pp_pas_bootstrap.expected",
+    )
 
     def _strip_pp_header(output):
         """Strip version/copyright/path lines from pp.pas -h output."""
