@@ -315,16 +315,22 @@ if get_option('run_fpc_rtl_tests')
   # forwards trailing args to unittest.loadTestsFromNames, and TestCompiler is
   # imported into the harness module namespace, so naming the method runs only
   # it.  Used by the MSYS2 Windows CI to exercise the Win64 self-host path.
-  test('FPC pp.pas bootstrap', python,
-    args: [
-      meson.project_source_root() / 'tests/do_not_run_me_directly_but_through_meson.py',
-      '--tap',
-      'TestCompiler.test_fpcrtl_pp_pas_bootstrap',
-    ],
-    workdir: meson.project_source_root(),
-    depends: [kgpc_cparser_exe, kgpc_runtime_lib],
-    env: fpc_rtl_env,
-    protocol: 'tap',
-    timeout: 3600,
-  )
+  #
+  # Gated behind its own option (off by default) so it does NOT duplicate the
+  # bootstrap already executed inside "FPC RTL tests" on a plain
+  # `meson test`/full RTL run — the bootstrap is the most expensive subtest.
+  if get_option('run_pp_bootstrap')
+    test('FPC pp.pas bootstrap', python,
+      args: [
+        meson.project_source_root() / 'tests/do_not_run_me_directly_but_through_meson.py',
+        '--tap',
+        'TestCompiler.test_fpcrtl_pp_pas_bootstrap',
+      ],
+      workdir: meson.project_source_root(),
+      depends: [kgpc_cparser_exe, kgpc_runtime_lib],
+      env: fpc_rtl_env,
+      protocol: 'tap',
+      timeout: 3600,
+    )
+  endif
 endif

@@ -129,7 +129,7 @@ jobs:
 
     - name: Configure FPC RTL build
       shell: msys2 {0}
-      run: meson setup build-fpc --buildtype=release -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true
+      run: meson setup build-fpc --buildtype=release -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true -Drun_pp_bootstrap=true
 
     - name: Build
       shell: msys2 {0}

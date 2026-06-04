@@ -5,3 +5,4 @@ option('with_gmp', type : 'feature', value : 'auto', description : 'Enable GMP r
 option('use_graph_coloring_allocator', type : 'boolean', value : true, description : 'Use graph coloring register allocator (Chaitin\'s algorithm) instead of simple LRU spilling')
 option('run_fpc_rtl_tests', type : 'boolean', value : false, description : 'Run test cases compiled against the FPC RTL (requires FPCSource/ directory)')
 option('fpc_rtl_dir', type : 'string', value : 'FPCSource', description : 'Path to the FPC source tree (contains rtl/ subdirectory)')
+option('run_pp_bootstrap', type : 'boolean', value : false, description : 'Register a standalone meson test running only the pp.pas bootstrap subtest (requires run_fpc_rtl_tests; used by the Windows bootstrap CI). Off by default so it does not duplicate the bootstrap already inside "FPC RTL tests".')
