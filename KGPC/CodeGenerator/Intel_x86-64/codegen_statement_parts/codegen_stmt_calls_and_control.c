@@ -1753,18 +1753,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
          * The exception is a source that already leaves RAW single bits (a
          * single-typed record/array/pointer element read) — those are already
          * in single layout and must be stored as-is. */
-        struct Expression *raw_src = assign_expr;
-        while (raw_src != NULL && raw_src->type == EXPR_TYPECAST &&
-               raw_src->expr_data.typecast_data.target_type == REAL_TYPE &&
-               raw_src->expr_data.typecast_data.expr != NULL) {
-          raw_src = raw_src->expr_data.typecast_data.expr;
-        }
-        int source_holds_raw_single =
-            (raw_src != NULL &&
-             (raw_src->type == EXPR_ARRAY_ACCESS ||
-              raw_src->type == EXPR_POINTER_DEREF) &&
-             expr_is_single_real_with_symtab(
-                 raw_src, ctx != NULL ? ctx->symtab : NULL));
+        int source_holds_raw_single = expr_holds_raw_single_bits(
+            assign_expr, ctx != NULL ? ctx->symtab : NULL);
         if (!source_holds_raw_single) {
           {
             Register_t *u[] = {reg};
@@ -2743,17 +2733,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
      * the promoted 8-byte double bits — promote single->double first. */
     if (!is_single_real_field && var_type_2 == REAL_TYPE &&
         assign_type == REAL_TYPE) {
-      struct Expression *raw_src = assign_expr;
-      while (raw_src != NULL && raw_src->type == EXPR_TYPECAST &&
-             raw_src->expr_data.typecast_data.target_type == REAL_TYPE &&
-             raw_src->expr_data.typecast_data.expr != NULL) {
-        raw_src = raw_src->expr_data.typecast_data.expr;
-      }
-      if (raw_src != NULL &&
-          (raw_src->type == EXPR_ARRAY_ACCESS ||
-           raw_src->type == EXPR_POINTER_DEREF) &&
-          expr_is_single_real_with_symtab(raw_src,
-                                          ctx != NULL ? ctx->symtab : NULL)) {
+      if (expr_holds_raw_single_bits(assign_expr,
+                                     ctx != NULL ? ctx->symtab : NULL)) {
         {
           char tmpl[64];
           snprintf(tmpl, sizeof(tmpl), "\tmovd\t%s, %%xmm0\n",
@@ -2799,18 +2780,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
          * is already in single layout and must not be re-narrowed (that would
          * reinterpret the single bits as a double). This mirrors the
          * reg_holds_raw_single rule in load_real_operand_into_xmm. */
-        struct Expression *raw_src = assign_expr;
-        while (raw_src != NULL && raw_src->type == EXPR_TYPECAST &&
-               raw_src->expr_data.typecast_data.target_type == REAL_TYPE &&
-               raw_src->expr_data.typecast_data.expr != NULL) {
-          raw_src = raw_src->expr_data.typecast_data.expr;
-        }
-        int source_holds_raw_single =
-            (raw_src != NULL &&
-             (raw_src->type == EXPR_ARRAY_ACCESS ||
-              raw_src->type == EXPR_POINTER_DEREF) &&
-             expr_is_single_real_with_symtab(
-                 raw_src, ctx != NULL ? ctx->symtab : NULL));
+        int source_holds_raw_single = expr_holds_raw_single_bits(
+            assign_expr, ctx != NULL ? ctx->symtab : NULL);
         if (!source_holds_raw_single) {
           {
             Register_t *u[] = {value_reg};

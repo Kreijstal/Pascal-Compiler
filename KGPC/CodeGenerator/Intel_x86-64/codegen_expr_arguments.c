@@ -3733,24 +3733,13 @@ ListNode_t *codegen_pass_arguments(
             int is_real_arg = (expected_type == REAL_TYPE);
             int is_xmm = (top_reg->bit_64 != NULL &&
                           strncmp(top_reg->bit_64, "%xmm", 4) == 0);
-            int is_single_record_payload = 0;
-            if (is_real_arg && expected_real_size == 4 && arg_expr != NULL) {
-              struct Expression *raw_arg_expr = arg_expr;
-              while (raw_arg_expr != NULL &&
-                     raw_arg_expr->type == EXPR_TYPECAST &&
-                     raw_arg_expr->expr_data.typecast_data.target_type ==
-                         REAL_TYPE &&
-                     raw_arg_expr->expr_data.typecast_data.expr != NULL) {
-                raw_arg_expr = raw_arg_expr->expr_data.typecast_data.expr;
-              }
-              /* Array elements and pointer derefs of Single leave RAW single
-               * bits; record-field reads are promoted to double on read (see
-               * codegen_record_access), so they are normal doubles here. */
-              is_single_record_payload =
-                  (raw_arg_expr != NULL &&
-                   (raw_arg_expr->type == EXPR_ARRAY_ACCESS ||
-                    raw_arg_expr->type == EXPR_POINTER_DEREF));
-            }
+            /* A Single array element / pointer deref leaves RAW single bits in
+             * the spilled register (record-field reads are promoted to double
+             * on read, so they are normal doubles here). */
+            int is_single_record_payload =
+                (is_real_arg && expected_real_size == 4 &&
+                 expr_holds_raw_single_bits(arg_expr,
+                                            ctx != NULL ? ctx->symtab : NULL));
             if (is_real_arg && is_xmm) {
               if (expected_real_size == 4) {
                 snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",

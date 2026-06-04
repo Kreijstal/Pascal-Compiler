@@ -1696,6 +1696,29 @@ int expr_is_single_real_with_symtab(const struct Expression *expr,
   return 0;
 }
 
+/* True when evaluating `expr` leaves RAW Single (4-byte) bits in a GPR rather
+ * than the promoted double-precision bits real values normally carry.  Only
+ * single-typed array elements and pointer dereferences read raw single bits;
+ * record-field reads are promoted to double on read (see codegen_record_access)
+ * and so are NOT raw-single.  A REAL_TYPE reinterpret typecast wrapping such a
+ * read is transparent and is stripped first.  This is the single source of
+ * truth for the reg_holds_raw_single convention that load_real_operand_into_xmm,
+ * the Single-target assignment paths and the write/argument paths all key on:
+ * such a value must be promoted (cvtss2sd) before a double consumer and must
+ * NOT be re-narrowed (cvtsd2ss) into a Single target. */
+int expr_holds_raw_single_bits(const struct Expression *expr,
+                               SymTab_t *symtab) {
+  struct Expression *raw = (struct Expression *)expr;
+  while (raw != NULL && raw->type == EXPR_TYPECAST &&
+         raw->expr_data.typecast_data.target_type == REAL_TYPE &&
+         raw->expr_data.typecast_data.expr != NULL) {
+    raw = raw->expr_data.typecast_data.expr;
+  }
+  return raw != NULL &&
+         (raw->type == EXPR_ARRAY_ACCESS || raw->type == EXPR_POINTER_DEREF) &&
+         expr_is_single_real_with_symtab(raw, symtab);
+}
+
 /* In the expr-tree evaluator, operands of string / shortstring / char-array /
  * record type are materialised as a POINTER (the address of the data) in their
  * register, never as an inline value.  When such a register is spilled and

@@ -112,6 +112,11 @@ int expr_uses_qword_kgpctype(const struct Expression *expr);
 /* Returns 1 when the expression is a Single (4-byte) real value. */
 int expr_is_single_real_with_symtab(const struct Expression *expr,
                                     SymTab_t *symtab);
+/* Returns 1 when evaluating the expression leaves RAW Single bits in a GPR
+ * (a single-typed array element or pointer dereference, transparently through
+ * a REAL_TYPE reinterpret typecast) rather than promoted double bits. */
+int expr_holds_raw_single_bits(const struct Expression *expr,
+                               SymTab_t *symtab);
 int expr_contains_function_call(const struct Expression *expr);
 int expr_returns_sret(const struct Expression *expr);
 

@@ -3038,17 +3038,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt,
        * kgpc_write_real expects. (Record-field reads are already promoted to
        * double by codegen_record_access.) Promote single->double here. */
       if (expr_is_real) {
-        struct Expression *raw_w = expr;
-        while (raw_w != NULL && raw_w->type == EXPR_TYPECAST &&
-               raw_w->expr_data.typecast_data.target_type == REAL_TYPE &&
-               raw_w->expr_data.typecast_data.expr != NULL) {
-          raw_w = raw_w->expr_data.typecast_data.expr;
-        }
-        if (raw_w != NULL &&
-            (raw_w->type == EXPR_ARRAY_ACCESS ||
-             raw_w->type == EXPR_POINTER_DEREF) &&
-            expr_is_single_real_with_symtab(raw_w,
-                                            ctx != NULL ? ctx->symtab : NULL)) {
+        if (expr_holds_raw_single_bits(expr,
+                                       ctx != NULL ? ctx->symtab : NULL)) {
           {
             char tmpl2[64];
             snprintf(tmpl2, sizeof(tmpl2), "\tmovd\t%s, %%xmm0\n",
