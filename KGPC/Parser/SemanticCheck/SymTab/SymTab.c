@@ -656,7 +656,10 @@ int QualifiedMethodIsOverloaded(SymTab_t *symtab, const char *owner,
                                 const char *method) {
   if (symtab == NULL || owner == NULL || method == NULL)
     return 0;
-  char qualified[256];
+  /* owner and method can each be long (generic instantiations, mangled
+   * names); keep the key wide enough that two distinct names don't truncate
+   * to the same key and get misclassified as overloads. */
+  char qualified[512];
   snprintf(qualified, sizeof(qualified), "%s__%s", owner, method);
   ListNode_t *idents = FindAllIdents(symtab, qualified);
   if (idents == NULL)

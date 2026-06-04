@@ -470,7 +470,9 @@ FunccallState funccall_state_self(FunccallCtx *ctx) {
             method_is_overloaded = QualifiedMethodIsOverloaded(
                 ctx->symtab, self_record->type_id, ctx->id);
             if (method_is_overloaded) {
-              char overload_name[256];
+              /* Match QualifiedMethodIsOverloaded's key width so the candidate
+               * lookup uses the same un-truncated owner__method key. */
+              char overload_name[512];
               snprintf(overload_name, sizeof(overload_name), "%s__%s",
                        self_record->type_id, ctx->id);
               ctx->overload_candidates =
