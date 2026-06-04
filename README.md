@@ -1,12 +1,12 @@
 # Kreijstal Gwinn Pascal Compiler (KGPC)
 
-> **Status: alpha (v0.0.1).**  KGPC is pre-release software.  The headline
+> **Status: alpha (v0.0.4).**  KGPC is pre-release software.  The headline
 > goal — bootstrapping Free Pascal without FPC or a proprietary
-> Delphi-compatible compiler — has been met: as of master `02633217` the
-> Stage 1–3 self-host chain is verified and exercised in CI on every push.
-> "Alpha" refers to language coverage, code quality, and API stability —
-> all of which are still moving.  See [`STATUS.md`](STATUS.md) for what
-> works, what doesn't, and the open compiler bugs.
+> Delphi-compatible compiler — has been met: the Stage 1–3 self-host chain
+> is verified in CI on both Linux and Windows (Win64).  "Alpha" refers to
+> language coverage, code quality, and API stability — all of which are
+> still moving.  See [`STATUS.md`](STATUS.md) for what works, what doesn't,
+> and the open compiler bugs.
 
 A fork of [gwinndr/Pascal-Compiler](https://github.com/gwinndr/Pascal-Compiler).
 
