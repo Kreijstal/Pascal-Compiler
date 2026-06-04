@@ -23,6 +23,11 @@ the Win64 counterpart of the Linux self-host milestone.
   dynamic arrays.
 - Promote `Single` record-field reads to `double` consistently, matching
   the promotion already applied to plain `Single` variables.
+- Honor `{$MAXSTACKSIZE}` / `{$MINSTACKSIZE}` on Win64: emit
+  `-Wl,--stack,<reserve>` (reserve = the larger of the two). A Win64
+  thread's stack cannot grow past the PE-header reserve, so programs that
+  request a large stack no longer overflow the linker's default ~2 MB at
+  startup.
 
 ### Compiler — front end
 - Compile the released FPC 3.2.2 sources: assorted codegen, semantic-check
@@ -41,6 +46,9 @@ the Win64 counterpart of the Linux self-host milestone.
 
 ### Tests
 - The AST-cache include-path regression now runs as a meson test.
+- Run the `pp.pas` bootstrap stage-2 self-host on Win64 as well as Linux:
+  `pp_bootstrap` builds the matching RTL from source (`rtl/win64` →
+  `rtl/units/x86_64-win64`) and recompiles `pp.pas` into `pp_stage2`.
 
 ## [0.0.2] — 2026-06-03
 
