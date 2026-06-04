@@ -625,7 +625,15 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       ref_side = left_expr;
     if (ref_side != NULL && ref_side->type != EXPR_NIL &&
         codegen_expr_is_char_array_like_ctx(ref_side, ctx) &&
-        codegen_expr_is_addressable(ref_side)) {
+        codegen_expr_is_addressable(ref_side) &&
+        ref_side->resolved_kgpc_type != NULL &&
+        kgpc_type_is_dynamic_array(ref_side->resolved_kgpc_type)) {
+      /* Restrict the slot-dereference compare to dynamic (reference-backed)
+       * char arrays.  A fixed `array[0..N] of char` is char-array-like and
+       * addressable too, but has no reference slot — dereferencing it would
+       * compare its first qword of contents to 0, so a zero-filled buffer
+       * would spuriously equal nil.  The analogous fast path in
+       * expr_tree_op.c carries the same kgpc_type_is_dynamic_array guard. */
       Register_t *addr_reg = NULL;
       inst_list = codegen_address_for_expr(ref_side, inst_list, ctx, &addr_reg);
       if (codegen_had_error(ctx) || addr_reg == NULL)
