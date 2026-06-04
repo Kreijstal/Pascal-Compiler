@@ -13,6 +13,13 @@ typedef struct TypeRef {
   struct TypeRef **generic_args;
   int num_generic_args;
   int is_class_reference; /* For "class of T" */
+  /* Intrusive links into the live-allocation list consumed by
+   * type_ref_cleanup_remaining().  Embedding the linkage in the node makes
+   * untracking on free O(1) rather than an O(n) scan of a side list, which
+   * otherwise turned destroying a large parse tree into O(n^2) work.  These
+   * are runtime-only bookkeeping and are never serialized. */
+  struct TypeRef *live_prev;
+  struct TypeRef *live_next;
 } TypeRef;
 
 QualifiedIdent *qualified_ident_from_single(const char *segment);

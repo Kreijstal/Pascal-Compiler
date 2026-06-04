@@ -5,6 +5,7 @@
     resolving record fields and their offsets.
 */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -346,6 +347,67 @@ long long sizeof_from_type_tag(int type_tag) {
   }
 }
 
+/* Some fixed-width scalar builtins (SmallInt, ShortInt) have no dedicated
+ * legacy type tag, so they are recorded with a generic INT_TYPE base_type
+ * whose tag-derived size (4) is wider than their true width.  Their alias
+ * carries the authoritative storage_size (2 and 1).  When a type_id names
+ * such an alias and its explicit storage_size is NARROWER than the tag's
+ * natural size, the alias width wins — this is what keeps packed records
+ * such as FPC's coffsymbol.section:smallint at the correct 18-byte layout.
+ * Only narrowing is honored, so width-varying aliases like Integer/LongInt
+ * (storage_size == tag size) are unaffected and the cross-unit aliasing the
+ * tag short-circuit guards against cannot be reintroduced. */
+static long long narrowing_alias_storage_size(SymTab_t *symtab,
+                                              const char *type_id,
+                                              long long tag_size) {
+  if (type_id == NULL || symtab == NULL || tag_size <= 0)
+    return 0;
+  HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+  struct TypeAlias *alias =
+      (type_node != NULL) ? get_type_alias_from_node(type_node) : NULL;
+  if (alias == NULL || alias->is_array || alias->is_set || alias->is_enum ||
+      alias->is_file || alias->is_pointer)
+    return 0;
+
+  /* The explicit storage_size of a narrow ordinal alias (SmallInt = 2,
+   * ShortInt = 1) is populated lazily from its declared subrange by
+   * sync_alias_range_bounds().  When a packed record field of such a type is
+   * sized before that lazy pass has run for the alias, storage_size is still
+   * 0, so the caller falls back to the wider tag size (INT_TYPE = 4) and
+   * compute_field_size() caches that wrong width on the field permanently --
+   * every later layout consumer then reads the poisoned 4 and the record is
+   * over-sized (e.g. FPC's coffsymbol.section:smallint pushing the 18-byte
+   * COFF symbol to 20).  Derive the width from the known range bounds here so
+   * the first sizing is correct regardless of evaluation order, using the
+   * exact thresholds of sync_alias_range_bounds() and writing the result back
+   * so every path agrees. */
+  long long width = alias->storage_size;
+  if (width <= 0 && alias->range_known) {
+    long long lo = alias->range_start;
+    long long hi = alias->range_end;
+    /* Pick the smallest width that holds the range, honoring signedness the
+     * way FPC does: an unsigned subrange (lo >= 0) uses the full byte/word/
+     * longword positive span, so 0..200 is one byte (not two) and 0..40000 is
+     * two (not four).  Signed subranges use the two's-complement span.
+     * Considering only the signed bounds would over-size unsigned packed
+     * fields and corrupt record layouts. */
+    if ((lo >= -128 && hi <= 127) || (lo >= 0 && hi <= 255))
+      width = 1;
+    else if ((lo >= -32768 && hi <= 32767) || (lo >= 0 && hi <= 65535))
+      width = 2;
+    else if ((lo >= INT32_MIN && hi <= INT32_MAX) ||
+             (lo >= 0 && hi <= 4294967295LL))
+      width = 4;
+    else
+      width = 8;
+    alias->storage_size = width;
+  }
+
+  if (width > 0 && width < tag_size)
+    return width;
+  return 0;
+}
+
 int sizeof_from_type_ref(SymTab_t *symtab, int type_tag, const char *type_id,
                          long long *size_out, int depth, int line_num) {
   if (size_out == NULL)
@@ -366,7 +428,9 @@ int sizeof_from_type_ref(SymTab_t *symtab, int type_tag, const char *type_id,
       type_tag != ENUM_TYPE && type_tag != SET_TYPE) {
     long long base_size = sizeof_from_type_tag(type_tag);
     if (base_size >= 0) {
-      *size_out = base_size;
+      long long narrowed =
+          narrowing_alias_storage_size(symtab, type_id, base_size);
+      *size_out = (narrowed > 0) ? narrowed : base_size;
       return 0;
     }
   }
@@ -1276,6 +1340,9 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
     long long size = sizeof_from_type_tag(type_tag);
     if (size > 0) {
       /* SET_TYPE is excluded above, so no SET_TYPE-specific cap here. */
+      long long narrowed = narrowing_alias_storage_size(symtab, type_id, size);
+      if (narrowed > 0)
+        size = narrowed;
       *align_out = fpc_type_alignment_from_size(size, type_tag);
       return 0;
     }

@@ -47,6 +47,13 @@ static bool g_compiler_mtime_known = false;
 static bool g_objfpc_mode_detected = false;
 static bool g_default_shortstring = false;
 
+/* Largest {$MAXSTACKSIZE}/{$MINSTACKSIZE} seen across the program and its units
+ * during the current compile (0 = none).  Windows links these into the PE
+ * stack reserve/commit; over-reserving is harmless, so taking the max keeps the
+ * program's request even if a unit asks for less.  See emit_link_args(). */
+static long long g_max_stack_size = 0;
+static long long g_min_stack_size = 0;
+
 static uint64_t fnv1a64_bytes(const unsigned char *data, size_t len) {
   uint64_t hash = 1469598103934665603ULL;
   for (size_t i = 0; i < len; ++i) {
@@ -325,6 +332,14 @@ void pascal_frontend_set_default_shortstring(bool value) {
   g_default_shortstring = value;
 }
 
+long long pascal_frontend_max_stack_size(void) { return g_max_stack_size; }
+long long pascal_frontend_min_stack_size(void) { return g_min_stack_size; }
+
+void pascal_frontend_reset_stack_size(void) {
+  g_max_stack_size = 0;
+  g_min_stack_size = 0;
+}
+
 void pascal_frontend_add_include_path(const char *path) {
   if (path == NULL || g_user_include_path_count >= MAX_USER_INCLUDE_PATHS)
     return;
@@ -580,22 +595,41 @@ static const char *skip_whitespace_and_comments(const char *cursor,
     }
 
     if (ch == '{') {
+      /* Brace comments nest in FPC (it warns "Comment level N").  Track depth
+       * so a `{` inside the comment — e.g. a directive-shaped `{$i ...}`
+       * mentioned in prose — does not close it early and cause this unit/
+       * program detector to misread the file's leading comment. */
       ++cursor;
-      while (cursor < end && *cursor != '}')
+      int depth = 1;
+      while (cursor < end && depth > 0) {
+        if (*cursor == '{')
+          ++depth;
+        else if (*cursor == '}')
+          --depth;
         ++cursor;
-      if (cursor < end)
-        ++cursor;
+      }
       continue;
     }
 
     if (ch == '(' && (cursor + 1) < end && cursor[1] == '*') {
+      /* `(* ... *)` comments nest in FPC just like `{ ... }`; track depth so a
+       * nested `(*` (or a directive-shaped one mentioned in prose) does not
+       * close the comment early and confuse this unit/program detector. */
       cursor += 2;
-      while ((cursor + 1) < end && !(cursor[0] == '*' && cursor[1] == ')'))
+      int depth = 1;
+      while (cursor < end && depth > 0) {
+        if ((cursor + 1) < end && cursor[0] == '(' && cursor[1] == '*') {
+          ++depth;
+          cursor += 2;
+          continue;
+        }
+        if ((cursor + 1) < end && cursor[0] == '*' && cursor[1] == ')') {
+          --depth;
+          cursor += 2;
+          continue;
+        }
         ++cursor;
-      if ((cursor + 1) < end)
-        cursor += 2;
-      else
-        cursor = end;
+      }
       continue;
     }
 
@@ -803,6 +837,28 @@ static char *compute_ast_cache_path(const char *source_path) {
                          strlen(target_tag)) ^
            hash;
   }
+  /* Mix in the include search paths (-I).  A unit's parsed AST depends on
+   * which files its {$i <name>} directives resolve to, and that resolution
+   * is driven by the -I search list.  Without this, the same source compiled
+   * under two different -I configurations (e.g. two RTL trees, or different
+   * include search orders) collides on one cache file keyed only on
+   * source+defines+target.  Loading such a stale entry yields an AST whose
+   * class/record declarations no longer match their method bodies — which
+   * is exactly how a self-referential static dynamic-array field
+   * (FSystemEncodings: array of TEncoding; static;) ended up mis-typed,
+   * breaking SetLength/Length/High/Low and desyncing later parsing.  The
+   * order of -I entries matters (it determines which duplicate wins), so it
+   * is folded into the hash in sequence rather than commutatively. */
+  for (int i = 0; i < g_user_include_path_count; ++i) {
+    if (g_user_include_paths[i] == NULL)
+      continue;
+    /* Fold sequentially: rotate the accumulator so reordering changes the
+     * key, then mix this path in. */
+    hash = (hash << 1) | (hash >> 63);
+    hash = fnv1a64_bytes((const unsigned char *)g_user_include_paths[i],
+                         strlen(g_user_include_paths[i])) ^
+           hash;
+  }
   if (g_compiler_mtime_known) {
     char compiler_stamp[64];
     snprintf(compiler_stamp, sizeof(compiler_stamp), "%lld.%09ld",
@@ -949,7 +1005,15 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
 
         return success;
       }
-      g_ast_cache_reads_enabled = false;
+      /* Cache miss on THIS file.  Do not disable cache reads for sibling
+       * files: every cache entry is independently keyed (source path +
+       * defines + target + include paths) and independently validated for
+       * freshness, so one stale or missing entry says nothing about the
+       * others.  The compiler prelude is queried first and is invalidated by
+       * every compiler rebuild, so poisoning all subsequent reads on its miss
+       * forced the entire FPC RTL (~20 units) to re-parse from source on the
+       * first compile after any rebuild — turning a few-second compile into a
+       * ~60s one and pushing the FPC RTL suite past its per-test timeout. */
       free(cache_path);
       /* Cache miss — proceed with normal parsing, save at the end */
     }
@@ -1340,6 +1404,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
                                               (int)inc_count);
     }
   }
+  /* Carry {$MAXSTACKSIZE}/{$MINSTACKSIZE} from this file (active branch only,
+   * resolved by the preprocessor) up to the link stage.  Take the max so the
+   * program's request wins over any (smaller or absent) unit value. */
+  {
+    long long file_max = pascal_preprocessor_max_stack_size(preprocessor);
+    long long file_min = pascal_preprocessor_min_stack_size(preprocessor);
+    if (file_max > g_max_stack_size)
+      g_max_stack_size = file_max;
+    if (file_min > g_min_stack_size)
+      g_min_stack_size = file_min;
+  }
   pascal_preprocessor_free(preprocessor);
 
   /* Temp debug: dump preprocessed output for system.pp */
@@ -1451,30 +1526,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
     else if (result.value.error != NULL)
       free_error(result.value.error);
   } else {
-    int remaining = skip_pascal_layout_preview(input, input->start);
-    if (remaining < input->length) {
-      ParseError *err = (ParseError *)calloc(1, sizeof(ParseError));
-      if (err != NULL) {
-        err->line = input->line;
-        err->col = input->col;
-        err->index = remaining;
-        err->message = strdup("Unexpected trailing input after program.");
-        /* parser_name is a borrowed/static reference per free_error contract —
-         * do not strdup. */
-        err->parser_name = "pascal_frontend";
-        err->committed = true;
-        ensure_parse_error_contexts(err, input);
-        if (error_out != NULL)
-          *error_out = err;
-        else
-          free_error(err);
-      }
-      free_ast(result.value.ast);
-      drain_parser_parse_pools();
-      free_input(input);
-      free(buffer);
-      return false;
-    }
+    /* A complete program/unit was parsed through its terminating `end.`.
+     * FPC's scanner treats `end.` as the end of the compilation unit and
+     * silently discards everything after it: `fpc` compiles such a source
+     * with RC=0 and emits neither a warning nor a hint (verified on 3.2.2 for
+     * both program and unit sources).  KGPC must do the same — erroring here
+     * would reject sources FPC accepts and is therefore stricter than the
+     * compiler we self-host against.  No diagnostic, matching FPC. */
 
     if (convert_to_tree) {
       /* Save unit ASTs only. Top-level programs should always reparse from

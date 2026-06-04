@@ -998,21 +998,23 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr,
     }
   } else if (tuple_node->typ != PASCAL_T_TUPLE) {
   wrap_single_element_into_tuple:
-    /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
-     * The parser parses (expr) as a parenthesized expression rather than
-     * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
-    ast_t *wrapper = new_ast();
-    wrapper->typ = PASCAL_T_TUPLE;
-    wrapper->child = tuple_node;
-    wrapper->next = NULL;
-    /* Detach from any sibling chain so iteration sees exactly 1 element */
-    ast_t *saved_next = tuple_node->next;
-    tuple_node->next = NULL;
-    tuple_node = wrapper;
-    synthetic_tuple_wrapper = wrapper;
-    /* saved_next is unused — single-element array consts only have one value.
-     */
-    (void)saved_next;
+    {
+      /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
+       * The parser parses (expr) as a parenthesized expression rather than
+       * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
+      ast_t *wrapper = new_ast();
+      ast_t *saved_next = tuple_node->next;
+      wrapper->typ = PASCAL_T_TUPLE;
+      wrapper->child = tuple_node;
+      wrapper->next = NULL;
+      /* Detach from any sibling chain so iteration sees exactly 1 element */
+      tuple_node->next = NULL;
+      tuple_node = wrapper;
+      synthetic_tuple_wrapper = wrapper;
+      /* saved_next is unused — single-element array consts only have one
+       * value. */
+      (void)saved_next;
+    }
   }
 
   int start = type_info->start;
@@ -2801,6 +2803,17 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node,
     } else {
       kgpc_type = rec_type;
     }
+  } else if (type_info.is_shortstring && type_info.end > 0 &&
+             type_info.end <= 255) {
+    /* `type T = string[N]` — build the alias KgpcType as a ShortString of the
+     * declared capacity.  convert_type_spec_to_kgpctype resolves the bare
+     * "string" identifier to a managed AnsiString primitive and drops the
+     * [N] bound, which would strip the ShortString storage kind from the
+     * alias.  That leaves record/class fields of the alias type looking like
+     * plain char arrays, so an AnsiString assignment to such a field takes
+     * the length-byte-less char-array copy and corrupts the string. */
+    kgpc_type =
+        create_primitive_type_with_size(SHORTSTRING_TYPE, type_info.end + 1);
   } else if (spec_node != NULL) {
     kgpc_type = convert_type_spec_to_kgpctype(spec_node, NULL);
   }

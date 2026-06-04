@@ -1,6 +1,15 @@
 # FPC Bootstrap Analysis
 
-## Status: Stage3 Bootstrap Verified
+## Status
+
+- **Linux:** Stage3 bootstrap verified (see below). KGPC→FPC 3-stage fixpoint completes.
+- **Native Windows (win64/UCRT64):** Self-host **fixpoint reached** — `pp_win.exe` (KGPC-built FPC)
+  compiles `pp.pas` into a working `pp_win2.exe` that boots and runs (`-iV` → `3.3.1`, RC=0), and the
+  chain converges to a **byte-identical stage4==stage5 fixpoint**. One residual KGPC sign-extension
+  bug remains (delays canonical convergence from stage3 to stage4 but does not break the bootstrap).
+  See [Native Windows self-host fixpoint](#native-windows-self-host-fixpoint) below.
+
+## Status: Stage3 Bootstrap Verified (Linux)
 
 As of PR #732 merged into `master`, the FPC bootstrap path is green:
 
@@ -395,6 +404,128 @@ bash scripts/native_build_pp_win.sh          # -> /tmp/pp_win.exe
 The cross-host counterpart (linking from Linux with the
 `x86_64-w64-mingw32` toolchain) is `scripts/cross_build_pp_win.sh`; it is
 correct for the same reason — that prefix also defines `__MINGW64__`.
+
+## Native Windows self-host fixpoint
+
+Once `pp_win.exe` exists (KGPC compiles `pp.pas` → asm → linked exe, per the section
+above), it can self-host: compile `pp.pas` into `pp_win2.exe`, which compiles `pp_win3.exe`,
+and so on until a byte-identical fixpoint. This is the win64 analogue of the Linux 3-stage
+bootstrap and is the strongest correctness check on win64 codegen.
+
+### ⚠️ The single most important lesson: delete the `/tmp` unit cache first
+
+**FPC caches compiled units. `-FE/tmp` leaves ~1500 `.ppu`/`.o` files in `/tmp`, and FPC
+*relinks* any unit whose source is unchanged instead of regenerating it.** This means a
+fixpoint build can silently relink stale object files produced by an *older* compiler — so
+bugs that were fixed long ago reappear, frozen, in the output, and look exactly like live
+codegen bugs.
+
+This caused a multi-day red herring: `pp_win2.exe -iV` SIGSEGV'd at startup (RC=139) on a
+garbage stack-dealloc `lea -0x44b675e0(%rsp),%rsp; pop %rbp` in win64 `_fin$NNNN`
+finalization-helper epilogues. The displacement was deterministic across rebuilds, which
+*looked* like a reproducible `final_localsize`/`tg.lasttemp` codegen bug. It was not: gdb on
+the running build showed `tcgx86_64.g_proc_exit` **never** computed a garbage `final_localsize`
+(the breakpoint fired zero times across full builds), because the build was **link-only** —
+only `pp.pas`'s own main proc was compiled fresh; every other unit, including the ones owning
+the garbage `_fin` funclets (`SYSTEM`, `LINK`, `COMPILER`), was relinked from frozen `.o` built
+by a *pre-fix* `pp_win.exe`. Deleting the cache and rebuilding produced a `pp_win2` with **zero**
+garbage leas that boots and runs.
+
+**Always run this before any fixpoint build or before debugging "broken" win64 output:**
+```bash
+rm -f /tmp/*.ppu /tmp/*.o
+```
+
+### The fixpoint build command (win64, run on the Windows host)
+
+```bash
+# on the Windows host (UCRT64 shell), with /tmp/pp_win.exe already built
+export MSYS2_ARG_CONV_EXCL="*"          # RUN steps: stop MSYS mangling the FPC switches
+cd ~/git/Pascal-Compiler/FPCSource/compiler
+rm -f /tmp/*.ppu /tmp/*.o               # <-- mandatory; see lesson above
+R=$(cygpath -m ~/git/Pascal-Compiler); F=$R/FPCSource; C=$F/compiler
+PPU=$F/rtl/units/x86_64-win64           # prebuilt win64 RTL .ppu (90 units)
+
+/tmp/pp_win.exe -Twin64 -Px86_64 -dx86_64 -dGDB -Sg \
+  -Fi$C -Fi$C/x86 -Fi$C/x86_64 -Fi$F/rtl/inc -Fi$F/rtl/x86_64 -Fi$F/rtl/win -Fi$F/rtl/win/wininc \
+  -Fu$PPU -Fu$C -Fu$C/x86 -Fu$C/x86_64 -Fu$C/systems \
+  -FE/tmp -o$(cygpath -m /tmp/pp_win2.exe) pp.pas
+
+export MSYS2_ARG_CONV_EXCL="*"; /tmp/pp_win2.exe -iV   # -> 3.3.1, exit 0 (no SIGSEGV)
+```
+
+Repeat with `pp_win2.exe` → `pp_win3.exe`, `pp_win3.exe` → `pp_win4.exe`, deleting the cache
+each time, then `cmp` consecutive stages. Path notes: build/run steps that invoke the FPC
+binaries pass Windows paths via `cygpath -m`; the `-FE` exe-output dir doubles as the unit
+cache (hence the `/tmp` cleanup).
+
+### Convergence result and how to read it
+
+| stage | built by | garbage `_fin` leas | `-iV` | vs previous |
+|---|---|---|---|---|
+| 1 `pp_win.exe` | KGPC | — | — | — |
+| 2 `pp_win2` | stage1 | 0 | `3.3.1` RC=0 | — |
+| 3 `pp_win3` | stage2 | 0 | `3.3.1` RC=0 | ≠ stage2 (~176k bytes) |
+| 4 `pp_win4` | stage3 | 0 | `3.3.1` RC=0 | ≠ stage3 (**4 bytes**) |
+| 5 `pp_win5` | stage4 | 0 | `3.3.1` RC=0 | **== stage4 (FIXPOINT)** |
+
+- **stage2 vs stage3 (~176k bytes):** uniform ±0x10 address-layout shifts (RIP-relative and
+  absolute references to symbols that moved by 0x10). **Benign** — expected because stage1 is
+  KGPC-built and makes slightly different instruction-selection/layout choices than self-built FPC.
+- **stage3 vs stage4 (4 bytes):** a **value** difference (see residual bug below). Converges by
+  stage4; stage4==stage5 byte-identical → true fixpoint.
+
+### Residual KGPC bug: negative SmallInt constant zero-extended in the self-host path
+
+A correct bootstrap reaches the fixpoint at **stage3** (stage2==stage3, since everything from
+stage2 on is identical FPC source built by FPC logic). Ours needs **stage4**, and the extra
+generation is a genuine KGPC bug, not cosmetic.
+
+The 4 diverging bytes are at `.text` file offset `0xAD202`, in proc
+`SYMDEF.TABSTRACTPROCDEF.TYPENAME_PARAS`, at a call to FPC's `Str(real)` helper
+`SYSTEM_$$_STR_REAL$SMALLINT$SMALLINT$DOUBLE...` with the default-format sentinels
+`width=-1`, `precision=-32767`:
+
+| reg / param | stage3 (emitted by stage2 = KGPC-built FPC) | stage4 (emitted by stage3 = self-built FPC) |
+|---|---|---|
+| `edx` = SmallInt `-1` | `mov $0xffff,%edx` (zero-ext = 65535, **wrong**) | `mov $0xffffffff,%edx` (sign-ext = −1, right) |
+| `ecx` = SmallInt `-32767` | `mov $0x8001,%ecx` (32769, **wrong**) | `mov $0xffff8001,%ecx` (−32767, right) |
+
+**The bug is indirect.** KGPC's *surface* handling of negative SmallInt constants is correct —
+minimal `foo(-1,-32767)`, typed `const A: smallint = -1`, and `-O2` all sign-extend properly
+(`negl`/`movslq`, or `movswl` for a typed const) on both `--target=sysv` and `--target=windows`.
+The defect is that KGPC **miscompiled FPC's own constant-emitter** inside `pp_win2`, so stage2's
+FPC-logic emits that `str_real` sentinel path zero-extended; FPC's correct logic re-asserts at
+stage3 (hence self-healing). Because the trigger lives in the self-host path, **no minimal `.p`
+reproduces it** — chasing it means bisecting which FPC compiler routine (the constant →
+32-bit-immediate parameter materialization used when lowering `Str(real)`) KGPC mis-translated.
+This is the same sign/zero-extension family as the earlier SmallInt/var-narrow fixes.
+
+### Debugging the running compiler on the Windows host (gdb gotchas)
+
+When you do need to gdb the running `pp_win.exe` during a build, several Windows/MSYS-specific
+traps cost real time:
+
+- **Use gdbserver + remote gdb client, and pass Windows paths.** Native gdb/gdbserver can't
+  resolve POSIX `/tmp/...` paths for the executable, the `-x` script, or `file`; translate with
+  `cygpath -m`.
+- **`strip --strip-debug` a copy of the binary first.** gdb 17.2 chokes on the FPC-emitted DWARF
+  (`-dGDB` → `-g`) with "cannot get C stack". Stripping debug info does **not** move `.text`
+  addresses, so symbol resolution still works.
+- **Move `sitecustomize.py` aside.** `/ucrt64/lib/python3.12/sitecustomize.py`'s faulthandler
+  crashes gdb; restore it after (a shell `trap` works well).
+- **Disable the NT debug heap: `export _NO_DEBUG_HEAP=1`.** A process launched under a debugger
+  otherwise uses the debug heap, which fills allocations with marker patterns and guard bytes —
+  this *perturbs* uninitialized-memory bugs and makes them manifest differently (e.g. a garbage
+  value that was baked into an instruction instead becomes a garbage filename string). With the
+  debug heap off, gdbserver reproduces the exact standalone behavior (byte-identical output).
+- **`set breakpoint condition-evaluation host`.** gdbserver evaluates breakpoint *conditions*
+  target-side by default and silently no-ops on expressions it can't handle, so a conditional
+  breakpoint never fires even though it's correctly placed. Forcing host-side evaluation is
+  reliable (but slower, since every hit round-trips to the client).
+- **Remember it's usually a link-only build.** If a breakpoint in codegen (`g_proc_exit`, etc.)
+  never fires, the units are cached — delete `/tmp/*.ppu /tmp/*.o` to force recompilation before
+  concluding the function "isn't called".
 
 ### Cleaning generated bootstrap outputs
 

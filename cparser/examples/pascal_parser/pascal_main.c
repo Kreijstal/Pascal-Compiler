@@ -71,24 +71,44 @@ static const char *skip_whitespace_and_comments(const char *cursor,
     }
 
     if (ch == '{') {
+      /* Brace comments nest in FPC (it warns "Comment level N").  Track depth
+       * so a `{` inside the comment — including a directive-shaped `{$i ...}`
+       * mentioned in prose — does not close it early.  This must match the
+       * main tokenizer's nesting skipper; otherwise a unit whose leading
+       * comment contains a nested brace is misdetected here as not starting
+       * with `unit`/`program`. */
       ++cursor;
-      while (cursor < end && *cursor != '}') {
+      int depth = 1;
+      while (cursor < end && depth > 0) {
+        if (*cursor == '{')
+          ++depth;
+        else if (*cursor == '}')
+          --depth;
         ++cursor;
       }
-      if (cursor < end)
-        ++cursor;
       continue;
     }
 
     if (ch == '(' && (cursor + 1) < end && cursor[1] == '*') {
+      /* `(* ... *)` comments nest in FPC just like `{ ... }`; track depth so a
+       * nested `(*` does not close the comment early.  This must match the main
+       * tokenizer's skipper so a unit whose leading comment contains a nested
+       * paren comment is not misdetected as not starting with unit/program. */
       cursor += 2;
-      while ((cursor + 1) < end && !(cursor[0] == '*' && cursor[1] == ')')) {
+      int depth = 1;
+      while (cursor < end && depth > 0) {
+        if ((cursor + 1) < end && cursor[0] == '(' && cursor[1] == '*') {
+          ++depth;
+          cursor += 2;
+          continue;
+        }
+        if ((cursor + 1) < end && cursor[0] == '*' && cursor[1] == ')') {
+          --depth;
+          cursor += 2;
+          continue;
+        }
         ++cursor;
       }
-      if ((cursor + 1) < end)
-        cursor += 2;
-      else
-        cursor = end;
       continue;
     }
 

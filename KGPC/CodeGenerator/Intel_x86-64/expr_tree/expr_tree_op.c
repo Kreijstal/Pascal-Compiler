@@ -621,6 +621,29 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
   case EXPR_ADDOP:
     type = expr->expr_data.addop_data.addop_type;
     if (expr_get_type_tag(expr) == SET_TYPE) {
+      if (expr_tree_is_large_set_expr(expr, ctx)) {
+        /* Sets wider than 32 bits cannot be computed in a single register.
+         * Recompute the whole binary op as a 32-byte set value via
+         * codegen_char_set_address (which loops qword-by-qword over the
+         * operands and stores into a stack temp), then hand the address of
+         * that temp back as the result.  This matches the EXPR_MULOP set
+         * branch below and the large-set contract used by the relational
+         * and assignment paths: a large-set value is represented by the
+         * address of its 32-byte storage held in a register. */
+        Register_t *set_addr_reg = NULL;
+        inst_list =
+            codegen_char_set_address(expr, inst_list, ctx, &set_addr_reg);
+        if (set_addr_reg != NULL && left_reg != NULL) {
+          if (set_addr_reg->reg_id != left_reg->reg_id) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                     set_addr_reg->bit_64, left_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+          }
+        }
+        if (set_addr_reg != NULL)
+          free_reg(get_reg_stack(), set_addr_reg);
+        break;
+      }
       /* Set operations use 32-bit instructions; ensure register names are
        * 32-bit */
       const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
@@ -1263,6 +1286,54 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
     struct Expression *left_expr = expr->expr_data.relop_data.left;
     struct Expression *right_expr = expr->expr_data.relop_data.right;
 
+    /* (dynamic array of char) = nil / <> nil is a pointer test, not a textual
+     * comparison.  expr_is_char_array_expr() is true for any char array, so a
+     * dynamic `array of char` (FPC's TAnsiCharDynArray, e.g. ogcoff's
+     * FCoffStrs) would otherwise fall into the char-array compare branch below,
+     * which calls expr_get_char_array_length_expr(), finds no static length for
+     * a dynamic array, and `break`s WITHOUT emitting any comparison -- leaving
+     * the operand's (always-nonzero) slot ADDRESS in the result register as the
+     * boolean, so `(FCoffStrs = nil)` could never be true (this broke the win64
+     * internal linker's COFF string-table reader).  The char-array operand
+     * register holds the slot address; the dynamic array's data pointer is its
+     * deref.  Compare that pointer to nil directly. */
+    if (relop_kind == EQ || relop_kind == NE) {
+      const char *ca_op = NULL;
+      const Register_t *ca_reg = NULL;
+      struct Expression *ca_expr = NULL;
+      if (right_expr != NULL && right_expr->type == EXPR_NIL &&
+          left_expr != NULL && expr_is_char_array_expr(left_expr)) {
+        ca_expr = left_expr;
+        ca_op = left;
+        ca_reg = left_reg;
+      } else if (left_expr != NULL && left_expr->type == EXPR_NIL &&
+                 right_expr != NULL && expr_is_char_array_expr(right_expr)) {
+        ca_expr = right_expr;
+        ca_op = right;
+        ca_reg = right_reg;
+      }
+      if (ca_expr != NULL && ca_reg != NULL && left_reg != NULL &&
+          ca_expr->resolved_kgpc_type != NULL &&
+          kgpc_type_is_dynamic_array(ca_expr->resolved_kgpc_type)) {
+        const char *ca64 = operand_as_reg64(ca_op, ca_reg);
+        const char *res64 = left_reg->bit_64;
+        const char *res32 = reg_to_reg32(left, left_reg);
+        const char *res8 = reg32_to_reg8(res32, left_reg);
+        if (ca64 != NULL && res64 != NULL && res32 != NULL && res8 != NULL) {
+          snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", ca64, res64);
+          inst_list = add_inst(inst_list, buffer);
+          snprintf(buffer, sizeof(buffer), "\tcmpq\t$0, %s\n", res64);
+          inst_list = add_inst(inst_list, buffer);
+          snprintf(buffer, sizeof(buffer), "\t%s\t%s\n",
+                   (relop_kind == EQ) ? "sete" : "setne", res8);
+          inst_list = add_inst(inst_list, buffer);
+          snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", res8, res32);
+          inst_list = add_inst(inst_list, buffer);
+          break;
+        }
+      }
+    }
+
     if (relop_kind == NOT) {
       const char *left32 = reg_to_reg32(left, left_reg);
       const char *left8 = reg32_to_reg8(left32, left_reg);
@@ -1327,6 +1398,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
             if (sz > 0)
               set_storage_bytes = (int)sz;
           }
+        }
+
+        /* The right operand may itself be a runtime set-arithmetic expression
+         * (e.g. `x in (setA + [e44])`).  Such an EXPR_ADDOP/EXPR_MULOP node
+         * does not always carry a KgpcType whose sizeof reflects the true
+         * 256-bit storage, so the type-based width above can under-report and
+         * wrongly select the 32-bit register path.  When the operand is a
+         * large set, force the address+memory-form btl path and use the
+         * materialised 32-byte (256-bit) storage width. */
+        if (set_storage_bytes <= 4 && right_expr != NULL &&
+            expr_tree_is_large_set_expr(right_expr, ctx)) {
+          long long sz = expr_tree_set_size_bytes(right_expr);
+          set_storage_bytes = (sz > 4) ? (int)sz : 32;
         }
 
         if (set_storage_bytes > 4 && left32 != NULL && left8 != NULL) {

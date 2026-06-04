@@ -460,6 +460,37 @@ class TestCompiler(unittest.TestCase):
                 file=sys.stderr,
             )
 
+    def test_win64_maxstacksize_emits_pe_stack_reserve(self):
+        """{$MAXSTACKSIZE}/{$MINSTACKSIZE} must drive -Wl,--stack on Windows."""
+        input_file = os.path.join(
+            TEST_CASES_DIR, "tdd_win64_maxstacksize_link_reserve.p"
+        )
+
+        # Windows target: the reserve must reach the link args so the PE header
+        # carries a stack big enough for recursion-heavy programs (the FPC
+        # compiler asks for 512 MB; the default ~2 MB reserve overflows at
+        # startup with STATUS_STACK_OVERFLOW).  Only the reserve is emitted, as
+        # the larger of MAXSTACKSIZE/MINSTACKSIZE (here 64 MB > 2 MB); gcc's
+        # -Wl, comma-splitting rules out the reserve,commit form.
+        asm_win = os.path.join(TEST_OUTPUT_DIR, "tdd_win64_maxstacksize_win.s")
+        run_compiler(input_file, asm_win, flags=["--target-windows"])
+        win_args = LINK_ARGS_BY_ASM.get(asm_win, [])
+        self.assertIn(
+            "-Wl,--stack,64000000",
+            win_args,
+            f"expected PE stack reserve in Windows link args, got {win_args}",
+        )
+
+        # POSIX target: the directive is meaningless (the stack auto-grows), so
+        # no --stack must be emitted.
+        asm_sysv = os.path.join(TEST_OUTPUT_DIR, "tdd_win64_maxstacksize_sysv.s")
+        run_compiler(input_file, asm_sysv, flags=["--target-sysv"])
+        sysv_args = LINK_ARGS_BY_ASM.get(asm_sysv, [])
+        self.assertFalse(
+            any(a.startswith("-Wl,--stack") for a in sysv_args),
+            f"POSIX target must not emit a stack reserve, got {sysv_args}",
+        )
+
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")

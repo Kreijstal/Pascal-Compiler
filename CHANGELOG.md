@@ -10,6 +10,86 @@ under active development.
 
 ## [Unreleased]
 
+## [0.0.3] — 2026-06-03
+
+Native Windows self-host fixpoint.  KGPC's Windows build of the FPC
+compiler (`pp_win.exe`) now compiles `pp.pas` into a working `pp_win2`,
+which goes on to reproduce a byte-identical stage4 == stage5 fixpoint —
+the Win64 counterpart of the Linux self-host milestone.
+
+### Compiler — code generator
+- Load a function result *after* managed-local cleanup on `EXIT`, so the
+  return value is no longer clobbered by finalization of local strings /
+  dynamic arrays.
+- Promote `Single` record-field reads to `double` consistently, matching
+  the promotion already applied to plain `Single` variables.
+
+### Compiler — front end
+- Compile the released FPC 3.2.2 sources: assorted codegen, semantic-check
+  and parser fixes uncovered by building 3.2.2 rather than trunk.
+- Nest `{ ... }` brace comments correctly in the unit/program detector so
+  commented-out `unit`/`program` keywords no longer confuse target
+  selection.
+- Make live-`TypeRef` tracking O(1), fixing O(n²) parse-tree teardown on
+  large unit graphs.
+
+### Docs
+- `docs/FPC_BOOTSTRAP.md` documents the native Windows self-host fixpoint:
+  the build command, the stage1→5 convergence, the `/tmp` unit-cache
+  pitfall (stale `.o` masquerading as live codegen bugs), and the
+  gdb-on-Windows debugging notes.
+
+### Tests
+- The AST-cache include-path regression now runs as a meson test.
+
+## [0.0.2] — 2026-06-03
+
+Windows (PE-COFF) FPC-RTL-from-source bootstrap.  KGPC builds the FPC
+runtime and compiler from source on Win64, and the native `pp_win.exe`
+links and runs.
+
+### Compiler — code generator
+- Fix runtime set arithmetic membership for ordinals ≥ 32: set
+  union/intersection/difference no longer truncates the bit-test to 32
+  bits, so `e in (setA + [e44])` is correct for high-ordinal elements.
+- Emit COFF-compatible sections, AT&T-syntax branches, and the correct
+  `Initialize`/`Finalize` symbol casing for the Win64 target.
+- Emit the `INITFINAL` table header as two native words (not a single
+  4-byte field), matching FPC's `TInitFinalTable` layout so
+  `FPC_FINALIZEUNITS` reads a valid count at exit.
+- Size `SmallInt`/`ShortInt` record fields, and scalar subrange aliases,
+  by their real storage width, fixing PACKRECORDS-C record strides.
+- Load by-reference narrow ordinal params from the value type, not the
+  slot, so `var shortint` reads sign-extend instead of widening garbage.
+- Evaluate `sizeof()` inside inline array-variable bounds, so
+  `array[0..sizeof(T)-1] of byte` gets its real length.
+- Compare dynamic char arrays to `nil` as a pointer test rather than
+  routing through string compare.
+- Build `string[N]` type aliases as `ShortString`, store the length byte
+  for ShortString elements of typed-const arrays, and materialize
+  `string(PChar)` casts as managed strings — fixing length-byte clobbers.
+- Widen nested-function class/pointer return size; convert fixed
+  `WideChar` arrays to `UnicodeString` on assignment; emit AnsiString ↔
+  UnicodeString and PChar / PWideChar conversion helpers.
+- Resolve overloaded method calls by argument list (not name alone) and
+  load typecast call targets with a full 64-bit `movq` (fixes pointer
+  truncation and overloaded-method misdispatch — #749).
+
+### Runtime / build
+- Detect MSYS via compiler predefines (`KGPC_WIN64_ABI`) and select the
+  Win64 ABI struct layout there; `GetHostName` falls back to POSIX
+  `gethostname` without `_WIN32`.
+- Target-dependent `FileRec`/`TextRec` sizes, QWord `Handle` on Win64, and
+  member-based record alignment; wire up the FPC entry-info globals
+  (`_FPC_SysInstance`, `_FPC_TlsKey`, resource-string tables) for native
+  Windows programs.
+- Self-host the RTL build in the `pp.pas` bootstrap CI test (no host fpc).
+
+### Front end / semantic check
+- Key the AST cache on the target ABI; resolve a routine's parameter types
+  in its declaring unit; let RTL declarations override KGPC's builtin
+  const defaults; don't collapse a `try..except` with an empty handler.
+
 ## [0.0.1] — 2026-05-26
 
 First tagged alpha.  This release is the starting point from which further

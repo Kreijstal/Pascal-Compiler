@@ -142,6 +142,14 @@ int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab,
 /* Returns NULL if not found */
 ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
 
+/* True iff the class-qualified method name `owner__method` resolves to more
+ * than one DISTINCT signature (deduped by mangled id), i.e. a genuine overload.
+ * Duplicate registrations of the same method across visible scope levels do not
+ * count.  Used to decide whether virtual-dispatch marking may rely on a
+ * name+arity match.  Returns 0 if absent or single-signature. */
+int QualifiedMethodIsOverloaded(SymTab_t *symtab, const char *owner,
+                                const char *method);
+
 /* Searches for all instances of an identifier in the nearest scope that defines
  * it */
 /* Returns NULL if not found */

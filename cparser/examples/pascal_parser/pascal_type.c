@@ -922,10 +922,18 @@ combinator_t *class_type(tag_t tag) {
 
   // Class var section: class var Field1, Field2: Type;
   // Allow multiple declarations separated by semicolons.
+  // A field may carry a trailing `static;` directive, e.g.
+  //   FFoo: array[...] of T; static;
+  // which marks the (instance-section) field as a class-wide static field.
   combinator_t *class_var_decl =
       seq(new_combinator(), PASCAL_T_FIELD_DECL,
           sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-          token(match(":")), create_type_ref_parser(), token(match(";")), (combinator_t *)NULL);
+          token(match(":")), create_type_ref_parser(), token(match(";")),
+          optional(seq(new_combinator(), PASCAL_T_NONE,
+                       token(create_keyword_parser("static",
+                                                   PASCAL_T_IDENTIFIER)),
+                       token(match(";")), (combinator_t *)NULL)),
+          (combinator_t *)NULL);
   combinator_t *class_var_section =
       seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
           token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
@@ -1208,6 +1216,7 @@ static combinator_t *create_record_method_directives(void) {
       token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
       token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
       token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+      token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
       token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
       token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
       token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
@@ -1245,6 +1254,7 @@ static combinator_t *create_class_method_directives(void) {
             token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
             token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
             token(create_keyword_parser("abstract", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
             token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
             token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
             token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),

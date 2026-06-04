@@ -6,39 +6,37 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct TypeRefLiveNode {
-  TypeRef *ref;
-  struct TypeRefLiveNode *next;
-} TypeRefLiveNode;
-
-static TypeRefLiveNode *g_live_type_refs = NULL;
+/* Intrusive doubly-linked list of every live TypeRef, so that
+ * type_ref_cleanup_remaining() can release any that were not freed by normal
+ * parse-tree destruction.  The linkage lives in the TypeRef itself
+ * (live_prev/live_next), making both track and untrack O(1).  An earlier
+ * implementation kept a separate singly-linked side list and scanned it on
+ * every free; freeing the N type refs of a parse tree was then O(N^2), which
+ * dominated compile time (tens of seconds) when building against the full
+ * FPC RTL. */
+static TypeRef *g_live_type_refs = NULL;
 
 static void type_ref_track(TypeRef *ref) {
   if (ref == NULL)
     return;
-  TypeRefLiveNode *node = (TypeRefLiveNode *)malloc(sizeof(TypeRefLiveNode));
-  if (node == NULL)
-    return;
-  node->ref = ref;
-  node->next = g_live_type_refs;
-  g_live_type_refs = node;
+  ref->live_prev = NULL;
+  ref->live_next = g_live_type_refs;
+  if (g_live_type_refs != NULL)
+    g_live_type_refs->live_prev = ref;
+  g_live_type_refs = ref;
 }
 
 static void type_ref_untrack(TypeRef *ref) {
-  TypeRefLiveNode *prev = NULL;
-  TypeRefLiveNode *cur = g_live_type_refs;
-  while (cur != NULL) {
-    if (cur->ref == ref) {
-      if (prev != NULL)
-        prev->next = cur->next;
-      else
-        g_live_type_refs = cur->next;
-      free(cur);
-      return;
-    }
-    prev = cur;
-    cur = cur->next;
-  }
+  if (ref == NULL)
+    return;
+  if (ref->live_prev != NULL)
+    ref->live_prev->live_next = ref->live_next;
+  else if (g_live_type_refs == ref)
+    g_live_type_refs = ref->live_next;
+  if (ref->live_next != NULL)
+    ref->live_next->live_prev = ref->live_prev;
+  ref->live_prev = NULL;
+  ref->live_next = NULL;
 }
 
 static char *dup_trimmed_ident_segment(const char *segment) {
@@ -292,8 +290,8 @@ void type_ref_free(TypeRef *ref) {
 
 void type_ref_cleanup_remaining(void) {
   while (g_live_type_refs != NULL) {
-    TypeRef *ref = g_live_type_refs->ref;
-    type_ref_free(ref);
+    /* type_ref_free() untracks the node, advancing the list head. */
+    type_ref_free(g_live_type_refs);
   }
 }
 

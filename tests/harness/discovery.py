@@ -199,6 +199,10 @@ def _bootstrap_rtl_include_dirs(fpc_src):
         # (system.pp, classes.pp, signals.pp, windows.pp).
         return shared + [
             os.path.join(fpc_src, "rtl", "win"),
+            # windows.pp ({$i base.inc} etc.) pulls its includes from
+            # rtl/win/wininc, matching FPC's own build where wininc is on the
+            # include path (cf. cache.py FPC_RTL_FLAGS).
+            os.path.join(fpc_src, "rtl", "win", "wininc"),
             os.path.join(fpc_src, "rtl", "win64"),
             os.path.join(fpc_src, "rtl", "win64", "x86_64"),
         ]

@@ -1304,6 +1304,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
         free_reg(get_reg_stack(), src_reg);
       }
     }
+    /* Tracks how the return value reaches the ABI return register.  The
+     * managed-local cleanup below emits kgpc_dynarray_finalize_local calls
+     * that clobber %rax/%xmm0, so the value must be parked in the Result
+     * stack slot across the cleanup and reloaded into the ABI register as
+     * the very last step before leave/ret (mirroring the fall-through
+     * epilogue, which already loads the result *after* cleanup). */
+    StackNode_t *exit_return_slot =
+        ctx != NULL ? ctx->current_return_slot : NULL;
+    int exit_return_in_slot = 0;
+    int exit_return_is_real = 0;
     if (return_expr != NULL && !handled_record_sret) {
       /* Evaluate the return expression */
       Register_t *result_reg = NULL;
@@ -1340,7 +1350,21 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
             inst_list = codegen_sign_extend32_to64(
                 inst_list, result_reg->bit_32, result_reg->bit_64);
 
-          if (use_qword) {
+          /* Park the value in the Result slot (if available) so the
+           * managed-local cleanup cannot clobber it; otherwise fall back
+           * to materialising it directly in %rax. */
+          if (exit_return_slot != NULL) {
+            char buf[64];
+            Register_t *uses_arr[] = {result_reg};
+            if (use_qword)
+              snprintf(buf, sizeof(buf), "\tmovq\t%%0, -%d(%%rbp)\n",
+                       exit_return_slot->offset);
+            else
+              snprintf(buf, sizeof(buf), "\tmovl\t%%0, -%d(%%rbp)\n",
+                       exit_return_slot->offset);
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, buf);
+            exit_return_in_slot = 1;
+          } else if (use_qword) {
             Register_t *uses_arr[] = {result_reg};
             inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
                                     "\tmovq\t%0, %rax\n");
@@ -1352,10 +1376,18 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
         } else {
           /* For real types, arithmetic operations leave their result in
            * xmm0 as a side effect, but simple variable reads put the
-           * 64-bit bit pattern into a GPR.  Always copy GPR → xmm0 so
-           * the caller sees the correct float return value regardless of
-           * which expression form was used. */
-          {
+           * 64-bit bit pattern into a GPR.  Park the bit pattern in the
+           * Result slot and reload into %xmm0 after cleanup; otherwise
+           * copy GPR → xmm0 directly. */
+          if (exit_return_slot != NULL) {
+            char buf[64];
+            Register_t *uses_arr[] = {result_reg};
+            snprintf(buf, sizeof(buf), "\tmovq\t%%0, -%d(%%rbp)\n",
+                     exit_return_slot->offset);
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, buf);
+            exit_return_in_slot = 1;
+            exit_return_is_real = 1;
+          } else {
             Register_t *uses_arr[] = {result_reg};
             inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1,
                                     "\tmovq\t%0, %xmm0\n");
@@ -1364,6 +1396,58 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
 
         free_reg(get_reg_stack(), result_reg);
       }
+    }
+
+    if (codegen_has_finally(ctx)) {
+      char exit_label[18];
+      gen_label(exit_label, sizeof(exit_label), ctx);
+      /* Exit unwinds everything, so limit_depth is 0 */
+      inst_list =
+          codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, 0);
+      char buffer[32];
+      snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+      inst_list = add_inst(inst_list, buffer);
+    }
+    /* Mirror the implicit-epilogue cleanup so EXIT releases the
+     * element data buffers of managed dynamic-array locals along
+     * the early-return path.  Since 7c840d0a dynarray assignment
+     * is a deep copy, user-declared locals are independent of the
+     * Result slot and can be finalized here for all function kinds.
+     * The Result slot is not in current_subprogram_declarations so
+     * codegen_emit_managed_local_cleanup never touches it.
+     *
+     * IMPORTANT: this cleanup emits kgpc_dynarray_finalize_local calls
+     * that clobber the ABI return register (%rax/%xmm0).  Therefore the
+     * return value must be materialised into %rax/%xmm0 *after* the
+     * cleanup, exactly like the fall-through epilogue does.  The
+     * Exit(value) path above already parked its value in the Result slot
+     * (exit_return_in_slot); the no-expr path reads from the Result slot
+     * in memory, which the cleanup never touches. */
+    if (ctx == NULL)
+      return inst_list;
+    inst_list = codegen_emit_managed_local_cleanup(
+        inst_list, ctx->current_subprogram_declarations, ctx, symtab);
+    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
+
+    /* Now (post-cleanup) materialise the return value into the ABI
+     * return register. */
+    if (exit_return_in_slot && exit_return_slot != NULL) {
+      char buffer[128];
+      if (exit_return_is_real)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%xmm0\n",
+                 exit_return_slot->offset);
+      else {
+        int use_qword = return_size >= 8;
+        if (return_size == 0 && exit_return_slot->size >= 8)
+          use_qword = 1;
+        if (use_qword)
+          snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n",
+                   exit_return_slot->offset);
+        else
+          snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%eax\n",
+                   exit_return_slot->offset);
+      }
+      inst_list = add_inst(inst_list, buffer);
     } else if (return_expr == NULL) {
       StackNode_t *return_var = ctx != NULL ? ctx->current_return_slot : NULL;
 
@@ -1464,29 +1548,6 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
         }
       }
     }
-
-    if (codegen_has_finally(ctx)) {
-      char exit_label[18];
-      gen_label(exit_label, sizeof(exit_label), ctx);
-      /* Exit unwinds everything, so limit_depth is 0 */
-      inst_list =
-          codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, 0);
-      char buffer[32];
-      snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
-      inst_list = add_inst(inst_list, buffer);
-    }
-    /* Mirror the implicit-epilogue cleanup so EXIT releases the
-     * element data buffers of managed dynamic-array locals along
-     * the early-return path.  Since 7c840d0a dynarray assignment
-     * is a deep copy, user-declared locals are independent of the
-     * Result slot and can be finalized here for all function kinds.
-     * The Result slot is not in current_subprogram_declarations so
-     * codegen_emit_managed_local_cleanup never touches it. */
-    if (ctx == NULL)
-      return inst_list;
-    inst_list = codegen_emit_managed_local_cleanup(
-        inst_list, ctx->current_subprogram_declarations, ctx, symtab);
-    inst_list = codegen_emit_managed_dynarray_temp_cleanup(ctx, inst_list);
     /* Restore callee-saved registers before leaving the frame */
     if (ctx->callee_save_rbx_offset > 0) {
       char buf[64];

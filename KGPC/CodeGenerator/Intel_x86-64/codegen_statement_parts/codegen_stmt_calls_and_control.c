@@ -1748,19 +1748,26 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
        * precision. Only convert if the source expression is a real type
        * (double), not integer etc. */
       if (is_single_target && assign_type == REAL_TYPE) {
-        /* Real expressions are materialized at double precision in registers.
-         * Narrow to Single before storing into a Single target. */
-        {
-          Register_t *u[] = {reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %xmm0\n");
-        }
-        inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
-        {
-          char tmpl[64];
-          snprintf(tmpl, sizeof(tmpl), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
-          Register_t *d[] = {reg};
-          inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        /* Real expressions are normally materialized at double precision in
+         * registers, so narrow to Single before storing into a Single target.
+         * The exception is a source that already leaves RAW single bits (a
+         * single-typed record/array/pointer element read) — those are already
+         * in single layout and must be stored as-is. */
+        int source_holds_raw_single = expr_holds_raw_single_bits(
+            assign_expr, ctx != NULL ? ctx->symtab : NULL);
+        if (!source_holds_raw_single) {
+          {
+            Register_t *u[] = {reg};
+            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                                    "\tmovq\t%0, %xmm0\n");
+          }
+          inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+          {
+            char tmpl[64];
+            snprintf(tmpl, sizeof(tmpl), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
+            Register_t *d[] = {reg};
+            inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+          }
         }
       } else if (is_single_target &&
                  (is_integer_type(assign_type) || assign_type == BOOL ||
@@ -2720,6 +2727,30 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
       use_qword = 1;
     int use_word = (!use_qword && record_element_size == 2);
 
+    /* Symmetric case: a double-width real field fed by a source that leaves
+     * RAW single bits (a single-typed record/array/pointer element read).
+     * The register holds 4-byte single bits, but the double target expects
+     * the promoted 8-byte double bits — promote single->double first. */
+    if (!is_single_real_field && var_type_2 == REAL_TYPE &&
+        assign_type == REAL_TYPE) {
+      if (expr_holds_raw_single_bits(assign_expr,
+                                     ctx != NULL ? ctx->symtab : NULL)) {
+        {
+          char tmpl[64];
+          snprintf(tmpl, sizeof(tmpl), "\tmovd\t%s, %%xmm0\n",
+                   value_reg->bit_32);
+          Register_t *u[] = {value_reg};
+          inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+        }
+        inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+        {
+          char tmpl[64];
+          snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%xmm0, %s\n", value_reg->bit_64);
+          Register_t *d[] = {value_reg};
+          inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        }
+      }
+    }
     if (is_single_real_field) {
       if (assign_is_integer_like) {
         {
@@ -2737,9 +2768,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
         }
       } else if (assign_type == REAL_TYPE) {
-        int source_is_qword_real =
-            expr_uses_qword_kgpctype(assign_expr) || coerced_to_real;
-        if (source_is_qword_real) {
+        /* Real-typed values are normally materialized at double precision in a
+         * GPR: plain single-variable loads are promoted via cvtss2sd, single
+         * typecasts such as ts32real(x) leave the wider source's double bits,
+         * arithmetic is computed in double, and real literals are double bits.
+         * Those all need narrowing (cvtsd2ss) before storing into the 4-byte
+         * field.
+         *
+         * The exception is a source that itself leaves RAW single bits in the
+         * register — a single-typed record/array/pointer element read — which
+         * is already in single layout and must not be re-narrowed (that would
+         * reinterpret the single bits as a double). This mirrors the
+         * reg_holds_raw_single rule in load_real_operand_into_xmm. */
+        int source_holds_raw_single = expr_holds_raw_single_bits(
+            assign_expr, ctx != NULL ? ctx->symtab : NULL);
+        if (!source_holds_raw_single) {
           {
             Register_t *u[] = {value_reg};
             inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,

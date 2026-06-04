@@ -6,6 +6,11 @@ on:
   push:
     branches: [ "*" ]
 
+env:
+  # Pin the FPC RTL/compiler source revision used by the pp.pas bootstrap job.
+  # Keep in sync with .github/workflows/ci.yml.
+  FPCSOURCE_COMMIT: 812f8fb69cb7088bd33f5387da74a80b5cf1d464
+
 jobs:
   msys2-build-test:
     strategy:
@@ -80,4 +85,64 @@ jobs:
       with:
         name: crash-dumps-${{ matrix.sys }}
         path: ${{ github.workspace }}/crashdumps/
+        if-no-files-found: ignore
+
+  # Native Win64 FPC self-host probe: compile the FPC compiler (pp.pas) with
+  # the KGPC built under UCRT64.  This is the environment where the native
+  # Windows self-host fixpoint was reached, so it guards the Win64 codegen
+  # path that the rest of this branch fixed.  Runs only the bootstrap subtest,
+  # not the full RTL suite.
+  fpc-bootstrap:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: UCRT64
+        update: true
+        install: base-devel git flex bison gmp-devel
+        pacboy: >-
+          cc:p
+          meson:p
+          ninja:p
+          python:p
+          gmp:p
+
+    - name: Cache FPC RTL source
+      id: cache-fpcsource
+      uses: actions/cache@v5
+      with:
+        path: FPCSource
+        key: fpcsource-msys2-${{ env.FPCSOURCE_COMMIT }}
+
+    - name: Clone FPC RTL source
+      if: steps.cache-fpcsource.outputs.cache-hit != 'true'
+      shell: msys2 {0}
+      run: |
+        git clone --filter=blob:none --no-checkout https://github.com/fpc/FPCSource.git FPCSource
+        cd FPCSource
+        git checkout ${{ env.FPCSOURCE_COMMIT }}
+
+    - name: Configure FPC RTL build
+      shell: msys2 {0}
+      run: meson setup build-fpc --buildtype=release -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true -Drun_pp_bootstrap=true
+
+    - name: Build
+      shell: msys2 {0}
+      run: meson compile -C build-fpc
+
+    - name: Run pp.pas bootstrap test
+      shell: msys2 {0}
+      run: meson test -v -C build-fpc "FPC pp.pas bootstrap"
+
+    - name: Upload meson logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: meson-logs-fpc-bootstrap-ucrt64
+        path: build-fpc/meson-logs/
         if-no-files-found: ignore

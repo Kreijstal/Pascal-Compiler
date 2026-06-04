@@ -27,7 +27,11 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
   for (ast_t *scan = field_decl_node->child; scan != NULL; scan = scan->next) {
     ast_t *node = unwrap_pascal_node(scan);
     if (node != NULL && node->sym != NULL && node->sym->name != NULL &&
-        strcasecmp(node->sym->name, "class") == 0) {
+        (strcasecmp(node->sym->name, "class") == 0 ||
+         /* A `var Foo: T; static;` field is a class-wide (static) variable,
+          * exactly like `class var Foo: T;`.  The trailing `static` directive
+          * is preserved as an identifier child by the field parser. */
+         strcasecmp(node->sym->name, "static") == 0)) {
       is_class_var = 1;
       break;
     }

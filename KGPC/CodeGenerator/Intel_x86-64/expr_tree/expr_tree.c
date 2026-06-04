@@ -1696,6 +1696,29 @@ int expr_is_single_real_with_symtab(const struct Expression *expr,
   return 0;
 }
 
+/* True when evaluating `expr` leaves RAW Single (4-byte) bits in a GPR rather
+ * than the promoted double-precision bits real values normally carry.  Only
+ * single-typed array elements and pointer dereferences read raw single bits;
+ * record-field reads are promoted to double on read (see codegen_record_access)
+ * and so are NOT raw-single.  A REAL_TYPE reinterpret typecast wrapping such a
+ * read is transparent and is stripped first.  This is the single source of
+ * truth for the reg_holds_raw_single convention that load_real_operand_into_xmm,
+ * the Single-target assignment paths and the write/argument paths all key on:
+ * such a value must be promoted (cvtss2sd) before a double consumer and must
+ * NOT be re-narrowed (cvtsd2ss) into a Single target. */
+int expr_holds_raw_single_bits(const struct Expression *expr,
+                               SymTab_t *symtab) {
+  struct Expression *raw = (struct Expression *)expr;
+  while (raw != NULL && raw->type == EXPR_TYPECAST &&
+         raw->expr_data.typecast_data.target_type == REAL_TYPE &&
+         raw->expr_data.typecast_data.expr != NULL) {
+    raw = raw->expr_data.typecast_data.expr;
+  }
+  return raw != NULL &&
+         (raw->type == EXPR_ARRAY_ACCESS || raw->type == EXPR_POINTER_DEREF) &&
+         expr_is_single_real_with_symtab(raw, symtab);
+}
+
 /* In the expr-tree evaluator, operands of string / shortstring / char-array /
  * record type are materialised as a POINTER (the address of the data) in their
  * register, never as an inline value.  When such a register is spilled and
@@ -1989,14 +2012,13 @@ load_real_operand_into_xmm(CodeGenContext *ctx, struct Expression *operand_expr,
     }
 
     if (operand_reg != NULL) {
-      int reg_holds_raw_single = 0;
-      if (is_single_real && operand_expr != NULL) {
-        int et = operand_expr->type;
-        if (et == EXPR_RECORD_ACCESS || et == EXPR_ARRAY_ACCESS ||
-            et == EXPR_POINTER_DEREF) {
-          reg_holds_raw_single = 1;
-        }
-      }
+      /* Single-typed array elements and pointer dereferences leave RAW single
+       * bits in the register (record-field reads are promoted to double on
+       * read, see codegen_record_access).  expr_holds_raw_single_bits also
+       * looks through a transparent REAL(...) reinterpret cast, so
+       * Real(arr[i]) / Real(p^) are handled too. */
+      int reg_holds_raw_single = expr_holds_raw_single_bits(
+          operand_expr, ctx != NULL ? ctx->symtab : NULL);
       if (reg_holds_raw_single) {
         const char *reg32 = reg64_to_reg32(operand, operand_reg);
         if (reg32 == NULL)
@@ -2270,6 +2292,30 @@ expr_node_t *build_expr_tree(struct Expression *expr) {
   return build_expr_tree_internal(expr, 0);
 }
 
+/* A typecast to a signed integer narrower than 32 bits (ShortInt = 1 byte,
+ * SmallInt = 2 bytes) reinterprets the low byte(s) of its operand as a signed
+ * value.  When the result is consumed at a wider width it must be sign-extended
+ * from its OWN width, regardless of the operand's signedness.  If such a cast
+ * is stripped, the operand is loaded with the operand's signedness — e.g.
+ * SmallInt(word_$ffff) loads the Word zero-extended (movzwl) and stays 65535
+ * instead of -1.  Detect these casts so they are preserved as tree leaves and
+ * gencode_case0 emits the movsbl/movswl.  size_out, if non-NULL, receives the
+ * cast type's width in bytes (1 or 2). */
+static int expr_typecast_is_signed_narrow(const struct Expression *expr,
+                                          int *size_out) {
+  if (expr == NULL || expr->type != EXPR_TYPECAST)
+    return 0;
+  KgpcType *cast_type = expr_get_kgpc_type(expr);
+  if (cast_type == NULL || !kgpc_type_is_signed(cast_type))
+    return 0;
+  long long sz = kgpc_type_sizeof(cast_type);
+  if (sz != 1 && sz != 2)
+    return 0;
+  if (size_out != NULL)
+    *size_out = (int)sz;
+  return 1;
+}
+
 static expr_node_t *
 build_expr_tree_internal(struct Expression *expr,
                          int preserve_narrowing_in_arithmetic) {
@@ -2308,6 +2354,17 @@ build_expr_tree_internal(struct Expression *expr,
      * Preserve as leaf so gencode_case0 can emit movslq after the load. */
     else if ((tc_target == INT64_TYPE || tc_target == QWORD_TYPE) &&
              type_tag_is_signed_32bit_int(expr_get_type_tag(tc_inner))) {
+      preserve_leaf_typecast = 1;
+    }
+    /* Narrowing/reinterpret typecast to a signed sub-32-bit integer
+     * (SmallInt(x) / ShortInt(x)).  Stripping it loses the sign reinterpret:
+     * SmallInt(word_$ffff) would load the Word zero-extended and stay 65535
+     * instead of -1.  This is exactly how FPC's str() default-format sentinels
+     * (-1, -32767, created as LongInt consts then narrowed to the SMALLINT
+     * compilerproc params) lost their sign in the KGPC-built FPC, pushing the
+     * Windows self-host one stage past the canonical stage-3 fixpoint.
+     * Preserve as a leaf so gencode_case0 sign-extends from the cast width. */
+    else if (expr_typecast_is_signed_narrow(expr, NULL)) {
       preserve_leaf_typecast = 1;
     }
     /* Narrowing typecast Extended -> Double/Single (e.g. FPC's
@@ -3300,6 +3357,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
   char buffer[CODEGEN_MAX_INST_BUF];
   char buf_leaf[128];
   struct Expression *expr;
+  int narrow_signed_size = 2;
 
   expr = node->expr;
   assert(target_reg != NULL);
@@ -4883,6 +4941,40 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     return inst_list;
   } else if (expr->type == EXPR_TYPECAST &&
              expr->expr_data.typecast_data.expr != NULL &&
+             expr_typecast_is_signed_narrow(expr, &narrow_signed_size)) {
+    /* Signed sub-32-bit reinterpret cast SmallInt(x) / ShortInt(x): evaluate
+     * the operand, then sign-extend the low byte(s) to fill the 32-bit
+     * register.  Without this the operand keeps its own (often unsigned)
+     * extension — SmallInt(word_$ffff) would remain 65535 instead of -1. */
+    struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+    expr_node_t *inner_tree = build_expr_tree(inner_expr);
+    if (inner_tree == NULL)
+      return inst_list;
+
+    inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+    free_expr_tree(inner_tree);
+
+    if (narrow_signed_size == 1) {
+      const char *reg8 = expr_tree_register_name8(target_reg);
+      if (reg8 != NULL)
+        snprintf(buffer, sizeof(buffer), "\tmovsbl\t%s, %s\n", reg8,
+                 target_reg->bit_32);
+      else
+        snprintf(buffer, sizeof(buffer), "\tmovsbl\t%%al, %s\n",
+                 target_reg->bit_32);
+    } else {
+      const char *reg16 = codegen_register_name16(target_reg);
+      if (reg16 != NULL)
+        snprintf(buffer, sizeof(buffer), "\tmovswl\t%s, %s\n", reg16,
+                 target_reg->bit_32);
+      else
+        snprintf(buffer, sizeof(buffer), "\tmovswl\t%%ax, %s\n",
+                 target_reg->bit_32);
+    }
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+  } else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
              expr->expr_data.typecast_data.target_type == CHAR_TYPE) {
     /* Char-valued typecast preserved as a leaf (see build_expr_tree_internal):
      * evaluate the inner ordinal and narrow it to a single byte. The result
@@ -5440,7 +5532,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
     long long storage_size = 0;
-    if (stack_node != NULL && !stack_node->is_array &&
+    /* For by-reference (var/out/constref) parameters the stack slot holds a
+     * pointer, so stack_node->size is the slot/pointer width (4 or 8), not the
+     * width of the pointed-to value.  Using it to size the dereferencing load
+     * reads too many bytes for narrow types (e.g. a `var shortint` read as a
+     * 4-byte movl picks up adjacent bytes).  Derive the load width from the
+     * value's own type instead. */
+    if (stack_node != NULL && !stack_node->is_reference && !stack_node->is_array &&
         !stack_node->is_dynamic && stack_node->size > 0)
       storage_size = stack_node->size;
     if (storage_size <= 0)

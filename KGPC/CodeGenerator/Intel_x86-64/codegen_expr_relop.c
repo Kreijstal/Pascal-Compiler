@@ -68,11 +68,13 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr,
   if (expr == NULL)
     return 0;
 
+  int best = 0;
+
   KgpcType *expr_type = expr_get_kgpc_type(expr);
   if (expr_type != NULL && kgpc_type_is_set(expr_type)) {
     long long size = kgpc_type_sizeof(expr_type);
-    if (size > 0)
-      return (int)size;
+    if (size > best)
+      best = (int)size;
   }
 
   if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && ctx != NULL &&
@@ -80,18 +82,52 @@ static int codegen_infer_set_storage_bytes(const struct Expression *expr,
     HashNode_t *node = NULL;
     if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
         node != NULL) {
-      if (node->const_set_value != NULL && node->const_set_size > 0)
-        return node->const_set_size;
+      if (node->const_set_value != NULL && node->const_set_size > best)
+        best = node->const_set_size;
 
       if (node->type != NULL && kgpc_type_is_set(node->type)) {
         long long size = kgpc_type_sizeof(node->type);
-        if (size > 0)
-          return (int)size;
+        if (size > best)
+          best = (int)size;
       }
     }
   }
 
-  return 0;
+  /* A set binary operation (union/intersection/difference) may carry a
+   * KgpcType whose sizeof under-reports the true storage (the result type is
+   * often computed as the narrow 4-byte default even when an operand spans
+   * ordinals >= 32).  Its true storage width is at least the widest of its
+   * operands, so recurse and take the maximum -- never trust the node's own
+   * narrow type alone.  This lets the `in` test recognise e.g.
+   * (setA + [hi]) as a large set and materialise it via
+   * codegen_char_set_address instead of truncating it into a 32-bit
+   * register. */
+  if (expr->type == EXPR_ADDOP && expr_has_type_tag(expr, SET_TYPE)) {
+    int l =
+        codegen_infer_set_storage_bytes(expr->expr_data.addop_data.left_expr,
+                                        ctx);
+    int r =
+        codegen_infer_set_storage_bytes(expr->expr_data.addop_data.right_term,
+                                        ctx);
+    if (l > best)
+      best = l;
+    if (r > best)
+      best = r;
+  }
+
+  if (expr->type == EXPR_MULOP && expr_has_type_tag(expr, SET_TYPE)) {
+    int l =
+        codegen_infer_set_storage_bytes(expr->expr_data.mulop_data.left_term,
+                                        ctx);
+    int r = codegen_infer_set_storage_bytes(
+        expr->expr_data.mulop_data.right_factor, ctx);
+    if (l > best)
+      best = l;
+    if (r > best)
+      best = r;
+  }
+
+  return best;
 }
 
 static int codegen_expr_is_large_set_ctx(const struct Expression *expr,
@@ -568,6 +604,50 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     free_reg(get_reg_stack(), left_addr);
     free_reg(get_reg_stack(), right_addr);
     return inst_list;
+  }
+
+  /* A comparison against the nil literal is a pointer/reference test, never a
+   * textual one.  A dynamic `array of char` (FPC's TAnsiCharDynArray, e.g.
+   * ogcoff's FCoffStrs) is classified char-array-like further down and
+   * materialised as its *address* (always nonzero), then routed through
+   * kgpc_string_compare -- so `(FCoffStrs = nil)` could never be true, which
+   * broke the win64 internal linker's COFF string-table reader.  Plain
+   * pointers and non-char dynamic arrays already reach the generic
+   * integer/pointer compare correctly; handle the char-array-like case here by
+   * loading the reference's pointer value (the deref of its storage slot) and
+   * comparing it to 0.  Flags are left set the same way the generic EQ/NE path
+   * leaves them, so the caller's sete/setne conversion is unchanged. */
+  if ((relop_kind == EQ || relop_kind == NE)) {
+    struct Expression *ref_side = NULL;
+    if (left_expr != NULL && left_expr->type == EXPR_NIL)
+      ref_side = right_expr;
+    else if (right_expr != NULL && right_expr->type == EXPR_NIL)
+      ref_side = left_expr;
+    if (ref_side != NULL && ref_side->type != EXPR_NIL &&
+        codegen_expr_is_char_array_like_ctx(ref_side, ctx) &&
+        codegen_expr_is_addressable(ref_side) &&
+        ref_side->resolved_kgpc_type != NULL &&
+        kgpc_type_is_dynamic_array(ref_side->resolved_kgpc_type)) {
+      /* Restrict the slot-dereference compare to dynamic (reference-backed)
+       * char arrays.  A fixed `array[0..N] of char` is char-array-like and
+       * addressable too, but has no reference slot — dereferencing it would
+       * compare its first qword of contents to 0, so a zero-filled buffer
+       * would spuriously equal nil.  The analogous fast path in
+       * expr_tree_op.c carries the same kgpc_type_is_dynamic_array guard. */
+      Register_t *addr_reg = NULL;
+      inst_list = codegen_address_for_expr(ref_side, inst_list, ctx, &addr_reg);
+      if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+      snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64,
+               addr_reg->bit_64);
+      inst_list = add_inst(inst_list, buffer);
+      snprintf(buffer, sizeof(buffer), "\tcmpq\t$0, %s\n", addr_reg->bit_64);
+      inst_list = add_inst(inst_list, buffer);
+      free_reg(get_reg_stack(), addr_reg);
+      if (relop_type != NULL)
+        *relop_type = relop_kind;
+      return inst_list;
+    }
   }
 
   /* For floating-point comparisons, use expr_tree-based evaluation with

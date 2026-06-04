@@ -3432,6 +3432,21 @@ long long kgpc_type_sizeof(KgpcType *type) {
     return type->type_alias->storage_size;
   }
 
+  /* A scalar subrange alias (e.g. `-32768..32767`, the form FPC's system.pp
+   * uses for SmallInt) carries its authoritative width in the alias
+   * storage_size, but its KgpcType kind is not always PRIMITIVE -- a subrange
+   * can be wrapped with a non-primitive kind while still being a plain
+   * ordinal.  Honor the alias width for such ordinals so a subrange-typed
+   * record field is sized to its true width instead of falling through to the
+   * kind-based path (which returns 0 for a record kind with no members).
+   * Sets, arrays, pointers, files and enums keep their dedicated handling. */
+  if (type->type_alias != NULL && type->type_alias->storage_size > 0 &&
+      type->type_alias->is_range && !type->type_alias->is_array &&
+      !type->type_alias->is_set && !type->type_alias->is_enum &&
+      !type->type_alias->is_pointer && !type->type_alias->is_file) {
+    return type->type_alias->storage_size;
+  }
+
   switch (type->kind) {
   case TYPE_KIND_PRIMITIVE:
     switch (type->info.primitive_type_tag) {
