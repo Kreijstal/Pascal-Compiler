@@ -1,6 +1,6 @@
 # Kreijstal Gwinn Pascal Compiler (KGPC)
 
-> **Status: alpha (v0.0.3).**  KGPC is pre-release software.  The headline
+> **Status: alpha (v0.0.4).**  KGPC is pre-release software.  The headline
 > goal — bootstrapping Free Pascal without FPC or a proprietary
 > Delphi-compatible compiler — has been met: the Stage 1–3 self-host chain
 > is verified in CI on both Linux and Windows (Win64).  "Alpha" refers to
