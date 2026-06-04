@@ -1489,17 +1489,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
     else if (result.value.error != NULL)
       free_error(result.value.error);
   } else {
-    int remaining = skip_pascal_layout_preview(input, input->start);
-    if (remaining < input->length) {
-      /* A complete program/unit was parsed through its terminating `end.`.
-       * FPC's scanner stops there and silently ignores anything that follows
-       * (some upstream sources, e.g. FPC 3.2.2's compiler/ncginl.pas, ship a
-       * stray token after `end.`). Match that behavior: warn but do not fail. */
-      fprintf(stderr,
-              "Warning: ignoring trailing input after end of program/unit in "
-              "%s (line %d, column %d).\n",
-              path, input->line, input->col);
-    }
+    /* A complete program/unit was parsed through its terminating `end.`.
+     * FPC's scanner treats `end.` as the end of the compilation unit and
+     * silently discards everything after it: `fpc` compiles such a source
+     * with RC=0 and emits neither a warning nor a hint (verified on 3.2.2 for
+     * both program and unit sources).  KGPC must do the same — erroring here
+     * would reject sources FPC accepts and is therefore stricter than the
+     * compiler we self-host against.  No diagnostic, matching FPC. */
 
     if (convert_to_tree) {
       /* Save unit ASTs only. Top-level programs should always reparse from
