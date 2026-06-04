@@ -2273,6 +2273,30 @@ expr_node_t *build_expr_tree(struct Expression *expr) {
   return build_expr_tree_internal(expr, 0);
 }
 
+/* A typecast to a signed integer narrower than 32 bits (ShortInt = 1 byte,
+ * SmallInt = 2 bytes) reinterprets the low byte(s) of its operand as a signed
+ * value.  When the result is consumed at a wider width it must be sign-extended
+ * from its OWN width, regardless of the operand's signedness.  If such a cast
+ * is stripped, the operand is loaded with the operand's signedness — e.g.
+ * SmallInt(word_$ffff) loads the Word zero-extended (movzwl) and stays 65535
+ * instead of -1.  Detect these casts so they are preserved as tree leaves and
+ * gencode_case0 emits the movsbl/movswl.  size_out, if non-NULL, receives the
+ * cast type's width in bytes (1 or 2). */
+static int expr_typecast_is_signed_narrow(const struct Expression *expr,
+                                          int *size_out) {
+  if (expr == NULL || expr->type != EXPR_TYPECAST)
+    return 0;
+  KgpcType *cast_type = expr_get_kgpc_type(expr);
+  if (cast_type == NULL || !kgpc_type_is_signed(cast_type))
+    return 0;
+  long long sz = kgpc_type_sizeof(cast_type);
+  if (sz != 1 && sz != 2)
+    return 0;
+  if (size_out != NULL)
+    *size_out = (int)sz;
+  return 1;
+}
+
 static expr_node_t *
 build_expr_tree_internal(struct Expression *expr,
                          int preserve_narrowing_in_arithmetic) {
@@ -2311,6 +2335,17 @@ build_expr_tree_internal(struct Expression *expr,
      * Preserve as leaf so gencode_case0 can emit movslq after the load. */
     else if ((tc_target == INT64_TYPE || tc_target == QWORD_TYPE) &&
              type_tag_is_signed_32bit_int(expr_get_type_tag(tc_inner))) {
+      preserve_leaf_typecast = 1;
+    }
+    /* Narrowing/reinterpret typecast to a signed sub-32-bit integer
+     * (SmallInt(x) / ShortInt(x)).  Stripping it loses the sign reinterpret:
+     * SmallInt(word_$ffff) would load the Word zero-extended and stay 65535
+     * instead of -1.  This is exactly how FPC's str() default-format sentinels
+     * (-1, -32767, created as LongInt consts then narrowed to the SMALLINT
+     * compilerproc params) lost their sign in the KGPC-built FPC, pushing the
+     * Windows self-host one stage past the canonical stage-3 fixpoint.
+     * Preserve as a leaf so gencode_case0 sign-extends from the cast width. */
+    else if (expr_typecast_is_signed_narrow(expr, NULL)) {
       preserve_leaf_typecast = 1;
     }
     /* Narrowing typecast Extended -> Double/Single (e.g. FPC's
@@ -3303,6 +3338,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
   char buffer[CODEGEN_MAX_INST_BUF];
   char buf_leaf[128];
   struct Expression *expr;
+  int narrow_signed_size = 2;
 
   expr = node->expr;
   assert(target_reg != NULL);
@@ -4882,6 +4918,40 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       snprintf(buffer, sizeof(buffer), "\tandl\t$%d, %s\n", word_mask,
                target_reg->bit_32);
 
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+  } else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             expr_typecast_is_signed_narrow(expr, &narrow_signed_size)) {
+    /* Signed sub-32-bit reinterpret cast SmallInt(x) / ShortInt(x): evaluate
+     * the operand, then sign-extend the low byte(s) to fill the 32-bit
+     * register.  Without this the operand keeps its own (often unsigned)
+     * extension — SmallInt(word_$ffff) would remain 65535 instead of -1. */
+    struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
+    expr_node_t *inner_tree = build_expr_tree(inner_expr);
+    if (inner_tree == NULL)
+      return inst_list;
+
+    inst_list = gencode_expr_tree(inner_tree, inst_list, ctx, target_reg);
+    free_expr_tree(inner_tree);
+
+    if (narrow_signed_size == 1) {
+      const char *reg8 = expr_tree_register_name8(target_reg);
+      if (reg8 != NULL)
+        snprintf(buffer, sizeof(buffer), "\tmovsbl\t%s, %s\n", reg8,
+                 target_reg->bit_32);
+      else
+        snprintf(buffer, sizeof(buffer), "\tmovsbl\t%%al, %s\n",
+                 target_reg->bit_32);
+    } else {
+      const char *reg16 = codegen_register_name16(target_reg);
+      if (reg16 != NULL)
+        snprintf(buffer, sizeof(buffer), "\tmovswl\t%s, %s\n", reg16,
+                 target_reg->bit_32);
+      else
+        snprintf(buffer, sizeof(buffer), "\tmovswl\t%%ax, %s\n",
+                 target_reg->bit_32);
+    }
     inst_list = add_inst(inst_list, buffer);
     return inst_list;
   } else if (expr->type == EXPR_TYPECAST &&
