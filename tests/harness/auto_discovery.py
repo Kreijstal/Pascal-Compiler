@@ -1,5 +1,6 @@
 # Auto-discovery functions for KGPC test harness.
 # Dynamically adds test methods to TestCompiler based on .p/.expected files.
+import hashlib
 import os
 import shutil
 import subprocess
