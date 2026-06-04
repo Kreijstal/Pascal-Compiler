@@ -724,21 +724,39 @@ def _add_pp_pas_bootstrap_test():
         helloworld_p = os.path.join(TEST_CASES_DIR, "helloworld.p")
         assert os.path.isfile(helloworld_p), f"helloworld.p missing: {helloworld_p}"
 
-        prebuilt_units_dir = os.path.join(fpc_src, "rtl", "units", "x86_64-linux")
+        # The self-host RTL build targets the flavour matching the binary we
+        # just produced.  pp_bootstrap runs natively in this test (its -h was
+        # executed above), so the target equals the host: Linux builds
+        # rtl/linux into rtl/units/x86_64-linux; Win64 builds rtl/win64 into
+        # rtl/units/x86_64-win64.
+        if IS_WINDOWS_ABI:
+            rtl_target_dirname = "win64"
+            rtl_units_target = "x86_64-win64"
+            # Win64 has no assembly loaders (the RTL Makefile's LOADERS list is
+            # empty; startup lives in sysinit/system.pp, not an ELF note like
+            # abitag), so there is no abitag.o analogue.  Pin system.o — emitted
+            # alongside system.ppu by the same build — as the co-required object.
+            rtl_loader_object = "system.o"
+        else:
+            rtl_target_dirname = "linux"
+            rtl_units_target = "x86_64-linux"
+            rtl_loader_object = "abitag.o"
+
+        prebuilt_units_dir = os.path.join(fpc_src, "rtl", "units", rtl_units_target)
         prebuilt_system_ppu = os.path.join(prebuilt_units_dir, "system.ppu")
         ppu_version_source = os.path.join(fpc_src, "compiler", "ppu.pas")
-        # `abitag.o` is built by the loader (not units) target, so a cache
-        # populated by an older `make units` invocation can have system.ppu
-        # without it.  Treat the loader artifact as a co-required input so
-        # we always rebuild when either piece of the RTL is missing.
-        prebuilt_abitag_o = os.path.join(prebuilt_units_dir, "abitag.o")
+        # The loader object is built by the loader (not units) target, so a
+        # cache populated by an older `make units` invocation can have
+        # system.ppu without it.  Treat the loader artifact as a co-required
+        # input so we always rebuild when either piece of the RTL is missing.
+        prebuilt_loader_object = os.path.join(prebuilt_units_dir, rtl_loader_object)
         rtl_units_are_stale = (
             not os.path.isfile(prebuilt_system_ppu) or
-            not os.path.isfile(prebuilt_abitag_o) or
+            not os.path.isfile(prebuilt_loader_object) or
             os.path.getmtime(prebuilt_system_ppu) < os.path.getmtime(ppu_version_source) or
-            os.path.getmtime(prebuilt_abitag_o) < os.path.getmtime(ppu_version_source) or
+            os.path.getmtime(prebuilt_loader_object) < os.path.getmtime(ppu_version_source) or
             _tree_contains_newer_file(os.path.join(fpc_src, "rtl"), prebuilt_system_ppu) or
-            _tree_contains_newer_file(os.path.join(fpc_src, "rtl"), prebuilt_abitag_o)
+            _tree_contains_newer_file(os.path.join(fpc_src, "rtl"), prebuilt_loader_object)
         )
         if rtl_units_are_stale:
             if os.path.isdir(prebuilt_units_dir):
@@ -747,25 +765,26 @@ def _add_pp_pas_bootstrap_test():
             assert make_bin is not None, (
                 "make is required to build FPC RTL units for pp_bootstrap"
             )
-            rtl_linux_dir = os.path.join(fpc_src, "rtl", "linux")
+            rtl_target_dir = os.path.join(fpc_src, "rtl", rtl_target_dirname)
             # Self-host: build the RTL .ppu with the just-built pp_bootstrap
             # itself (no host fpc).  Any KGPC codegen bug in an RTL unit now
             # fails the build here rather than being papered over by .ppu a
             # distro compiler produced.
             bootstrap_fpc = os.path.abspath(executable_file)
             try:
-                # `make all` (not `units`) is required: the `units` target
-                # only builds .ppu/.o pairs for Pascal units, but FPC's
+                # `make all` (not `units`) is required on Linux: the `units`
+                # target only builds .ppu/.o pairs for Pascal units, but FPC's
                 # Linux startup code uses `{$L abitag.o}` to pull in an
-                # assembly-built note.ABI-tag section.  abitag is declared
-                # as a LOADER in the RTL Makefile and is built by the
-                # `loaders` (and thus `all`) target — `units` skips it,
-                # which leaves pp_bootstrap unable to link any program.
+                # assembly-built note.ABI-tag section.  abitag is declared as a
+                # LOADER in the RTL Makefile and is built by the `loaders` (and
+                # thus `all`) target — `units` skips it, leaving pp_bootstrap
+                # unable to link any program.  Win64 has no such loaders, but
+                # `all` is harmless there and keeps the invocation uniform.
                 subprocess.run(
                     [
                         make_bin,
                         "-C",
-                        rtl_linux_dir,
+                        rtl_target_dir,
                         "all",
                         "FPC=" + bootstrap_fpc,
                     ],
@@ -785,13 +804,12 @@ def _add_pp_pas_bootstrap_test():
             assert os.path.isfile(prebuilt_system_ppu), (
                 f"FPC RTL build did not produce {prebuilt_system_ppu}"
             )
-            # Loader artifacts (built by the `loaders` target rolled into
-            # `all`) live alongside the .ppu files and are pulled in via
-            # `{$L abitag.o}` from the Linux startup code.  Pin their
-            # presence so a future Makefile/target regression surfaces
-            # here instead of as an opaque "ld: cannot find abitag.o".
-            assert os.path.isfile(prebuilt_abitag_o), (
-                f"FPC RTL build did not produce {prebuilt_abitag_o}; "
+            # The co-required object (the Linux `{$L abitag.o}` loader, or
+            # win64's system.o) lives alongside the .ppu files.  Pin its
+            # presence so a future Makefile/target regression surfaces here
+            # instead of as an opaque "ld: cannot find <object>".
+            assert os.path.isfile(prebuilt_loader_object), (
+                f"FPC RTL build did not produce {prebuilt_loader_object}; "
                 "did the Makefile target switch from `all` back to `units`?"
             )
 
