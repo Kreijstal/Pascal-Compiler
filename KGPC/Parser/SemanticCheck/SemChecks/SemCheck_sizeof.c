@@ -385,11 +385,18 @@ static long long narrowing_alias_storage_size(SymTab_t *symtab,
   if (width <= 0 && alias->range_known) {
     long long lo = alias->range_start;
     long long hi = alias->range_end;
-    if (lo >= -128 && hi <= 127)
+    /* Pick the smallest width that holds the range, honoring signedness the
+     * way FPC does: an unsigned subrange (lo >= 0) uses the full byte/word/
+     * longword positive span, so 0..200 is one byte (not two) and 0..40000 is
+     * two (not four).  Signed subranges use the two's-complement span.
+     * Considering only the signed bounds would over-size unsigned packed
+     * fields and corrupt record layouts. */
+    if ((lo >= -128 && hi <= 127) || (lo >= 0 && hi <= 255))
       width = 1;
-    else if (lo >= -32768 && hi <= 32767)
+    else if ((lo >= -32768 && hi <= 32767) || (lo >= 0 && hi <= 65535))
       width = 2;
-    else if (lo >= INT32_MIN && hi <= INT32_MAX)
+    else if ((lo >= INT32_MIN && hi <= INT32_MAX) ||
+             (lo >= 0 && hi <= 4294967295LL))
       width = 4;
     else
       width = 8;
