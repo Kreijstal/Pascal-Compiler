@@ -41,4 +41,9 @@ size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
 /* Returns true if {$ASMMODE INTEL} was the last asmmode directive seen. */
 bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp);
 
+/* {$MAXSTACKSIZE n} / {$MINSTACKSIZE n} from the active conditional branch,
+ * or 0 if the directive was not present. */
+long long pascal_preprocessor_max_stack_size(const PascalPreprocessor *pp);
+long long pascal_preprocessor_min_stack_size(const PascalPreprocessor *pp);
+
 #endif /* PASCAL_PREPROCESSOR_H */

@@ -38,4 +38,10 @@ void pascal_frontend_set_objfpc_mode(void);
 bool pascal_frontend_default_shortstring(void);
 void pascal_frontend_set_default_shortstring(bool value);
 
+/* {$MAXSTACKSIZE}/{$MINSTACKSIZE} (bytes) accumulated over the current compile,
+ * or 0 if unset.  Reset before each top-level compile. */
+long long pascal_frontend_max_stack_size(void);
+long long pascal_frontend_min_stack_size(void);
+void pascal_frontend_reset_stack_size(void);
+
 #endif

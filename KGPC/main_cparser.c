@@ -1969,6 +1969,9 @@ static int compile_single_program(const char *input_file,
   (void)argv;
   file_to_parse = (char *)input_file;
   unit_search_paths_set_user(&g_unit_paths, input_file);
+  /* Fresh stack-size accumulation per program; {$MAXSTACKSIZE} from this
+   * program (and its units) is linked into the Win64 PE stack reserve. */
+  pascal_frontend_reset_stack_size();
 
   double pipeline_total_start =
       profile_pipeline_flag() ? current_time_seconds() : 0.0;
@@ -2757,6 +2760,29 @@ static void emit_link_args(void) {
      * to remove unused unit functions that have unresolvable references. */
     used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
                              " -Wl,--gc-sections");
+  }
+
+  /* Honor {$MAXSTACKSIZE}/{$MINSTACKSIZE} on Windows: unlike POSIX, a Win64
+   * thread's stack cannot grow past the reserve baked into the PE header, so
+   * recursion-heavy programs (FPC's pp.pas asks for 512 MB) overflow the
+   * linker's default ~2 MB reserve and crash at startup with
+   * STATUS_STACK_OVERFLOW.  MAXSTACKSIZE is the reserve, MINSTACKSIZE the
+   * commit; ld's --stack takes reserve[,commit] and requires commit<=reserve.
+   * On POSIX these directives are irrelevant (the stack auto-grows), so skip. */
+  if (target_windows_flag()) {
+    long long stack_reserve = pascal_frontend_max_stack_size();
+    long long stack_commit = pascal_frontend_min_stack_size();
+    if (stack_reserve > 0 || stack_commit > 0) {
+      if (stack_commit > stack_reserve)
+        stack_reserve = stack_commit;
+      if (stack_commit > 0)
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " -Wl,--stack,%lld,%lld", stack_reserve,
+                                 stack_commit);
+      else
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " -Wl,--stack,%lld", stack_reserve);
+    }
   }
 
   if (!target_windows_flag()) {

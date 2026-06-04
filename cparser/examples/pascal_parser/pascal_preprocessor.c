@@ -1,6 +1,7 @@
 #include "pascal_preprocessor.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,6 +37,10 @@ struct PascalPreprocessor {
   size_t current_output_len;
   /* Track {$ASMMODE INTEL/ATT} state */
   bool asmmode_intel;
+  /* Stack-size directives ({$MAXSTACKSIZE n} / {$MINSTACKSIZE n}), captured
+   * from the active conditional branch only.  0 means "not set". */
+  long long max_stack_size;
+  long long min_stack_size;
 };
 
 typedef struct {
@@ -162,6 +167,8 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
   pp->current_output = NULL;
   pp->current_output_len = 0;
   pp->asmmode_intel = false;
+  pp->max_stack_size = 0;
+  pp->min_stack_size = 0;
   return pp;
 }
 
@@ -268,6 +275,14 @@ size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
 
 bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp) {
   return pp != NULL && pp->asmmode_intel;
+}
+
+long long pascal_preprocessor_max_stack_size(const PascalPreprocessor *pp) {
+  return pp != NULL ? pp->max_stack_size : 0;
+}
+
+long long pascal_preprocessor_min_stack_size(const PascalPreprocessor *pp) {
+  return pp != NULL ? pp->min_stack_size : 0;
 }
 
 void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp,
@@ -1407,6 +1422,26 @@ static bool handle_directive(PascalPreprocessor *pp, const char *filename,
                strcasecmp(asmmode_val, "STANDARD") == 0 ||
                strcasecmp(asmmode_val, "DEFAULT") == 0)
         pp->asmmode_intel = false;
+    }
+
+    /* Capture {$MAXSTACKSIZE n} / {$MINSTACKSIZE n} from the active branch.
+     * On Windows the stack cannot grow past its PE reserve, so recursion-heavy
+     * programs (e.g. FPC's pp.pas, which asks for 512 MB) rely on these to size
+     * the reserve/commit; the link stage turns them into -Wl,--stack.  Parsing
+     * here (not via a raw buffer scan) means {$ifdef}-disabled branches are
+     * correctly skipped. */
+    if (branch_active &&
+        (strcmp(keyword, "MAXSTACKSIZE") == 0 ||
+         strcmp(keyword, "MINSTACKSIZE") == 0)) {
+      errno = 0;
+      char *endp = NULL;
+      long long val = strtoll(rest, &endp, 10);
+      if (endp != rest && errno == 0 && val > 0) {
+        if (strcmp(keyword, "MAXSTACKSIZE") == 0)
+          pp->max_stack_size = val;
+        else
+          pp->min_stack_size = val;
+      }
     }
 
     // If we should preserve this directive, output it verbatim

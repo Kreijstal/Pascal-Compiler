@@ -47,6 +47,13 @@ static bool g_compiler_mtime_known = false;
 static bool g_objfpc_mode_detected = false;
 static bool g_default_shortstring = false;
 
+/* Largest {$MAXSTACKSIZE}/{$MINSTACKSIZE} seen across the program and its units
+ * during the current compile (0 = none).  Windows links these into the PE
+ * stack reserve/commit; over-reserving is harmless, so taking the max keeps the
+ * program's request even if a unit asks for less.  See emit_link_args(). */
+static long long g_max_stack_size = 0;
+static long long g_min_stack_size = 0;
+
 static uint64_t fnv1a64_bytes(const unsigned char *data, size_t len) {
   uint64_t hash = 1469598103934665603ULL;
   for (size_t i = 0; i < len; ++i) {
@@ -323,6 +330,14 @@ bool pascal_frontend_default_shortstring(void) { return g_default_shortstring; }
 
 void pascal_frontend_set_default_shortstring(bool value) {
   g_default_shortstring = value;
+}
+
+long long pascal_frontend_max_stack_size(void) { return g_max_stack_size; }
+long long pascal_frontend_min_stack_size(void) { return g_min_stack_size; }
+
+void pascal_frontend_reset_stack_size(void) {
+  g_max_stack_size = 0;
+  g_min_stack_size = 0;
 }
 
 void pascal_frontend_add_include_path(const char *path) {
@@ -1388,6 +1403,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree,
         compilation_context_add_include_files(comp_ctx, inc_files,
                                               (int)inc_count);
     }
+  }
+  /* Carry {$MAXSTACKSIZE}/{$MINSTACKSIZE} from this file (active branch only,
+   * resolved by the preprocessor) up to the link stage.  Take the max so the
+   * program's request wins over any (smaller or absent) unit value. */
+  {
+    long long file_max = pascal_preprocessor_max_stack_size(preprocessor);
+    long long file_min = pascal_preprocessor_min_stack_size(preprocessor);
+    if (file_max > g_max_stack_size)
+      g_max_stack_size = file_max;
+    if (file_min > g_min_stack_size)
+      g_min_stack_size = file_min;
   }
   pascal_preprocessor_free(preprocessor);
 
