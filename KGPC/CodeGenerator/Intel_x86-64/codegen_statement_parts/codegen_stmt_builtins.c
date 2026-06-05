@@ -4016,9 +4016,18 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list,
     else if (pascal_identifier_equals(call_target, "Initialize"))
       call_target = "Initialize";
   }
+  /* UniqueString(var S): codegen_pass_arguments already marshals the var-param
+   * address (a char**) into the first argument register, matching the runtime
+   * helper kgpc_string_unique(char **target) which makes S refcount-unique in
+   * place.  Route to it instead of the mangled `uniquestring_s`, which has no
+   * implementation (KGPC registers UniqueString as a builtin proc but emits no
+   * body).  FPC's compiler (e.g. omfbase.pas, cfileutl.fixpath) calls this. */
+  if (builtin_id != NULL &&
+      pascal_identifier_equals(builtin_id, "UniqueString"))
+    call_target = "kgpc_string_unique";
   if (call_target == NULL)
     call_target = "";
-  snprintf(buffer, 50, "\tcall\t%s\n", call_target);
+  snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
   inst_list = add_inst(inst_list, buffer);
   inst_list = codegen_cleanup_call_stack(inst_list, ctx);
 #ifdef DEBUG_CODEGEN
