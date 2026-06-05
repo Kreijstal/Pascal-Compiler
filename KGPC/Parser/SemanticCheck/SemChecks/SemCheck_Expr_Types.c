@@ -1491,6 +1491,44 @@ int semcheck_pointer_deref(int *type_return, SymTab_t *symtab,
   }
 
   int target_type = pointer_expr->pointer_subtype;
+
+  /* An array-index expression whose element is a pointer (e.g.
+   * `fbitmap[x1,y1]`, a `Pinterferencebitmap2`) does not cache its pointee on
+   * the expression node, so the legacy pointer_subtype / subtype_id fields are
+   * empty here.  The freshly computed `pointer_kgpc_type` above DOES carry the
+   * real pointer type, though.  When it points to an array, set up array info
+   * on the deref result directly so `ptr^[i]` indexing works; otherwise the
+   * size-inference below collapses the (large) array pointee to LONGINT. */
+  if (target_type == UNKNOWN_TYPE && pointer_kgpc_type != NULL &&
+      pointer_kgpc_type->kind == TYPE_KIND_POINTER) {
+    KgpcType *kpt_points_to =
+        kgpc_type_resolve_pointer_pointee(pointer_kgpc_type, symtab);
+    if (kpt_points_to != NULL && kpt_points_to->kind == TYPE_KIND_ARRAY) {
+      target_type = INT_TYPE; /* placeholder; element type set below */
+      expr->is_array_expr = 1;
+      expr->array_element_type = UNKNOWN_TYPE;
+      expr->array_element_type_id = NULL;
+
+      KgpcType *elem_type = kpt_points_to->info.array_info.element_type;
+      if (elem_type != NULL) {
+        target_type = semcheck_tag_from_kgpc(elem_type);
+        if (target_type == UNKNOWN_TYPE)
+          target_type = INT_TYPE;
+        expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+        if (elem_type->kind == TYPE_KIND_RECORD)
+          expr->array_element_record_type = kgpc_type_get_record(elem_type);
+      }
+      if (kpt_points_to->info.array_info.element_type_id != NULL)
+        expr->array_element_type_id =
+            strdup(kpt_points_to->info.array_info.element_type_id);
+
+      if (expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+      kgpc_type_retain(kpt_points_to);
+      expr->resolved_kgpc_type = kpt_points_to;
+    }
+  }
+
   if (target_type == UNKNOWN_TYPE && pointer_expr->pointer_subtype_id != NULL) {
     HashNode_t *target_node = NULL;
     if (FindSymbol(&target_node, symtab, pointer_expr->pointer_subtype_id) !=
@@ -1509,6 +1547,18 @@ int semcheck_pointer_deref(int *type_return, SymTab_t *symtab,
           target_type = ENUM_TYPE;
         else if (alias->is_file)
           target_type = FILE_TYPE;
+        else if (alias->is_array) {
+          /* Pointer to an array (e.g. ^(array[byte] of set of byte)): set up
+           * array info on the deref result so it can be indexed with [i].
+           * Without this the size-inference below collapses the (large) array
+           * pointee to LONGINT, breaking `ptr^[i]` where ptr comes from an
+           * array-index expression such as `fbitmap[x1,y1]^[k]`. */
+          semcheck_set_array_info_from_alias(expr, symtab, alias,
+                                             expr->line_num);
+          target_type = expr->array_element_type;
+          if (target_type == UNKNOWN_TYPE)
+            target_type = INT_TYPE; /* placeholder; outer [i] uses element_type_id */
+        }
       }
     }
 

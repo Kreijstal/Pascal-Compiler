@@ -3683,8 +3683,16 @@ int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt,
     return ++return_val;
   }
 
+  /* An array-index expression whose element is a pointer (e.g.
+   * `new(fbitmap[x1,y1])`) carries its pointee in resolved_kgpc_type rather
+   * than in the legacy pointer_subtype fields. */
+  int has_kgpc_pointee =
+      (target_expr->resolved_kgpc_type != NULL &&
+       target_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER &&
+       kgpc_type_resolve_pointer_pointee(target_expr->resolved_kgpc_type,
+                                         symtab) != NULL);
   if (target_expr->pointer_subtype == UNKNOWN_TYPE &&
-      target_expr->pointer_subtype_id == NULL) {
+      target_expr->pointer_subtype_id == NULL && !has_kgpc_pointee) {
     semcheck_error_with_context_at(
         stmt->line_num, stmt->col_num, stmt->source_index,
         "Error on line %d, unable to determine allocation type for New.\\n",
