@@ -3997,8 +3997,36 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list,
   if (proc_name_hint == NULL)
     proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
 
-  inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
-                                     proc_name_hint, 0, NULL, 0);
+  /* For an overloaded RTL procedure dispatched here by its mangled name (e.g.
+   * System.Assign -> assign_f_ss), resolve the formal parameters from the
+   * overload whose mangled_id matches the call target, rather than letting
+   * codegen_pass_arguments fall back to FindSymbol(proc_name_hint), which
+   * returns an arbitrary same-named overload.  Without this, a ShortString
+   * argument to System.Assign is matched against the RawByteString overload's
+   * AnsiString formal and wrongly promoted (kgpc_shortstring_to_string),
+   * dropping the string's first character (the FPC bootstrap "Cannot open
+   * file" / system.assign filename corruption). */
+  struct KgpcType *resolved_overload_type = NULL;
+  if (proc_name != NULL && proc_name_hint != NULL && ctx != NULL &&
+      ctx->symtab != NULL &&
+      !pascal_identifier_equals(proc_name, proc_name_hint)) {
+    ListNode_t *cands = FindAllIdents(ctx->symtab, proc_name_hint);
+    for (ListNode_t *c = cands; c != NULL; c = c->next) {
+      HashNode_t *hn = (HashNode_t *)c->cur;
+      if (hn != NULL && hn->mangled_id != NULL &&
+          strcmp(hn->mangled_id, proc_name) == 0 && hn->type != NULL &&
+          hn->type->kind == TYPE_KIND_PROCEDURE) {
+        resolved_overload_type = hn->type;
+        break;
+      }
+    }
+    if (cands != NULL)
+      DestroyList(cands);
+  }
+
+  inst_list = codegen_pass_arguments(args_expr, inst_list, ctx,
+                                     resolved_overload_type, proc_name_hint, 0,
+                                     NULL, 0);
   inst_list = codegen_vect_reg(inst_list, 0);
   const char *call_target =
       (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;

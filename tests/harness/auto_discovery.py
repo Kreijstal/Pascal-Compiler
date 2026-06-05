@@ -289,6 +289,10 @@ SYSV_ABI_ONLY_TESTS = {
 # Tests that target overloads or units only present in the FPC RTL suite.
 FPC_RTL_ONLY_TESTS = {
     "fpc_bootstrap_hminus_extractfilepath",
+    # Exercises FPC's overloaded System.Assign(File, ShortString) -> assign_f_ss,
+    # which only exists when the FPC RTL is compiled in.  KGPC's default builtin
+    # runtime has no such symbol, so the default-mode link is undefined.
+    "fpc_bootstrap_system_assign_shortstring_var",
 }
 
 # Tests without explicit FPC RTL/package imports are skipped from the FPC RTL
@@ -375,6 +379,7 @@ FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "fpc_bootstrap_syssbh_pos_alias",
     "fpc_bootstrap_system_qualified_const",
     "fpc_bootstrap_system_qualified_proccall",
+    "fpc_bootstrap_system_assign_shortstring_var",
     "fpc_bootstrap_tclass",
     "fpc_bootstrap_trtlcriticalsection",
     "fpc_bootstrap_typedfile",
