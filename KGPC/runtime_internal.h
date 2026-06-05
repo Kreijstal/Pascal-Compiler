@@ -117,13 +117,28 @@ typedef struct KGPCFilePrivate {
  *
  * Compiled FPC RTL code accesses these fields directly via
  * `PAnsiRec(Pointer(S) - AnsiFirstOff)`, so the layout MUST match
- * upstream.
+ * upstream.  FPC's 64-bit `TAnsiRec` is 24 bytes:
+ *
+ *     CodePage    : Word;      { data-24 }
+ *     ElementSize : Word;      { data-22 }
+ *     Dummy       : DWord;     { data-20, CPU64 alignment padding }
+ *     Ref         : SizeInt;   { data-16 }
+ *     Len         : SizeInt;   { data-8  }
+ *
+ * so `Ref` is an 8-byte field at data-16 and the string data starts at
+ * data (header size 24), NOT 16.  A 16-byte header here made FPC RTL code
+ * that pokes the header directly — e.g. `SetCodePage`/`InternalSetCodePage`
+ * writing `PAnsiRec(S-AnsiFirstOff)^.CodePage` at data-24 — read and write
+ * 8 bytes before the allocation, corrupting the heap (observed at
+ * pp_bootstrap startup via initlocaltime -> gettimezonefile while compiling
+ * the FPC 3.2.2 release).
  */
 typedef struct KgpcStringHeader {
-  uint16_t codepage;
-  uint16_t elementsize;
-  int32_t refcount;
-  int64_t length;
+  uint16_t codepage;    /* TAnsiRec.CodePage    @ data-24 */
+  uint16_t elementsize; /* TAnsiRec.ElementSize @ data-22 */
+  uint32_t _dummy;      /* TAnsiRec.Dummy (CPU64 alignment) @ data-20 */
+  int64_t refcount;     /* TAnsiRec.Ref (SizeInt) @ data-16 */
+  int64_t length;       /* TAnsiRec.Len (SizeInt) @ data-8  */
 } KgpcStringHeader;
 
 /** @brief `TextRec.mode` sentinel: file is currently closed. */

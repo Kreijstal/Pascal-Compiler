@@ -250,10 +250,13 @@ __attribute__((unused)) static void assign_f_rbs(void *filerec,
 #include <string.h>
 #include <sys/stat.h>
 
+/* Mirror of KgpcStringHeader (runtime_internal.h) — FPC 64-bit TAnsiRec,
+ * 24 bytes: codepage@-24, elementsize@-22, dummy@-20, ref@-16, len@-8. */
 typedef struct KgpcStringHeaderShim {
   uint16_t codepage;
   uint16_t elementsize;
-  int32_t refcount;
+  uint32_t _dummy;
+  int64_t refcount;
   int64_t length;
 } KgpcStringHeaderShim;
 
