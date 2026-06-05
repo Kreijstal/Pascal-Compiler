@@ -4685,6 +4685,81 @@ void codegen_program_footer(CodeGenContext *ctx) {
 #endif
 }
 
+/* Emit the adaptive AnsiString/UnicodeString header geometry that the runtime
+ * (kgpc_strhdr_* in runtime_strhdr.h) reads.  The runtime's on-heap managed
+ * string header must byte-match the RTL's TAnsiRec, whose layout differs
+ * between FPC versions (trunk: 16 bytes, Ref:Longint@-12; 3.2.2: 24 bytes,
+ * Ref:SizeInt@-16).  Instead of hardcoding a size or branching on a version,
+ * read SizeOf(TAnsiRec) and the Ref/Len field geometry from the RTL actually
+ * being compiled and publish it as program globals.  TAnsiRec is FPC's
+ * well-defined ansistring-header record; its fields are read positionally
+ * (last = length, the one before = reference count) so neither the field
+ * names nor their widths are assumed.  When the program declares no TAnsiRec
+ * (e.g. a KGPC-native program not using the FPC RTL) the values default to
+ * KGPC's native 24-byte layout, which is self-consistent for such programs. */
+static void codegen_emit_ansistr_geometry(CodeGenContext *ctx) {
+  long long header_size = 24; /* native default: codepage@-24, es@-22, */
+  long long ref_offset = -16; /* ref:int64@-16, len@-8                  */
+  long long ref_width = 8;
+
+  SymTab_t *symtab = ctx->symtab;
+  struct RecordType *rec =
+      (symtab != NULL)
+          ? codegen_lookup_record_type_by_name(symtab, "TAnsiRec", 0)
+          : NULL;
+  if (rec != NULL && rec->fields != NULL) {
+    const char *ref_name = NULL; /* second-to-last simple field */
+    const char *len_name = NULL; /* last simple field           */
+    int count = 0;
+    for (ListNode_t *n = rec->fields; n != NULL; n = n->next) {
+      if (n->type != LIST_RECORD_FIELD || n->cur == NULL)
+        continue;
+      struct RecordField *f = (struct RecordField *)n->cur;
+      if (f == NULL || f->name == NULL || f->is_class_var)
+        continue;
+      ref_name = len_name;
+      len_name = f->name;
+      count++;
+    }
+
+    long long size = 0;
+    if (count >= 2 && ref_name != NULL && len_name != NULL &&
+        semcheck_compute_record_size(symtab, rec, &size, 0) == 0 && size > 0) {
+      long long ref_in_rec = 0, len_in_rec = 0;
+      struct RecordField *fd = NULL;
+      if (resolve_record_field(symtab, rec, ref_name, &fd, &ref_in_rec, 0, 1) ==
+              0 &&
+          resolve_record_field(symtab, rec, len_name, &fd, &len_in_rec, 0, 1) ==
+              0 &&
+          len_in_rec > ref_in_rec && len_in_rec == size - 8 &&
+          (size == 16 || size == 24)) {
+        /* Only the two RTL-supported shapes are accepted (trunk 16-byte,
+         * 3.2.2 24-byte).  A record named TAnsiRec that is neither — e.g. a
+         * user type shadowing the RTL's — is rejected here and the safe native
+         * default below is published instead of a guessed-wrong geometry. */
+        /* Len is the trailing 64-bit field and Ref directly precedes it, so
+         * the Ref width is the gap between them — no field-size lookup or
+         * version assumption needed. */
+        header_size = size;
+        ref_offset = ref_in_rec - size; /* relative to the data pointer (<0) */
+        ref_width = len_in_rec - ref_in_rec;
+      }
+    }
+  }
+
+  fprintf(ctx->output_file, "\n\t.data\n");
+  fprintf(ctx->output_file, "\t.align\t8\n");
+  fprintf(ctx->output_file, "\t.globl\tkgpc_ansistr_header_size\n");
+  fprintf(ctx->output_file, "kgpc_ansistr_header_size:\n");
+  fprintf(ctx->output_file, "\t.quad\t%lld\n", header_size);
+  fprintf(ctx->output_file, "\t.globl\tkgpc_ansistr_ref_offset\n");
+  fprintf(ctx->output_file, "kgpc_ansistr_ref_offset:\n");
+  fprintf(ctx->output_file, "\t.quad\t%lld\n", ref_offset);
+  fprintf(ctx->output_file, "\t.globl\tkgpc_ansistr_ref_width\n");
+  fprintf(ctx->output_file, "kgpc_ansistr_ref_width:\n");
+  fprintf(ctx->output_file, "\t.quad\t%lld\n", ref_width);
+}
+
 /* Generates main which calls our program */
 void codegen_main(char *prgm_name, CodeGenContext *ctx) {
 #ifdef DEBUG_CODEGEN
@@ -4693,6 +4768,9 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx) {
   assert(prgm_name != NULL);
   assert(ctx != NULL);
   int call_space;
+  /* Publish the runtime's adaptive managed-string header geometry (one
+   * definition per program; the runtime references these as extern). */
+  codegen_emit_ansistr_geometry(ctx);
   fprintf(ctx->output_file, "\t.section\t.text\n");
   fprintf(ctx->output_file, "\t.globl\tmain\n");
   codegen_function_header("main", ctx);

@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 /** @brief Element-type tag used by binary file operations. */
 typedef enum {
@@ -112,19 +113,10 @@ typedef struct KGPCFilePrivate {
   size_t element_size;
 } KGPCFilePrivate;
 
-/**
- * @brief AnsiString record header (FPC-compatible `TAnsiRec` on x86-64).
- *
- * Compiled FPC RTL code accesses these fields directly via
- * `PAnsiRec(Pointer(S) - AnsiFirstOff)`, so the layout MUST match
- * upstream.
- */
-typedef struct KgpcStringHeader {
-  uint16_t codepage;
-  uint16_t elementsize;
-  int32_t refcount;
-  int64_t length;
-} KgpcStringHeader;
+/* Adaptive AnsiString/UnicodeString header geometry + accessors.  Kept in a
+ * standalone, dependency-free header so runtime_fpc_assign.c (which cannot
+ * include this file) can share the exact same layout logic. */
+#include "runtime_strhdr.h"
 
 /** @brief `TextRec.mode` sentinel: file is currently closed. */
 #define KGPC_FM_CLOSED 0xD7B0
@@ -345,7 +337,7 @@ void kgpc_string_set_insert(const void *value);
 int kgpc_string_is_managed(const char *value);
 
 /** @brief Return the `(hdr + 1)`-style header of @p value, or NULL. */
-KgpcStringHeader *kgpc_string_header(const char *value);
+const char *kgpc_string_managed_or_null(const char *value);
 
 /** @brief Fast `Length(s)`: read the stored header length. */
 size_t kgpc_string_known_length(const char *value);

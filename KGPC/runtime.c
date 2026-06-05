@@ -4376,31 +4376,18 @@ typedef struct KgpcFpcDynLibsManager {
   char *(*GetLoadErrorStr)(void);
 } KgpcFpcDynLibsManager;
 
-typedef struct KgpcStringHeaderShim {
-  uint16_t codepage;
-  uint16_t elementsize;
-  int32_t refcount;
-  int64_t length;
-} KgpcStringHeaderShim;
-
 /* Defined in Pascal (system.p / system.pp) — referenced as extern here. */
 extern KgpcFpcDynLibsManager CurrentDLM;
 
-static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value) {
-  if (value == NULL)
-    return NULL;
-  return (const KgpcStringHeaderShim *)(value - (ptrdiff_t)sizeof(
-                                                    KgpcStringHeaderShim));
-}
-
 static char *kgpc_fpc_unicode_to_ansi_dup(const char *value) {
-  const KgpcStringHeaderShim *hdr = kgpc_string_header_shim(value);
   if (value == NULL)
     return NULL;
-  if (hdr == NULL || hdr->elementsize != 2 || hdr->length <= 0)
+  if (!kgpc_string_is_managed(value) ||
+      kgpc_strhdr_get_elementsize(value) != 2 ||
+      kgpc_strhdr_get_length(value) <= 0)
     return strdup(value);
 
-  size_t len = (size_t)hdr->length;
+  size_t len = (size_t)kgpc_strhdr_get_length(value);
   char *ansi = (char *)malloc(len + 1);
   if (ansi == NULL)
     return NULL;
@@ -5173,20 +5160,15 @@ void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest,
      KGPC aliases UnicodeString=AnsiString, so callers may pass
      1-byte char data through PUnicodeChar parameters. */
   int src_is_ansi = 0;
-  if (kgpc_string_is_managed((const char *)source)) {
-    KgpcStringHeader *shdr =
-        (KgpcStringHeader *)((const char *)source -
-                             (int64_t)sizeof(KgpcStringHeader));
-    if (shdr->elementsize == 1)
-      src_is_ansi = 1;
-  }
+  if (kgpc_string_is_managed((const char *)source) &&
+      kgpc_strhdr_get_elementsize((const char *)source) == 1)
+    src_is_ansi = 1;
   kgpc_string_setlength(dest, len);
   if (*dest == NULL)
     return;
   /* Set codepage in the header */
-  KgpcStringHeader *hdr = kgpc_string_header(*dest);
-  if (hdr != NULL)
-    hdr->codepage = (uint16_t)cp;
+  if (kgpc_string_is_managed(*dest))
+    kgpc_strhdr_set_codepage(*dest, (uint16_t)cp);
   char *p = *dest;
   if (src_is_ansi) {
     const char *asrc = (const char *)source;
@@ -5219,17 +5201,17 @@ void kgpc_default_ansi2unicode_move(const char *source, int32_t cp,
 
   /* Allocate: header + len*2 bytes + 2 byte null terminator */
   size_t data_bytes = (size_t)len * 2 + 2;
-  KgpcStringHeader *hdr =
-      (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-  if (hdr == NULL) {
+  size_t hdr_size = kgpc_strhdr_size();
+  char *base = (char *)malloc(hdr_size + data_bytes);
+  if (base == NULL) {
     *dest = NULL;
     return;
   }
-  hdr->codepage = 1200; /* UTF-16LE */
-  hdr->elementsize = 2; /* UnicodeChar = 2 bytes */
-  hdr->refcount = 1;
-  hdr->length = len;
-  uint16_t *data = (uint16_t *)(hdr + 1);
+  uint16_t *data = (uint16_t *)(base + hdr_size);
+  kgpc_strhdr_set_codepage((char *)data, 1200); /* UTF-16LE */
+  kgpc_strhdr_set_elementsize((char *)data, 2); /* UnicodeChar = 2 bytes */
+  kgpc_strhdr_set_refcount((char *)data, 1);
+  kgpc_strhdr_set_length((char *)data, len);
   for (int64_t i = 0; i < len; i++)
     data[i] = (uint16_t)(unsigned char)source[i];
   data[len] = 0; /* null terminator */

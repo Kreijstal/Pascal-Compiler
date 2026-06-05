@@ -890,7 +890,22 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
     {
       struct Expression *left_expr = expr->expr_data.addop_data.left_expr;
       struct Expression *right_expr = expr->expr_data.addop_data.right_term;
-      const int use_qword_op = codegen_type_uses_qword(expr_get_type_tag(expr));
+      /* Use 64-bit arithmetic when the result OR either operand is a
+       * pointer-width value (Pointer, PtrInt/PtrUint, Int64/QWord).  The
+       * result type tag alone is not enough: `PtrUint(p) - SizeOf(rec)`
+       * resolves its result tag to a 32-bit integer, so without checking the
+       * operands the subtraction is emitted as a 32-bit `subl` + `movslq`,
+       * truncating the upper half of the pointer.  This works by accident on
+       * Linux (heap addresses fit in 32 bits) but corrupts the pointer on
+       * Win64 (high addresses).  A `Integer(p)` cast keeps its 32-bit tag, so
+       * genuine 32-bit `longint - longint` arithmetic stays 32-bit (and its
+       * wraparound semantics are preserved). */
+      const int use_qword_op =
+          codegen_type_uses_qword(expr_get_type_tag(expr)) ||
+          codegen_type_uses_qword(expr_get_type_tag(left_expr)) ||
+          codegen_type_uses_qword(expr_get_type_tag(right_expr)) ||
+          expr_uses_qword_kgpctype(left_expr) ||
+          expr_uses_qword_kgpctype(right_expr);
       const char arith_suffix = use_qword_op ? 'q' : 'l';
       const char *left_op = left;
       const char *right_op = right;
