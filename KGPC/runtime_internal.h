@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 /** @brief Element-type tag used by binary file operations. */
 typedef enum {
@@ -112,34 +113,10 @@ typedef struct KGPCFilePrivate {
   size_t element_size;
 } KGPCFilePrivate;
 
-/**
- * @brief AnsiString record header (FPC-compatible `TAnsiRec` on x86-64).
- *
- * Compiled FPC RTL code accesses these fields directly via
- * `PAnsiRec(Pointer(S) - AnsiFirstOff)`, so the layout MUST match
- * upstream.  FPC's 64-bit `TAnsiRec` is 24 bytes:
- *
- *     CodePage    : Word;      { data-24 }
- *     ElementSize : Word;      { data-22 }
- *     Dummy       : DWord;     { data-20, CPU64 alignment padding }
- *     Ref         : SizeInt;   { data-16 }
- *     Len         : SizeInt;   { data-8  }
- *
- * so `Ref` is an 8-byte field at data-16 and the string data starts at
- * data (header size 24), NOT 16.  A 16-byte header here made FPC RTL code
- * that pokes the header directly — e.g. `SetCodePage`/`InternalSetCodePage`
- * writing `PAnsiRec(S-AnsiFirstOff)^.CodePage` at data-24 — read and write
- * 8 bytes before the allocation, corrupting the heap (observed at
- * pp_bootstrap startup via initlocaltime -> gettimezonefile while compiling
- * the FPC 3.2.2 release).
- */
-typedef struct KgpcStringHeader {
-  uint16_t codepage;    /* TAnsiRec.CodePage    @ data-24 */
-  uint16_t elementsize; /* TAnsiRec.ElementSize @ data-22 */
-  uint32_t _dummy;      /* TAnsiRec.Dummy (CPU64 alignment) @ data-20 */
-  int64_t refcount;     /* TAnsiRec.Ref (SizeInt) @ data-16 */
-  int64_t length;       /* TAnsiRec.Len (SizeInt) @ data-8  */
-} KgpcStringHeader;
+/* Adaptive AnsiString/UnicodeString header geometry + accessors.  Kept in a
+ * standalone, dependency-free header so runtime_fpc_assign.c (which cannot
+ * include this file) can share the exact same layout logic. */
+#include "runtime_strhdr.h"
 
 /** @brief `TextRec.mode` sentinel: file is currently closed. */
 #define KGPC_FM_CLOSED 0xD7B0
@@ -360,7 +337,7 @@ void kgpc_string_set_insert(const void *value);
 int kgpc_string_is_managed(const char *value);
 
 /** @brief Return the `(hdr + 1)`-style header of @p value, or NULL. */
-KgpcStringHeader *kgpc_string_header(const char *value);
+const char *kgpc_string_managed_or_null(const char *value);
 
 /** @brief Fast `Length(s)`: read the stored header length. */
 size_t kgpc_string_known_length(const char *value);

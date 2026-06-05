@@ -250,33 +250,20 @@ __attribute__((unused)) static void assign_f_rbs(void *filerec,
 #include <string.h>
 #include <sys/stat.h>
 
-/* Mirror of KgpcStringHeader (runtime_internal.h) — FPC 64-bit TAnsiRec,
- * 24 bytes: codepage@-24, elementsize@-22, dummy@-20, ref@-16, len@-8. */
-typedef struct KgpcStringHeaderShim {
-  uint16_t codepage;
-  uint16_t elementsize;
-  uint32_t _dummy;
-  int64_t refcount;
-  int64_t length;
-} KgpcStringHeaderShim;
-
-static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value) {
-  if (value == NULL)
-    return NULL;
-  return (const KgpcStringHeaderShim *)(value - (ptrdiff_t)sizeof(
-                                                    KgpcStringHeaderShim));
-}
+/* Shared adaptive string-header accessors (dependency-free header). */
+#include "runtime_strhdr.h"
 
 static char *kgpc_fpc_filename_to_ansi_dup(const char *filename) {
   if (filename == NULL)
     return NULL;
 
-  const KgpcStringHeaderShim *hdr = kgpc_string_header_shim(filename);
-  if (hdr == NULL || hdr->elementsize != 2 || hdr->length <= 0)
+  if (!kgpc_string_is_managed(filename) ||
+      kgpc_strhdr_get_elementsize(filename) != 2 ||
+      kgpc_strhdr_get_length(filename) <= 0)
     return strdup(filename);
 
   const uint16_t *src = (const uint16_t *)filename;
-  size_t len = (size_t)hdr->length;
+  size_t len = (size_t)kgpc_strhdr_get_length(filename);
   char *ansi = (char *)malloc(len + 1);
   if (ansi == NULL)
     return NULL;

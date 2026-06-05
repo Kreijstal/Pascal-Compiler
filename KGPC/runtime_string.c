@@ -89,9 +89,7 @@ static void kgpc_string_set_cleanup(void) {
     void *entry = kgpc_string_set_slots[i];
     if (entry == NULL || entry == KGPC_STRING_TOMBSTONE)
       continue;
-    KgpcStringHeader *hdr =
-        (KgpcStringHeader *)((char *)entry - (int64_t)sizeof(KgpcStringHeader));
-    free(hdr);
+    free(kgpc_strhdr_base((const char *)entry));
     kgpc_string_set_slots[i] = NULL;
   }
 
@@ -199,11 +197,12 @@ int kgpc_string_is_managed(const char *value) {
   return 0;
 }
 
-KgpcStringHeader *kgpc_string_header(const char *value) {
-  if (!kgpc_string_is_managed(value))
-    return NULL;
-  return (KgpcStringHeader *)((char *)value -
-                              (int64_t)sizeof(KgpcStringHeader));
+/* Returns VALUE (the managed-string data pointer) if it is a runtime-managed
+ * string — meaning the kgpc_strhdr_* accessors in runtime_internal.h may be
+ * used on it — otherwise NULL.  Replaces the old struct-returning
+ * kgpc_string_header now that the header geometry is runtime-adaptive. */
+const char *kgpc_string_managed_or_null(const char *value) {
+  return kgpc_string_is_managed(value) ? value : NULL;
 }
 
 static int kgpc_string_try_known_length(const char *value, size_t *out_length) {
@@ -212,9 +211,7 @@ static int kgpc_string_try_known_length(const char *value, size_t *out_length) {
   if (!kgpc_string_is_managed(value))
     return 0;
 
-  KgpcStringHeader hdr;
-  memcpy(&hdr, value - (ptrdiff_t)sizeof(hdr), sizeof(hdr));
-  *out_length = (size_t)hdr.length;
+  *out_length = (size_t)kgpc_strhdr_get_length(value);
   return 1;
 }
 
@@ -254,18 +251,16 @@ void kgpc_setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert) {
     return;
 
   if (!convert || by_value) {
-    KgpcStringHeader *hdr = kgpc_string_header(str);
-    if (hdr != NULL)
-      hdr->codepage = (uint16_t)codepage;
+    if (kgpc_string_is_managed(str))
+      kgpc_strhdr_set_codepage(str, (uint16_t)codepage);
     return;
   }
 
   /* Portable conversion path (no iconv): keep bytes unchanged and
    * update codepage metadata. This matches FPC behavior for raw
    * byte strings when no concrete conversion backend is linked. */
-  KgpcStringHeader *hdr = kgpc_string_header(str);
-  if (hdr != NULL)
-    hdr->codepage = (uint16_t)codepage;
+  if (kgpc_string_is_managed(str))
+    kgpc_strhdr_set_codepage(str, (uint16_t)codepage);
 }
 
 /* 2-arg SetCodePage overload: Convert defaults to True in FPC. */
@@ -311,62 +306,63 @@ char *widechar__op_assign_olevariant_wc(uint16_t value) {
  * (separate .o so linker only pulls it when not defined by compiler code) */
 
 char *kgpc_string_alloc_with_length(size_t length) {
-  size_t total = sizeof(KgpcStringHeader) + length + 1;
-  KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(total);
-  if (hdr == NULL)
+  size_t hdr_size = kgpc_strhdr_size();
+  char *base = (char *)malloc(hdr_size + length + 1);
+  if (base == NULL)
     return NULL;
-  hdr->codepage = 0;    /* CP_ACP / default */
-  hdr->elementsize = 1; /* AnsiChar = 1 byte */
-  hdr->refcount = 1;
-  hdr->length = (int64_t)length;
-  char *data = (char *)(hdr + 1);
+  char *data = base + hdr_size;
+  kgpc_strhdr_set_codepage(data, 0);    /* CP_ACP / default */
+  kgpc_strhdr_set_elementsize(data, 1); /* AnsiChar = 1 byte */
+  kgpc_strhdr_set_refcount(data, 1);
+  kgpc_strhdr_set_length(data, (int64_t)length);
   data[length] = '\0';
   kgpc_string_set_insert(data);
-  /* cppcheck-suppress memleak ; `data` is `(hdr + 1)`; ownership of the
-     allocation moves into the kgpc_string_set, which frees via the data
-     pointer in kgpc_string_release(). */
+  /* cppcheck-suppress memleak ; ownership of `base` moves into the
+     kgpc_string_set, which frees via kgpc_strhdr_base(data) in
+     kgpc_string_release(). */
   return data;
 }
 
 static void kgpc_string_retain(const char *value) {
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr == NULL)
+  if (!kgpc_string_is_managed(value))
     return;
-  if (hdr->refcount >= 0)
-    hdr->refcount += 1;
+  int64_t rc = kgpc_strhdr_get_refcount(value);
+  if (rc >= 0)
+    kgpc_strhdr_set_refcount((char *)value, rc + 1);
 }
 
 void kgpc_string_release(char *value) {
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr == NULL)
+  if (!kgpc_string_is_managed(value))
     return;
-  if (hdr->refcount < 0)
+  int64_t rc = kgpc_strhdr_get_refcount(value);
+  if (rc < 0)
     return;
-  hdr->refcount -= 1;
-  if (hdr->refcount == 0) {
+  rc -= 1;
+  kgpc_strhdr_set_refcount(value, rc);
+  if (rc == 0) {
     kgpc_string_set_remove(value);
-    free(hdr);
+    free(kgpc_strhdr_base(value));
   }
 }
 
 void FPC_ANSISTR_UNIQUE(char **value) {
   if (value == NULL || *value == NULL)
     return;
-  KgpcStringHeader *hdr = kgpc_string_header(*value);
-  if (hdr == NULL)
+  if (!kgpc_string_is_managed(*value))
     return;
-  if (hdr->refcount == 1 || hdr->refcount < 0)
+  int64_t rc = kgpc_strhdr_get_refcount(*value);
+  if (rc == 1 || rc < 0)
     return;
-  size_t len = (size_t)hdr->length;
-  char *new_str = (char *)malloc(sizeof(KgpcStringHeader) + len + 1);
-  if (new_str == NULL)
+  size_t len = (size_t)kgpc_strhdr_get_length(*value);
+  size_t hdr_size = kgpc_strhdr_size();
+  char *new_base = (char *)malloc(hdr_size + len + 1);
+  if (new_base == NULL)
     return;
-  KgpcStringHeader *new_hdr = (KgpcStringHeader *)new_str;
-  new_hdr->codepage = hdr->codepage;
-  new_hdr->elementsize = hdr->elementsize;
-  new_hdr->refcount = 1;
-  new_hdr->length = len;
-  char *new_data = new_str + sizeof(KgpcStringHeader);
+  char *new_data = new_base + hdr_size;
+  kgpc_strhdr_set_codepage(new_data, kgpc_strhdr_get_codepage(*value));
+  kgpc_strhdr_set_elementsize(new_data, kgpc_strhdr_get_elementsize(*value));
+  kgpc_strhdr_set_refcount(new_data, 1);
+  kgpc_strhdr_set_length(new_data, (int64_t)len);
   memcpy(new_data, *value, len + 1);
   kgpc_string_set_insert(new_data);
   kgpc_string_release(*value);
@@ -374,11 +370,24 @@ void FPC_ANSISTR_UNIQUE(char **value) {
 }
 
 char *kgpc_alloc_empty_string(void) {
-  static struct {
-    KgpcStringHeader header;
-    char data[1];
-  } empty = {{0, 1, -1, 0}, {'\0'}};
-  return empty.data;
+  /* Lazily built once: a constant (refcount = -1, never freed) empty managed
+   * string laid out with the program's detected header geometry.  Not inserted
+   * into kgpc_string_set; kgpc_string_is_managed special-cases this pointer. */
+  static char *empty = NULL;
+  if (empty == NULL) {
+    size_t hdr_size = kgpc_strhdr_size();
+    char *base = (char *)malloc(hdr_size + 1);
+    if (base == NULL)
+      return NULL;
+    char *data = base + hdr_size;
+    kgpc_strhdr_set_codepage(data, 0);
+    kgpc_strhdr_set_elementsize(data, 1);
+    kgpc_strhdr_set_refcount(data, -1); /* constant string sentinel */
+    kgpc_strhdr_set_length(data, 0);
+    data[0] = '\0';
+    empty = data;
+  }
+  return empty;
 }
 
 void kgpc_init_widestringmanager(void);
@@ -430,8 +439,7 @@ char *kgpc_string_duplicate(const char *value) {
   if (value == NULL)
     return kgpc_alloc_empty_string();
 
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr != NULL) {
+  if (kgpc_string_is_managed(value)) {
     kgpc_string_retain(value);
     return (char *)value;
   }
@@ -554,8 +562,7 @@ void kgpc_string_assign(char **target, const char *value) {
     return;
   }
 
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr != NULL) {
+  if (kgpc_string_is_managed(value)) {
     kgpc_string_retain(value);
     *target = (char *)value;
     return;
@@ -575,17 +582,16 @@ char *kgpc_string_unique(char **target) {
     return value;
   }
 
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr == NULL) {
+  if (!kgpc_string_is_managed(value)) {
     value = kgpc_string_duplicate(value);
     *target = value;
     return value;
   }
 
-  if (hdr->refcount <= 1)
+  if (kgpc_strhdr_get_refcount(value) <= 1)
     return value;
 
-  char *copy = kgpc_string_duplicate_length(value, hdr->length);
+  char *copy = kgpc_string_duplicate_length(value, kgpc_strhdr_get_length(value));
   kgpc_string_release(value);
   *target = copy;
   return copy;
@@ -608,8 +614,7 @@ void kgpc_string_assign_take(char **target, char *value) {
   if (*target != NULL)
     kgpc_string_release(*target);
 
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr != NULL) {
+  if (kgpc_string_is_managed(value)) {
     *target = value;
     return;
   }
@@ -675,29 +680,29 @@ void kgpc_unicodestring_setlength(uint16_t **target, int64_t new_length) {
   }
 
   size_t data_bytes = (size_t)new_length * 2 + 2;
-  KgpcStringHeader *hdr =
-      (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-  if (hdr == NULL) {
+  size_t hdr_size = kgpc_strhdr_size();
+  char *base = (char *)malloc(hdr_size + data_bytes);
+  if (base == NULL) {
     fprintf(stderr,
             "KGPC runtime: failed to resize unicode string to %lld chars.\n",
             (long long)new_length);
     exit(EXIT_FAILURE);
   }
 
-  hdr->codepage = 1200;
-  hdr->elementsize = 2;
-  hdr->refcount = 1;
-  hdr->length = new_length;
+  uint16_t *data = (uint16_t *)(base + hdr_size);
+  kgpc_strhdr_set_codepage((char *)data, 1200);
+  kgpc_strhdr_set_elementsize((char *)data, 2);
+  kgpc_strhdr_set_refcount((char *)data, 1);
+  kgpc_strhdr_set_length((char *)data, new_length);
 
-  uint16_t *data = (uint16_t *)(hdr + 1);
   memset(data, 0, data_bytes);
   kgpc_string_set_insert((char *)data);
 
   if (*target != NULL)
     kgpc_string_release((char *)*target);
   *target = data;
-  /* cppcheck-suppress memleak ; ownership of hdr's allocation moves into
-     *target via the (hdr + 1) payload pointer. */
+  /* cppcheck-suppress memleak ; ownership of the allocation moves into
+     *target via the payload pointer. */
 }
 
 void kgpc_setstring(char **target, const char *buffer, int64_t length) {
@@ -734,18 +739,29 @@ void kgpc_setstring(char **target, const char *buffer, int64_t length) {
 static int64_t kgpc_unicode_known_length(const uint16_t *value) {
   if (value == NULL)
     return 0;
-  KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
-  if (hdr != NULL)
-    return hdr->length;
+  if (kgpc_string_is_managed((const char *)value))
+    return kgpc_strhdr_get_length((const char *)value);
   return kgpc_widechar_length(value);
 }
 
 static uint16_t *kgpc_alloc_empty_unicodestring(void) {
-  static struct {
-    KgpcStringHeader header;
-    uint16_t data[1];
-  } empty = {{1200, 2, -1, 0}, {0}};
-  return empty.data;
+  /* Lazily built once with the program's detected header geometry; a constant
+   * (refcount = -1) empty UTF-16 string.  Not in kgpc_string_set. */
+  static uint16_t *empty = NULL;
+  if (empty == NULL) {
+    size_t hdr_size = kgpc_strhdr_size();
+    char *base = (char *)malloc(hdr_size + 2);
+    if (base == NULL)
+      return NULL;
+    uint16_t *data = (uint16_t *)(base + hdr_size);
+    kgpc_strhdr_set_codepage((char *)data, 1200);
+    kgpc_strhdr_set_elementsize((char *)data, 2);
+    kgpc_strhdr_set_refcount((char *)data, -1);
+    kgpc_strhdr_set_length((char *)data, 0);
+    data[0] = 0;
+    empty = data;
+  }
+  return empty;
 }
 
 void kgpc_setstring_unicode(uint16_t **target, const uint16_t *buffer,
@@ -763,19 +779,19 @@ void kgpc_setstring_unicode(uint16_t **target, const uint16_t *buffer,
   }
 
   size_t data_bytes = (size_t)length * 2 + 2;
-  KgpcStringHeader *hdr =
-      (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-  if (hdr == NULL) {
+  size_t hdr_size = kgpc_strhdr_size();
+  char *base = (char *)malloc(hdr_size + data_bytes);
+  if (base == NULL) {
     fprintf(stderr,
             "KGPC runtime: failed to allocate UnicodeString (%zu bytes).\n",
             data_bytes);
     exit(EXIT_FAILURE);
   }
-  hdr->codepage = 1200; /* UTF-16LE */
-  hdr->elementsize = 2; /* UnicodeChar = 2 bytes */
-  hdr->refcount = 1;
-  hdr->length = length;
-  uint16_t *data = (uint16_t *)(hdr + 1);
+  uint16_t *data = (uint16_t *)(base + hdr_size);
+  kgpc_strhdr_set_codepage((char *)data, 1200); /* UTF-16LE */
+  kgpc_strhdr_set_elementsize((char *)data, 2); /* UnicodeChar = 2 bytes */
+  kgpc_strhdr_set_refcount((char *)data, 1);
+  kgpc_strhdr_set_length((char *)data, length);
   memcpy(data, buffer, (size_t)length * 2);
   data[length] = 0;
 
@@ -785,8 +801,8 @@ void kgpc_setstring_unicode(uint16_t **target, const uint16_t *buffer,
   if (current != NULL)
     kgpc_string_release((char *)current);
   *target = data;
-  /* cppcheck-suppress memleak ; ownership of hdr's allocation moves into
-     *target via the (hdr + 1) payload pointer. */
+  /* cppcheck-suppress memleak ; ownership of the allocation moves into
+     *target via the payload pointer. */
 }
 
 void kgpc_write_unicodestring(KGPCTextRec *file, int width,
@@ -802,8 +818,8 @@ void kgpc_write_unicodestring(KGPCTextRec *file, int width,
    * storage (elementsize=1). In that case, print through string writer
    * instead of interpreting bytes as UTF-16 code units. */
   {
-    KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
-    if (hdr != NULL && hdr->elementsize == 1) {
+    if (kgpc_string_is_managed((const char *)value) &&
+        kgpc_strhdr_get_elementsize((const char *)value) == 1) {
       kgpc_write_string(file, width, (const char *)value);
       return;
     }
@@ -2077,10 +2093,14 @@ char *kgpc_string_concat(const char *lhs, const char *rhs) {
   if (rhs == NULL)
     rhs = "";
 
-  KgpcStringHeader *lhs_hdr = kgpc_string_header(lhs);
-  KgpcStringHeader *rhs_hdr = kgpc_string_header(rhs);
-  int lhs_elem = (lhs_hdr != NULL && lhs_hdr->elementsize == 2) ? 2 : 1;
-  int rhs_elem = (rhs_hdr != NULL && rhs_hdr->elementsize == 2) ? 2 : 1;
+  int lhs_elem = (kgpc_string_is_managed(lhs) &&
+                  kgpc_strhdr_get_elementsize(lhs) == 2)
+                     ? 2
+                     : 1;
+  int rhs_elem = (kgpc_string_is_managed(rhs) &&
+                  kgpc_strhdr_get_elementsize(rhs) == 2)
+                     ? 2
+                     : 1;
 
   size_t lhs_len = kgpc_string_known_length(lhs);
   size_t rhs_len = kgpc_string_known_length(rhs);
@@ -2088,17 +2108,17 @@ char *kgpc_string_concat(const char *lhs, const char *rhs) {
 
   if (lhs_elem == 2 || rhs_elem == 2) {
     size_t data_bytes = total * 2 + 2;
-    KgpcStringHeader *hdr =
-        (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-    if (hdr == NULL)
+    size_t hdr_size = kgpc_strhdr_size();
+    char *base = (char *)malloc(hdr_size + data_bytes);
+    if (base == NULL)
       return kgpc_alloc_empty_string();
 
-    hdr->codepage = 1200;
-    hdr->elementsize = 2;
-    hdr->refcount = 1;
-    hdr->length = (int64_t)total;
+    uint16_t *out = (uint16_t *)(base + hdr_size);
+    kgpc_strhdr_set_codepage((char *)out, 1200);
+    kgpc_strhdr_set_elementsize((char *)out, 2);
+    kgpc_strhdr_set_refcount((char *)out, 1);
+    kgpc_strhdr_set_length((char *)out, (int64_t)total);
 
-    uint16_t *out = (uint16_t *)(hdr + 1);
     size_t pos = 0;
 
     if (lhs_len > 0) {
@@ -2146,19 +2166,15 @@ uint16_t *kgpc_unicodestring_concat(const uint16_t *lhs, const uint16_t *rhs) {
   if (rhs == NULL)
     rhs = kgpc_alloc_empty_unicodestring();
 
-  {
-    KgpcStringHeader *hdr = kgpc_string_header((const char *)lhs);
-    if (hdr != NULL && hdr->elementsize == 1) {
-      lhs_owned = kgpc_unicodestring_from_string((const char *)lhs);
-      lhs = lhs_owned;
-    }
+  if (kgpc_string_is_managed((const char *)lhs) &&
+      kgpc_strhdr_get_elementsize((const char *)lhs) == 1) {
+    lhs_owned = kgpc_unicodestring_from_string((const char *)lhs);
+    lhs = lhs_owned;
   }
-  {
-    KgpcStringHeader *hdr = kgpc_string_header((const char *)rhs);
-    if (hdr != NULL && hdr->elementsize == 1) {
-      rhs_owned = kgpc_unicodestring_from_string((const char *)rhs);
-      rhs = rhs_owned;
-    }
+  if (kgpc_string_is_managed((const char *)rhs) &&
+      kgpc_strhdr_get_elementsize((const char *)rhs) == 1) {
+    rhs_owned = kgpc_unicodestring_from_string((const char *)rhs);
+    rhs = rhs_owned;
   }
 
   int64_t lhs_len = kgpc_unicode_known_length(lhs);
@@ -2168,14 +2184,14 @@ uint16_t *kgpc_unicodestring_concat(const uint16_t *lhs, const uint16_t *rhs) {
   uint16_t *result = kgpc_alloc_empty_unicodestring();
   if (total_len > 0) {
     size_t data_bytes = (size_t)total_len * sizeof(uint16_t) + sizeof(uint16_t);
-    KgpcStringHeader *hdr =
-        (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-    if (hdr != NULL) {
-      hdr->codepage = 1200;
-      hdr->elementsize = 2;
-      hdr->refcount = 1;
-      hdr->length = total_len;
-      result = (uint16_t *)(hdr + 1);
+    size_t hdr_size = kgpc_strhdr_size();
+    char *base = (char *)malloc(hdr_size + data_bytes);
+    if (base != NULL) {
+      result = (uint16_t *)(base + hdr_size);
+      kgpc_strhdr_set_codepage((char *)result, 1200);
+      kgpc_strhdr_set_elementsize((char *)result, 2);
+      kgpc_strhdr_set_refcount((char *)result, 1);
+      kgpc_strhdr_set_length((char *)result, total_len);
       if (lhs_len > 0)
         memcpy(result, lhs, (size_t)lhs_len * sizeof(uint16_t));
       if (rhs_len > 0)
@@ -2258,21 +2274,21 @@ uint16_t *kgpc_unicodestring_copy(const uint16_t *value, int64_t index,
 
   uint16_t *result = kgpc_alloc_empty_unicodestring();
   size_t data_bytes = (size_t)to_copy * sizeof(uint16_t) + sizeof(uint16_t);
-  KgpcStringHeader *hdr =
-      (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-  if (hdr == NULL)
+  size_t hdr_size = kgpc_strhdr_size();
+  char *base = (char *)malloc(hdr_size + data_bytes);
+  if (base == NULL)
     return result;
 
-  hdr->codepage = 1200;
-  hdr->elementsize = 2;
-  hdr->refcount = 1;
-  hdr->length = to_copy;
-  result = (uint16_t *)(hdr + 1);
+  result = (uint16_t *)(base + hdr_size);
+  kgpc_strhdr_set_codepage((char *)result, 1200);
+  kgpc_strhdr_set_elementsize((char *)result, 2);
+  kgpc_strhdr_set_refcount((char *)result, 1);
+  kgpc_strhdr_set_length((char *)result, to_copy);
   memcpy(result, value + start, (size_t)to_copy * sizeof(uint16_t));
   result[to_copy] = 0;
   kgpc_string_set_insert((char *)result);
-  /* cppcheck-suppress memleak ; result == (hdr + 1); ownership moves to
-     the kgpc_string_set, released later via the data pointer. */
+  /* cppcheck-suppress memleak ; ownership moves to the kgpc_string_set,
+     released later via the data pointer. */
   return result;
 }
 
@@ -2470,8 +2486,8 @@ void kgpc_string_assign_from_unicodestring(char **target,
     return;
   }
 
-  KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
-  if (hdr != NULL && hdr->elementsize == 1) {
+  if (kgpc_string_is_managed((const char *)value) &&
+      kgpc_strhdr_get_elementsize((const char *)value) == 1) {
     kgpc_string_assign(target, (const char *)value);
     return;
   }
@@ -2499,8 +2515,8 @@ uint16_t *kgpc_unicodestring_from_string(const char *value) {
   if (value == NULL)
     return kgpc_alloc_empty_unicodestring();
 
-  KgpcStringHeader *hdr = kgpc_string_header(value);
-  if (hdr != NULL && hdr->elementsize == 2) {
+  if (kgpc_string_is_managed(value) &&
+      kgpc_strhdr_get_elementsize(value) == 2) {
     kgpc_string_retain(value);
     return (uint16_t *)value;
   }
@@ -2542,8 +2558,8 @@ void kgpc_unicodestring_assign_from_widechar(uint16_t **target,
     return;
   }
 
-  KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
-  if (hdr != NULL && hdr->elementsize == 2) {
+  if (kgpc_string_is_managed((const char *)value) &&
+      kgpc_strhdr_get_elementsize((const char *)value) == 2) {
     uint16_t *current = *target;
     if (current == value)
       return;
@@ -2609,8 +2625,8 @@ void kgpc_unicodestring_assign(uint16_t **target, const uint16_t *value) {
     return;
   }
 
-  KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
-  if (hdr == NULL || hdr->elementsize == 1) {
+  if (!kgpc_string_is_managed((const char *)value) ||
+      kgpc_strhdr_get_elementsize((const char *)value) == 1) {
     kgpc_unicodestring_assign_from_string(target, (const char *)value);
     return;
   }
