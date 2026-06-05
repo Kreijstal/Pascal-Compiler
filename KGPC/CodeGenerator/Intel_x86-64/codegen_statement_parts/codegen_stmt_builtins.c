@@ -4027,7 +4027,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list,
     call_target = "kgpc_string_unique";
   if (call_target == NULL)
     call_target = "";
-  snprintf(buffer, 64, "\tcall\t%s\n", call_target);
+  snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
   inst_list = add_inst(inst_list, buffer);
   inst_list = codegen_cleanup_call_stack(inst_list, ctx);
 #ifdef DEBUG_CODEGEN
