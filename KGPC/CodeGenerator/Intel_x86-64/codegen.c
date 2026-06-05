@@ -4731,7 +4731,12 @@ static void codegen_emit_ansistr_geometry(CodeGenContext *ctx) {
               0 &&
           resolve_record_field(symtab, rec, len_name, &fd, &len_in_rec, 0, 1) ==
               0 &&
-          len_in_rec > ref_in_rec && len_in_rec == size - 8) {
+          len_in_rec > ref_in_rec && len_in_rec == size - 8 &&
+          (size == 16 || size == 24)) {
+        /* Only the two RTL-supported shapes are accepted (trunk 16-byte,
+         * 3.2.2 24-byte).  A record named TAnsiRec that is neither — e.g. a
+         * user type shadowing the RTL's — is rejected here and the safe native
+         * default below is published instead of a guessed-wrong geometry. */
         /* Len is the trailing 64-bit field and Ref directly precedes it, so
          * the Ref width is the gap between them — no field-size lookup or
          * version assumption needed. */
