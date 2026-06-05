@@ -703,9 +703,20 @@ int semcheck_arrayaccess(int *type_return, SymTab_t *symtab,
 
   /* Propagate resolved KgpcType to the result of the indexing expression */
   KgpcType *res_type = NULL;
-  if (array_expr->resolved_kgpc_type != NULL &&
-      kgpc_type_is_array(array_expr->resolved_kgpc_type)) {
-    res_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
+  KgpcType *base_array_type = array_expr->resolved_kgpc_type;
+  /* Pointer-to-array base (`p[i]` == `p^[i]`): resolve through the pointer so
+   * the element keeps its full KgpcType.  Without this the element of a
+   * pointer-to-array-of-pointers (e.g. `fbitmap[x1]` : Pinterferencebitmap2)
+   * falls back to a bare primitive(POINTER), dropping the pointee, which then
+   * breaks a subsequent dereference `fbitmap[x1,y1]^[k]`. */
+  if (base_array_type != NULL && base_array_type->kind == TYPE_KIND_POINTER) {
+    KgpcType *base_pointee =
+        kgpc_type_resolve_pointer_pointee(base_array_type, symtab);
+    if (base_pointee != NULL && kgpc_type_is_array(base_pointee))
+      base_array_type = base_pointee;
+  }
+  if (base_array_type != NULL && kgpc_type_is_array(base_array_type)) {
+    res_type = kgpc_type_get_array_element_type(base_array_type);
     if (res_type != NULL)
       kgpc_type_retain(res_type);
 
