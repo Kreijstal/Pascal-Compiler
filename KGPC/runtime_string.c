@@ -760,6 +760,10 @@ static uint16_t *kgpc_alloc_empty_unicodestring(void) {
     kgpc_strhdr_set_length((char *)data, 0);
     data[0] = 0;
     empty = data;
+    /* cppcheck-suppress memleak ; the constant empty UnicodeString is retained
+       for the program's lifetime via the static `empty` (an interior pointer);
+       cppcheck loses the base->data derivation through the uint16_t* cast that
+       the AnsiString twin in kgpc_alloc_empty_string() does not need. */
   }
   return empty;
 }
