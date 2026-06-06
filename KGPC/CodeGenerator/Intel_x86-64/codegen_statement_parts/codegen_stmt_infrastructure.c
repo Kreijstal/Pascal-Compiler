@@ -1358,6 +1358,25 @@ static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
   return inst_list;
 }
 
+/* Element count of a fixed-size (non-dynamic) array source, from its declared
+ * bounds.  Used when copying a static/typed-constant array into a dynamic
+ * array: the source storage is raw element data with no descriptor, so we must
+ * supply the length ourselves. */
+static long long codegen_static_array_elem_count(struct Expression *expr,
+                                                 CodeGenContext *ctx) {
+  (void)ctx;
+  if (expr == NULL)
+    return 0;
+  KgpcType *t = expr_get_kgpc_type(expr);
+  if (t != NULL && kgpc_type_is_array(t) && !kgpc_type_is_dynamic_array(t)) {
+    long long lo = t->info.array_info.start_index;
+    long long hi = t->info.array_info.end_index;
+    if (hi >= lo)
+      return hi - lo + 1;
+  }
+  return 0;
+}
+
 ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
                                          struct Expression *src_expr,
                                          ListNode_t *inst_list,
@@ -1508,6 +1527,84 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, src_reg,
                                            descriptor_size, dest_element_size);
     free_reg(get_reg_stack(), src_reg);
+    free_reg(get_reg_stack(), dest_reload);
+  } else if (expr_is_static_array_like(src_expr, ctx)) {
+    /* Fixed-size array source (typed constant or static array variable): its
+     * storage is raw element data, not a dynarray descriptor.  Build a
+     * temporary {data, length} descriptor that points at the source and
+     * deep-copy its elements into the destination's heap buffer.  (Previously
+     * this fell into the value path below, which loaded the array's first
+     * bytes as a scalar and passed that garbage to
+     * kgpc_dynarray_assign_from_temp as if it were a descriptor pointer ->
+     * wild-pointer crash / heap corruption, e.g. FPC's
+     * `result := win64_saved_std_regs` in get_saved_registers_int.) */
+    long long count = codegen_static_array_elem_count(src_expr, ctx);
+    int src_element_size = (int)expr_get_array_element_size(src_expr, ctx);
+    if (src_element_size <= 0)
+      src_element_size = dest_element_size;
+
+    Register_t *src_addr = NULL;
+    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr);
+    if (codegen_had_error(ctx) || src_addr == NULL) {
+      if (src_addr != NULL)
+        free_reg(get_reg_stack(), src_addr);
+      return inst_list;
+    }
+
+    StackNode_t *src_desc = add_l_t_bytes("dynarray_src_desc", descriptor_size);
+    if (src_desc == NULL) {
+      free_reg(get_reg_stack(), src_addr);
+      return codegen_fail_register(
+          ctx, inst_list, NULL,
+          "ERROR: Unable to allocate descriptor for static array copy.");
+    }
+
+    {
+      /* descriptor.data (offset 0) := source address */
+      char tmpl[96];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t%%0, -%d(%%rbp)\n",
+               src_desc->offset);
+      Register_t *uses_arr[] = {src_addr};
+      inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, tmpl);
+    }
+    {
+      /* descriptor.length (offset 8) := element count */
+      char buffer[96];
+      snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, -%d(%%rbp)\n", count,
+               src_desc->offset - 8);
+      inst_list = add_inst(inst_list, buffer);
+    }
+    free_reg(get_reg_stack(), src_addr);
+
+    Register_t *dest_reload = get_free_reg(get_reg_stack(), &inst_list);
+    Register_t *desc_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (dest_reload == NULL || desc_reg == NULL) {
+      if (dest_reload != NULL)
+        free_reg(get_reg_stack(), dest_reload);
+      if (desc_reg != NULL)
+        free_reg(get_reg_stack(), desc_reg);
+      return codegen_fail_register(
+          ctx, inst_list, NULL,
+          "ERROR: Unable to allocate registers for static array copy.");
+    }
+    {
+      char tmpl[96];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+               dest_temp->offset);
+      Register_t *defs_arr[] = {dest_reload};
+      inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+    }
+    {
+      char tmpl[96];
+      snprintf(tmpl, sizeof(tmpl), "\tleaq\t-%d(%%rbp), %%0\n",
+               src_desc->offset);
+      Register_t *defs_arr[] = {desc_reg};
+      inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+    }
+
+    inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, desc_reg,
+                                           descriptor_size, src_element_size);
+    free_reg(get_reg_stack(), desc_reg);
     free_reg(get_reg_stack(), dest_reload);
   } else {
     Register_t *value_reg = NULL;

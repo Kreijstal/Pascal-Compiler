@@ -3087,9 +3087,26 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
 
   Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
 
+  /* Under register pressure the allocator can hand back the very register we
+     are using as the destination (target_reg).  The register-based path below
+     spills the LHS, evaluates the RHS into rhs_reg, then reloads the LHS into
+     target_reg -- if rhs_reg == target_reg that reload clobbers the freshly
+     computed RHS, producing concat(LHS, LHS).  Fall back to the stack-spill
+     path (which uses only target_reg + a temp slot) in that case. */
+  if (rhs_reg != NULL && rhs_reg == target_reg) {
+    free_reg(get_reg_stack(), rhs_reg);
+    rhs_reg = NULL;
+  }
+
   if (rhs_reg == NULL) {
 
     StackNode_t *spill_loc = add_l_t("str_concat_rhs");
+    if (spill_loc == NULL) {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate spill slot for string "
+               "concatenation RHS.");
+      return inst_list;
+    }
     inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
     if (result_is_wide)
       inst_list = promote_operand_to_unicodestring(node->right_expr, inst_list,
@@ -3136,6 +3153,12 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
     }
   } else {
     StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
+    if (lhs_spill == NULL) {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate spill slot for string "
+               "concatenation LHS.");
+      return inst_list;
+    }
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
     if (result_is_wide)
       inst_list = promote_operand_to_unicodestring(node->left_expr, inst_list,

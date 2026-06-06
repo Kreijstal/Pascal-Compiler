@@ -1932,6 +1932,34 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
     int extra_idx_num = 1;
     ListNode_t *extra_idx_node =
         expr->expr_data.array_access_data.extra_indices;
+    /* For a pointer-to-array base indexed `p[i,j]`, FPC treats `p[i]` as the
+     * i-th whole pointee (stride = sizeof(pointee), already in
+     * first_index_stride) and `p[i,j]` as `p[i][j]` — j descends INTO the
+     * pointee array, so its stride is that array's element size, not the
+     * pointee size.  Capture the pointee array type so the extra-index
+     * fallback below can descend one level per extra index (without this,
+     * j reused sizeof(pointee) and read far out of bounds -> the
+     * tinterferencebitmap.destroy segfault in the FPC register allocator). */
+    KgpcType *ptr_pointee_array = NULL;
+    if (base_is_pointer && array_expr != NULL) {
+      KgpcType *ptr_type = array_expr->resolved_kgpc_type;
+      if ((ptr_type == NULL || !kgpc_type_is_pointer(ptr_type)) &&
+          array_expr->type == EXPR_VAR_ID &&
+          array_expr->expr_data.id != NULL && ctx != NULL &&
+          ctx->symtab != NULL) {
+        HashNode_t *ptr_node = NULL;
+        if (FindSymbol(&ptr_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+            ptr_node != NULL && ptr_node->type != NULL)
+          ptr_type = ptr_node->type;
+      }
+      if (ptr_type != NULL && kgpc_type_is_pointer(ptr_type) && ctx != NULL &&
+          ctx->symtab != NULL) {
+        KgpcType *pointee =
+            kgpc_type_resolve_pointer_pointee(ptr_type, ctx->symtab);
+        if (pointee != NULL && kgpc_type_is_array(pointee))
+          ptr_pointee_array = pointee;
+      }
+    }
     while (extra_idx_node != NULL) {
       struct Expression *extra_idx_expr =
           (struct Expression *)extra_idx_node->cur;
@@ -1968,6 +1996,34 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
         } else if (tokenidx_pointer_index && extra_idx_num == 1) {
           stride = 4;
           extra_lower_bound = 'A';
+        } else if (ptr_pointee_array != NULL) {
+          /* Pointer-to-array base: descend `extra_idx_num` levels into the
+           * pointee array (index 0 already consumed the pointer deref) and use
+           * that sub-array's element size as this index's stride. */
+          KgpcType *cur = ptr_pointee_array;
+          int descend_ok = 1;
+          for (int d = 1; d < extra_idx_num; ++d) {
+            KgpcType *next =
+                kgpc_type_get_array_element_type_resolved(cur, ctx->symtab);
+            if (next == NULL || !kgpc_type_is_array(next)) {
+              descend_ok = 0;
+              break;
+            }
+            cur = next;
+          }
+          if (descend_ok && cur != NULL && kgpc_type_is_array(cur)) {
+            stride = kgpc_type_get_array_element_size(cur);
+            extra_lower_bound = cur->info.array_info.start_index;
+          } else {
+            long long element_size_ll = 1;
+            int element_size_ok = codegen_get_indexable_element_size(
+                array_expr, ctx, &element_size_ll);
+            KGPC_COMPILER_HARD_ASSERT(
+                element_size_ok, "codegen_get_indexable_element_size failed "
+                                 "in stride computation");
+            stride = element_size_ll;
+            extra_lower_bound = 0;
+          }
         } else {
           /* Fallback for when dimension info is not available or exceeded */
           long long element_size_ll = 1;

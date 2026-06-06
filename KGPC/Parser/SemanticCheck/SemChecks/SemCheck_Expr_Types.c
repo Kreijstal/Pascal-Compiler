@@ -1779,17 +1779,49 @@ int semcheck_pointer_deref(int *type_return, SymTab_t *symtab,
       semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
     }
   }
-  if (target_type == RECORD_TYPE &&
-      (expr->resolved_kgpc_type == NULL ||
-       !kgpc_type_is_record(expr->resolved_kgpc_type)) &&
-      pointer_expr->pointer_subtype_id != NULL) {
-    struct RecordType *record_info =
-        semcheck_lookup_record_type(symtab, pointer_expr->pointer_subtype_id);
-    if (record_info != NULL) {
-      KgpcType *record_kgpc = create_record_type(record_info);
-      if (record_kgpc != NULL) {
-        semcheck_expr_set_resolved_kgpc_type_shared(expr, record_kgpc);
-        destroy_kgpc_type(record_kgpc);
+  /* Classes (and interfaces) are reference types: a class variable IS an 8-byte
+   * reference, not the instance aggregate.  Dereferencing a pointer-to-class
+   * (`pbest^` where `pbest: ^TClass`) therefore yields a class reference, which
+   * must be represented as a pointer-wrapped record (TYPE_KIND_POINTER ->
+   * record) so codegen passes/loads it as an 8-byte reference -- exactly what
+   * `var p:^TClass` and named-alias pointers already produce.
+   *
+   * Two pointee representations reach here for `^TClass`: a proper class
+   * reference (pointer-wrapped, already correct), or a BARE class record.  The
+   * bare-record form is produced for a typed constant with an inline pointer
+   * type (`const pbest: ^TClass = @g`, e.g. FPC 3.2.2's
+   * `pbestrealtype : ^tdef = @s64floattype`): its pointer's pointee is the
+   * class record itself.  Propagated as a record, the argument path copied the
+   * whole instance into a stack temp and passed the temp's (dangling) address.
+   * Normalise any class-record deref result to a class reference. */
+  if (target_type == RECORD_TYPE) {
+    struct RecordType *class_record = NULL;
+    if (expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_record(expr->resolved_kgpc_type)) {
+      class_record = kgpc_type_get_record(expr->resolved_kgpc_type);
+    } else if ((expr->resolved_kgpc_type == NULL ||
+                !kgpc_type_is_record(expr->resolved_kgpc_type)) &&
+               pointer_expr->pointer_subtype_id != NULL) {
+      class_record =
+          semcheck_lookup_record_type(symtab, pointer_expr->pointer_subtype_id);
+    }
+    if (class_record != NULL) {
+      KgpcType *deref_kgpc = NULL;
+      if (record_type_is_class(class_record)) {
+        KgpcType *record_kgpc = create_record_type(class_record);
+        if (record_kgpc != NULL) {
+          deref_kgpc = create_pointer_type(record_kgpc);
+          destroy_kgpc_type(record_kgpc);
+        }
+      } else if (expr->resolved_kgpc_type == NULL ||
+                 !kgpc_type_is_record(expr->resolved_kgpc_type)) {
+        /* Non-class record with no resolved type yet: preserve prior behaviour
+         * of attaching the (aggregate) record type. */
+        deref_kgpc = create_record_type(class_record);
+      }
+      if (deref_kgpc != NULL) {
+        semcheck_expr_set_resolved_kgpc_type_shared(expr, deref_kgpc);
+        destroy_kgpc_type(deref_kgpc);
       }
     }
   }

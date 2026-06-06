@@ -3624,9 +3624,24 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list,
     }
   }
 
+  /* Prefetch is a no-op cache hint whose argument is an untyped `const` —
+   * i.e. passed BY REFERENCE.  FPC lowers `prefetch(x)` to a prefetch on the
+   * ADDRESS of x and never dereferences it.  Route it to
+   * codegen_builtin_prefetch (which passes the address) rather than falling
+   * through to the generic argument path: there the untyped-const + pointer-arg
+   * heuristic in codegen_pass_arguments passes x BY VALUE, dereferencing it.
+   * For `prefetch(next.next)` with a nil `next` (the last node in
+   * TLinkedList.Clear's `Next:=NewNode.Next; prefetch(Next.Next)`) that load
+   * reads through a near-null pointer and segfaults — which crashed the
+   * bootstrapped FPC 3.2.2 compiler while clearing its command-line option list
+   * (the system.ppu build under pp_bootstrap).  Both the FPC internproc
+   * spelling (fpc_in_prefetch_var) and KGPC's own system unit declaration
+   * (`procedure prefetch(const p); external name 'kgpc_prefetch'`) resolve
+   * here, so handle both. */
   if (proc_name != NULL &&
-      pascal_identifier_equals(proc_name, "fpc_in_prefetch_var"))
-    proc_name = "kgpc_prefetch";
+      (pascal_identifier_equals(proc_name, "fpc_in_prefetch_var") ||
+       pascal_identifier_equals(proc_name, "kgpc_prefetch")))
+    return codegen_builtin_prefetch(stmt, inst_list, ctx);
   // removed assert on proc_name
   // removed assert on proc_name
   // removed assert on proc_name

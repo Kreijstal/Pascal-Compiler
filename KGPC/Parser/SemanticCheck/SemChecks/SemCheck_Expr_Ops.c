@@ -2628,8 +2628,21 @@ static int semcheck_with_match_is_synthetic_self(const char *id,
   return 0;
 }
 
+/* One-shot request to suppress implicit-Self / WITH shadowing for the very
+ * next semcheck_varid() call.  Set by the unit-qualified record-access path
+ * (e.g. resolving `scanner.c` where the enclosing method's class also has a
+ * field named `c`): an EXPLICIT unit qualifier must bind to the unit's own
+ * global, never to a same-named Self field.  Consumed (cleared) at the top of
+ * semcheck_varid so it only affects that immediate call, not any recursion. */
 int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
                    int max_scope_lev, int mutating) {
+  return semcheck_varid_ex(type_return, symtab, expr, max_scope_lev, mutating,
+                           0);
+}
+
+int semcheck_varid_ex(int *type_return, SymTab_t *symtab,
+                      struct Expression *expr, int max_scope_lev, int mutating,
+                      int suppress_self) {
   int return_val, scope_return;
   char *id;
   HashNode_t *hash_return;
@@ -2754,7 +2767,8 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
             id != NULL ? id : "(null)", with_status, (void *)with_expr,
             expr->line_num);
   }
-  if (with_status == 0 && with_expr != NULL && !direct_current_scope_value) {
+  if (with_status == 0 && with_expr != NULL && !direct_current_scope_value &&
+      !suppress_self) {
     if (kgpc_getenv("KGPC_DEBUG_FIELD") != NULL) {
       fprintf(stderr,
               "[SemCheck] WITH resolved '%s' at line %d, with_expr->type=%d\n",
@@ -2773,7 +2787,7 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
     with_expr = NULL;
   }
   if (with_status == 1 && with_context_count > 0 && id != NULL &&
-      !direct_current_scope_value) {
+      !direct_current_scope_value && !suppress_self) {
     struct Expression *with_method_expr = NULL;
     int with_method_status = semcheck_with_try_resolve_method(
         id, symtab, &with_method_expr, expr->line_num);
@@ -2890,7 +2904,7 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
    * type from another unit), check if Self has a field and prefer it.
    * Local variables/parameters and function return variables still shadow
    * fields — only imported/global symbols lose to Self fields. */
-  if (scope_return && hash_return != NULL && id != NULL &&
+  if (scope_return && hash_return != NULL && id != NULL && !suppress_self &&
       hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
       hash_return->hash_type != HASHTYPE_ARRAY) {
     /* Skip Self field check for variables that are local to the current
@@ -3134,7 +3148,7 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
         }
       }
     }
-    if (!scope_return) {
+    if (!scope_return && !suppress_self) {
       HashNode_t *self_node = NULL;
       if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL) {
         if (id != NULL) {
@@ -3274,7 +3288,8 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
       helper_context = 1;
   }
 
-  if (scope_return > 0 && id != NULL && helper_self_node != NULL) {
+  if (scope_return > 0 && id != NULL && helper_self_node != NULL &&
+      !suppress_self) {
     int is_value_symbol =
         (hash_return != NULL && hash_return->hash_type != HASHTYPE_TYPE &&
          hash_return->hash_type != HASHTYPE_FUNCTION &&
