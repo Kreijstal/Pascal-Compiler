@@ -196,6 +196,11 @@ void semcheck_promote_pointer_expr_to_string(struct Expression *expr);
 int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
                    int max_scope_lev, int mutating);
 
+/* Request that the very next semcheck_varid() call ignore implicit-Self / WITH
+ * shadowing, so an explicit unit qualifier (e.g. scanner.c) binds to the unit
+ * global rather than a same-named Self field.  One-shot: cleared on use. */
+void semcheck_suppress_self_for_next_varid(void);
+
 /* Array access semantic check */
 int semcheck_arrayaccess(int *type_return, SymTab_t *symtab,
                          struct Expression *expr, int max_scope_lev,

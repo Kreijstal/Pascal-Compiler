@@ -536,6 +536,11 @@ skip_scoped_enum_resolution:
           record_access_clear_payload(expr, 1);
           expr->type = EXPR_VAR_ID;
           expr->expr_data.id = field_copy;
+          /* The qualifier was explicit (UnitName.field): bind to the unit
+           * global, never to a same-named Self field of the enclosing method's
+           * class (e.g. raatt.GetToken's `c := scanner.c`, where tasmreader
+           * also has a field `c`). */
+          semcheck_suppress_self_for_next_varid();
           return semcheck_varid(type_return, symtab, expr, max_scope_lev,
                                 mutating);
         } else if (field_node->hash_type == HASHTYPE_TYPE) {
@@ -607,6 +612,9 @@ skip_scoped_enum_resolution:
           record_access_clear_payload(expr, 1);
           expr->type = EXPR_VAR_ID;
           expr->expr_data.id = field_copy;
+          /* Explicit unit qualifier: bind to the unit's routine, not a
+           * same-named Self method of the enclosing class. */
+          semcheck_suppress_self_for_next_varid();
           return semcheck_varid(type_return, symtab, expr, max_scope_lev,
                                 mutating);
         } else if (field_node->hash_type == HASHTYPE_FUNCTION_RETURN) {
