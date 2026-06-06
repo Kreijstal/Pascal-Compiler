@@ -2324,6 +2324,28 @@ sys.exit(3)
         self.assertIn("Unhandled exception raised with code 77", process.stderr)
         self.assertNotEqual(process.returncode, 0)
 
+    def test_fpc_bootstrap_loop_control_unwinds_except_frame(self):
+        """Break/continue from try/except must not leave stale handlers."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_loop_control_unwinds_except_frame"
+        )
+
+        run_compiler(input_file, asm_file)
+        asm_source = read_file_content(asm_file)
+        self.assertIn("BREAK: pop active try/except frame", asm_source)
+        self.assertIn("CONTINUE: pop active try/except frame", asm_source)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.stdout.strip(), "")
+        self.assertIn("Unhandled exception raised with code 88", process.stderr)
+        self.assertNotEqual(process.returncode, 0)
+
     def test_zahlen_program_compiles(self):
         """Ensures the zahlen classification demo compiles successfully."""
         input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")

@@ -284,6 +284,7 @@ typedef struct {
   char *label;
   char *continue_label;
   int finally_depth;
+  int except_depth;
 } CodeGenLoopFrame;
 
 typedef struct {

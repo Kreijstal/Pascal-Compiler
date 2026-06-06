@@ -159,6 +159,7 @@ int codegen_current_except_finally_depth(const CodeGenContext *ctx);
 const char *codegen_current_except_label(const CodeGenContext *ctx);
 const char *codegen_current_loop_continue(const CodeGenContext *ctx);
 const char *codegen_current_loop_exit(const CodeGenContext *ctx);
+int codegen_current_loop_except_depth(const CodeGenContext *ctx);
 int codegen_current_loop_finally_depth(const CodeGenContext *ctx);
 int codegen_dynamic_array_element_size(CodeGenContext *ctx,
                                        StackNode_t *array_node,
