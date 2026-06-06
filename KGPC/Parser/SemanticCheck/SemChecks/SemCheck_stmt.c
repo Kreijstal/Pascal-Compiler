@@ -949,6 +949,8 @@ int semcheck_try_record_conversion_expression(SymTab_t *symtab,
       semcheck_record_type_id_from_expr(symtab, source_expr, *source_type);
   const char *target_type_id =
       semcheck_record_type_id_from_expr(symtab, target_expr, target_type);
+  if (source_type_id == NULL && target_type_id == NULL)
+    return 0;
 
   HashNode_t *operator_node = NULL;
   KgpcType *return_type = NULL;
