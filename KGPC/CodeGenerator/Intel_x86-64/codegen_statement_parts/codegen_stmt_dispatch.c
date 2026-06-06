@@ -1187,6 +1187,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
   }
   case STMT_EXIT: {
     inst_list = add_inst(inst_list, "\t# EXIT statement\n");
+    int exit_except_depth = ctx != NULL ? ctx->except_depth : 0;
 
     int return_is_real = 0;
     int return_size = 0;
@@ -1407,6 +1408,14 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
       char buffer[32];
       snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
       inst_list = add_inst(inst_list, buffer);
+    }
+    for (int i = 0; i < exit_except_depth; ++i) {
+      inst_list =
+          add_inst(inst_list, "\t# EXIT: pop active try/except frame\n");
+      inst_list = codegen_vect_reg(inst_list, 0);
+      inst_list =
+          codegen_call_with_shadow_space(inst_list, "kgpc_pop_except_frame");
+      free_arg_regs();
     }
     /* Mirror the implicit-epilogue cleanup so EXIT releases the
      * element data buffers of managed dynamic-array locals along
