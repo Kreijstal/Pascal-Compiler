@@ -1000,6 +1000,25 @@ class TestCompiler(unittest.TestCase):
             "imulq\t$11,", asm,
             "expected stride-11 imul for string[10] elements; got none.")
 
+    def test_fpc_bootstrap_ptruint_longword_align(self):
+        """PtrUInt div/mul LongWord must widen 32-bit memory operands first."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_ptruint_longword_align"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = run_executable_with_valgrind(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout.strip(), "48")
+
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
         input_file, asm_file, _ = self._get_test_paths("bitshift_expr_malformed")
@@ -2328,4 +2347,3 @@ sys.exit(3)
         self.assertNotIn("this should not be printed", process.stdout)
         # FPC-compatible exit code 227 for assertion failure
         self.assertEqual(process.returncode, 227)
-

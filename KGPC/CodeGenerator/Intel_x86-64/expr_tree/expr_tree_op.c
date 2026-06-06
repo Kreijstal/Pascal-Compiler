@@ -82,6 +82,25 @@ static int expr_tree_is_any_set_expr(const struct Expression *expr,
   return 0;
 }
 
+static int operand_is_memory_reference(const char *operand) {
+  return operand != NULL && strchr(operand, '(') != NULL;
+}
+
+static int expr_is_32bit_integer_operand(const struct Expression *expr) {
+  if (expr == NULL)
+    return 0;
+
+  int type_tag = expr_get_type_tag(expr);
+  return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
+          type_tag == LONGWORD_TYPE);
+}
+
+static const char *scratch64_to_32(const char *scratch) {
+  if (scratch != NULL && strcmp(scratch, "%r11") == 0)
+    return "%r11d";
+  return "%r10d";
+}
+
 static long long expr_tree_set_size_bytes(const struct Expression *expr) {
   if (expr == NULL)
     return 0;
@@ -1157,6 +1176,23 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
           op_left = left64;
         if (right64 != NULL)
           op_right = right64;
+
+        if ((type == STAR || type == DIV || type == MOD) &&
+            right_reg == NULL && operand_is_memory_reference(right) &&
+            expr_is_32bit_integer_operand(
+                expr->expr_data.mulop_data.right_factor)) {
+          const char *scratch = select_divisor_temp_reg(left_reg, 1);
+          int right_tag =
+              expr_get_type_tag(expr->expr_data.mulop_data.right_factor);
+          if (codegen_type_is_signed(right_tag))
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right,
+                     scratch);
+          else
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right,
+                     scratch64_to_32(scratch));
+          inst_list = add_inst(inst_list, buffer);
+          op_right = scratch;
+        }
       } else {
         /* 32-bit operation: ensure 64-bit registers are narrowed to 32-bit form
          */
