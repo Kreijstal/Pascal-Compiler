@@ -113,6 +113,27 @@ static int codegen_type_is_shortstring_result_storage(const KgpcType *type) {
          KGPC_STRING_STORAGE_SHORTSTRING;
 }
 
+static int codegen_record_field_is_inline_shortstring_storage(
+    const struct RecordField *field, const KgpcType *field_type) {
+  if (field == NULL)
+    return 0;
+
+  if (field_type != NULL &&
+      (codegen_type_is_inline_shortstring_storage(field_type) ||
+       kgpc_type_string_storage_kind((KgpcType *)field_type) ==
+           KGPC_STRING_STORAGE_SHORTSTRING))
+    return 1;
+
+  if (field->type == SHORTSTRING_TYPE)
+    return 1;
+
+  if (field->type == STRING_TYPE && field->has_cached_layout &&
+      field->cached_size > CODEGEN_POINTER_SIZE_BYTES)
+    return 1;
+
+  return 0;
+}
+
 static int codegen_expr_is_current_shortstring_result_storage(
     const struct Expression *expr, CodeGenContext *ctx) {
   if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID ||
@@ -1513,6 +1534,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
   if (base_is_string) {
     if (codegen_type_is_inline_shortstring_storage(
             expr_get_kgpc_type(array_expr)) ||
+        codegen_record_field_is_inline_shortstring_storage(record_field,
+                                                           record_field_type) ||
         codegen_expr_is_current_shortstring_result_storage(array_expr, ctx))
       base_is_inline_shortstring = 1;
   }
