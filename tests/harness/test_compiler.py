@@ -2264,6 +2264,29 @@ sys.exit(3)
         self.assertEqual(process.stdout.strip(), "ok")
         self.assertEqual(process.returncode, 0)
 
+    def test_fpc_bootstrap_typecast_class_field_assign(self):
+        """Typecasted class fields must copy the class reference, not the object."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_typecast_class_field_assign"
+        )
+
+        run_compiler(input_file, asm_file)
+        asm_source = read_file_content(asm_file)
+        program_body = asm_source.split(
+            ".globl\tfpc_bootstrap_typecast_class_field_assign", 1
+        )[1].split("\n.data\n", 1)[0]
+        self.assertNotIn("\tcall\tkgpc_move\n", program_body)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.stdout.strip(), "ok")
+        self.assertEqual(process.returncode, 0)
+
     def test_fpc_bootstrap_inc_word_field_width(self):
         """Inc on Word-sized record fields must not use a 32-bit memory add."""
         input_file, asm_file, executable_file = self._get_test_paths(
