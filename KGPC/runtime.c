@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__GLIBC__) || defined(__linux__)
+#include <malloc.h>
+#endif
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
@@ -5493,7 +5496,20 @@ size_t kgpc_freemem_ptr(void *p) {
   free(p);
   return 0;
 }
-void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
+void *kgpc_reallocmem_ptr(void *p, size_t size) {
+  size_t old_size = 0;
+  int can_zero_growth = p == NULL;
+#if defined(__GLIBC__) || defined(__linux__)
+  if (p != NULL) {
+    old_size = malloc_usable_size(p);
+    can_zero_growth = 1;
+  }
+#endif
+  void *result = realloc(p, size);
+  if (result != NULL && can_zero_growth && size > old_size)
+    memset((char *)result + old_size, 0, size - old_size);
+  return result;
+}
 
 /* Memory barriers - no-ops on x86 (strong memory model) */
 void kgpc_readbarrier(void) {}

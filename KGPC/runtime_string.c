@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__GLIBC__) || defined(__linux__)
+#include <malloc.h>
+#endif
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
@@ -1846,6 +1849,14 @@ void kgpc_reallocmem(void **target, size_t new_size) {
   }
 
   void *original = *target;
+  size_t old_size = 0;
+  int can_zero_growth = original == NULL;
+#if defined(__GLIBC__) || defined(__linux__)
+  if (original != NULL) {
+    old_size = malloc_usable_size(original);
+    can_zero_growth = 1;
+  }
+#endif
   void *resized = NULL;
   if (original == NULL)
     resized = malloc(new_size);
@@ -1859,6 +1870,8 @@ void kgpc_reallocmem(void **target, size_t new_size) {
     exit(EXIT_FAILURE);
   }
 
+  if (can_zero_growth && new_size > old_size)
+    memset((char *)resized + old_size, 0, new_size - old_size);
   *target = resized;
 }
 
@@ -1893,14 +1906,25 @@ void *SysReallocMem(void **pp, intptr_t size) {
   if (pp == NULL)
     return NULL;
   void *original = *pp;
+  size_t old_size = 0;
+  int can_zero_growth = original == NULL;
+#if defined(__GLIBC__) || defined(__linux__)
+  if (original != NULL) {
+    old_size = malloc_usable_size(original);
+    can_zero_growth = 1;
+  }
+#endif
   if (size <= 0) {
     free(original);
     *pp = NULL;
     return NULL;
   }
   void *result = realloc(original, (size_t)size);
-  if (result != NULL)
+  if (result != NULL) {
+    if (can_zero_growth && (size_t)size > old_size)
+      memset((char *)result + old_size, 0, (size_t)size - old_size);
     *pp = result;
+  }
   return result;
 }
 
@@ -1915,7 +1939,18 @@ void *SysTryResizeMem(void *p, intptr_t size) {
     free(p);
     return NULL;
   }
-  return realloc(p, (size_t)size);
+  size_t old_size = 0;
+  int can_zero_growth = p == NULL;
+#if defined(__GLIBC__) || defined(__linux__)
+  if (p != NULL) {
+    old_size = malloc_usable_size(p);
+    can_zero_growth = 1;
+  }
+#endif
+  void *result = realloc(p, (size_t)size);
+  if (result != NULL && can_zero_growth && (size_t)size > old_size)
+    memset((char *)result + old_size, 0, (size_t)size - old_size);
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1989,14 +2024,25 @@ static void *kgpc_mm_reallocmem(void **pp, uintptr_t size) {
   if (pp == NULL)
     return NULL;
   void *original = *pp;
+  size_t old_size = 0;
+  int can_zero_growth = original == NULL;
+#if defined(__GLIBC__) || defined(__linux__)
+  if (original != NULL) {
+    old_size = malloc_usable_size(original);
+    can_zero_growth = 1;
+  }
+#endif
   if (size == 0) {
     free(original);
     *pp = NULL;
     return NULL;
   }
   void *result = realloc(original, (size_t)size);
-  if (result != NULL)
+  if (result != NULL) {
+    if (can_zero_growth && (size_t)size > old_size)
+      memset((char *)result + old_size, 0, (size_t)size - old_size);
     *pp = result;
+  }
   return result;
 }
 
