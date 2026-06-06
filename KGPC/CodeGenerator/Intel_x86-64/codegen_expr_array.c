@@ -699,6 +699,19 @@ int codegen_get_indexable_element_size(struct Expression *array_expr,
       }
     }
   }
+  if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+      ctx != NULL && ctx->symtab != NULL) {
+    HashNode_t *var_node = NULL;
+    if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+        var_node != NULL && var_node->type != NULL &&
+        kgpc_type_is_string(var_node->type) &&
+        kgpc_type_string_storage_kind(var_node->type) !=
+            KGPC_STRING_STORAGE_SHORTSTRING) {
+      base_is_string = 1;
+      base_is_array = 0;
+      base_is_pointer = 0;
+    }
+  }
   if (!base_is_array && !base_is_string && !base_is_pointer) {
     if (array_expr->type == EXPR_POINTER_DEREF) {
       /* p^[i] where p points to an array - treat as array access */
@@ -1245,6 +1258,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
       }
     }
   }
+  if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+      ctx != NULL && ctx->symtab != NULL) {
+    HashNode_t *var_node = NULL;
+    if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+        var_node != NULL && var_node->type != NULL &&
+        kgpc_type_is_string(var_node->type) &&
+        kgpc_type_string_storage_kind(var_node->type) !=
+            KGPC_STRING_STORAGE_SHORTSTRING) {
+      base_is_string = 1;
+      base_is_array = 0;
+      base_is_pointer = 0;
+    }
+  }
   if (!base_is_array && !base_is_string && !base_is_pointer) {
     if (array_expr->type == EXPR_POINTER_DEREF) {
       /* p^[i] where p points to an array - treat as array access */
@@ -1541,7 +1567,45 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
   }
 
   Register_t *base_reg = NULL;
-  if ((base_is_string || base_is_pointer) && !base_is_inline_shortstring) {
+  if (base_is_string && !base_is_inline_shortstring &&
+      array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL) {
+    int base_scope_depth = 0;
+    StackNode_t *base_stack_node =
+        find_label_with_depth(array_expr->expr_data.id, &base_scope_depth);
+    if (base_stack_node != NULL && base_scope_depth > 0 &&
+        !base_stack_node->is_static) {
+      base_reg = get_free_reg(get_reg_stack(), &inst_list);
+      if (base_reg == NULL)
+        base_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+      if (base_reg == NULL) {
+        free_reg(get_reg_stack(), index_reg);
+        codegen_report_error(
+            ctx, "ERROR: Unable to allocate register for non-local string base.");
+        return inst_list;
+      }
+      Register_t *frame_reg =
+          codegen_acquire_static_link(ctx, &inst_list, base_scope_depth);
+      if (frame_reg == NULL) {
+        free_reg(get_reg_stack(), index_reg);
+        free_reg(get_reg_stack(), base_reg);
+        codegen_report_error(
+            ctx, "ERROR: Failed to acquire static link for string %s.",
+            array_expr->expr_data.id);
+        return inst_list;
+      }
+      char load_buf[128];
+      snprintf(load_buf, sizeof(load_buf), "\tmovq\t-%d(%s), %s\n",
+               base_stack_node->offset, frame_reg->bit_64, base_reg->bit_64);
+      inst_list = add_inst(inst_list, load_buf);
+    } else {
+      inst_list =
+          codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
+      if (codegen_had_error(ctx) || base_reg == NULL) {
+        free_reg(get_reg_stack(), index_reg);
+        return inst_list;
+      }
+    }
+  } else if ((base_is_string || base_is_pointer) && !base_is_inline_shortstring) {
     inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
     if (codegen_had_error(ctx) || base_reg == NULL) {
       free_reg(get_reg_stack(), index_reg);
