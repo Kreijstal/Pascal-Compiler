@@ -104,6 +104,50 @@ static int codegen_type_is_inline_shortstring_storage(const KgpcType *type) {
   return 0;
 }
 
+static int codegen_type_is_shortstring_result_storage(const KgpcType *type) {
+  if (type == NULL)
+    return 0;
+  if (codegen_type_is_inline_shortstring_storage(type))
+    return 1;
+  return kgpc_type_string_storage_kind((KgpcType *)type) ==
+         KGPC_STRING_STORAGE_SHORTSTRING;
+}
+
+static int codegen_expr_is_current_shortstring_result_storage(
+    const struct Expression *expr, CodeGenContext *ctx) {
+  if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID ||
+      expr->expr_data.id == NULL)
+    return 0;
+
+  if (!codegen_type_is_shortstring_result_storage(ctx->current_return_type))
+    return 0;
+
+  if (pascal_identifier_equals(expr->expr_data.id, "Result")) {
+    HashNode_t *shadow_node = NULL;
+    if (ctx->symtab != NULL &&
+        FindSymbol(&shadow_node, ctx->symtab, expr->expr_data.id) != 0 &&
+        shadow_node != NULL)
+      return 0;
+    return 1;
+  }
+
+  if (ctx->current_subprogram_id != NULL &&
+      pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_id))
+    return 1;
+
+  if (ctx->current_subprogram_method_name != NULL &&
+      pascal_identifier_equals(expr->expr_data.id,
+                               ctx->current_subprogram_method_name))
+    return 1;
+
+  if (ctx->current_subprogram_result_name != NULL &&
+      pascal_identifier_equals(expr->expr_data.id,
+                               ctx->current_subprogram_result_name))
+    return 1;
+
+  return 0;
+}
+
 /* Walk a decl-list looking for a typed-const array named `bare_id` and
  * return its element storage size (only for shortstring elements).
  * Returns 0 if no such declaration is found or the element is not a
@@ -1467,7 +1511,9 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
    * of string data as if it were a pointer. */
   int base_is_inline_shortstring = 0;
   if (base_is_string) {
-    if (codegen_type_is_inline_shortstring_storage(expr_get_kgpc_type(array_expr)))
+    if (codegen_type_is_inline_shortstring_storage(
+            expr_get_kgpc_type(array_expr)) ||
+        codegen_expr_is_current_shortstring_result_storage(array_expr, ctx))
       base_is_inline_shortstring = 1;
   }
 
@@ -1785,6 +1831,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
   if (!wide_char_index && first_index_stride <= 1 &&
       (codegen_array_access_targets_shortstring(expr, ctx) ||
        codegen_type_is_inline_shortstring_storage(expr_get_kgpc_type(array_expr)) ||
+       codegen_expr_is_current_shortstring_result_storage(array_expr, ctx) ||
        base_is_inline_shortstring)) {
     shortstring_index = 1;
   } else if (!wide_char_index && array_expr != NULL &&
