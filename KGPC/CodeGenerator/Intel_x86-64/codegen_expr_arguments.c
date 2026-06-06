@@ -3502,19 +3502,6 @@ ListNode_t *codegen_pass_arguments(
             free_expr_tree(expr_tree);
           }
 
-          /* BUGFIX: For assigned() with comma-syntax array accesses,
-           * gencode_expr_tree returns the address of the pointer slot.
-           * kgpc_assigned expects the pointer VALUE, so dereference. */
-          if (top_reg != NULL && call_expr != NULL &&
-              call_expr->expr_data.function_call_data.builtin_call_lowering ==
-                  BUILTIN_CALL_ASSIGNED &&
-              arg_expr != NULL && arg_expr->type == EXPR_ARRAY_ACCESS &&
-              arg_expr->expr_data.array_access_data.extra_indices != NULL) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                     top_reg->bit_64, top_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-          }
-
           if (expected_type == REAL_TYPE)
             inst_list = codegen_expr_maybe_convert_int_like_to_real(
                 expected_type, arg_expr, top_reg, inst_list, ctx);
