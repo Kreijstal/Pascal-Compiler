@@ -2634,14 +2634,15 @@ static int semcheck_with_match_is_synthetic_self(const char *id,
  * field named `c`): an EXPLICIT unit qualifier must bind to the unit's own
  * global, never to a same-named Self field.  Consumed (cleared) at the top of
  * semcheck_varid so it only affects that immediate call, not any recursion. */
-static int s_suppress_self_for_next_varid = 0;
-
-void semcheck_suppress_self_for_next_varid(void) {
-  s_suppress_self_for_next_varid = 1;
-}
-
 int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
                    int max_scope_lev, int mutating) {
+  return semcheck_varid_ex(type_return, symtab, expr, max_scope_lev, mutating,
+                           0);
+}
+
+int semcheck_varid_ex(int *type_return, SymTab_t *symtab,
+                      struct Expression *expr, int max_scope_lev, int mutating,
+                      int suppress_self) {
   int return_val, scope_return;
   char *id;
   HashNode_t *hash_return;
@@ -2651,10 +2652,6 @@ int semcheck_varid(int *type_return, SymTab_t *symtab, struct Expression *expr,
 
   return_val = 0;
   id = expr->expr_data.id;
-  /* Consume the one-shot self-suppression request so it only affects this
-   * call (not any nested semcheck_varid invoked while resolving this one). */
-  int suppress_self = s_suppress_self_for_next_varid;
-  s_suppress_self_for_next_varid = 0;
   semcheck_clear_pointer_info(expr);
   semcheck_clear_array_info(expr);
   if (mutating != NO_MUTATE && id != NULL) {

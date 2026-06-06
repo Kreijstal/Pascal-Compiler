@@ -838,12 +838,21 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
             (ptr_reg_reg != NULL && ptr_reg_reg->reg_id == REG_R11);
         const char *scratch = ptr_is_r11 ? "%r10" : "%r11";
         const char *scratch32 = ptr_is_r11 ? "%r10d" : "%r11d";
+        /* Load with the width of the actual operand: a Byte/Word/SmallInt slot
+         * holds 1/2 bytes, so a blanket movl/movslq would read 4 bytes and pull
+         * adjacent bytes into the offset.  Sign-extend signed types into the
+         * 64-bit scratch; zero-extend unsigned types into its 32-bit half
+         * (which clears the upper 32 bits of the full register). */
+        int int_w = get_type_tag_size(expr_get_type_tag(int_expr));
         if (codegen_type_is_signed(expr_get_type_tag(int_expr))) {
-          snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", int_reg,
+          const char *mov =
+              (int_w == 1) ? "movsbq" : (int_w == 2) ? "movswq" : "movslq";
+          snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", mov, int_reg,
                    scratch);
         } else {
-          /* movl into the 32-bit half zero-extends into the full register */
-          snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", int_reg,
+          const char *mov =
+              (int_w == 1) ? "movzbl" : (int_w == 2) ? "movzwl" : "movl";
+          snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", mov, int_reg,
                    scratch32);
         }
         inst_list = add_inst(inst_list, buffer);

@@ -3101,6 +3101,12 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
   if (rhs_reg == NULL) {
 
     StackNode_t *spill_loc = add_l_t("str_concat_rhs");
+    if (spill_loc == NULL) {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate spill slot for string "
+               "concatenation RHS.");
+      return inst_list;
+    }
     inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
     if (result_is_wide)
       inst_list = promote_operand_to_unicodestring(node->right_expr, inst_list,
@@ -3147,6 +3153,12 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
     }
   } else {
     StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
+    if (lhs_spill == NULL) {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate spill slot for string "
+               "concatenation LHS.");
+      return inst_list;
+    }
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
     if (result_is_wide)
       inst_list = promote_operand_to_unicodestring(node->left_expr, inst_list,

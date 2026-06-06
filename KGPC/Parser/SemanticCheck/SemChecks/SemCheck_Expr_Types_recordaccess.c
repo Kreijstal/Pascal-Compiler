@@ -540,9 +540,8 @@ skip_scoped_enum_resolution:
            * global, never to a same-named Self field of the enclosing method's
            * class (e.g. raatt.GetToken's `c := scanner.c`, where tasmreader
            * also has a field `c`). */
-          semcheck_suppress_self_for_next_varid();
-          return semcheck_varid(type_return, symtab, expr, max_scope_lev,
-                                mutating);
+          return semcheck_varid_ex(type_return, symtab, expr, max_scope_lev,
+                                   mutating, 1);
         } else if (field_node->hash_type == HASHTYPE_TYPE) {
           char *qualified_name = NULL;
           HashNode_t *qualified_type = NULL;
@@ -614,9 +613,8 @@ skip_scoped_enum_resolution:
           expr->expr_data.id = field_copy;
           /* Explicit unit qualifier: bind to the unit's routine, not a
            * same-named Self method of the enclosing class. */
-          semcheck_suppress_self_for_next_varid();
-          return semcheck_varid(type_return, symtab, expr, max_scope_lev,
-                                mutating);
+          return semcheck_varid_ex(type_return, symtab, expr, max_scope_lev,
+                                   mutating, 1);
         } else if (field_node->hash_type == HASHTYPE_FUNCTION_RETURN) {
           /* Unit.QualifiedName may resolve to the function-return helper
            * symbol first; force a zero-arg function call in expression

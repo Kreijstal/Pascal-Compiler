@@ -1952,7 +1952,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
             ptr_node != NULL && ptr_node->type != NULL)
           ptr_type = ptr_node->type;
       }
-      if (ptr_type != NULL && kgpc_type_is_pointer(ptr_type)) {
+      if (ptr_type != NULL && kgpc_type_is_pointer(ptr_type) && ctx != NULL &&
+          ctx->symtab != NULL) {
         KgpcType *pointee =
             kgpc_type_resolve_pointer_pointee(ptr_type, ctx->symtab);
         if (pointee != NULL && kgpc_type_is_array(pointee))
