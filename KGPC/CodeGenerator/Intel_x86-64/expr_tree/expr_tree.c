@@ -3516,7 +3516,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     }
 
     if (func_mangled_name != NULL &&
-        strcmp(func_mangled_name, "kgpc_string_length") == 0) {
+        (strcmp(func_mangled_name, "kgpc_string_length") == 0 ||
+         strcmp(func_mangled_name, "fpc_in_length_string") == 0)) {
       inst_list =
           codegen_builtin_string_length(expr, inst_list, ctx, target_reg);
       return inst_list;

@@ -1,6 +1,7 @@
+{$H+}
 program fpc_bootstrap_fnmatch_star_length;
 
-function MatchesStar(const Pattern, Name: string): boolean;
+function MatchesStar(const Pattern, Name: RawByteString): boolean;
 var
   LenPat, LenName: longint;
 
