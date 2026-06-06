@@ -2224,6 +2224,26 @@ sys.exit(3)
         self.assertEqual(lines, ["-42", "7", "1024", "ctypes"])
         self.assertEqual(process.returncode, 0)
 
+    def test_fpc_bootstrap_classref_ptr_deref_assign(self):
+        """Class-reference field assignment from ^class deref must stay direct."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_classref_ptr_deref_assign"
+        )
+
+        run_compiler(input_file, asm_file)
+        asm_source = read_file_content(asm_file)
+        self.assertNotIn("olevariant__op_assign_terror", asm_source)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.stdout.strip(), "ok")
+        self.assertEqual(process.returncode, 0)
+
     def test_zahlen_program_compiles(self):
         """Ensures the zahlen classification demo compiles successfully."""
         input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")

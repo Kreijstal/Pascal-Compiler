@@ -2346,6 +2346,14 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
                                               symtab))
         return 1;
     }
+    if (((lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
+          lhs_points_to->info.primitive_type_tag == RECORD_TYPE) ||
+         lhs_points_to->kind == TYPE_KIND_RECORD) &&
+        ((rhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
+          rhs_points_to->info.primitive_type_tag == RECORD_TYPE) ||
+         rhs_points_to->kind == TYPE_KIND_RECORD)) {
+      return 1;
+    }
     if (lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
         rhs_points_to->kind == TYPE_KIND_PRIMITIVE) {
       int lhs_tag = lhs_points_to->info.primitive_type_tag;
