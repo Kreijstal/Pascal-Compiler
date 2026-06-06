@@ -3087,6 +3087,17 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
 
   Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
 
+  /* Under register pressure the allocator can hand back the very register we
+     are using as the destination (target_reg).  The register-based path below
+     spills the LHS, evaluates the RHS into rhs_reg, then reloads the LHS into
+     target_reg -- if rhs_reg == target_reg that reload clobbers the freshly
+     computed RHS, producing concat(LHS, LHS).  Fall back to the stack-spill
+     path (which uses only target_reg + a temp slot) in that case. */
+  if (rhs_reg != NULL && rhs_reg == target_reg) {
+    free_reg(get_reg_stack(), rhs_reg);
+    rhs_reg = NULL;
+  }
+
   if (rhs_reg == NULL) {
 
     StackNode_t *spill_loc = add_l_t("str_concat_rhs");
