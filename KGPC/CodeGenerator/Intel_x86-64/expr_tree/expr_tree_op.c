@@ -819,6 +819,36 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
       const char *int_reg = left_is_pointer ? right64 : left64;
       const Register_t *ptr_reg_reg = left_is_pointer ? left_reg : right_reg;
       struct Expression *ptr_expr = left_is_pointer ? left_expr : right_expr;
+      struct Expression *int_expr = left_is_pointer ? right_expr : left_expr;
+
+      /* If the integer offset is a 32-bit value living in memory (a stack
+       * slot or global), int_reg is a memory reference like "-12(%rbp)".
+       * Using it directly in the 64-bit imulq/addq/subq below would read 8
+       * bytes from a 4-byte slot, pulling adjacent stack garbage into the
+       * high 32 bits and corrupting the pointer (e.g. `pmax := p + len`
+       * computed `p + len + (low32(p) << 32)`, faulting on deref on Win64
+       * and looping forever on Linux/Wine).  Load it into a scratch register
+       * with the correct sign/zero extension first so all later uses operate
+       * on a full 64-bit register.  64-bit memory operands are fine as-is. */
+      if (int_reg != NULL && int_reg[0] != '$' && int_reg[0] != '%' &&
+          int_expr != NULL &&
+          !codegen_type_uses_qword(expr_get_type_tag(int_expr)) &&
+          !expr_uses_qword_kgpctype(int_expr)) {
+        int ptr_is_r11 =
+            (ptr_reg_reg != NULL && ptr_reg_reg->reg_id == REG_R11);
+        const char *scratch = ptr_is_r11 ? "%r10" : "%r11";
+        const char *scratch32 = ptr_is_r11 ? "%r10d" : "%r11d";
+        if (codegen_type_is_signed(expr_get_type_tag(int_expr))) {
+          snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", int_reg,
+                   scratch);
+        } else {
+          /* movl into the 32-bit half zero-extends into the full register */
+          snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", int_reg,
+                   scratch32);
+        }
+        inst_list = add_inst(inst_list, buffer);
+        int_reg = scratch;
+      }
 
       /* Get element size */
       long long element_size = 1;
