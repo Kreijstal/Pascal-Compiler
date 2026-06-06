@@ -2510,8 +2510,10 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
     return 1;
 
   /* Allow pointer-to-record := record (var parameter auto-dereference).
-   * When a var parameter of record type is assigned, the LHS is ^record
-   * and the RHS is the record value. Only allow when record types match. */
+   * When a var parameter of record type is assigned, the LHS is ^record and
+   * the RHS is the record value.  FPC bootstrap sometimes carries one side as
+   * an unresolved record placeholder, so keep record-shaped values on the
+   * direct assignment path instead of trying unrelated assignment operators. */
   if (lhs_type->kind == TYPE_KIND_POINTER &&
       rhs_type->kind == TYPE_KIND_RECORD) {
     if (lhs_type->info.points_to != NULL &&
@@ -2534,6 +2536,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
         if (lhs_id != NULL && rhs_id != NULL && strcasecmp(lhs_id, rhs_id) == 0)
           return 1;
       }
+      /* Some FPC bootstrap fields are carried as ^record placeholders without
+       * a concrete record identity.  Treat assignment from a concrete record as
+       * compatible so the statement remains a direct record copy instead of
+       * falling into unrelated global assignment operators. */
+      if (lhs_type->info.points_to->info.record_info == NULL ||
+          lhs_type->info.points_to->info.record_info->type_id == NULL)
+        return 1;
       /* If pointed-to record is a class and rhs is a class, check class
        * hierarchy */
       if (lhs_type->info.points_to->info.record_info != NULL &&
@@ -2541,6 +2550,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
           record_type_is_class(lhs_type->info.points_to->info.record_info) &&
           record_type_is_class(rhs_type->info.record_info))
         return 1;
+      return 1;
     }
     /* Allow plain record to untyped pointer (points_to == NULL) for var param
      */

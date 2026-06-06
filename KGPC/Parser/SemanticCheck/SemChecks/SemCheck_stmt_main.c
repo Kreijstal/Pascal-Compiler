@@ -1613,6 +1613,9 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt,
          !semcheck_type_is_recordish(rhs_kgpctype)) ||
         (!semcheck_type_is_recordish(lhs_kgpctype) &&
          semcheck_type_is_recordish(rhs_kgpctype))) {
+      if (are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype,
+                                              symtab))
+        goto assignment_types_ok;
       if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
                                                   &rhs_kgpctype, &rhs_owned)) {
         expr = stmt->stmt_data.var_assign_data.expr;
