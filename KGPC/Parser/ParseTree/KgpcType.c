@@ -2515,6 +2515,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
   if (lhs_type->kind == TYPE_KIND_POINTER &&
       rhs_type->kind == TYPE_KIND_RECORD) {
     if (lhs_type->info.points_to != NULL &&
+        lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_type->info.points_to->info.primitive_type_tag == RECORD_TYPE) {
+      return 1;
+    }
+    if (lhs_type->info.points_to != NULL &&
         lhs_type->info.points_to->kind == TYPE_KIND_RECORD) {
       /* Check if record types match */
       if (kgpc_type_equals(lhs_type->info.points_to, rhs_type))
