@@ -718,7 +718,9 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     const int use_qword_spill =
         expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
-    StackNode_t *left_int_spill = add_l_t("relop_left_spill");
+    StackNode_t *left_int_spill =
+        expr_contains_function_call(right_expr) ? add_l_t("relop_left_spill")
+                                                : NULL;
     if (left_int_spill != NULL) {
       snprintf(buffer, sizeof(buffer), "\tmov%c\t%s, -%d(%%rbp)\n",
                use_qword_spill ? 'q' : 'l',
