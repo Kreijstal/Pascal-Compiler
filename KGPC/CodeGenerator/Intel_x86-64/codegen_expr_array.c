@@ -91,6 +91,10 @@ static int codegen_type_is_inline_shortstring_storage(const KgpcType *type) {
   if (alias != NULL && alias->is_shortstring)
     return 1;
 
+  if (kgpc_type_string_storage_kind((KgpcType *)type) ==
+      KGPC_STRING_STORAGE_SHORTSTRING)
+    return 1;
+
   if (type->kind == TYPE_KIND_ARRAY &&
       type->info.array_info.element_type != NULL &&
       type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
@@ -1915,8 +1919,24 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
    * at index 0. Only apply shortstring indexing for character access within a
    * ShortString (stride == 1), NOT for element access in an array of
    * ShortStrings (stride == 256). */
+  int base_var_is_shortstring = 0;
+  if (array_expr != NULL && array_expr->type == EXPR_VAR_ID &&
+      array_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL) {
+    HashNode_t *base_node = NULL;
+    if (FindSymbol(&base_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+        base_node != NULL && base_node->type != NULL &&
+        kgpc_type_string_storage_kind(base_node->type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING) {
+      base_var_is_shortstring = 1;
+    }
+  }
+
   if (!wide_char_index && first_index_stride <= 1 &&
       (codegen_array_access_targets_shortstring(expr, ctx) ||
+       (array_type != NULL &&
+        kgpc_type_string_storage_kind(array_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING) ||
+       base_var_is_shortstring ||
        codegen_type_is_inline_shortstring_storage(expr_get_kgpc_type(array_expr)) ||
        codegen_expr_is_current_shortstring_result_storage(array_expr, ctx) ||
        base_is_inline_shortstring)) {
