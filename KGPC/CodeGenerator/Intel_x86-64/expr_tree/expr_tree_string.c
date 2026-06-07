@@ -45,6 +45,34 @@ static int expr_is_shortstring_storage(const struct Expression *expr) {
   return 0;
 }
 
+static int expr_var_id_is_managed_string_symbol(const struct Expression *expr,
+                                                CodeGenContext *ctx) {
+  if (expr == NULL || expr->type != EXPR_VAR_ID || ctx == NULL ||
+      ctx->symtab == NULL || expr->expr_data.id == NULL)
+    return 0;
+
+  HashNode_t *node = NULL;
+  if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) == 0 ||
+      node == NULL || node->type == NULL)
+    return 0;
+
+  if (kgpc_type_string_storage_kind(node->type) ==
+      KGPC_STRING_STORAGE_SHORTSTRING)
+    return 0;
+
+  if (kgpc_type_string_storage_kind(node->type) ==
+          KGPC_STRING_STORAGE_MANAGED_ANSI ||
+      kgpc_type_string_storage_kind(node->type) ==
+          KGPC_STRING_STORAGE_MANAGED_WIDE) {
+    struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+    if (kgpc_type_equals_tag(node->type, STRING_TYPE) && alias == NULL)
+      return !pascal_frontend_default_shortstring();
+    return 1;
+  }
+
+  return 0;
+}
+
 int expr_function_call_returns_ansistring(const struct Expression *expr,
                                           CodeGenContext *ctx) {
   if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
@@ -73,14 +101,11 @@ int expr_is_shortstring_storage_ctx(const struct Expression *expr,
   if (expr_function_call_returns_ansistring(expr, ctx))
     return 0;
 
+  if (expr_var_id_is_managed_string_symbol(expr, ctx))
+    return 0;
+
   if (expr_is_shortstring_storage(expr))
     return 1;
-
-  if (expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
-      expr_has_type_tag(expr, STRING_TYPE) &&
-      !pascal_frontend_default_shortstring()) {
-    return 0;
-  }
 
   if (ctx != NULL && codegen_expr_is_shortstring_value_ctx(expr, ctx))
     return 1;

@@ -228,8 +228,8 @@ size_t kgpc_string_known_length(const char *value) {
   return strlen(value);
 }
 
-int64_t kgpc_utf8codepointlen(const char *p, int64_t max_len,
-                              int include_partial) {
+intptr_t kgpc_utf8codepointlen(const char *p, intptr_t max_len,
+                               int include_partial) {
   if (p == NULL || max_len <= 0)
     return 0;
 
@@ -246,14 +246,20 @@ int64_t kgpc_utf8codepointlen(const char *p, int64_t max_len,
   else if (c >= 0xf0 && c <= 0xf4)
     need = 4;
   else
-    return 1;
+    return -1;
 
   if (max_len < need)
-    return include_partial ? max_len : 0;
+    return include_partial ? -max_len : 0;
+
+  if ((c == 0xe0 && (s[1] < 0xa0 || s[1] > 0xbf)) ||
+      (c == 0xed && (s[1] < 0x80 || s[1] > 0x9f)) ||
+      (c == 0xf0 && (s[1] < 0x90 || s[1] > 0xbf)) ||
+      (c == 0xf4 && (s[1] < 0x80 || s[1] > 0x8f)))
+    return -1;
 
   for (int i = 1; i < need; i++) {
     if ((s[i] & 0xc0) != 0x80)
-      return i;
+      return -1;
   }
 
   return need;
