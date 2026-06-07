@@ -6510,8 +6510,29 @@ ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
   }
 
   int limit_depth = codegen_current_loop_finally_depth(ctx);
-  return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label,
-                                        limit_depth);
+  int except_pop_count =
+      ctx != NULL ? ctx->except_depth - codegen_current_loop_except_depth(ctx)
+                  : 0;
+  if (except_pop_count <= 0)
+    return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label,
+                                          limit_depth);
+
+  char cleanup_label[18];
+  gen_label(cleanup_label, sizeof(cleanup_label), ctx);
+  inst_list = codegen_branch_through_finally(ctx, inst_list, symtab,
+                                             cleanup_label, limit_depth);
+  char buffer[32];
+  snprintf(buffer, sizeof(buffer), "%s:\n", cleanup_label);
+  inst_list = add_inst(inst_list, buffer);
+  for (int i = 0; i < except_pop_count; ++i) {
+    inst_list =
+        add_inst(inst_list, "\t# BREAK: pop active try/except frame\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list,
+                                               "kgpc_pop_except_frame");
+    free_arg_regs();
+  }
+  return gencode_jmp(NORMAL_JMP, 0, (char *)exit_label, inst_list);
 }
 
 ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list,
@@ -6525,8 +6546,29 @@ ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list,
   }
 
   int limit_depth = codegen_current_loop_finally_depth(ctx);
-  return codegen_branch_through_finally(ctx, inst_list, symtab, continue_label,
-                                        limit_depth);
+  int except_pop_count =
+      ctx != NULL ? ctx->except_depth - codegen_current_loop_except_depth(ctx)
+                  : 0;
+  if (except_pop_count <= 0)
+    return codegen_branch_through_finally(ctx, inst_list, symtab,
+                                          continue_label, limit_depth);
+
+  char cleanup_label[18];
+  gen_label(cleanup_label, sizeof(cleanup_label), ctx);
+  inst_list = codegen_branch_through_finally(ctx, inst_list, symtab,
+                                             cleanup_label, limit_depth);
+  char buffer[32];
+  snprintf(buffer, sizeof(buffer), "%s:\n", cleanup_label);
+  inst_list = add_inst(inst_list, buffer);
+  for (int i = 0; i < except_pop_count; ++i) {
+    inst_list =
+        add_inst(inst_list, "\t# CONTINUE: pop active try/except frame\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list,
+                                               "kgpc_pop_except_frame");
+    free_arg_regs();
+  }
+  return gencode_jmp(NORMAL_JMP, 0, (char *)continue_label, inst_list);
 }
 
 ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list,

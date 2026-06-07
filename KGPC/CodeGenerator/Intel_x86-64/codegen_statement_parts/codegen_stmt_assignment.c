@@ -55,11 +55,21 @@ static int codegen_assignment_type_is_class_vmt_value(const KgpcType *type) {
   if (type->type_alias != NULL && type->type_alias->is_class_reference)
     return 1;
 
+  if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL &&
+      record_type_is_class(type->info.record_info))
+    return 1;
+
   if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
       type->info.points_to->type_alias != NULL &&
       type->info.points_to->type_alias->is_class_reference) {
     return 1;
   }
+
+  if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+      type->info.points_to->kind == TYPE_KIND_RECORD &&
+      type->info.points_to->info.record_info != NULL &&
+      record_type_is_class(type->info.points_to->info.record_info))
+    return 1;
 
   return 0;
 }

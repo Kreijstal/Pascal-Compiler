@@ -1,0 +1,111 @@
+# Maintainer: Kreijstal <elektrischrainbow@gmail.com>
+#
+# mingw-w64 (MSYS2) package for the Free Pascal Compiler, bootstrapped *without*
+# an existing FPC: KGPC (this repository's Pascal compiler, written in C) compiles
+# FPC's own compiler source (pp.pas) into a native Win64 ppcx64.exe, which then
+# self-builds the entire Win64 RTL.  No host fpc is used anywhere in the chain.
+#
+# Build it from a full checkout of the Pascal-Compiler repo (with the FPCSource
+# tree present).  Run inside an MSYS2 UCRT64/MINGW64 shell:
+#
+#     cd packaging/msys2
+#     makepkg-mingw -sCf            # -s: pull makedepends, -C: clean, -f: overwrite
+#
+# The chain (all verified on win11 / MSYS_NT UCRT64):
+#   1. meson builds the native KGPC (kgpc.exe)                         [C]
+#   2. scripts/native_build_pp_win.sh: KGPC compiles pp.pas -> ppcx64.exe
+#   3. ppcx64 self-builds rtl/win64 -> 90 .ppu + 87 .o
+#   4. ppcx64 builds compiler/utils/fpc.pp -> the fpc.exe driver (needs -dx86_64)
+#   5. assemble bin/ + units/ + fpc.cfg into $MINGW_PREFIX
+
+_realname=fpc
+pkgbase="mingw-w64-${_realname}-kgpc"
+pkgname="${MINGW_PACKAGE_PREFIX}-${_realname}-kgpc"
+# FPC compiler version produced by this bootstrap (FPCSource/compiler/version.pas).
+pkgver=3.3.1
+pkgrel=1
+pkgdesc="Free Pascal Compiler, bootstrapped from source via KGPC (no host FPC) (mingw-w64)"
+arch=('any')
+mingw_arch=('mingw64' 'ucrt64' 'clang64')
+url="https://github.com/Kreijstal/Pascal-Compiler"
+license=('GPL-2.0-or-later' 'LGPL-2.1-or-later')  # FPC compiler GPL2, RTL LGPL2 + linking exception
+depends=("${MINGW_PACKAGE_PREFIX}-binutils")        # as/ld used by ppcx64 to assemble+link
+makedepends=("${MINGW_PACKAGE_PREFIX}-gcc"
+             "${MINGW_PACKAGE_PREFIX}-meson"
+             "${MINGW_PACKAGE_PREFIX}-ninja"
+             "${MINGW_PACKAGE_PREFIX}-pkgconf")
+options=('!strip' '!debug')   # ppcx64.exe is a self-contained 31 MB PE; do not strip the units
+
+# This PKGBUILD builds the repository it lives in (two levels up). No external source.
+_repo="$(cd "${startdir}/../.." && pwd)"
+
+# Target tuple FPC uses for the produced units.
+_fpctarget="x86_64-win64"
+
+build() {
+  cd "${_repo}"
+
+  # Guard: must be a MinGW-w64 toolchain (defines _WIN64); the msys posix gcc is a
+  # Cygwin fork and produces a ppcx64 that faults at startup (argv/entry-info shim).
+  if ! "${MINGW_PREFIX}/bin/gcc" -dM -E - </dev/null 2>/dev/null | grep -q "define _WIN64"; then
+    error "Toolchain at ${MINGW_PREFIX}/bin/gcc does not define _WIN64 (not MinGW-w64)."
+    return 1
+  fi
+
+  # --- 1. native KGPC (C) -------------------------------------------------
+  local _kgpcbuild="build-pkg-kgpc"
+  if [ ! -x "${_kgpcbuild}/KGPC/kgpc.exe" ]; then
+    meson setup "${_kgpcbuild}" --buildtype=release
+  fi
+  meson compile -C "${_kgpcbuild}" kgpc
+
+  # --- 2. KGPC: pp.pas -> ppcx64.exe -------------------------------------
+  export KGPC="${_repo}/${_kgpcbuild}/KGPC/kgpc.exe"
+  export WORK="${srcdir}/ppwork"
+  export PP_EXE="${WORK}/ppcx64.exe"
+  mkdir -p "${WORK}"
+  bash scripts/native_build_pp_win.sh
+
+  # --- 3. ppcx64 self-builds the Win64 RTL --------------------------------
+  local _units="${_repo}/FPCSource/rtl/units/${_fpctarget}"
+  # Start from a clean unit dir so the produced .ppu/.o are genuinely self-built
+  # (never the vendored host-fpc release units, if any are checked in).
+  ( cd FPCSource/rtl/win64
+    make clean    FPC="${PP_EXE}" CPU_TARGET=x86_64 OS_TARGET=win64 >/dev/null 2>&1 || true
+    rm -f "${_units}"/*.ppu "${_units}"/*.o fpcmade.x86_64-win64
+    make all      FPC="${PP_EXE}" CPU_TARGET=x86_64 OS_TARGET=win64 )
+
+  # --- 4. ppcx64 builds the fpc.exe driver --------------------------------
+  # The driver keys its target off the bare `x86_64` define, which FPC's own
+  # Makefiles pass as -d$(CPU_TARGET); pass it here too or ppcbin comes out empty.
+  ( cd FPCSource/compiler/utils
+    rm -f fpc.exe fpc.o fpc.ppu
+    "${PP_EXE}" -Twin64 -Px86_64 -dx86_64 -Fu"${_units}" -FE. fpc.pp )
+}
+
+package() {
+  cd "${_repo}"
+  local _units="${_repo}/FPCSource/rtl/units/${_fpctarget}"
+  local _bin="${pkgdir}${MINGW_PREFIX}/bin"
+  local _unitdir="${pkgdir}${MINGW_PREFIX}/lib/fpc/${pkgver}/units/${_fpctarget}/rtl"
+
+  install -d "${_bin}" "${_unitdir}"
+  install -m755 "${srcdir}/ppwork/ppcx64.exe"          "${_bin}/ppcx64.exe"
+  install -m755 "FPCSource/compiler/utils/fpc.exe"     "${_bin}/fpc.exe"
+  install -m644 "${_units}"/*.ppu                       "${_unitdir}/"
+  install -m644 "${_units}"/*.o                         "${_unitdir}/"
+
+  # fpc.cfg with absolute install paths (standard for fixed-prefix mingw-w64 pkgs).
+  # ppcx64 auto-reads fpc.cfg from its own directory; -FD lets the driver find ppcx64.
+  local _winprefix; _winprefix="$(cygpath -w "${MINGW_PREFIX}")"
+  local _winprefix_bs="${_winprefix//\//\\}"
+  cat > "${_bin}/fpc.cfg" <<EOF
+# fpc.cfg for KGPC-bootstrapped FPC ${pkgver} (${_fpctarget}) — generated by PKGBUILD
+-FD${_winprefix_bs}\\bin
+-Fu${_winprefix_bs}\\lib\\fpc\\${pkgver}\\units\\${_fpctarget}\\rtl
+EOF
+
+  install -d "${pkgdir}${MINGW_PREFIX}/share/licenses/${_realname}-kgpc"
+  install -m644 "FPCSource/rtl/COPYING.FPC" \
+    "${pkgdir}${MINGW_PREFIX}/share/licenses/${_realname}-kgpc/COPYING.FPC" 2>/dev/null || true
+}

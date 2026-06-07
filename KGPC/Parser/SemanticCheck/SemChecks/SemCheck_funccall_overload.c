@@ -551,6 +551,54 @@ FunccallState funccall_state_overload_setup(FunccallCtx *ctx) {
       ctx->expr->expr_data.function_call_data.procedural_var_symbol =
           first_candidate;
 
+      /* For a method pointer ("procedure of object"), codegen must load the
+       * hidden Self/data half of the TMethod from the variable's storage and
+       * pass it as the implicit first argument.  It locates that storage via
+       * procedural_var_expr.  The plain-variable procvar path never built one,
+       * so codegen fell back to a bare indirect call that dropped Self and
+       * shifted every argument by one register.  Build an EXPR_VAR_ID for the
+       * callee variable so the method-pointer path in codegen can find it.
+       * (Plain 8-byte function-pointer procvars keep the symbol path.) */
+      if (kgpc_type_is_method_pointer(proc_type) &&
+          ctx->expr->expr_data.function_call_data.procedural_var_expr == NULL &&
+          ctx->id != NULL) {
+        char *callee_id = strdup(ctx->id);
+        if (callee_id == NULL) {
+          semcheck_error_with_context_at(
+              ctx->expr->line_num, ctx->expr->col_num, ctx->expr->source_index,
+              "Error on line %d, out of memory while preparing "
+              "method-pointer call.\n",
+              ctx->expr->line_num);
+          *ctx->type_return = UNKNOWN_TYPE;
+          do {
+            ctx->final_status = ++ctx->return_val;
+            return FC_CLEANUP;
+          } while (0);
+        }
+        struct Expression *callee_expr = mk_varid(ctx->expr->line_num, callee_id);
+        if (callee_expr == NULL) {
+          free(callee_id);
+          semcheck_error_with_context_at(
+              ctx->expr->line_num, ctx->expr->col_num, ctx->expr->source_index,
+              "Error on line %d, out of memory while preparing "
+              "method-pointer call.\n",
+              ctx->expr->line_num);
+          *ctx->type_return = UNKNOWN_TYPE;
+          do {
+            ctx->final_status = ++ctx->return_val;
+            return FC_CLEANUP;
+          } while (0);
+        }
+        callee_expr->col_num = ctx->expr->col_num;
+        callee_expr->source_index = ctx->expr->source_index;
+        semcheck_expr_with_type(NULL, ctx->symtab, callee_expr,
+                                ctx->max_scope_lev, NO_MUTATE);
+        ctx->expr->expr_data.function_call_data.procedural_var_expr =
+            callee_expr;
+        semcheck_expr_set_call_kgpc_type(ctx->expr, proc_type, 1);
+        ctx->expr->expr_data.function_call_data.is_call_info_valid = 1;
+      }
+
       destroy_list(ctx->overload_candidates);
       ctx->overload_candidates = NULL;
       if (ctx->mangled_name != NULL)

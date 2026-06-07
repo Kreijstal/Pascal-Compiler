@@ -9,6 +9,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__) || defined(_WIN32)
+#include <malloc.h>
+#endif
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
@@ -5487,13 +5491,72 @@ void kgpc_runerror(int32_t code) {
   exit(code);
 }
 
+typedef struct KgpcHeapBlock {
+  size_t size;
+  max_align_t align;
+} KgpcHeapBlock;
+
+static KgpcHeapBlock *kgpc_heap_header(void *ptr) {
+  if (ptr == NULL)
+    return NULL;
+  return ((KgpcHeapBlock *)ptr) - 1;
+}
+
+static void *kgpc_heap_alloc(size_t size, int zero) {
+  if (size == 0)
+    return NULL;
+  KgpcHeapBlock *block =
+      (KgpcHeapBlock *)malloc(sizeof(KgpcHeapBlock) + size);
+  if (block == NULL)
+    return NULL;
+  block->size = size;
+  void *payload = (void *)(block + 1);
+  if (zero)
+    memset(payload, 0, size);
+  /* cppcheck-suppress memleak ; ownership of `block` is returned as its
+   * payload pointer and recovered by kgpc_heap_header() before free/realloc. */
+  return payload;
+}
+
+static void kgpc_heap_free(void *ptr) {
+  if (ptr != NULL)
+    free(kgpc_heap_header(ptr));
+}
+
+static void *kgpc_heap_realloc(void *ptr, size_t size, int zero_growth) {
+  if (size == 0) {
+    kgpc_heap_free(ptr);
+    return NULL;
+  }
+
+  size_t old_size = 0;
+  KgpcHeapBlock *old_block = kgpc_heap_header(ptr);
+  if (old_block != NULL)
+    old_size = old_block->size;
+
+  KgpcHeapBlock *new_block =
+      (KgpcHeapBlock *)realloc(old_block, sizeof(KgpcHeapBlock) + size);
+  if (new_block == NULL)
+    return NULL;
+  new_block->size = size;
+
+  void *payload = (void *)(new_block + 1);
+  if (zero_growth && size > old_size)
+    memset((char *)payload + old_size, 0, size - old_size);
+  /* cppcheck-suppress memleak ; ownership of `new_block` is returned as its
+   * payload pointer and recovered by kgpc_heap_header() before free/realloc. */
+  return payload;
+}
+
 /* GetMemory/FreeMemory/ReallocMemory - C heap wrappers */
-void *kgpc_getmem_ptr(size_t size) { return malloc(size); }
+void *kgpc_getmem_ptr(size_t size) { return kgpc_heap_alloc(size, 0); }
 size_t kgpc_freemem_ptr(void *p) {
-  free(p);
+  kgpc_heap_free(p);
   return 0;
 }
-void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
+void *kgpc_reallocmem_ptr(void *p, size_t size) {
+  return kgpc_heap_realloc(p, size, 1);
+}
 
 /* Memory barriers - no-ops on x86 (strong memory model) */
 void kgpc_readbarrier(void) {}

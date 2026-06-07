@@ -83,6 +83,96 @@ static long long codegen_arr_decl_shortstring_elem_storage(const Tree_t *decl) {
   return 0;
 }
 
+static int codegen_type_is_inline_shortstring_storage(const KgpcType *type) {
+  if (type == NULL)
+    return 0;
+
+  struct TypeAlias *alias = kgpc_type_get_type_alias((KgpcType *)type);
+  if (alias != NULL && alias->is_shortstring)
+    return 1;
+
+  if (kgpc_type_string_storage_kind((KgpcType *)type) ==
+      KGPC_STRING_STORAGE_SHORTSTRING)
+    return 1;
+
+  if (type->kind == TYPE_KIND_ARRAY &&
+      type->info.array_info.element_type != NULL &&
+      type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+      type->info.array_info.element_type->info.primitive_type_tag ==
+          CHAR_TYPE &&
+      type->info.array_info.start_index == 0 &&
+      type->info.array_info.end_index >= 0 &&
+      type->info.array_info.end_index <= 255)
+    return 1;
+
+  return 0;
+}
+
+static int codegen_type_is_shortstring_result_storage(const KgpcType *type) {
+  if (type == NULL)
+    return 0;
+  if (codegen_type_is_inline_shortstring_storage(type))
+    return 1;
+  return kgpc_type_string_storage_kind((KgpcType *)type) ==
+         KGPC_STRING_STORAGE_SHORTSTRING;
+}
+
+static int codegen_record_field_is_inline_shortstring_storage(
+    const struct RecordField *field, const KgpcType *field_type) {
+  if (field == NULL)
+    return 0;
+
+  if (field_type != NULL &&
+      (codegen_type_is_inline_shortstring_storage(field_type) ||
+       kgpc_type_string_storage_kind((KgpcType *)field_type) ==
+           KGPC_STRING_STORAGE_SHORTSTRING))
+    return 1;
+
+  if (field->type == SHORTSTRING_TYPE)
+    return 1;
+
+  if (field->type == STRING_TYPE && field->has_cached_layout &&
+      field->cached_size > CODEGEN_POINTER_SIZE_BYTES)
+    return 1;
+
+  return 0;
+}
+
+static int codegen_expr_is_current_shortstring_result_storage(
+    const struct Expression *expr, CodeGenContext *ctx) {
+  if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID ||
+      expr->expr_data.id == NULL)
+    return 0;
+
+  if (!codegen_type_is_shortstring_result_storage(ctx->current_return_type))
+    return 0;
+
+  if (pascal_identifier_equals(expr->expr_data.id, "Result")) {
+    HashNode_t *shadow_node = NULL;
+    if (ctx->symtab != NULL &&
+        FindSymbol(&shadow_node, ctx->symtab, expr->expr_data.id) != 0 &&
+        shadow_node != NULL)
+      return 0;
+    return 1;
+  }
+
+  if (ctx->current_subprogram_id != NULL &&
+      pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_id))
+    return 1;
+
+  if (ctx->current_subprogram_method_name != NULL &&
+      pascal_identifier_equals(expr->expr_data.id,
+                               ctx->current_subprogram_method_name))
+    return 1;
+
+  if (ctx->current_subprogram_result_name != NULL &&
+      pascal_identifier_equals(expr->expr_data.id,
+                               ctx->current_subprogram_result_name))
+    return 1;
+
+  return 0;
+}
+
 /* Walk a decl-list looking for a typed-const array named `bare_id` and
  * return its element storage size (only for shortstring elements).
  * Returns 0 if no such declaration is found or the element is not a
@@ -254,8 +344,11 @@ codegen_array_access_targets_shortstring(const struct Expression *expr,
        (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
         pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
     return 0;
-  if (codegen_expr_is_shortstring_value(expr))
-    return 1;
+  if (codegen_expr_is_shortstring_value(expr)) {
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (codegen_type_is_inline_shortstring_storage(expr_type))
+      return 1;
+  }
 
   struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
   if (base_expr == NULL)
@@ -279,8 +372,7 @@ codegen_array_access_targets_shortstring(const struct Expression *expr,
 
   if (base_type != NULL && kgpc_type_is_array(base_type)) {
     KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
-    if (kgpc_type_string_storage_kind(elem_type) ==
-        KGPC_STRING_STORAGE_SHORTSTRING)
+    if (codegen_type_is_inline_shortstring_storage(elem_type))
       return 1;
   }
 
@@ -609,6 +701,19 @@ int codegen_get_indexable_element_size(struct Expression *array_expr,
         else if (kgpc_type_is_pointer(var_node->type))
           base_is_pointer = 1;
       }
+    }
+  }
+  if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+      ctx != NULL && ctx->symtab != NULL) {
+    HashNode_t *var_node = NULL;
+    if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+        var_node != NULL && var_node->type != NULL &&
+        kgpc_type_is_string(var_node->type) &&
+        kgpc_type_string_storage_kind(var_node->type) !=
+            KGPC_STRING_STORAGE_SHORTSTRING) {
+      base_is_string = 1;
+      base_is_array = 0;
+      base_is_pointer = 0;
     }
   }
   if (!base_is_array && !base_is_string && !base_is_pointer) {
@@ -1157,6 +1262,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
       }
     }
   }
+  if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+      ctx != NULL && ctx->symtab != NULL) {
+    HashNode_t *var_node = NULL;
+    if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+        var_node != NULL && var_node->type != NULL &&
+        kgpc_type_is_string(var_node->type) &&
+        kgpc_type_string_storage_kind(var_node->type) !=
+            KGPC_STRING_STORAGE_SHORTSTRING) {
+      base_is_string = 1;
+      base_is_array = 0;
+      base_is_pointer = 0;
+    }
+  }
   if (!base_is_array && !base_is_string && !base_is_pointer) {
     if (array_expr->type == EXPR_POINTER_DEREF) {
       /* p^[i] where p points to an array - treat as array access */
@@ -1444,12 +1562,54 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
    * of string data as if it were a pointer. */
   int base_is_inline_shortstring = 0;
   if (base_is_string) {
-    if (codegen_expr_is_shortstring_value_ctx(array_expr, ctx))
+    if (codegen_type_is_inline_shortstring_storage(
+            expr_get_kgpc_type(array_expr)) ||
+        codegen_record_field_is_inline_shortstring_storage(record_field,
+                                                           record_field_type) ||
+        codegen_expr_is_current_shortstring_result_storage(array_expr, ctx))
       base_is_inline_shortstring = 1;
   }
 
   Register_t *base_reg = NULL;
-  if ((base_is_string || base_is_pointer) && !base_is_inline_shortstring) {
+  if (base_is_string && !base_is_inline_shortstring &&
+      array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL) {
+    int base_scope_depth = 0;
+    StackNode_t *base_stack_node =
+        find_label_with_depth(array_expr->expr_data.id, &base_scope_depth);
+    if (base_stack_node != NULL && base_scope_depth > 0 &&
+        !base_stack_node->is_static) {
+      base_reg = get_free_reg(get_reg_stack(), &inst_list);
+      if (base_reg == NULL)
+        base_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+      if (base_reg == NULL) {
+        free_reg(get_reg_stack(), index_reg);
+        codegen_report_error(
+            ctx, "ERROR: Unable to allocate register for non-local string base.");
+        return inst_list;
+      }
+      Register_t *frame_reg =
+          codegen_acquire_static_link(ctx, &inst_list, base_scope_depth);
+      if (frame_reg == NULL) {
+        free_reg(get_reg_stack(), index_reg);
+        free_reg(get_reg_stack(), base_reg);
+        codegen_report_error(
+            ctx, "ERROR: Failed to acquire static link for string %s.",
+            array_expr->expr_data.id);
+        return inst_list;
+      }
+      char load_buf[128];
+      snprintf(load_buf, sizeof(load_buf), "\tmovq\t-%d(%s), %s\n",
+               base_stack_node->offset, frame_reg->bit_64, base_reg->bit_64);
+      inst_list = add_inst(inst_list, load_buf);
+    } else {
+      inst_list =
+          codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
+      if (codegen_had_error(ctx) || base_reg == NULL) {
+        free_reg(get_reg_stack(), index_reg);
+        return inst_list;
+      }
+    }
+  } else if ((base_is_string || base_is_pointer) && !base_is_inline_shortstring) {
     inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
     if (codegen_had_error(ctx) || base_reg == NULL) {
       free_reg(get_reg_stack(), index_reg);
@@ -1759,9 +1919,26 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
    * at index 0. Only apply shortstring indexing for character access within a
    * ShortString (stride == 1), NOT for element access in an array of
    * ShortStrings (stride == 256). */
+  int base_var_is_shortstring = 0;
+  if (array_expr != NULL && array_expr->type == EXPR_VAR_ID &&
+      array_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL) {
+    HashNode_t *base_node = NULL;
+    if (FindSymbol(&base_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+        base_node != NULL && base_node->type != NULL &&
+        kgpc_type_string_storage_kind(base_node->type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING) {
+      base_var_is_shortstring = 1;
+    }
+  }
+
   if (!wide_char_index && first_index_stride <= 1 &&
       (codegen_array_access_targets_shortstring(expr, ctx) ||
-       codegen_expr_is_shortstring_value(array_expr) ||
+       (array_type != NULL &&
+        kgpc_type_string_storage_kind(array_type) ==
+            KGPC_STRING_STORAGE_SHORTSTRING) ||
+       base_var_is_shortstring ||
+       codegen_type_is_inline_shortstring_storage(expr_get_kgpc_type(array_expr)) ||
+       codegen_expr_is_current_shortstring_result_storage(array_expr, ctx) ||
        base_is_inline_shortstring)) {
     shortstring_index = 1;
   } else if (!wide_char_index && array_expr != NULL &&
@@ -1770,10 +1947,9 @@ ListNode_t *codegen_array_element_address(struct Expression *expr,
         array_expr->expr_data.pointer_deref_data.pointer_expr;
     KgpcType *ptr_type = NULL;
     if (ptr_expr != NULL) {
-      if (ptr_expr->pointer_subtype == SHORTSTRING_TYPE ||
-          (ptr_expr->pointer_subtype_id != NULL &&
-           pascal_identifier_equals(ptr_expr->pointer_subtype_id,
-                                    "ShortString"))) {
+      if (ptr_expr->pointer_subtype_id != NULL &&
+          pascal_identifier_equals(ptr_expr->pointer_subtype_id,
+                                   "ShortString")) {
         shortstring_index = 1;
       }
       ptr_type = ptr_expr->resolved_kgpc_type;

@@ -708,10 +708,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       inst_list = add_inst(inst_list, buffer);
     }
   } else {
-    /* Non-floating-point comparisons: evaluate both operands into registers.
-     * The right operand may contain function calls (e.g. Length(s)) that
-     * clobber caller-saved registers, so preserve the left operand via a spill
-     * slot. */
+    /* Non-floating-point comparisons: evaluating the right operand may need
+     * scratch registers and force the spill allocator to reuse the left
+     * operand's physical register.  Materialize the left value first and
+     * reload it just before the cmp so the compare never observes a stale
+     * register. */
     inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &left_reg);
     if (codegen_had_error(ctx) || left_reg == NULL)
       return inst_list;

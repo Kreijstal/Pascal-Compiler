@@ -139,6 +139,7 @@ int codegen_push_loop(CodeGenContext *ctx, const char *exit_label,
       new_frames[i].label = NULL;
       new_frames[i].continue_label = NULL;
       new_frames[i].finally_depth = 0;
+      new_frames[i].except_depth = 0;
     }
     ctx->loop_frames = new_frames;
     ctx->loop_capacity = new_capacity;
@@ -146,6 +147,7 @@ int codegen_push_loop(CodeGenContext *ctx, const char *exit_label,
   ctx->loop_frames[ctx->loop_depth].label = strdup(exit_label);
   ctx->loop_frames[ctx->loop_depth].continue_label = strdup(continue_label);
   ctx->loop_frames[ctx->loop_depth].finally_depth = ctx->finally_depth;
+  ctx->loop_frames[ctx->loop_depth].except_depth = ctx->except_depth;
   if (ctx->loop_frames[ctx->loop_depth].label == NULL ||
       ctx->loop_frames[ctx->loop_depth].continue_label == NULL) {
     codegen_report_error(ctx, "ERROR: Unable to duplicate loop labels.\n");
@@ -439,6 +441,12 @@ int codegen_current_loop_finally_depth(const CodeGenContext *ctx) {
   if (ctx == NULL || ctx->loop_depth <= 0)
     return 0;
   return ctx->loop_frames[ctx->loop_depth - 1].finally_depth;
+}
+
+int codegen_current_loop_except_depth(const CodeGenContext *ctx) {
+  if (ctx == NULL || ctx->loop_depth <= 0)
+    return 0;
+  return ctx->loop_frames[ctx->loop_depth - 1].except_depth;
 }
 
 int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements) {
@@ -1187,6 +1195,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
   }
   case STMT_EXIT: {
     inst_list = add_inst(inst_list, "\t# EXIT statement\n");
+    int exit_except_depth = ctx != NULL ? ctx->except_depth : 0;
 
     int return_is_real = 0;
     int return_size = 0;
@@ -1407,6 +1416,14 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
       char buffer[32];
       snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
       inst_list = add_inst(inst_list, buffer);
+    }
+    for (int i = 0; i < exit_except_depth; ++i) {
+      inst_list =
+          add_inst(inst_list, "\t# EXIT: pop active try/except frame\n");
+      inst_list = codegen_vect_reg(inst_list, 0);
+      inst_list =
+          codegen_call_with_shadow_space(inst_list, "kgpc_pop_except_frame");
+      free_arg_regs();
     }
     /* Mirror the implicit-epilogue cleanup so EXIT releases the
      * element data buffers of managed dynamic-array locals along

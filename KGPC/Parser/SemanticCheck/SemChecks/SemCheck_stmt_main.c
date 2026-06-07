@@ -1619,6 +1619,9 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt,
         type_second = semcheck_tag_from_kgpc(rhs_kgpctype);
         goto assignment_types_ok;
       }
+      if (are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype,
+                                              symtab))
+        goto assignment_types_ok;
     }
 
     if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype,

@@ -717,6 +717,97 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
   return inst_list;
 }
 
+static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
+                                                 ListNode_t *inst_list,
+                                                 CodeGenContext *ctx,
+                                                 Register_t *target_reg) {
+  if (expr == NULL || ctx == NULL || target_reg == NULL)
+    return inst_list;
+
+  ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+  if (args == NULL || args->next != NULL || args->cur == NULL) {
+    codegen_report_error(ctx, "ERROR: Length intrinsic expects one argument.");
+    return inst_list;
+  }
+
+  struct Expression *arg_expr = (struct Expression *)args->cur;
+  Register_t *value_reg = NULL;
+  int arg_is_inline_storage =
+      expr_is_shortstring_storage_ctx(arg_expr, ctx) ||
+      expr_is_char_array_expr(arg_expr);
+  if (arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL) {
+    int scope_depth = 0;
+    StackNode_t *stack_node =
+        find_label_with_depth(arg_expr->expr_data.id, &scope_depth);
+    if (stack_node != NULL && scope_depth == 0) {
+      value_reg = get_free_reg(get_reg_stack(), &inst_list);
+      if (value_reg == NULL)
+        value_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+      if (value_reg == NULL)
+        return inst_list;
+
+      char buffer[128];
+      if (arg_is_inline_storage && stack_node->is_reference) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                 stack_node->offset, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else if (arg_is_inline_storage && stack_node->is_static) {
+        const char *label = stack_node->static_label != NULL
+                                ? stack_node->static_label
+                                : stack_node->label;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+                 value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else if (arg_is_inline_storage) {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                 stack_node->offset, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else if (stack_node->is_static) {
+        const char *label = stack_node->static_label != NULL
+                                ? stack_node->static_label
+                                : stack_node->label;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n", label,
+                 value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                 stack_node->offset, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        if (stack_node->is_reference) {
+          snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                   value_reg->bit_64, value_reg->bit_64);
+          inst_list = add_inst(inst_list, buffer);
+        }
+      }
+    }
+  }
+
+  if (value_reg == NULL)
+    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+  if (codegen_had_error(ctx) || value_reg == NULL)
+    return inst_list;
+
+  const char *arg_reg64 = current_arg_reg64(0);
+  if (arg_reg64 == NULL) {
+    free_reg(get_reg_stack(), value_reg);
+    return inst_list;
+  }
+
+  char buffer[128];
+  snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64,
+           arg_reg64);
+  inst_list = add_inst(inst_list, buffer);
+  free_reg(get_reg_stack(), value_reg);
+
+  inst_list = codegen_vect_reg(inst_list, 0);
+  inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_length");
+  snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64,
+           target_reg->bit_64);
+  inst_list = add_inst(inst_list, buffer);
+  free_arg_regs();
+  return inst_list;
+}
+
 static int codegen_builtin_lowhigh_bounds_from_tag(int type_tag,
                                                    long long *low_out,
                                                    long long *high_out,
@@ -3472,6 +3563,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
           codegen_builtin_dynarray_length(expr, inst_list, ctx, target_reg);
       // NOTE: Don't free mangled_id here - it will be freed when the AST is
       // destroyed codegen_release_function_call_mangled_id(expr);
+      return inst_list;
+    }
+
+    if (func_mangled_name != NULL &&
+        (strcmp(func_mangled_name, "kgpc_string_length") == 0 ||
+         strcmp(func_mangled_name, "fpc_in_length_string") == 0)) {
+      inst_list =
+          codegen_builtin_string_length(expr, inst_list, ctx, target_reg);
       return inst_list;
     }
 
