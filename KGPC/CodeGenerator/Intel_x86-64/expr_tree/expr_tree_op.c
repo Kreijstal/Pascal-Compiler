@@ -86,13 +86,13 @@ static int operand_is_memory_reference(const char *operand) {
   return operand != NULL && strchr(operand, '(') != NULL;
 }
 
-static int expr_is_32bit_integer_operand(const struct Expression *expr) {
+static int expr_is_up_to_32bit_integer_operand(const struct Expression *expr) {
   if (expr == NULL)
     return 0;
 
   int type_tag = expr_get_type_tag(expr);
-  return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
-          type_tag == LONGWORD_TYPE);
+  int size = get_type_tag_size(type_tag);
+  return size > 0 && size <= 4 && is_integer_type(type_tag);
 }
 
 static const char *scratch64_to_32(const char *scratch) {
@@ -1179,17 +1179,31 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
 
         if ((type == STAR || type == DIV || type == MOD) &&
             right_reg == NULL && operand_is_memory_reference(right) &&
-            expr_is_32bit_integer_operand(
+            expr_is_up_to_32bit_integer_operand(
                 expr->expr_data.mulop_data.right_factor)) {
           const char *scratch = select_divisor_temp_reg(left_reg, 1);
+          if (scratch == NULL)
+            scratch = "%r10";
+          const char *scratch32 = scratch64_to_32(scratch);
           int right_tag =
               expr_get_type_tag(expr->expr_data.mulop_data.right_factor);
-          if (codegen_type_is_signed(right_tag))
-            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right,
+          int right_size = get_type_tag_size(right_tag);
+          if (codegen_type_is_signed(right_tag)) {
+            const char *mov =
+                (right_size == 1) ? "movsbl"
+                                  : (right_size == 2) ? "movswl" : "movl";
+            snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", mov, right,
+                     scratch32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", scratch32,
                      scratch);
-          else
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right,
-                     scratch64_to_32(scratch));
+          } else {
+            const char *mov =
+                (right_size == 1) ? "movzbl"
+                                  : (right_size == 2) ? "movzwl" : "movl";
+            snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", mov, right,
+                     scratch32);
+          }
           inst_list = add_inst(inst_list, buffer);
           op_right = scratch;
         }

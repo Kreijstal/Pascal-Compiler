@@ -562,19 +562,41 @@ FunccallState funccall_state_overload_setup(FunccallCtx *ctx) {
       if (kgpc_type_is_method_pointer(proc_type) &&
           ctx->expr->expr_data.function_call_data.procedural_var_expr == NULL &&
           ctx->id != NULL) {
-        struct Expression *callee_expr =
-            mk_varid(ctx->expr->line_num, strdup(ctx->id));
-        if (callee_expr != NULL) {
-          callee_expr->col_num = ctx->expr->col_num;
-          callee_expr->source_index = ctx->expr->source_index;
-          semcheck_expr_with_type(NULL, ctx->symtab, callee_expr,
-                                  ctx->max_scope_lev, NO_MUTATE);
-          ctx->expr->expr_data.function_call_data.procedural_var_expr =
-              callee_expr;
-          ctx->expr->expr_data.function_call_data.call_kgpc_type = proc_type;
-          kgpc_type_retain(proc_type);
-          ctx->expr->expr_data.function_call_data.is_call_info_valid = 1;
+        char *callee_id = strdup(ctx->id);
+        if (callee_id == NULL) {
+          semcheck_error_with_context_at(
+              ctx->expr->line_num, ctx->expr->col_num, ctx->expr->source_index,
+              "Error on line %d, out of memory while preparing "
+              "method-pointer call.\n",
+              ctx->expr->line_num);
+          *ctx->type_return = UNKNOWN_TYPE;
+          do {
+            ctx->final_status = ++ctx->return_val;
+            return FC_CLEANUP;
+          } while (0);
         }
+        struct Expression *callee_expr = mk_varid(ctx->expr->line_num, callee_id);
+        if (callee_expr == NULL) {
+          free(callee_id);
+          semcheck_error_with_context_at(
+              ctx->expr->line_num, ctx->expr->col_num, ctx->expr->source_index,
+              "Error on line %d, out of memory while preparing "
+              "method-pointer call.\n",
+              ctx->expr->line_num);
+          *ctx->type_return = UNKNOWN_TYPE;
+          do {
+            ctx->final_status = ++ctx->return_val;
+            return FC_CLEANUP;
+          } while (0);
+        }
+        callee_expr->col_num = ctx->expr->col_num;
+        callee_expr->source_index = ctx->expr->source_index;
+        semcheck_expr_with_type(NULL, ctx->symtab, callee_expr,
+                                ctx->max_scope_lev, NO_MUTATE);
+        ctx->expr->expr_data.function_call_data.procedural_var_expr =
+            callee_expr;
+        semcheck_expr_set_call_kgpc_type(ctx->expr, proc_type, 1);
+        ctx->expr->expr_data.function_call_data.is_call_info_valid = 1;
       }
 
       destroy_list(ctx->overload_candidates);

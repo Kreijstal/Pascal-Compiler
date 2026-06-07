@@ -2550,7 +2550,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type,
           record_type_is_class(lhs_type->info.points_to->info.record_info) &&
           record_type_is_class(rhs_type->info.record_info))
         return 1;
-      return 1;
+      return 0;
     }
     /* Allow plain record to untyped pointer (points_to == NULL) for var param
      */

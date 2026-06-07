@@ -732,6 +732,9 @@ static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
 
   struct Expression *arg_expr = (struct Expression *)args->cur;
   Register_t *value_reg = NULL;
+  int arg_is_inline_storage =
+      expr_is_shortstring_storage_ctx(arg_expr, ctx) ||
+      expr_is_char_array_expr(arg_expr);
   if (arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL) {
     int scope_depth = 0;
     StackNode_t *stack_node =
@@ -744,7 +747,22 @@ static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
         return inst_list;
 
       char buffer[128];
-      if (stack_node->is_static) {
+      if (arg_is_inline_storage && stack_node->is_reference) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                 stack_node->offset, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else if (arg_is_inline_storage && stack_node->is_static) {
+        const char *label = stack_node->static_label != NULL
+                                ? stack_node->static_label
+                                : stack_node->label;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+                 value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else if (arg_is_inline_storage) {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                 stack_node->offset, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+      } else if (stack_node->is_static) {
         const char *label = stack_node->static_label != NULL
                                 ? stack_node->static_label
                                 : stack_node->label;
