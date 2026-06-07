@@ -1074,12 +1074,6 @@ RegStack_t *init_reg_stack() {
   /* %rax is caller-saved — not in the allocatable pool.
      It is used as return value and varargs indicator. */
 
-  /* %r10, %r11 are caller-saved scratch registers.
-     They are NOT in the allocatable pool — only used explicitly
-     (VMT dispatch, division, etc.) and never live across calls. */
-
-  /* %r8, %r9, %r10, %r11 are caller-saved — not added to the pool. */
-
   /* %rbx, %r12 - callee-saved, survive across function calls.
      Placed first in the list so get_free_reg prefers them for
      intermediate values that may live across call instructions. */
@@ -1153,10 +1147,66 @@ RegStack_t *init_reg_stack() {
   r15->current_live_range = NULL;
 #endif
 
-  /* Build register list — only callee-saved registers are in the pool.
-     These survive across function calls, so values are never lost.
-     Caller-saved registers (%rax, %rcx, %rdx, %rsi, %rdi, %r8-%r11)
-     are NOT in the pool — they are clobbered by calls. */
+  Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
+  assert(r8 != NULL);
+  r8->reg_id = REG_R8;
+  r8->bit_64 = strdup("%r8");
+  r8->bit_32 = strdup("%r8d");
+  r8->spill_location = NULL;
+  r8->last_use_seq = 0;
+  r8->spill_callback = NULL;
+  r8->spill_context = NULL;
+  r8->vreg_id = -1;
+#if USE_GRAPH_COLORING_ALLOCATOR
+  r8->current_live_range = NULL;
+#endif
+
+  Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
+  assert(r9 != NULL);
+  r9->reg_id = REG_R9;
+  r9->bit_64 = strdup("%r9");
+  r9->bit_32 = strdup("%r9d");
+  r9->spill_location = NULL;
+  r9->last_use_seq = 0;
+  r9->spill_callback = NULL;
+  r9->spill_context = NULL;
+  r9->vreg_id = -1;
+#if USE_GRAPH_COLORING_ALLOCATOR
+  r9->current_live_range = NULL;
+#endif
+
+  Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
+  assert(r10 != NULL);
+  r10->reg_id = REG_R10;
+  r10->bit_64 = strdup("%r10");
+  r10->bit_32 = strdup("%r10d");
+  r10->spill_location = NULL;
+  r10->last_use_seq = 0;
+  r10->spill_callback = NULL;
+  r10->spill_context = NULL;
+  r10->vreg_id = -1;
+#if USE_GRAPH_COLORING_ALLOCATOR
+  r10->current_live_range = NULL;
+#endif
+
+  Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
+  assert(r11 != NULL);
+  r11->reg_id = REG_R11;
+  r11->bit_64 = strdup("%r11");
+  r11->bit_32 = strdup("%r11d");
+  r11->spill_location = NULL;
+  r11->last_use_seq = 0;
+  r11->spill_callback = NULL;
+  r11->spill_context = NULL;
+  r11->vreg_id = -1;
+#if USE_GRAPH_COLORING_ALLOCATOR
+  r11->current_live_range = NULL;
+#endif
+
+  /* Build register list.  Prefer callee-saved registers; use caller-saved
+     registers only after those are exhausted.  Call sites save and restore
+     allocated registers around calls, so these remain valid for expression
+     temporaries while avoiding unsafe implicit spills. */
   registers = CreateListNode(rbx, LIST_UNSPECIFIED);
   registers =
       PushListNodeBack(registers, CreateListNode(r12, LIST_UNSPECIFIED));
@@ -1166,10 +1216,18 @@ RegStack_t *init_reg_stack() {
       PushListNodeBack(registers, CreateListNode(r14, LIST_UNSPECIFIED));
   registers =
       PushListNodeBack(registers, CreateListNode(r15, LIST_UNSPECIFIED));
+  registers =
+      PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
+  registers =
+      PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
+  registers =
+      PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
+  registers =
+      PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
 
   reg_stack->registers_allocated = NULL;
   reg_stack->registers_free = registers;
-  reg_stack->num_registers = 5; /* rbx, r12, r13, r14, r15 */
+  reg_stack->num_registers = 9; /* rbx, r12-r15, r8-r11 */
   reg_stack->use_sequence = 0;
 
 #if USE_GRAPH_COLORING_ALLOCATOR
