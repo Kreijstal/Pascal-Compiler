@@ -2237,9 +2237,14 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt,
     target_uses_qword = expr_uses_qword_kgpctype(target_expr);
 
   if (target_uses_qword &&
-      (value_expr == NULL || !expr_uses_qword_kgpctype(value_expr)))
-    inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32,
-                                           increment_reg->bit_64);
+      (value_expr == NULL || !expr_uses_qword_kgpctype(value_expr))) {
+    if (value_expr != NULL && expr_is_unsigned_type(value_expr))
+      inst_list = codegen_zero_extend32_to64(inst_list, increment_reg->bit_32,
+                                             increment_reg->bit_32);
+    else
+      inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32,
+                                             increment_reg->bit_64);
+  }
 
   long long pointer_step = 1;
   if (target_is_pointer) {

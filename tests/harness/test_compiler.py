@@ -1019,6 +1019,25 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout.strip(), "48")
 
+    def test_fpc_bootstrap_inc_qword_longword_delta(self):
+        """Inc(QWord, LongWord) must zero-extend the unsigned delta."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_inc_qword_longword_delta"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = run_executable_with_valgrind(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout.strip(), "ok")
+
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
         input_file, asm_file, _ = self._get_test_paths("bitshift_expr_malformed")
