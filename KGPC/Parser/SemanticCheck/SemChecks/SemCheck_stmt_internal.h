@@ -38,6 +38,7 @@ int semcheck_try_record_assignment_operator(SymTab_t *symtab,
                                             KgpcType *lhs_type,
                                             KgpcType **rhs_type,
                                             int *rhs_owned);
+int semcheck_kgpc_type_is_class_reference(const KgpcType *type);
 int param_has_default_value(Tree_t *decl);
 int append_default_args(ListNode_t **args_head, ListNode_t *formal_params,
                         int line_num);

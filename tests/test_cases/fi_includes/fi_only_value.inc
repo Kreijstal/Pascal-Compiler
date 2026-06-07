@@ -1,0 +1,2 @@
+const
+  FiOnlyValue = 42;

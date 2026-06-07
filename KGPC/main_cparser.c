@@ -718,6 +718,10 @@ static SetFlagsResult set_flags(char **optional_args, int count) {
                arg[3] != '\0') {
       /* Unit search path: -Fu/path/to/units (FPC compatible) */
       unit_search_paths_add_unit_path(&g_unit_paths, &arg[3]);
+    } else if (arg[0] == '-' && arg[1] == 'F' && arg[2] == 'i' &&
+               arg[3] != '\0') {
+      /* Include search path: -Fi/path/to/includes (FPC compatible) */
+      pascal_frontend_add_include_path(&arg[3]);
     } else if (strcmp(arg, "--no-vendor-units") == 0) {
       /* Disable built-in KGPC vendor units */
       unit_search_paths_disable_vendor(&g_unit_paths);
