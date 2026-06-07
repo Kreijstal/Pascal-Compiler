@@ -9,7 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(__GLIBC__) || defined(__linux__) || defined(_WIN32)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__) || defined(_WIN32)
 #include <malloc.h>
 #endif
 #ifndef _WIN32
@@ -5499,7 +5500,8 @@ size_t kgpc_freemem_ptr(void *p) {
 void *kgpc_reallocmem_ptr(void *p, size_t size) {
   size_t old_size = 0;
   int can_zero_growth = p == NULL;
-#if defined(__GLIBC__) || defined(__linux__)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__)
   if (p != NULL) {
     old_size = malloc_usable_size(p);
     can_zero_growth = 1;

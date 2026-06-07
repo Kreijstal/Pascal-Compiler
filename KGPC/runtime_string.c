@@ -9,7 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(__GLIBC__) || defined(__linux__) || defined(_WIN32)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__) || defined(_WIN32)
 #include <malloc.h>
 #endif
 #ifndef _WIN32
@@ -1851,7 +1852,8 @@ void kgpc_reallocmem(void **target, size_t new_size) {
   void *original = *target;
   size_t old_size = 0;
   int can_zero_growth = original == NULL;
-#if defined(__GLIBC__) || defined(__linux__)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__)
   if (original != NULL) {
     old_size = malloc_usable_size(original);
     can_zero_growth = 1;
@@ -1913,7 +1915,8 @@ void *SysReallocMem(void **pp, intptr_t size) {
   void *original = *pp;
   size_t old_size = 0;
   int can_zero_growth = original == NULL;
-#if defined(__GLIBC__) || defined(__linux__)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__)
   if (original != NULL) {
     old_size = malloc_usable_size(original);
     can_zero_growth = 1;
@@ -1951,7 +1954,8 @@ void *SysTryResizeMem(void *p, intptr_t size) {
   }
   size_t old_size = 0;
   int can_zero_growth = p == NULL;
-#if defined(__GLIBC__) || defined(__linux__)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__)
   if (p != NULL) {
     old_size = malloc_usable_size(p);
     can_zero_growth = 1;
@@ -2041,7 +2045,8 @@ static void *kgpc_mm_reallocmem(void **pp, uintptr_t size) {
   void *original = *pp;
   size_t old_size = 0;
   int can_zero_growth = original == NULL;
-#if defined(__GLIBC__) || defined(__linux__)
+#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
+    defined(__MSYS__)
   if (original != NULL) {
     old_size = malloc_usable_size(original);
     can_zero_growth = 1;
