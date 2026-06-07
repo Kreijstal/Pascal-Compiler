@@ -5513,6 +5513,8 @@ static void *kgpc_heap_alloc(size_t size, int zero) {
   void *payload = (void *)(block + 1);
   if (zero)
     memset(payload, 0, size);
+  /* cppcheck-suppress memleak ; ownership of `block` is returned as its
+   * payload pointer and recovered by kgpc_heap_header() before free/realloc. */
   return payload;
 }
 
@@ -5541,6 +5543,8 @@ static void *kgpc_heap_realloc(void *ptr, size_t size, int zero_growth) {
   void *payload = (void *)(new_block + 1);
   if (zero_growth && size > old_size)
     memset((char *)payload + old_size, 0, size - old_size);
+  /* cppcheck-suppress memleak ; ownership of `new_block` is returned as its
+   * payload pointer and recovered by kgpc_heap_header() before free/realloc. */
   return payload;
 }
 
