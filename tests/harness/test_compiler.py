@@ -2516,6 +2516,13 @@ sys.exit(3)
                 flags = UNIT_ONLY_FLAGS.get(base_name)
                 run_compiler(input_file, asm_file, flags=flags)
 
+    def test_fpc_fi_include_path(self):
+        """FPC-compatible -Fi paths must resolve include files."""
+        input_file = os.path.join(TEST_CASES_DIR, "fi_include_main.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "fi_include_main.s")
+        include_dir = os.path.join(TEST_CASES_DIR, "fi_includes")
+        run_compiler(input_file, asm_file, flags=[f"-Fi{include_dir}"])
+
     def test_assert_failure_exits_227(self):
         """Assert(False, 'msg') must print the message to stderr and exit with code 227."""
         input_file = os.path.join(TEST_CASES_DIR, "assert_fail.p")

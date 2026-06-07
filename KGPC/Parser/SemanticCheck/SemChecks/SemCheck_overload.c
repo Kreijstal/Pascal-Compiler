@@ -968,6 +968,18 @@ static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
     DestroyList(cands);
   }
 
+  /* Class variables are references, not aggregate records.  Do not scan
+   * unrelated visible operators after a type-specific miss; otherwise a normal
+   * class-reference match can be converted through e.g.
+   * olevariant.op_assign(terror).  Plain records still need the generic scan
+   * for FPC helper conversions. */
+  if (!found && (semcheck_kgpc_type_is_class_reference(formal_kgpc) ||
+                 semcheck_kgpc_type_is_class_reference(actual_kgpc))) {
+    if (actual_owned)
+      destroy_kgpc_type(actual_kgpc);
+    return 0;
+  }
+
   if (!found) {
     ListNode_t *cands = FindAllIdents(symtab, "op_assign");
     for (ListNode_t *cur = cands; cur != NULL; cur = cur->next) {

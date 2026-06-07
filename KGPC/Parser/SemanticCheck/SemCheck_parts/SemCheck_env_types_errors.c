@@ -836,6 +836,14 @@ int semcheck_kgpc_type_is_char_like(const KgpcType *type) {
   return 0;
 }
 
+int semcheck_kgpc_type_is_class_reference(const KgpcType *type) {
+  return type != NULL && type->kind == TYPE_KIND_POINTER &&
+         type->info.points_to != NULL &&
+         type->info.points_to->kind == TYPE_KIND_RECORD &&
+         type->info.points_to->info.record_info != NULL &&
+         record_type_is_class(type->info.points_to->info.record_info);
+}
+
 int semcheck_is_currency_type_id(const char *type_id) {
   const char *base = semcheck_base_type_name(type_id);
   return (base != NULL && pascal_identifier_equals(base, "Currency"));

@@ -58,6 +58,7 @@ KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
                                             int *owned_out);
 int semcheck_class_type_ids_compatible(SymTab_t *symtab, const char *formal_id,
                                        const char *actual_id);
+int semcheck_kgpc_type_is_class_reference(const KgpcType *type);
 struct RecordType *
 semcheck_lookup_parent_record(SymTab_t *symtab, struct RecordType *record_info);
 static inline int semcheck_method_is_declared_constructor(

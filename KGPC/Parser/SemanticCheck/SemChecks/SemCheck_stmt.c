@@ -807,6 +807,15 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(
     return best_node;
   }
 
+  /* Class variables are references, not aggregate records.  Falling through to
+   * every visible global op_assign can bind unrelated conversions such as
+   * olevariant.op_assign(terror) for normal class-reference assignments like
+   * `resultdef := pbestrealtype^` in FPC's ninl.pas.  Plain records still need
+   * the global scan for FPC helper conversions. */
+  if (semcheck_kgpc_type_is_class_reference(target_type) ||
+      semcheck_kgpc_type_is_class_reference(source_type))
+    return NULL;
+
   semcheck_record_assign_consider_id(symtab, ":=", target_type, source_type,
                                      &best_node, &best_return_type,
                                      &best_score);

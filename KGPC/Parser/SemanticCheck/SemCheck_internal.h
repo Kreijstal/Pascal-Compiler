@@ -260,6 +260,7 @@ int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id);
 int semcheck_is_currency_type_id(const char *type_id);
 int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref);
 int semcheck_kgpc_type_is_char_like(const KgpcType *type);
+int semcheck_kgpc_type_is_class_reference(const KgpcType *type);
 int semcheck_kgpc_type_is_record_like(const KgpcType *type);
 int semcheck_map_builtin_type_name_local(const char *id);
 void semcheck_mark_const_decl_units(ListNode_t *const_decls, int unit_index);
