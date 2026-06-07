@@ -228,6 +228,37 @@ size_t kgpc_string_known_length(const char *value) {
   return strlen(value);
 }
 
+int64_t kgpc_utf8codepointlen(const char *p, int64_t max_len,
+                              int include_partial) {
+  if (p == NULL || max_len <= 0)
+    return 0;
+
+  const unsigned char *s = (const unsigned char *)p;
+  unsigned char c = s[0];
+  int need = 0;
+
+  if (c < 0x80)
+    return 1;
+  if (c >= 0xc2 && c <= 0xdf)
+    need = 2;
+  else if (c >= 0xe0 && c <= 0xef)
+    need = 3;
+  else if (c >= 0xf0 && c <= 0xf4)
+    need = 4;
+  else
+    return 1;
+
+  if (max_len < need)
+    return include_partial ? max_len : 0;
+
+  for (int i = 1; i < need; i++) {
+    if ((s[i] & 0xc0) != 0x80)
+      return i;
+  }
+
+  return need;
+}
+
 void kgpc_string_assign_take(char **target, char *value);
 
 /* Robust SetCodePage wrapper: accepts either a var RawByteString (by-ref)
