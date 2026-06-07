@@ -708,19 +708,18 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       inst_list = add_inst(inst_list, buffer);
     }
   } else {
-    /* Non-floating-point comparisons: evaluate both operands into registers.
-     * The right operand may contain function calls (e.g. Length(s)) that
-     * clobber caller-saved registers, so preserve the left operand via a spill
-     * slot. */
+    /* Non-floating-point comparisons: evaluating the right operand may need
+     * scratch registers and force the spill allocator to reuse the left
+     * operand's physical register.  Materialize the left value first and
+     * reload it just before the cmp so the compare never observes a stale
+     * register. */
     inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &left_reg);
     if (codegen_had_error(ctx) || left_reg == NULL)
       return inst_list;
 
     const int use_qword_spill =
         expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
-    StackNode_t *left_int_spill =
-        expr_contains_function_call(right_expr) ? add_l_t("relop_left_spill")
-                                                : NULL;
+    StackNode_t *left_int_spill = add_l_t("relop_left_spill");
     if (left_int_spill != NULL) {
       snprintf(buffer, sizeof(buffer), "\tmov%c\t%s, -%d(%%rbp)\n",
                use_qword_spill ? 'q' : 'l',

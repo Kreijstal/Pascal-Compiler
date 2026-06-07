@@ -2326,6 +2326,35 @@ sys.exit(3)
         self.assertEqual(process.stdout.strip(), "ok")
         self.assertEqual(process.returncode, 0)
 
+    def test_fpc_bootstrap_relop_spill_movelist(self):
+        """Integer relops must preserve lhs across complex rhs evaluation."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_relop_spill_movelist"
+        )
+
+        run_compiler(input_file, asm_file)
+        asm_source = read_file_content(asm_file)
+        procedure_body = asm_source.split(
+            "tregobj__addtomovelist_p_li_p", 1
+        )[1].split("\n.globl\t", 1)[0]
+        self.assertRegex(
+            procedure_body,
+            r"\tmovl\t%r12d, -\d+\(%rbp\)\n"
+            r"(?:.*\n)+?"
+            r"\tmovl\t-\d+\(%rbp\), %ebx\n"
+            r"\tcmpl\t%r12d, %ebx\n",
+        )
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.stdout.strip(), "ok")
+        self.assertEqual(process.returncode, 0)
+
     def test_fpc_bootstrap_exit_unwinds_except_frame(self):
         """Exit from try/except must not leave a stale runtime handler."""
         input_file, asm_file, executable_file = self._get_test_paths(
