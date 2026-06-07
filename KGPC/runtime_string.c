@@ -1795,19 +1795,72 @@ void kgpc_fillword(void *dest, size_t count, unsigned short value) {
     ptr[i] = value;
 }
 
+typedef struct KgpcHeapBlock {
+  size_t size;
+  max_align_t align;
+} KgpcHeapBlock;
+
+static KgpcHeapBlock *kgpc_heap_header(void *ptr) {
+  if (ptr == NULL)
+    return NULL;
+  return ((KgpcHeapBlock *)ptr) - 1;
+}
+
+static void *kgpc_heap_alloc(size_t size, int zero) {
+  if (size == 0)
+    return NULL;
+  KgpcHeapBlock *block =
+      (KgpcHeapBlock *)malloc(sizeof(KgpcHeapBlock) + size);
+  if (block == NULL)
+    return NULL;
+  block->size = size;
+  void *payload = (void *)(block + 1);
+  if (zero)
+    memset(payload, 0, size);
+  return payload;
+}
+
+static void kgpc_heap_free(void *ptr) {
+  if (ptr != NULL)
+    free(kgpc_heap_header(ptr));
+}
+
+static void *kgpc_heap_realloc(void *ptr, size_t size, int zero_growth) {
+  if (size == 0) {
+    kgpc_heap_free(ptr);
+    return NULL;
+  }
+
+  size_t old_size = 0;
+  KgpcHeapBlock *old_block = kgpc_heap_header(ptr);
+  if (old_block != NULL)
+    old_size = old_block->size;
+
+  KgpcHeapBlock *new_block =
+      (KgpcHeapBlock *)realloc(old_block, sizeof(KgpcHeapBlock) + size);
+  if (new_block == NULL)
+    return NULL;
+  new_block->size = size;
+
+  void *payload = (void *)(new_block + 1);
+  if (zero_growth && size > old_size)
+    memset((char *)payload + old_size, 0, size - old_size);
+  return payload;
+}
+
 void kgpc_getmem(void **target, size_t size) {
   if (target == NULL)
     return;
 
   if (size == 0) {
     if (*target != NULL) {
-      free(*target);
+      kgpc_heap_free(*target);
       *target = NULL;
     }
     return;
   }
 
-  void *memory = malloc(size);
+  void *memory = kgpc_heap_alloc(size, 0);
   if (memory == NULL) {
     fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes via GetMem.\n",
             size);
@@ -1822,7 +1875,7 @@ void *kgpc_allocmem(size_t size) {
   if (size == 0)
     return NULL;
 
-  void *memory = calloc(1, size);
+  void *memory = kgpc_heap_alloc(size, 1);
   if (memory == NULL) {
     fprintf(stderr,
             "KGPC runtime: failed to allocate %zu bytes via AllocMem.\n", size);
@@ -1833,8 +1886,7 @@ void *kgpc_allocmem(size_t size) {
 }
 
 void kgpc_freemem(void *ptr) {
-  if (ptr != NULL)
-    free(ptr);
+  kgpc_heap_free(ptr);
 }
 
 void kgpc_reallocmem(void **target, size_t new_size) {
@@ -1849,26 +1901,7 @@ void kgpc_reallocmem(void **target, size_t new_size) {
     return;
   }
 
-  void *original = *target;
-  size_t old_size = 0;
-  int can_zero_growth = original == NULL;
-#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
-    defined(__MSYS__)
-  if (original != NULL) {
-    old_size = malloc_usable_size(original);
-    can_zero_growth = 1;
-  }
-#elif defined(_WIN32)
-  if (original != NULL) {
-    old_size = _msize(original);
-    can_zero_growth = 1;
-  }
-#endif
-  void *resized = NULL;
-  if (original == NULL)
-    resized = malloc(new_size);
-  else
-    resized = realloc(original, new_size);
+  void *resized = kgpc_heap_realloc(*target, new_size, 1);
 
   if (resized == NULL) {
     fprintf(stderr,
@@ -1877,8 +1910,6 @@ void kgpc_reallocmem(void **target, size_t new_size) {
     exit(EXIT_FAILURE);
   }
 
-  if (can_zero_growth && new_size > old_size)
-    memset((char *)resized + old_size, 0, new_size - old_size);
   *target = resized;
 }
 
@@ -1901,11 +1932,11 @@ void kgpc_reallocmem(void **target, size_t new_size) {
 void *SysGetMem(intptr_t size) {
   if (size <= 0)
     return NULL;
-  return malloc((size_t)size);
+  return kgpc_heap_alloc((size_t)size, 0);
 }
 
 intptr_t SysFreeMem(void *p) {
-  free(p);
+  kgpc_heap_free(p);
   return 0;
 }
 
@@ -1913,63 +1944,29 @@ void *SysReallocMem(void **pp, intptr_t size) {
   if (pp == NULL)
     return NULL;
   void *original = *pp;
-  size_t old_size = 0;
-  int can_zero_growth = original == NULL;
-#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
-    defined(__MSYS__)
-  if (original != NULL) {
-    old_size = malloc_usable_size(original);
-    can_zero_growth = 1;
-  }
-#elif defined(_WIN32)
-  if (original != NULL) {
-    old_size = _msize(original);
-    can_zero_growth = 1;
-  }
-#endif
   if (size <= 0) {
-    free(original);
+    kgpc_heap_free(original);
     *pp = NULL;
     return NULL;
   }
-  void *result = realloc(original, (size_t)size);
-  if (result != NULL) {
-    if (can_zero_growth && (size_t)size > old_size)
-      memset((char *)result + old_size, 0, (size_t)size - old_size);
+  void *result = kgpc_heap_realloc(original, (size_t)size, 1);
+  if (result != NULL)
     *pp = result;
-  }
   return result;
 }
 
 intptr_t SysFreeMemSize(void *p, intptr_t size) {
   (void)size;
-  free(p);
+  kgpc_heap_free(p);
   return 0;
 }
 
 void *SysTryResizeMem(void *p, intptr_t size) {
   if (size <= 0) {
-    free(p);
+    kgpc_heap_free(p);
     return NULL;
   }
-  size_t old_size = 0;
-  int can_zero_growth = p == NULL;
-#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
-    defined(__MSYS__)
-  if (p != NULL) {
-    old_size = malloc_usable_size(p);
-    can_zero_growth = 1;
-  }
-#elif defined(_WIN32)
-  if (p != NULL) {
-    old_size = _msize(p);
-    can_zero_growth = 1;
-  }
-#endif
-  void *result = realloc(p, (size_t)size);
-  if (result != NULL && can_zero_growth && (size_t)size > old_size)
-    memset((char *)result + old_size, 0, (size_t)size - old_size);
-  return result;
+  return kgpc_heap_realloc(p, (size_t)size, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2019,55 +2016,38 @@ extern char MemoryManager[];
 static void *kgpc_mm_getmem(uintptr_t size) {
   if (size == 0)
     return NULL;
-  return malloc((size_t)size);
+  return kgpc_heap_alloc((size_t)size, 0);
 }
 
 static uintptr_t kgpc_mm_freemem(void *p) {
-  free(p);
+  kgpc_heap_free(p);
   return 0;
 }
 
 static uintptr_t kgpc_mm_freememsize(void *p, uintptr_t size) {
   (void)size;
-  free(p);
+  kgpc_heap_free(p);
   return 0;
 }
 
 static void *kgpc_mm_allocmem(uintptr_t size) {
   if (size == 0)
     return NULL;
-  return calloc(1, (size_t)size);
+  return kgpc_heap_alloc((size_t)size, 1);
 }
 
 static void *kgpc_mm_reallocmem(void **pp, uintptr_t size) {
   if (pp == NULL)
     return NULL;
   void *original = *pp;
-  size_t old_size = 0;
-  int can_zero_growth = original == NULL;
-#if defined(__GLIBC__) || defined(__linux__) || defined(__CYGWIN__) ||          \
-    defined(__MSYS__)
-  if (original != NULL) {
-    old_size = malloc_usable_size(original);
-    can_zero_growth = 1;
-  }
-#elif defined(_WIN32)
-  if (original != NULL) {
-    old_size = _msize(original);
-    can_zero_growth = 1;
-  }
-#endif
   if (size == 0) {
-    free(original);
+    kgpc_heap_free(original);
     *pp = NULL;
     return NULL;
   }
-  void *result = realloc(original, (size_t)size);
-  if (result != NULL) {
-    if (can_zero_growth && (size_t)size > old_size)
-      memset((char *)result + old_size, 0, (size_t)size - old_size);
+  void *result = kgpc_heap_realloc(original, (size_t)size, 1);
+  if (result != NULL)
     *pp = result;
-  }
   return result;
 }
 
@@ -2122,7 +2102,7 @@ void kgpc_memory_manager_freemem(void *ptr) {
   kgpc_mm_freemem_fn free_fn = NULL;
   memcpy(&free_fn, MemoryManager + 16, sizeof(free_fn));
   if (free_fn == NULL) {
-    free(ptr);
+    kgpc_heap_free(ptr);
     return;
   }
   free_fn(ptr);
