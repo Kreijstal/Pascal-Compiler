@@ -2523,6 +2523,56 @@ sys.exit(3)
         include_dir = os.path.join(TEST_CASES_DIR, "fi_includes")
         run_compiler(input_file, asm_file, flags=[f"-Fi{include_dir}"])
 
+    def test_fpc_bootstrap_pointer_string_cast(self):
+        """Pointer(AnsiString/RawByteString) must expose the string data pointer."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_pointer_string_cast"
+        )
+        expected_file = os.path.join(
+            TEST_CASES_DIR, "fpc_bootstrap_pointer_string_cast.expected"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            read_file_content(expected_file).strip().splitlines(),
+        )
+
+    def test_fpc_bootstrap_dirent_name_to_string(self):
+        """Fixed char-array record fields assigned to strings use C-string length."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "fpc_bootstrap_dirent_name_to_string"
+        )
+        expected_file = os.path.join(
+            TEST_CASES_DIR, "fpc_bootstrap_dirent_name_to_string.expected"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            read_file_content(expected_file).strip().splitlines(),
+        )
+
     def test_assert_failure_exits_227(self):
         """Assert(False, 'msg') must print the message to stderr and exit with code 227."""
         input_file = os.path.join(TEST_CASES_DIR, "assert_fail.p")
