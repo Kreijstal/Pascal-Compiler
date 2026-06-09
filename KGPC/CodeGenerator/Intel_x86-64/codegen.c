@@ -2263,10 +2263,18 @@ void codegen_register_decl_list(CodeGenContext *ctx, ListNode_t *decls,
     for (ListNode_t *id_node = ids; id_node != NULL; id_node = id_node->next) {
       if (id_node->cur == NULL)
         continue;
-      HashNode_t *promoted_source = NULL;
+      /* Shortstring promotion (for `s[0]:=...` index-zero inference) must only
+       * inherit a prior shortstring typing of *this same* variable, i.e. an
+       * earlier registration in the scope we are about to push into.  Using a
+       * full-scope FindSymbol here wrongly pulls in an unrelated outer/global
+       * symbol of the same name (e.g. a shortstring `pattern` in another unit),
+       * corrupting a managed-ansistring parameter such as FNMatch's
+       * `const Pattern,Name:string` into a shortstring and emitting an address
+       * (leaq) instead of the managed value (movq) for Length(Pattern). */
+      HashNode_t *promoted_source =
+          FindIdentInCurrentScope(symtab, (char *)id_node->cur);
       KgpcType *effective_decl_type = decl_type;
-      if (FindSymbol(&promoted_source, symtab, id_node->cur) != 0 &&
-          promoted_source != NULL &&
+      if (promoted_source != NULL &&
           (promoted_source->hash_type == HASHTYPE_VAR ||
            promoted_source->hash_type == HASHTYPE_ARRAY ||
            promoted_source->hash_type == HASHTYPE_FUNCTION_RETURN)) {
