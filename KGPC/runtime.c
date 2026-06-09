@@ -1560,9 +1560,34 @@ int64_t kgpc_load_extended_to_bits(const void *src) {
   if (src == NULL)
     return kgpc_double_to_bits(0.0);
 
+#if defined(__x86_64__) || defined(__i386__)
+  /*
+   * Narrow the 80-bit x87 extended value to a 64-bit double and return its
+   * bit pattern in an integer register, performing the conversion entirely on
+   * the x87 stack so that no SSE/xmm register is touched.
+   *
+   * This must be compiler-independent: written as plain C ("(double)ext"),
+   * some compilers (clang) lower the narrowing through xmm0 and leave the
+   * converted double live in xmm0 on return.  KGPC's generated code loads real
+   * operands into xmm registers lazily and treats this bit-conversion helper as
+   * leaving the SSE register file undisturbed, so a stray value left in xmm0
+   * corrupts later floating-point evaluation (observed as bogus overload
+   * resolution while self-hosting on the LLVM/clang64 toolchain).  The explicit
+   * fldt/fstpl keeps the whole operation on the x87 stack regardless of which C
+   * compiler builds the runtime.
+   */
+  int64_t bits;
+  __asm__("fldt %1\n\t"
+          "fstpl %0"
+          : "=m"(bits)
+          : "m"(*(const char(*)[10])src)
+          : "st");
+  return bits;
+#else
   long double ext = 0.0L;
   memcpy(&ext, src, 10);
   return kgpc_double_to_bits((double)ext);
+#endif
 }
 
 void kgpc_store_extended_from_int64(void *dest, int64_t value) {
@@ -5059,41 +5084,43 @@ int64_t fpc_in_hi_qword(uint64_t value) {
 }
 
 /* Set operations for 256-bit sets (set of Char / set of AnsiChar).
-   Each set is 32 bytes = 4 x uint64. */
+   Each set is 32 bytes = 4 x uint64.
+
+   The dest/a/b pointers point at Pascal set storage, which can sit at any
+   byte offset inside a record or on the stack -- they are NOT guaranteed to
+   be 8-byte aligned. Casting void* -> uint64_t* and dereferencing is therefore
+   undefined behaviour: a compiler may legally assume 8-byte alignment and emit
+   alignment-requiring loads/stores (or autovectorize into aligned moves).
+   clang -O2 does exactly this, corrupting set data on misaligned input.
+   Access the words through memcpy, which both gcc and clang lower back to a
+   plain mov while honouring the real (byte) alignment. */
+static inline uint64_t kgpc__set_load64(const void *p, int i) {
+  uint64_t v;
+  memcpy(&v, (const unsigned char *)p + (size_t)i * 8, 8);
+  return v;
+}
+static inline void kgpc__set_store64(void *p, int i, uint64_t v) {
+  memcpy((unsigned char *)p + (size_t)i * 8, &v, 8);
+}
+
 void kgpc_set_union_256(void *dest, const void *a, const void *b) {
-  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-  uint64_t *d = (uint64_t *)dest;
-  d[0] = sa[0] | sb[0];
-  d[1] = sa[1] | sb[1];
-  d[2] = sa[2] | sb[2];
-  d[3] = sa[3] | sb[3];
+  for (int i = 0; i < 4; i++)
+    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) | kgpc__set_load64(b, i));
 }
 
 void kgpc_set_intersect_256(void *dest, const void *a, const void *b) {
-  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-  uint64_t *d = (uint64_t *)dest;
-  d[0] = sa[0] & sb[0];
-  d[1] = sa[1] & sb[1];
-  d[2] = sa[2] & sb[2];
-  d[3] = sa[3] & sb[3];
+  for (int i = 0; i < 4; i++)
+    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) & kgpc__set_load64(b, i));
 }
 
 void kgpc_set_diff_256(void *dest, const void *a, const void *b) {
-  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-  uint64_t *d = (uint64_t *)dest;
-  d[0] = sa[0] & ~sb[0];
-  d[1] = sa[1] & ~sb[1];
-  d[2] = sa[2] & ~sb[2];
-  d[3] = sa[3] & ~sb[3];
+  for (int i = 0; i < 4; i++)
+    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) & ~kgpc__set_load64(b, i));
 }
 
 void kgpc_set_symdiff_256(void *dest, const void *a, const void *b) {
-  const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
-  uint64_t *d = (uint64_t *)dest;
-  d[0] = sa[0] ^ sb[0];
-  d[1] = sa[1] ^ sb[1];
-  d[2] = sa[2] ^ sb[2];
-  d[3] = sa[3] ^ sb[3];
+  for (int i = 0; i < 4; i++)
+    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) ^ kgpc__set_load64(b, i));
 }
 
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.
