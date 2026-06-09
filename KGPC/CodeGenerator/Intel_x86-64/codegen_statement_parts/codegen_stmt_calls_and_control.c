@@ -483,9 +483,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
     if (is_string_type(target_type))
       lhs_is_string_typecast = 1;
     else {
-      if (var_expr->resolved_kgpc_type != NULL)
+      if (var_expr->resolved_kgpc_type != NULL) {
         lhs_typecast_target_size =
             kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+      } else {
+        /* No resolved type (e.g. a bare named pointer cast that wasn't
+         * type-annotated by semcheck): fall back to resolving the cast
+         * target by tag/id so the widening below still has a real size. */
+        long long sz = 0;
+        if (codegen_sizeof_type_reference(
+                ctx, target_type,
+                var_expr->expr_data.typecast_data.target_type_id, NULL,
+                &sz) == 0 &&
+            sz > 0)
+          lhs_typecast_target_size = sz;
+      }
       var_expr = var_expr->expr_data.typecast_data.expr;
     }
   }
@@ -1821,7 +1833,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
       /* An explicit LHS typecast widens the store to its target type (e.g.
        * Pointer(untyped_var) must store all 8 bytes). Only widen, never narrow,
        * so narrowing casts like Byte(x) keep their existing behavior. */
-      if (lhs_typecast_target_size > target_size)
+      if (lhs_typecast_target_size > 0 &&
+          lhs_typecast_target_size > target_size)
         target_size = lhs_typecast_target_size;
       if ((target_size <= 0 || target_size == 4) && ctx != NULL &&
           ctx->symtab != NULL) {
