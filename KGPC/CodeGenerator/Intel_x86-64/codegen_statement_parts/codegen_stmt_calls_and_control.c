@@ -470,13 +470,24 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
    * Generate a string assignment (kgpc_string_assign) instead of direct store.
    */
   int lhs_is_string_typecast = 0;
+  /* A non-string typecast on the LHS determines the store width via its TARGET
+   * type, not the inner expression: e.g. `Pointer(obj) := nil` where `obj` is
+   * an untyped `var` parameter (as in RTL FreeAndNil). The untyped var has no
+   * type and would otherwise default to a 4-byte store, truncating a 64-bit
+   * pointer (low 32 bits cleared, high 32 left stale). Capture the typecast
+   * target size before unwrapping so the size logic below can honor it. */
+  long long lhs_typecast_target_size = 0;
   if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
       var_expr->expr_data.typecast_data.expr != NULL) {
     int target_type = var_expr->expr_data.typecast_data.target_type;
     if (is_string_type(target_type))
       lhs_is_string_typecast = 1;
-    else
+    else {
+      if (var_expr->resolved_kgpc_type != NULL)
+        lhs_typecast_target_size =
+            kgpc_type_sizeof(var_expr->resolved_kgpc_type);
       var_expr = var_expr->expr_data.typecast_data.expr;
+    }
   }
 
   /* Handle string typecast on LHS: e.g., RawByteString(ptr) := ''
@@ -1807,6 +1818,11 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
         target_size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
       if (target_size <= 0)
         target_size = expr_effective_size_bytes(var_expr);
+      /* An explicit LHS typecast widens the store to its target type (e.g.
+       * Pointer(untyped_var) must store all 8 bytes). Only widen, never narrow,
+       * so narrowing casts like Byte(x) keep their existing behavior. */
+      if (lhs_typecast_target_size > target_size)
+        target_size = lhs_typecast_target_size;
       if ((target_size <= 0 || target_size == 4) && ctx != NULL &&
           ctx->symtab != NULL) {
         sym_type = codegen_expr_lookup_symtab_type(var_expr, ctx->symtab);
