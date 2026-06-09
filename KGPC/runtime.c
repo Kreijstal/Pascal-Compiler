@@ -1584,8 +1584,13 @@ int64_t kgpc_load_extended_to_bits(const void *src) {
           : "st");
   return bits;
 #else
+  /* x87 80-bit extended only exists on x86, so KGPC never reaches this path
+     on its supported targets.  Bound the copy by sizeof(long double) so it can
+     never overflow `ext` on a platform whose long double is narrower than the
+     10-byte source (e.g. an 8-byte long double on ARM/AArch64 or MSVC). */
   long double ext = 0.0L;
-  memcpy(&ext, src, 10);
+  size_t n = sizeof(ext) < 10 ? sizeof(ext) : 10;
+  memcpy(&ext, src, n);
   return kgpc_double_to_bits((double)ext);
 #endif
 }
@@ -5104,23 +5109,31 @@ static inline void kgpc__set_store64(void *p, int i, uint64_t v) {
 }
 
 void kgpc_set_union_256(void *dest, const void *a, const void *b) {
-  for (int i = 0; i < 4; i++)
-    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) | kgpc__set_load64(b, i));
+  kgpc__set_store64(dest, 0, kgpc__set_load64(a, 0) | kgpc__set_load64(b, 0));
+  kgpc__set_store64(dest, 1, kgpc__set_load64(a, 1) | kgpc__set_load64(b, 1));
+  kgpc__set_store64(dest, 2, kgpc__set_load64(a, 2) | kgpc__set_load64(b, 2));
+  kgpc__set_store64(dest, 3, kgpc__set_load64(a, 3) | kgpc__set_load64(b, 3));
 }
 
 void kgpc_set_intersect_256(void *dest, const void *a, const void *b) {
-  for (int i = 0; i < 4; i++)
-    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) & kgpc__set_load64(b, i));
+  kgpc__set_store64(dest, 0, kgpc__set_load64(a, 0) & kgpc__set_load64(b, 0));
+  kgpc__set_store64(dest, 1, kgpc__set_load64(a, 1) & kgpc__set_load64(b, 1));
+  kgpc__set_store64(dest, 2, kgpc__set_load64(a, 2) & kgpc__set_load64(b, 2));
+  kgpc__set_store64(dest, 3, kgpc__set_load64(a, 3) & kgpc__set_load64(b, 3));
 }
 
 void kgpc_set_diff_256(void *dest, const void *a, const void *b) {
-  for (int i = 0; i < 4; i++)
-    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) & ~kgpc__set_load64(b, i));
+  kgpc__set_store64(dest, 0, kgpc__set_load64(a, 0) & ~kgpc__set_load64(b, 0));
+  kgpc__set_store64(dest, 1, kgpc__set_load64(a, 1) & ~kgpc__set_load64(b, 1));
+  kgpc__set_store64(dest, 2, kgpc__set_load64(a, 2) & ~kgpc__set_load64(b, 2));
+  kgpc__set_store64(dest, 3, kgpc__set_load64(a, 3) & ~kgpc__set_load64(b, 3));
 }
 
 void kgpc_set_symdiff_256(void *dest, const void *a, const void *b) {
-  for (int i = 0; i < 4; i++)
-    kgpc__set_store64(dest, i, kgpc__set_load64(a, i) ^ kgpc__set_load64(b, i));
+  kgpc__set_store64(dest, 0, kgpc__set_load64(a, 0) ^ kgpc__set_load64(b, 0));
+  kgpc__set_store64(dest, 1, kgpc__set_load64(a, 1) ^ kgpc__set_load64(b, 1));
+  kgpc__set_store64(dest, 2, kgpc__set_load64(a, 2) ^ kgpc__set_load64(b, 2));
+  kgpc__set_store64(dest, 3, kgpc__set_load64(a, 3) ^ kgpc__set_load64(b, 3));
 }
 
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.
