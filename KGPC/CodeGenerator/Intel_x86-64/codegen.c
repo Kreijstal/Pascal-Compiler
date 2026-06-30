@@ -6158,7 +6158,18 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx,
             if (kgpc_type_get_array_dimension_info(var_node->type, symtab,
                                                    &dim_info) == 0) {
               kgpc_dim_count = dim_info.dim_count;
-              if (dim_info.strides[0] > 0 && dim_info.strides[0] <= INT_MAX) {
+              if (dim_info.strides[0] > 0 && dim_info.strides[0] <= INT_MAX &&
+                  /* For a single-dimension array the element type's own size
+                   * (from arr->element_kgpc_type, above) is authoritative for
+                   * the .comm allocation; don't let a dimension-info stride
+                   * SHRINK it.  dim_info under-sizes an inline `set of <enum>`
+                   * element to a 4-byte small set, which (with the correct
+                   * 32-byte indexing stride elsewhere) would under-allocate the
+                   * typed const and let its initializer overrun the next global
+                   * (e.g. FPC's RegModifiedByInstruction WriteOps).  Multi-dim
+                   * arrays still need strides[0] to pack inner dimensions. */
+                  (dim_info.dim_count > 1 ||
+                   (int)dim_info.strides[0] >= element_size)) {
                 element_size = (int)dim_info.strides[0];
               }
               /* Only use dim_info.total_size when it actually
