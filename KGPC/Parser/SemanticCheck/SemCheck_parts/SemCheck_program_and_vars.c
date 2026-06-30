@@ -1477,6 +1477,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls) {
             KgpcType *set_type = create_primitive_type(SET_TYPE);
             if (set_type != NULL &&
                 tree->tree_data.var_decl_data.inline_type_alias != NULL) {
+              /* Resolve the anonymous set type's storage size from its element
+               * type before attaching it.  Named set type declarations run
+               * through inherit_alias_metadata (which caches the storage size
+               * from the element enum/range), but an inline "var s: set of T"
+               * alias never did, so kgpc_set_storage_size fell back to the
+               * 4-byte default and truncated every element with ordinal >= 32
+               * (corrupting set operations on large enums). */
+              inherit_alias_metadata(
+                  symtab, tree->tree_data.var_decl_data.inline_type_alias);
               kgpc_type_set_type_alias(
                   set_type, tree->tree_data.var_decl_data.inline_type_alias);
             }
