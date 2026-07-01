@@ -5011,6 +5011,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                  "\t# ERROR: function call with NULL target\n");
         inst_list = add_inst(inst_list, buffer);
       }
+      if (owned_call_target != NULL)
+        free(owned_call_target);
     }
 
     inst_list = codegen_cleanup_call_stack(inst_list, ctx);
