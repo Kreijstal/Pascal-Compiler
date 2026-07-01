@@ -86,11 +86,23 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr,
   }
   if (deref_type != NULL) {
     struct TypeAlias *alias = kgpc_type_get_type_alias(deref_type);
-    if (kgpc_type_is_record(deref_type) || kgpc_type_is_array(deref_type) ||
+    int is_set_type =
         (deref_type->kind == TYPE_KIND_PRIMITIVE &&
          deref_type->info.primitive_type_tag == SET_TYPE) ||
+        (alias != NULL && alias->is_set);
+    int keep_by_address =
+        kgpc_type_is_record(deref_type) || kgpc_type_is_array(deref_type) ||
         kgpc_type_is_shortstring(deref_type) ||
-        (alias != NULL && (alias->is_shortstring || alias->is_set))) {
+        (alias != NULL && alias->is_shortstring);
+    /* Small (<=4-byte, register-resident) sets must be LOADED as a value
+     * (movl/movq) just like any scalar: `in`, `=` and `:=` all expect the
+     * set bitmask in the register, not its address.  Only large (>4-byte,
+     * 32-byte char) sets are handled by address like records/arrays.  Keeping
+     * the address for small sets made `p^` yield the pointer bits, so e.g.
+     * `(e in pflags(arg)^)` tested the address instead of the set. */
+    if (is_set_type && kgpc_type_sizeof(deref_type) > 4)
+      keep_by_address = 1;
+    if (keep_by_address) {
       char addr_buf[64];
       snprintf(addr_buf, sizeof(addr_buf), "\tmovq\t%s, %s\n", addr_reg->bit_64,
                target_reg->bit_64);

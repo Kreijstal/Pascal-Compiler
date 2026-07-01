@@ -3354,6 +3354,12 @@ int semcheck_varid_ex(int *type_return, SymTab_t *symtab,
           }
           if (getter_found && getter_node != NULL &&
               getter_node->hash_type == HASHTYPE_FUNCTION) {
+            /* expr_data is a union; free the EXPR_VAR_ID strdup'd id (which
+             * `id` aliases) before the memset switches the slot to
+             * function_call_data, otherwise it leaks. getter_id is an
+             * independent allocation and `id` is not used past this point. */
+            if (expr->type == EXPR_VAR_ID)
+              free(expr->expr_data.id);
             expr->type = EXPR_FUNCTION_CALL;
             memset(&expr->expr_data.function_call_data, 0,
                    sizeof(expr->expr_data.function_call_data));

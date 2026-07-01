@@ -270,6 +270,22 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt,
                                  "fail") &&
         stmt->stmt_data.procedure_call_data.expr_args == NULL &&
         semcheck_get_current_subprogram_is_constructor()) {
+      /* Free the heap-owned procedure_call_data fields before zeroing the
+       * union — otherwise the memset orphans the strdup'd id (e.g. "fail")
+       * and the other call metadata strings, leaking them. expr_args is NULL
+       * here (checked above), so there are no argument nodes to release. */
+      free(stmt->stmt_data.procedure_call_data.id);
+      free(stmt->stmt_data.procedure_call_data.mangled_id);
+      free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+      free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+      free(stmt->stmt_data.procedure_call_data.cached_method_name);
+      free(stmt->stmt_data.procedure_call_data.self_class_name);
+      free(stmt->stmt_data.procedure_call_data.constructor_class_name);
+      free(stmt->stmt_data.procedure_call_data.call_qualifier);
+      if (stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
+        destroy_expr(stmt->stmt_data.procedure_call_data.procedural_var_expr);
+      if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
+        destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
       stmt->type = STMT_EXIT;
       memset(&stmt->stmt_data, 0, sizeof(stmt->stmt_data));
       stmt->stmt_data.exit_data.return_expr = NULL;
@@ -2326,7 +2342,15 @@ int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
   ListNode_t *extra_indices = lhs->expr_data.array_access_data.extra_indices;
   lhs->expr_data.array_access_data.extra_indices = NULL;
 
-  /* Detach needed subexpressions before destroying lhs. */
+  /* Detach needed subexpressions before destroying lhs.  object_expr (the
+   * record_expr child, case RECORD_ACCESS) becomes the setter's Self argument;
+   * index_expr and rhs become the remaining arguments; array_expr itself (the
+   * synthetic `obj.default_property` wrapper built in semcheck_arrayaccess, or
+   * the original VAR_ID base) is no longer part of the rewritten call, so it
+   * must be freed explicitly -- nulling lhs's array_expr slot below stops
+   * destroy_expr(lhs) from reaching it.  property_name aliases array_expr's
+   * field_id/id and is unused past this point (the setter is already
+   * resolved). */
   if (array_expr->type == EXPR_RECORD_ACCESS)
     array_expr->expr_data.record_access_data.record_expr = NULL;
   lhs->expr_data.array_access_data.array_expr = NULL;
@@ -2335,6 +2359,7 @@ int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
   stmt->stmt_data.var_assign_data.expr = NULL;
 
   destroy_expr(lhs);
+  destroy_expr(array_expr);
 
   ListNode_t *args_head = NULL;
   ListNode_t *args_tail = NULL;

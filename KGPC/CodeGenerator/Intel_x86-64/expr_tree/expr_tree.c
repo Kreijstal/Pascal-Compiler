@@ -2407,6 +2407,27 @@ static int expr_typecast_is_signed_narrow(const struct Expression *expr,
   return 1;
 }
 
+/* A SCALAR unsigned narrowing cast Byte(x)/Word(x), as opposed to a typecast to
+ * an aggregate whose target tag happens to be BYTE/WORD — e.g.
+ * `array[0..sizeof(T)-1] of byte`(rec), used for raw byte swaps — which must
+ * keep its full aggregate width rather than being masked to one byte/word. */
+static int
+expr_typecast_is_unsigned_narrow_scalar(const struct Expression *expr) {
+  if (expr == NULL || expr->type != EXPR_TYPECAST)
+    return 0;
+  int tc = expr->expr_data.typecast_data.target_type;
+  if (tc != BYTE_TYPE && tc != WORD_TYPE)
+    return 0;
+  KgpcType *cast_type = expr_get_kgpc_type((struct Expression *)expr);
+  if (cast_type == NULL)
+    return 0;
+  if (kgpc_type_is_array(cast_type) || kgpc_type_is_record(cast_type) ||
+      kgpc_type_is_pointer(cast_type))
+    return 0;
+  long long sz = kgpc_type_sizeof(cast_type);
+  return (sz == 1 || sz == 2);
+}
+
 static expr_node_t *
 build_expr_tree_internal(struct Expression *expr,
                          int preserve_narrowing_in_arithmetic) {
@@ -2425,8 +2446,15 @@ build_expr_tree_internal(struct Expression *expr,
     if (tc_target == POINTER_TYPE && tc_inner->is_array_expr &&
         codegen_expr_is_addressable(tc_inner)) {
       preserve_leaf_typecast = 1;
-    } else if (preserve_narrowing_in_arithmetic &&
-               (tc_target == BYTE_TYPE || tc_target == WORD_TYPE)) {
+    } else if (expr_typecast_is_unsigned_narrow_scalar(expr)) {
+      /* Unsigned narrowing cast Byte()/Word() must truncate to its width
+       * whenever its value is materialised — not only inside arithmetic but
+       * also when passed as an argument or used as an array index (e.g. FPC's
+       * `ConstWriteSizes[Word(ConstRegs[Count])]` in the x86 CMOV optimiser).
+       * If stripped, the inner 32-bit load keeps the full value (Word($1050002)
+       * stayed 0x1050002 instead of 2), producing out-of-bounds indices.
+       * Preserve as a leaf so gencode_case0 emits the andl mask, mirroring the
+       * unconditional signed-narrow handling below. */
       preserve_leaf_typecast = 1;
     }
     /* Char-valued typecast (e.g. char(65), char(byte(x))) feeding a string
@@ -3949,6 +3977,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     }
 
     /* For constructors, allocate memory for the instance */
+    /* Set when the constructor is invoked on an existing instance value (no
+     * allocation; Self = the instance).  Needed both in the allocation block
+     * below and in the later argument-passing block. */
+    int receiver_is_instance_value = 0;
     if (is_constructor) {
       struct RecordType *class_record = NULL;
       int ctor_type_receiver = 0;
@@ -4082,6 +4114,43 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
             pascal_identifier_equals(fa->expr_data.id, "Self"))
           ctor_type_receiver = 0;
       }
+      /* A constructor invoked on an existing instance value
+       * (e.g. `Inst.Create(...)` or `dest[i].Create_Regset(...)`) must NOT
+       * allocate a new object: per Object Pascal semantics it runs the
+       * constructor body as an ordinary method with Self = the instance.
+       * Detect that here so the allocation path below is replaced by loading
+       * the receiver instance as Self.  Class-reference / bare-type receivers
+       * (TFoo.Create, classref variables) still allocate.  (Self chaining is
+       * handled separately above by clearing ctor_type_receiver.) */
+      if (ctor_type_receiver && constructor_receiver_expr != NULL) {
+        int receiver_is_type_name = 0;
+        if (constructor_receiver_expr->type == EXPR_VAR_ID &&
+            constructor_receiver_expr->expr_data.id != NULL && ctx != NULL &&
+            ctx->symtab != NULL) {
+          HashNode_t *rn = NULL;
+          if (FindSymbol(&rn, ctx->symtab,
+                         constructor_receiver_expr->expr_data.id) != 0 &&
+              rn != NULL && rn->hash_type == HASHTYPE_TYPE)
+            receiver_is_type_name = 1;
+        }
+        /* Robustly recognise a class-reference receiver (`class of T`), which
+         * must still allocate.  resolved_kgpc_type can be NULL for array
+         * elements / field accesses, so fall back to expr_get_kgpc_type, which
+         * resolves the element/member type and preserves the is_class_reference
+         * alias (e.g. `Classes[i].Create` where Classes: array of class-of-T). */
+        KgpcType *rtype = constructor_receiver_expr->resolved_kgpc_type;
+        if (rtype == NULL)
+          rtype = expr_get_kgpc_type(constructor_receiver_expr);
+        int receiver_is_classref = receiver_is_runtime_classref ||
+                                   expr_tree_type_is_class_vmt_value(rtype);
+        /* The enclosing block already established that class_record is a class
+         * (record_type_is_class).  A receiver that is neither a class-reference
+         * value nor a bare type name is therefore an instance value, whatever
+         * its exact resolved expression type (simple variable, array element,
+         * field access, etc.). */
+        if (!receiver_is_type_name && !receiver_is_classref)
+          receiver_is_instance_value = 1;
+      }
       if (ctor_type_receiver && class_record != NULL &&
           record_type_is_class(class_record)) {
         /* Get the size of the class instance */
@@ -4089,6 +4158,35 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
         if (codegen_sizeof_record_type(ctx, class_record, &instance_size) ==
                 0 &&
             instance_size > 0) {
+          if (receiver_is_instance_value) {
+            /* Instance receiver: load the existing object as Self; no
+             * allocation, no VMT re-init, no ownership/free. The shared
+             * constructor-call machinery below passes constructor_instance_reg
+             * as Self. */
+            Register_t *inst_reg =
+                get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (inst_reg == NULL) {
+              codegen_report_error(ctx,
+                                   "ERROR: Unable to allocate register for "
+                                   "constructor instance receiver.");
+              goto cleanup_constructor;
+            }
+            expr_node_t *receiver_tree =
+                build_expr_tree(constructor_receiver_expr);
+            if (receiver_tree != NULL) {
+              inst_list =
+                  gencode_expr_tree(receiver_tree, inst_list, ctx, inst_reg);
+              free_expr_tree(receiver_tree);
+            }
+            constructor_instance_reg = inst_reg;
+            constructor_instance_slot = add_l_t("ctor_instance");
+            if (constructor_instance_slot != NULL) {
+              snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                       constructor_instance_reg->bit_64,
+                       constructor_instance_slot->offset);
+              inst_list = add_inst(inst_list, buffer);
+            }
+          } else {
           /* Allocate memory through the runtime helper. */
           const char *alloc_arg_reg =
               codegen_target_is_windows() ? "%rcx" : "%rdi";
@@ -4286,6 +4384,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
           inst_list = codegen_emit_interface_vtable_slot_init(
               inst_list, ctx, class_record, class_record->type_id,
               constructor_instance_reg);
+          }
         }
       }
     }
@@ -4361,10 +4460,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                   expr->expr_data.function_call_data.constructor_receiver_expr
                       ->expr_data.id)) {
             skip_first = 1;
-          } else if (fa != NULL && fa->type != EXPR_NIL) {
+          } else if (!receiver_is_instance_value && fa != NULL &&
+                     fa->type != EXPR_NIL) {
             /* First arg is not a Self placeholder — it's a real arg.
              * The class was derived from constructor_receiver_expr
-             * which was set by the proc_call codegen path. */
+             * which was set by the proc_call codegen path.
+             * (For an instance receiver we supply Self ourselves via
+             * constructor_instance_reg, so the injected receiver arg must
+             * still be skipped regardless of its expression kind.) */
             skip_first = 0;
           }
         }
@@ -4908,6 +5011,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                  "\t# ERROR: function call with NULL target\n");
         inst_list = add_inst(inst_list, buffer);
       }
+      if (owned_call_target != NULL)
+        free(owned_call_target);
     }
 
     inst_list = codegen_cleanup_call_stack(inst_list, ctx);
@@ -5040,8 +5145,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     return codegen_record_access(expr, inst_list, ctx, target_reg);
   } else if (expr->type == EXPR_TYPECAST &&
              expr->expr_data.typecast_data.expr != NULL &&
-             (expr->expr_data.typecast_data.target_type == BYTE_TYPE ||
-              expr->expr_data.typecast_data.target_type == WORD_TYPE)) {
+             expr_typecast_is_unsigned_narrow_scalar(expr)) {
     struct Expression *inner_expr = expr->expr_data.typecast_data.expr;
     const int byte_mask = 255;
     const int word_mask = 65535;

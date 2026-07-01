@@ -3223,17 +3223,24 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
     }
     free_reg(get_reg_stack(), addr_reg);
 
-    inst_list = codegen_expr(assign_expr, inst_list, ctx);
-    if (codegen_had_error(ctx))
+    /* Evaluate the RHS and capture the register that actually holds its value.
+     * Using codegen_expr() (which discards/frees the result register) and then
+     * grabbing a fresh get_free_reg() assumed the just-freed result register
+     * would be handed back — true only by coincidence.  Under register
+     * pressure (e.g. optcse.pas searchcsedomain's
+     * `pnode(lists.locationlist[i])^ := cderefnode.Create(ctemprefnode.create(...))`)
+     * get_free_reg() returned a DIFFERENT free register still holding a stale
+     * value (the constructor receiver's class-reference / VMT pointer), so the
+     * deref store wrote that read-only VMT address into the node slot and the
+     * next field access crashed.  Capture the result register explicitly. */
+    Register_t *value_reg = NULL;
+    inst_list =
+        codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+    if (codegen_had_error(ctx) || value_reg == NULL) {
+      if (value_reg != NULL)
+        free_reg(get_reg_stack(), value_reg);
       return inst_list;
-
-    Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (value_reg == NULL)
-      value_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-    if (value_reg == NULL)
-      return codegen_fail_register(
-          ctx, inst_list, NULL,
-          "ERROR: Unable to allocate register for pointer value.");
+    }
 
     Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
     if (addr_reload == NULL)
@@ -4340,16 +4347,22 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list,
   assert(ctx != NULL);
   assert(symtab != NULL);
 
-  char body_label[18], exit_label[18], buffer[50];
+  char body_label[18], cont_label[18], exit_label[18], buffer[50];
   int relop_type = NE;
   ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
 
   gen_label(body_label, 18, ctx);
+  gen_label(cont_label, 18, ctx);
   gen_label(exit_label, 18, ctx);
   snprintf(buffer, 50, "%s:\n", body_label);
   inst_list = add_inst(inst_list, buffer);
 
-  if (!codegen_push_loop(ctx, exit_label, body_label))
+  /* Continue inside a repeat..until must branch to the until-condition test,
+   * NOT the loop body top: otherwise a Continue on the final pass skips the
+   * termination test and the loop over-runs (e.g. walking a tai list past the
+   * sentinel, corrupting later passes). So the loop's continue target is a
+   * dedicated label emitted just before the until test below. */
+  if (!codegen_push_loop(ctx, exit_label, cont_label))
     return inst_list;
   while (body_list != NULL) {
     struct Statement *body_stmt = (struct Statement *)body_list->cur;
@@ -4358,6 +4371,8 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list,
   }
   codegen_pop_loop(ctx);
 
+  snprintf(buffer, 50, "%s:\n", cont_label);
+  inst_list = add_inst(inst_list, buffer);
   inst_list = codegen_condition_expr(stmt->stmt_data.repeat_data.until_expr,
                                      inst_list, ctx, &relop_type);
   inst_list = gencode_jmp(relop_type, 1, body_label, inst_list);
@@ -5653,6 +5668,21 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       return inst_list;
     }
 
+    /* Reload the loop index from its canonical home (index_slot) before
+     * storing it into the loop variable.  The set-iteration body holds six
+     * registers live at once (idx, base, byte_index, bit, byte_val, mask) but
+     * the allocatable pool only has five, so mask_reg ends up reusing
+     * idx_reg's physical register and clobbers the index before this store.
+     * The authoritative counter always lives in index_slot (it is what gets
+     * incremented each iteration), so materialise the loop variable from it. */
+    {
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovl\t-%d(%%rbp), %%0\n",
+               index_slot->offset);
+      Register_t *d[] = {idx_reg};
+      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+    }
+
     {
       long long elem_size =
           (loop_var != NULL && loop_var->resolved_kgpc_type != NULL)
@@ -5759,6 +5789,85 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
   int start_index = array_type->info.array_info.start_index;
   int end_index = array_type->info.array_info.end_index;
 
+  /* Open arrays and dynamic arrays have a runtime length (their static
+   * bounds are encoded as end_index < start_index).  Their storage is a
+   * descriptor { void *data; int64_t length; }: for an open-array / var
+   * parameter the parameter slot holds the descriptor pointer, for a local
+   * dynamic array the variable IS the inline descriptor.  Without this the
+   * loop compared the index against the bogus static end_index and iterated
+   * zero times (e.g. FPC's `for op in ops` over `array of TAsmOp` in the x86
+   * peephole optimiser's MatchInstruction silently never matched, so the
+   * CL-only shift guard was skipped and a non-CL shift count was emitted). */
+  int is_runtime_len = kgpc_type_is_dynamic_array(array_type);
+  StackNode_t *data_slot = NULL;
+  StackNode_t *len_slot = NULL;
+  if (is_runtime_len) {
+    char dbuf[128];
+    /* Acquire the descriptor pointer the same way Length()/indexing do:
+     * by value for reference / var parameters (open arrays), by address for
+     * an inline local dynamic-array variable. */
+    int use_value = 0;
+    if (collection->type == EXPR_VAR_ID && collection->expr_data.id != NULL) {
+      StackNode_t *cn = find_label(collection->expr_data.id);
+      if (cn != NULL && cn->is_reference)
+        use_value = 1;
+      HashNode_t *hn = NULL;
+      if (!use_value &&
+          FindSymbol(&hn, ctx->symtab, collection->expr_data.id) != 0 &&
+          hn != NULL && hn->is_var_parameter)
+        use_value = 1;
+    }
+    Register_t *desc_reg = NULL;
+    if (!use_value && codegen_expr_is_addressable(collection))
+      inst_list =
+          codegen_address_for_expr(collection, inst_list, ctx, &desc_reg);
+    else
+      inst_list = codegen_expr_with_result(collection, inst_list, ctx, &desc_reg);
+    if (desc_reg == NULL || codegen_had_error(ctx))
+      return inst_list;
+
+    data_slot = codegen_alloc_temp_slot("for_in_data");
+    len_slot = codegen_alloc_temp_slot("for_in_len");
+    if (data_slot == NULL || len_slot == NULL) {
+      free_reg(get_reg_stack(), desc_reg);
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate temp slots for for-in descriptor");
+      return inst_list;
+    }
+    /* From the single descriptor pointer: length = descriptor[8],
+     * data = descriptor[0].  Spill both so the loop body's register churn
+     * cannot clobber them.  Read length first, then overwrite desc_reg with
+     * the data pointer. */
+    Register_t *len_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (len_reg == NULL) {
+      free_reg(get_reg_stack(), desc_reg);
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate register for for-in length");
+      return inst_list;
+    }
+    {
+      Register_t *d[] = {len_reg};
+      Register_t *u[] = {desc_reg};
+      inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, "\tmovq\t8(%1), %0\n");
+    }
+    snprintf(dbuf, sizeof(dbuf), "\tmovq\t%s, -%d(%%rbp)\n", len_reg->bit_64,
+             len_slot->offset);
+    inst_list = add_inst(inst_list, dbuf);
+    free_reg(get_reg_stack(), len_reg);
+    {
+      Register_t *du[] = {desc_reg};
+      inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tmovq\t(%0), %0\n");
+    }
+    snprintf(dbuf, sizeof(dbuf), "\tmovq\t%s, -%d(%%rbp)\n", desc_reg->bit_64,
+             data_slot->offset);
+    inst_list = add_inst(inst_list, dbuf);
+    free_reg(get_reg_stack(), desc_reg);
+
+    /* Iterate the descriptor by zero-based position. */
+    start_index = 0;
+    end_index = 0; /* unused for the runtime-length path */
+  }
+
   // Generate labels for loop control
   char cond_label[18], body_label[18], exit_label[18], incr_label[18],
       buffer[256];
@@ -5809,10 +5918,26 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
   }
 
-  // Get the base address of the array (not its value)
+  // Get the base address of the array elements.  For a fixed array this is the
+  // variable's storage; for a runtime-length (open/dynamic) array it is the
+  // descriptor's data pointer that we spilled to data_slot above.
   Register_t *array_base_reg = NULL;
-  inst_list =
-      codegen_address_for_expr(collection, inst_list, ctx, &array_base_reg);
+  if (is_runtime_len) {
+    array_base_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (array_base_reg != NULL) {
+      Register_t *d[] = {array_base_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
+               data_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+    } else {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate register for for-in array base");
+    }
+  } else {
+    inst_list =
+        codegen_address_for_expr(collection, inst_list, ctx, &array_base_reg);
+  }
   if (array_base_reg == NULL || codegen_had_error(ctx)) {
     free_reg(get_reg_stack(), index_reg);
     codegen_pop_loop(ctx);
@@ -6015,14 +6140,44 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
   snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
   inst_list = add_inst(inst_list, buffer);
 
-  // Compare index with end_index
-  snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", end_index,
-           index_slot->offset);
-  inst_list = add_inst(inst_list, buffer);
+  if (is_runtime_len) {
+    // Runtime length: continue while index < length.  Load the 32-bit length
+    // into a scratch register (two memory operands can't be compared directly)
+    // and branch on a signed less-than.
+    Register_t *len_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (len_reg == NULL) {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate register for for-in length compare");
+      codegen_pop_loop(ctx);
+      return inst_list;
+    }
+    {
+      Register_t *d[] = {len_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tmovl\t-%d(%%rbp), %%0\n",
+               len_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+    }
+    {
+      Register_t *u[] = {len_reg};
+      char tmpl[64];
+      snprintf(tmpl, sizeof(tmpl), "\tcmpl\t%%0, -%d(%%rbp)\n",
+               index_slot->offset);
+      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+    }
+    free_reg(get_reg_stack(), len_reg);
+    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+  } else {
+    // Compare index with end_index
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", end_index,
+             index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
 
-  // Jump to body if index <= end_index
-  snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
-  inst_list = add_inst(inst_list, buffer);
+    // Jump to body if index <= end_index
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+  }
 
   // Exit label
   snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);

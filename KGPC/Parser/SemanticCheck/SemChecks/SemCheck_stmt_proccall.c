@@ -1508,8 +1508,22 @@ skip_type_receiver_rewrite:
       int self_type_tag = UNKNOWN_TYPE;
       semcheck_stmt_expr_tag(&self_type_tag, symtab, first_arg, max_scope_lev,
                              NO_MUTATE);
-      /* Advance past Self for overload resolution */
+      /* Advance past Self for overload resolution.  This Self node was
+       * synthetically prepended by the WITH-context method-call retry; a
+       * unit-qualified free call does not take it.  Unlink and free the head
+       * node here so the statement's expr_args stays consistent with
+       * args_given -- otherwise a later `expr_args = args_given` reassignment
+       * (e.g. the procedural-type default-arg path) orphans and leaks this
+       * listnode plus its cloned Self expression. */
+      ListNode_t *skipped_self = args_given;
       args_given = args_given->next;
+      if (stmt->stmt_data.procedure_call_data.expr_args == skipped_self) {
+        stmt->stmt_data.procedure_call_data.expr_args = args_given;
+        skipped_self->next = NULL;
+        destroy_expr((struct Expression *)skipped_self->cur);
+        skipped_self->cur = NULL;
+        free(skipped_self);
+      }
       was_unit_qualified = 1;
       goto skip_method_placeholder_resolution;
     }

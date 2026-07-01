@@ -76,18 +76,36 @@ static void semcheck_resolve_inline_set_range(SymTab_t *symtab,
     return;
 
   struct TypeAlias *alias = type->type_alias;
-  if (!alias->is_set || !alias->is_range || alias->range_known)
+  if (!alias->is_set)
     return;
 
-  long long start_value = 0;
-  long long end_value = 0;
-  if (semcheck_resolve_bound_literal(symtab, alias->range_start_str,
-                                     &start_value) == 0 &&
-      semcheck_resolve_bound_literal(symtab, alias->range_end_str,
-                                     &end_value) == 0) {
-    alias->range_start = start_value;
-    alias->range_end = end_value;
-    alias->range_known = 1;
+  /* Resolve a `set of <subrange>` whose bounds are named constants. */
+  if (alias->is_range && !alias->range_known) {
+    long long start_value = 0;
+    long long end_value = 0;
+    if (semcheck_resolve_bound_literal(symtab, alias->range_start_str,
+                                       &start_value) == 0 &&
+        semcheck_resolve_bound_literal(symtab, alias->range_end_str,
+                                       &end_value) == 0) {
+      alias->range_start = start_value;
+      alias->range_end = end_value;
+      alias->range_known = 1;
+    }
+  }
+
+  /* Cache the set's storage size on the alias.  Codegen sizes inline set types
+   * via kgpc_set_storage_size(), which has no symbol table and therefore cannot
+   * resolve a `set of <named-enum>` element to its true element count -- it
+   * would default such a set to a 4-byte small set.  Resolving the size here
+   * (where the symbol table is available) and caching it on the alias keeps an
+   * anonymous inline `set of TEnum` array/record element 32 bytes wide, matching
+   * a named `type TS = set of TEnum` alias.  This is what makes a typed-const
+   * `array[..] of set of TEnum` (e.g. FPC's RegModifiedByInstruction WriteOps)
+   * lay out and index with the correct 32-byte stride. */
+  if (alias->storage_size <= 0) {
+    long long set_size = 0;
+    if (sizeof_from_alias(symtab, alias, &set_size, 0, 0) == 0 && set_size > 0)
+      alias->storage_size = set_size;
   }
 }
 
@@ -166,6 +184,16 @@ static void clear_predeclare_var_type_caches(ListNode_t *decls) {
       tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
     } else if (tree->type == TREE_ARR_DECL &&
                tree->tree_data.arr_decl_data.element_kgpc_type != NULL) {
+      /* An inline `set of <named-enum>` element type (e.g. a typed-const
+       * `array[..] of set of TEnum`) is built at parse time and is the only
+       * durable record of the element enum: the array carries no `type_id`
+       * naming it, so a cleared element type cannot be rebuilt during the real
+       * semantic pass and would degrade to a generic 4-byte small set.  The
+       * predeclare pass never recomputes element_kgpc_type (only the parser
+       * sets it), so this cache is not stale -- preserve set element types so
+       * the real pass can resolve and cache their true storage size. */
+      if (kgpc_type_is_set(tree->tree_data.arr_decl_data.element_kgpc_type))
+        continue;
       kgpc_type_release(tree->tree_data.arr_decl_data.element_kgpc_type);
       tree->tree_data.arr_decl_data.element_kgpc_type = NULL;
     }
@@ -1477,6 +1505,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls) {
             KgpcType *set_type = create_primitive_type(SET_TYPE);
             if (set_type != NULL &&
                 tree->tree_data.var_decl_data.inline_type_alias != NULL) {
+              /* Resolve the anonymous set type's storage size from its element
+               * type before attaching it.  Named set type declarations run
+               * through inherit_alias_metadata (which caches the storage size
+               * from the element enum/range), but an inline "var s: set of T"
+               * alias never did, so kgpc_set_storage_size fell back to the
+               * 4-byte default and truncated every element with ordinal >= 32
+               * (corrupting set operations on large enums). */
+              inherit_alias_metadata(
+                  symtab, tree->tree_data.var_decl_data.inline_type_alias);
               kgpc_type_set_type_alias(
                   set_type, tree->tree_data.var_decl_data.inline_type_alias);
             }
