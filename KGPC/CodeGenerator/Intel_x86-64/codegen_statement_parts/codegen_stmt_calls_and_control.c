@@ -5930,6 +5930,9 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
                data_slot->offset);
       inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+    } else {
+      codegen_report_error(
+          ctx, "ERROR: Unable to allocate register for for-in array base");
     }
   } else {
     inst_list =
