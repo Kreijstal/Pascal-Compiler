@@ -270,6 +270,22 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt,
                                  "fail") &&
         stmt->stmt_data.procedure_call_data.expr_args == NULL &&
         semcheck_get_current_subprogram_is_constructor()) {
+      /* Free the heap-owned procedure_call_data fields before zeroing the
+       * union — otherwise the memset orphans the strdup'd id (e.g. "fail")
+       * and the other call metadata strings, leaking them. expr_args is NULL
+       * here (checked above), so there are no argument nodes to release. */
+      free(stmt->stmt_data.procedure_call_data.id);
+      free(stmt->stmt_data.procedure_call_data.mangled_id);
+      free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+      free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+      free(stmt->stmt_data.procedure_call_data.cached_method_name);
+      free(stmt->stmt_data.procedure_call_data.self_class_name);
+      free(stmt->stmt_data.procedure_call_data.constructor_class_name);
+      free(stmt->stmt_data.procedure_call_data.call_qualifier);
+      if (stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
+        destroy_expr(stmt->stmt_data.procedure_call_data.procedural_var_expr);
+      if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
+        destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
       stmt->type = STMT_EXIT;
       memset(&stmt->stmt_data, 0, sizeof(stmt->stmt_data));
       stmt->stmt_data.exit_data.return_expr = NULL;
