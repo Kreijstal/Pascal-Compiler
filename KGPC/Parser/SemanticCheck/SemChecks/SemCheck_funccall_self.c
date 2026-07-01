@@ -1845,6 +1845,15 @@ FunccallState funccall_state_self(FunccallCtx *ctx) {
             }
           }
 
+          /* When the method is overloaded, the self-injection block above
+           * already populated ctx->overload_candidates with the owner__method
+           * FindAllIdents list (see line ~478).  That list is owned by ctx and
+           * we are about to replace it with the mangled-name candidate list
+           * (or a single-node list), so free the old one first to avoid
+           * leaking it.  method_candidates is a distinct FindAllIdents result
+           * (mangled_method_name key), never an alias of overload_candidates. */
+          if (ctx->overload_candidates != NULL)
+            DestroyList(ctx->overload_candidates);
           if (method_candidates != NULL) {
             ctx->overload_candidates = method_candidates;
           } else {
