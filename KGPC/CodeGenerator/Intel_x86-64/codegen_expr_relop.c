@@ -1093,8 +1093,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", cmp_func);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_call(&em, cmp_func, NULL);
+      inst_list = em.list;
+    }
     if (invert_cmp)
       inst_list = add_inst(inst_list, "\tnegl\t%eax\n");
     {

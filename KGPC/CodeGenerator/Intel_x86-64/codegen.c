@@ -652,7 +652,8 @@ static void codegen_mark_class_constructors_used(ListNode_t *type_decls,
 
 static ListNode_t *codegen_class_constructor_calls(ListNode_t *inst_list,
                                                    ListNode_t *type_decls,
-                                                   SymTab_t *symtab) {
+                                                   SymTab_t *symtab,
+                                                   CodeGenContext *ctx) {
   for (ListNode_t *node = type_decls; node != NULL; node = node->next) {
     if (node->type != LIST_TREE || node->cur == NULL)
       continue;
@@ -672,11 +673,13 @@ static ListNode_t *codegen_class_constructor_calls(ListNode_t *inst_list,
       if (tmpl->kind != METHOD_TEMPLATE_CONSTRUCTOR || !tmpl->is_class_method ||
           !tmpl->is_static || tmpl->name == NULL)
         continue;
-      char buffer[1024];
       const char *target =
           codegen_class_constructor_target(symtab, owner, tmpl, NULL);
-      snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", target);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_call(&em, target, NULL);
+        inst_list = em.list;
+      }
     }
   }
   return inst_list;
@@ -3187,7 +3190,11 @@ ListNode_t *codegen_emit_interface_dispatch(
     snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", vmt_index,
              current_arg_reg32(2));
     inst_list = add_inst(inst_list, buffer);
-    inst_list = add_inst(inst_list, "\tcall\t__kgpc_resolve_intf_method\n");
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_call(&em, "__kgpc_resolve_intf_method", NULL);
+      inst_list = em.list;
+    }
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n",
              target_slot->offset);
     inst_list = add_inst(inst_list, buffer);
@@ -4850,14 +4857,15 @@ char *codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
       if (unit == NULL || unit->type != TREE_UNIT)
         continue;
       inst_list = codegen_class_constructor_calls(
-          inst_list, unit->tree_data.unit_data.interface_type_decls, symtab);
+          inst_list, unit->tree_data.unit_data.interface_type_decls, symtab,
+          ctx);
       inst_list = codegen_class_constructor_calls(
           inst_list, unit->tree_data.unit_data.implementation_type_decls,
-          symtab);
+          symtab, ctx);
     }
   }
   inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration,
-                                              symtab);
+                                              symtab, ctx);
 
   /* Windows FPC-RTL startup: mark the program a console application before any
    * unit initialization section runs.  In a normal FPC build the console entry
