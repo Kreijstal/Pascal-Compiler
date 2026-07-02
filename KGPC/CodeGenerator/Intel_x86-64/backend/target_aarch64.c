@@ -574,6 +574,80 @@ static const BackendRegSpec *aa_fregpool(int *n) {
   return kAArch64FPool;
 }
 
+/* ---- Directive / data channel (GNU as) ---------------------------------
+ * Section and symbol directives share GAS spelling with x86; the data-word
+ * mnemonics use the AArch64-idiomatic names (.hword/.word/.xword) to make the
+ * neutral API's per-target rendering explicit.  (GNU as for aarch64 also
+ * accepts .short/.long/.quad as synonyms.) */
+
+static void aa_emit_section(BeEmitter *em, BeSection s) {
+  const char *d = (s == BE_SEC_TEXT)   ? "\t.text\n"
+                  : (s == BE_SEC_DATA) ? "\t.data\n"
+                                       : "\t.section\t.rodata\n";
+  em->list = add_inst(em->list, d);
+}
+
+static void aa_emit_global(BeEmitter *em, const char *sym) {
+  char buf[128];
+  snprintf(buf, sizeof(buf), "\t.globl\t%s\n", sym);
+  em->list = add_inst(em->list, buf);
+}
+
+static void aa_emit_data_label(BeEmitter *em, const char *label) {
+  char buf[128];
+  snprintf(buf, sizeof(buf), "%s:\n", label);
+  em->list = add_inst(em->list, buf);
+}
+
+static void aa_emit_data(BeEmitter *em, BeDataKind k, long long value) {
+  const char *d = (k == BE_D8)    ? ".byte"
+                  : (k == BE_D16) ? ".hword"
+                  : (k == BE_D32) ? ".word"
+                                  : ".xword";
+  char buf[64];
+  snprintf(buf, sizeof(buf), "\t%s\t%lld\n", d, value);
+  em->list = add_inst(em->list, buf);
+}
+
+static void aa_string_escape(const char *s, char *out, size_t n) {
+  size_t j = 0;
+  for (; *s && j + 2 < n; ++s) {
+    char c = *s;
+    if (c == '\\' || c == '"') {
+      out[j++] = '\\';
+      out[j++] = c;
+    } else if (c == '\n') {
+      out[j++] = '\\';
+      out[j++] = 'n';
+    } else if (c == '\t') {
+      out[j++] = '\\';
+      out[j++] = 't';
+    } else {
+      out[j++] = c;
+    }
+  }
+  out[j] = '\0';
+}
+
+static void aa_emit_string(BeEmitter *em, const char *s) {
+  char esc[256], buf[300];
+  aa_string_escape(s, esc, sizeof(esc));
+  snprintf(buf, sizeof(buf), "\t.string\t\"%s\"\n", esc);
+  em->list = add_inst(em->list, buf);
+}
+
+static void aa_emit_zero(BeEmitter *em, int nbytes) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "\t.zero\t%d\n", nbytes);
+  em->list = add_inst(em->list, buf);
+}
+
+static void aa_emit_align(BeEmitter *em, int nbytes) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "\t.align\t%d\n", nbytes);
+  em->list = add_inst(em->list, buf);
+}
+
 static const Target kAArch64 = {
     .name = "aarch64",
     .ptr_width = 8,
@@ -586,6 +660,13 @@ static const Target kAArch64 = {
     .emit_label = aa_emit_label,
     .emit_prologue = aa_emit_prologue,
     .emit_epilogue = aa_emit_epilogue,
+    .emit_section = aa_emit_section,
+    .emit_global = aa_emit_global,
+    .emit_data_label = aa_emit_data_label,
+    .emit_data = aa_emit_data,
+    .emit_string = aa_emit_string,
+    .emit_zero = aa_emit_zero,
+    .emit_align = aa_emit_align,
     .arg_reg = aa_arg_reg,
     .num_int_arg_regs = aa_num_int_arg_regs,
     .return_reg = aa_return_reg,

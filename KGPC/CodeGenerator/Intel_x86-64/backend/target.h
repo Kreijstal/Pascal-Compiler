@@ -68,6 +68,26 @@ typedef enum {
   BE_ALWAYS /* unconditional */
 } BeCond;
 
+/* ---- Assembler sections (directive/data channel) ------------------------ */
+/* A code generator emits two channels: the instruction stream (the ops above)
+ * and a directive/data channel — section selection, symbol globals, data
+ * words, labels, alignment.  These are ISA-neutral concepts; each target
+ * renders the concrete assembler syntax (GAS here, but the vocabulary is not
+ * GAS-specific). */
+typedef enum {
+  BE_SEC_TEXT,   /* executable code  → .text */
+  BE_SEC_DATA,   /* writable data    → .data */
+  BE_SEC_RODATA  /* read-only data   → .section .rodata */
+} BeSection;
+
+/* Width of an emitted data word (value = size in bytes). */
+typedef enum {
+  BE_D8 = 1,  /* .byte  / .byte  */
+  BE_D16 = 2, /* .short / .hword */
+  BE_D32 = 4, /* .long  / .word  */
+  BE_D64 = 8  /* .quad  / .xword */
+} BeDataKind;
+
 /* ---- Operands ----------------------------------------------------------- */
 typedef enum {
   OPK_VREG,    /* virtual register (Register_t* from get_free_reg) */
@@ -159,6 +179,28 @@ typedef struct Target {
    * function is fully self-assembleable (no front-end frame logic). */
   void (*emit_prologue)(BeEmitter *em, const BeFrame *f);
   void (*emit_epilogue)(BeEmitter *em, const BeFrame *f);
+
+  /* ---- Directive / data channel ----------------------------------------
+   * These append LIST_STRING nodes to em->list, so they serialize through
+   * be_inst_list_write exactly like instructions.  They carry no GAS syntax
+   * in the neutral API — each target renders the concrete spelling (AT&T GAS
+   * for x86, GNU as for AArch64).  Emit them into a list before the register
+   * allocator runs; they pass through the allocator/emitter verbatim. */
+
+  /* Select the active section for subsequent emission. */
+  void (*emit_section)(BeEmitter *em, BeSection s);
+  /* Mark `sym` as a global (externally visible) symbol. */
+  void (*emit_global)(BeEmitter *em, const char *sym);
+  /* Define a data label (`label:`) at the current position. */
+  void (*emit_data_label)(BeEmitter *em, const char *label);
+  /* Emit a single data word of width `k` holding `value`. */
+  void (*emit_data)(BeEmitter *em, BeDataKind k, long long value);
+  /* Emit a NUL-terminated string constant. */
+  void (*emit_string)(BeEmitter *em, const char *s);
+  /* Reserve `nbytes` of zero-initialized space. */
+  void (*emit_zero)(BeEmitter *em, int nbytes);
+  /* Align the next datum/instruction to an `nbytes` boundary. */
+  void (*emit_align)(BeEmitter *em, int nbytes);
 
   /* ABI queries (thin wrappers over the target's register file).
    * arg_reg / return_reg are width-overloaded: a float width (BE_WF32/WF64)

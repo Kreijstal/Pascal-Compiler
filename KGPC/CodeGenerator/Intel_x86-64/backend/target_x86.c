@@ -626,6 +626,77 @@ static const BackendRegSpec *x86_fregpool(int *n) {
   return kX86FPool;
 }
 
+/* ---- Directive / data channel (AT&T GAS) -------------------------------- */
+
+static void x86_emit_section(BeEmitter *em, BeSection s) {
+  const char *d = (s == BE_SEC_TEXT)   ? "\t.text\n"
+                  : (s == BE_SEC_DATA) ? "\t.data\n"
+                                       : "\t.section\t.rodata\n";
+  em->list = add_inst(em->list, d);
+}
+
+static void x86_emit_global(BeEmitter *em, const char *sym) {
+  char buf[128];
+  snprintf(buf, sizeof(buf), "\t.globl\t%s\n", sym);
+  em->list = add_inst(em->list, buf);
+}
+
+static void x86_emit_data_label(BeEmitter *em, const char *label) {
+  char buf[128];
+  snprintf(buf, sizeof(buf), "%s:\n", label);
+  em->list = add_inst(em->list, buf);
+}
+
+static void x86_emit_data(BeEmitter *em, BeDataKind k, long long value) {
+  const char *d = (k == BE_D8)    ? ".byte"
+                  : (k == BE_D16) ? ".short"
+                  : (k == BE_D32) ? ".long"
+                                  : ".quad";
+  char buf[64];
+  snprintf(buf, sizeof(buf), "\t%s\t%lld\n", d, value);
+  em->list = add_inst(em->list, buf);
+}
+
+/* Emit a .string, escaping the GAS-significant characters. */
+static void be_string_escape(const char *s, char *out, size_t n) {
+  size_t j = 0;
+  for (; *s && j + 2 < n; ++s) {
+    char c = *s;
+    if (c == '\\' || c == '"') {
+      out[j++] = '\\';
+      out[j++] = c;
+    } else if (c == '\n') {
+      out[j++] = '\\';
+      out[j++] = 'n';
+    } else if (c == '\t') {
+      out[j++] = '\\';
+      out[j++] = 't';
+    } else {
+      out[j++] = c;
+    }
+  }
+  out[j] = '\0';
+}
+
+static void x86_emit_string(BeEmitter *em, const char *s) {
+  char esc[256], buf[300];
+  be_string_escape(s, esc, sizeof(esc));
+  snprintf(buf, sizeof(buf), "\t.string\t\"%s\"\n", esc);
+  em->list = add_inst(em->list, buf);
+}
+
+static void x86_emit_zero(BeEmitter *em, int nbytes) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "\t.zero\t%d\n", nbytes);
+  em->list = add_inst(em->list, buf);
+}
+
+static void x86_emit_align(BeEmitter *em, int nbytes) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "\t.align\t%d\n", nbytes);
+  em->list = add_inst(em->list, buf);
+}
+
 static const Target kX86SysV = {
     .name = "x86_64-sysv",
     .ptr_width = 8,
@@ -638,6 +709,13 @@ static const Target kX86SysV = {
     .emit_label = x86_emit_label,
     .emit_prologue = x86_emit_prologue,
     .emit_epilogue = x86_emit_epilogue,
+    .emit_section = x86_emit_section,
+    .emit_global = x86_emit_global,
+    .emit_data_label = x86_emit_data_label,
+    .emit_data = x86_emit_data,
+    .emit_string = x86_emit_string,
+    .emit_zero = x86_emit_zero,
+    .emit_align = x86_emit_align,
     .arg_reg = x86_arg_reg,
     .num_int_arg_regs = x86_num_int_arg_regs,
     .return_reg = x86_return_reg,

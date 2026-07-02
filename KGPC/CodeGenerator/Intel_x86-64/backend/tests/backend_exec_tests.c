@@ -607,6 +607,149 @@ static void test_golden_aarch64_float(const Target *T) {
   CHECK(strstr(a3, "fcvtzs\tw") != NULL, "aarch64: float->int = fcvtzs w<d>");
 }
 
+/* Run allocation + emission and serialize the list verbatim (no injected
+ * .text/.globl header) — the directive/data channel emits its own sections and
+ * globals into the list, so the whole translation unit is self-describing. */
+static void finalize_and_write_raw(const char *path, ListNode_t *list) {
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  ir_peephole_remove_redundant_moves(&list);
+
+  FILE *fp = fopen(path, "w");
+  if (fp == NULL) {
+    fprintf(stderr, "FAIL: cannot open %s\n", path);
+    ++g_failures;
+    return;
+  }
+  be_inst_list_write(fp, list);
+  fclose(fp);
+}
+
+/* Build a .rodata 64-bit constant labeled `lbl`, plus a `.text` function `sym`
+ * that loads it RIP-relative and returns it (long f(void)). */
+static ListNode_t *build_data_const(const Target *T, const char *sym,
+                                    const char *lbl, long long value) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+
+  /* .rodata:  lbl:  .quad value */
+  T->emit_section(&em, BE_SEC_RODATA);
+  T->emit_data_label(&em, lbl);
+  T->emit_data(&em, BE_D64, value);
+
+  /* .text:  .globl sym ; sym: <prologue> movq lbl(%rip),%rax <epilogue> */
+  T->emit_section(&em, BE_SEC_TEXT);
+  T->emit_global(&em, sym);
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  BeOperand ret = {OPK_PHYS, BE_W64, {.phys = T->return_reg(BE_W64)}};
+  BeOperand src = {OPK_RIP_SYM, BE_W64, {.sym = lbl}};
+  T->emit(&em, BE_MOV, BE_W64, &ret, &src, NULL); /* movq lbl(%rip), %rax */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Build a `.data` array of three .long words, plus a `.text` function that
+ * returns the middle element (arr[1]) via a RIP-relative load at lbl+4. */
+static ListNode_t *build_data_array(const Target *T, const char *sym,
+                                    const char *lbl) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+
+  T->emit_section(&em, BE_SEC_DATA);
+  T->emit_data_label(&em, lbl);
+  T->emit_data(&em, BE_D32, 10);
+  T->emit_data(&em, BE_D32, 20);
+  T->emit_data(&em, BE_D32, 30);
+
+  T->emit_section(&em, BE_SEC_TEXT);
+  T->emit_global(&em, sym);
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  char elt[80];
+  snprintf(elt, sizeof(elt), "%s+4", lbl); /* &arr[1] (rendered synchronously) */
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand src = {OPK_RIP_SYM, BE_W32, {.sym = elt}};
+  T->emit(&em, BE_MOV, BE_W32, &ret, &src, NULL); /* movl lbl+4(%rip), %eax */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Exec: .rodata .quad constant loaded and returned. */
+static void test_exec_data_const(const Target *T) {
+  ListNode_t *list = build_data_const(T, "getk", ".LCk", 42);
+  finalize_and_write_raw("be_getk.s", list);
+  const char *drv =
+      "extern long getk(void);\nint main(void){return getk()==42?0:1;}\n";
+  int rc = assemble_link_run("getk", "be_getk.s", drv);
+  CHECK(rc == 0, "exec: .rodata .quad 42 loaded RIP-relative returns 42");
+}
+
+/* Exec: .data three-.long array; function returns arr[1]==20. */
+static void test_exec_data_array(const Target *T) {
+  ListNode_t *list = build_data_array(T, "getarr1", ".Larr");
+  finalize_and_write_raw("be_getarr1.s", list);
+  const char *drv =
+      "extern int getarr1(void);\nint main(void){return getarr1()==20?0:1;}\n";
+  int rc = assemble_link_run("getarr1", "be_getarr1.s", drv);
+  CHECK(rc == 0, "exec: .data .long array returns arr[1]==20");
+}
+
+/* Golden: x86 renders the neutral data channel as AT&T GAS. */
+static void test_golden_x86_data(const Target *T) {
+  ListNode_t *list = build_data_const(T, "getk", ".LCk", 42);
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, ".section\t.rodata") != NULL, "x86 data: .section .rodata");
+  CHECK(strstr(all, ".LCk:") != NULL, "x86 data: data label");
+  CHECK(strstr(all, ".quad\t42") != NULL, "x86 data: .quad 42");
+  CHECK(strstr(all, ".globl\tgetk") != NULL, "x86 data: .globl getk");
+  CHECK(strstr(all, ".LCk(%rip)") != NULL, "x86 data: RIP-relative load");
+}
+
+/* Golden: the SAME neutral data channel rendered as AArch64 GNU as.  Proves the
+ * directive/data API is ISA-neutral — the target renders concrete syntax (e.g.
+ * .xword for a 64-bit word), with sections/globals/labels shared with x86. */
+static void test_golden_aarch64_data(const Target *T) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  em.list = NULL;
+
+  T->emit_section(&em, BE_SEC_RODATA);
+  T->emit_global(&em, "kdata");
+  T->emit_data_label(&em, ".LCk");
+  T->emit_data(&em, BE_D64, 42);
+  T->emit_data(&em, BE_D32, 7);
+  T->emit_data(&em, BE_D16, 3);
+  T->emit_string(&em, "hi");
+  T->emit_align(&em, 8);
+  T->emit_zero(&em, 16);
+
+  char all[4096];
+  concat_emitted(em.list, all, sizeof(all));
+  CHECK(strstr(all, ".section\t.rodata") != NULL,
+        "aarch64 data: .section .rodata");
+  CHECK(strstr(all, ".globl\tkdata") != NULL, "aarch64 data: .globl");
+  CHECK(strstr(all, ".LCk:") != NULL, "aarch64 data: data label");
+  CHECK(strstr(all, ".xword\t42") != NULL, "aarch64 data: .xword (64-bit word)");
+  CHECK(strstr(all, ".word\t7") != NULL, "aarch64 data: .word (32-bit word)");
+  CHECK(strstr(all, ".hword\t3") != NULL, "aarch64 data: .hword (16-bit word)");
+  CHECK(strstr(all, ".string\t\"hi\"") != NULL, "aarch64 data: .string");
+  CHECK(strstr(all, ".align\t8") != NULL, "aarch64 data: .align");
+  CHECK(strstr(all, ".zero\t16") != NULL, "aarch64 data: .zero");
+  /* Neutrality: AArch64 must not carry x86's .quad spelling. */
+  CHECK(strstr(all, ".quad") == NULL, "aarch64 data: no x86 .quad spelling");
+}
+
 int main(void) {
   g_current_codegen_abi = KGPC_TARGET_ABI_SYSTEM_V;
   g_stack_home_space_bytes = 0;
@@ -657,6 +800,13 @@ int main(void) {
   test_exec_f2i(T, "bef2i", 3.9, 3);   /* (int)3.9 == 3 (truncate) */
   test_exec_i2f(T, "bei2f", 7, 7.0);   /* (double)7 == 7.0 */
 
+  /* Directive / data channel: emit sections + data words through the neutral
+   * API, then assemble-link-run to prove the emitted data is real. */
+  fprintf(stderr, "-- directive / data channel --\n");
+  test_golden_x86_data(T);
+  test_exec_data_const(T);
+  test_exec_data_array(T);
+
   /* M4: neutrality proof via a second backend (golden-asm; no local AArch64
    * toolchain/qemu here to run exec — that tier is intentionally skipped). */
   const Target *A = target_aarch64();
@@ -664,6 +814,7 @@ int main(void) {
   test_golden_aarch64(A);
   test_golden_aarch64_ext(A);
   test_golden_aarch64_float(A);
+  test_golden_aarch64_data(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");
