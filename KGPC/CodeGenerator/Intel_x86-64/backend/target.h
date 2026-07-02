@@ -48,7 +48,9 @@ typedef enum {
   BE_DIV,   /* dst := a / b          (signed quotient) */
   BE_MOD,   /* dst := a % b          (signed remainder) */
   BE_CMP,   /* set condition from a ? b */
-  BE_LEA    /* dst := &mem           */
+  BE_LEA,   /* dst := &mem           */
+  BE_CVT_I2F, /* dst(float) := (float)src(int)   — int→double/single */
+  BE_CVT_F2I  /* dst(int)   := (int)src(float)   — double/single→int, truncating */
 } BeOp;
 
 /* ---- Condition codes (mapped to mnemonics inside each target) ----------- */
@@ -158,15 +160,30 @@ typedef struct Target {
   void (*emit_prologue)(BeEmitter *em, const BeFrame *f);
   void (*emit_epilogue)(BeEmitter *em, const BeFrame *f);
 
-  /* ABI queries (thin wrappers over the target's register file). */
+  /* ABI queries (thin wrappers over the target's register file).
+   * arg_reg / return_reg are width-overloaded: a float width (BE_WF32/WF64)
+   * selects the target's floating-point argument/return registers (SysV
+   * xmm0..xmm7 / xmm0; AAPCS64 d0..d7 / d0) instead of the integer ones. */
   const char *(*arg_reg)(int idx, BeWidth w);
   int (*num_int_arg_regs)(void);
   const char *(*return_reg)(BeWidth w);
 
-  /* The target's allocatable register pool.  Returns a static table and sets
-   * *n to its length.  Feed to stackmng_set_register_pool() so the shared
+  /* The target's allocatable INTEGER register pool.  Returns a static table and
+   * sets *n to its length.  Feed to stackmng_set_register_pool() so the shared
    * allocator colors into this target's registers. */
   const struct BackendRegSpec *(*regpool)(int *n);
+
+  /* The target's allocatable FLOATING-POINT register pool (SysV xmm8..xmm15;
+   * AAPCS64 d8..d15).  Selected via stackmng_set_register_pool() before
+   * building a FLOAT-ONLY function, so the (single-class) graph-coloring
+   * allocator colors float vregs into float registers.
+   *
+   * LIMITATION: the allocator has one pool at a time, so a single function may
+   * mix only one register class.  Mixed int+float register allocation in one
+   * function is a later step and is intentionally out of scope here — float
+   * conversion ops therefore take the "other" class operand as a physical
+   * register (arg/return reg), never a second-class vreg. */
+  const struct BackendRegSpec *(*fregpool)(int *n);
 } Target;
 
 /* Target factories (defined in target_x86.c / target_aarch64.c). */

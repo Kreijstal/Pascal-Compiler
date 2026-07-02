@@ -52,6 +52,15 @@ static void select_target_pool(const Target *T) {
   stackmng_set_register_pool(specs, n);
 }
 
+/* Point the shared allocator at this target's FLOAT register pool, so float
+ * vregs color into xmm/d registers (float-only functions — see fregpool's
+ * mixed-class limitation note in target.h). */
+static void select_target_fpool(const Target *T) {
+  int n = 0;
+  const BackendRegSpec *specs = T->fregpool(&n);
+  stackmng_set_register_pool(specs, n);
+}
+
 /* Run a completed instruction list through allocation + emission and serialize
  * it to `path` as an assembleable .globl'd function. */
 static void finalize_and_write(const char *path, const char *sym,
@@ -282,6 +291,76 @@ static ListNode_t *build_ext(const Target *T, const char *sym, BeWidth from,
   return em.list;
 }
 
+/* Build `double f(double a, double b)` computing `a OP b` (float-only fn). */
+static ListNode_t *build_fbinop(const Target *T, const char *sym, BeOp op) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_fpool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vb = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_WF64, {.vreg = va}};
+  BeOperand dvb = {OPK_VREG, BE_WF64, {.vreg = vb}};
+  BeOperand arg0 = {OPK_PHYS, BE_WF64, {.phys = T->arg_reg(0, BE_WF64)}};
+  BeOperand arg1 = {OPK_PHYS, BE_WF64, {.phys = T->arg_reg(1, BE_WF64)}};
+  BeOperand ret = {OPK_PHYS, BE_WF64, {.phys = T->return_reg(BE_WF64)}};
+
+  T->emit(&em, BE_MOV, BE_WF64, &dva, &arg0, NULL); /* va = a */
+  T->emit(&em, BE_MOV, BE_WF64, &dvb, &arg1, NULL); /* vb = b */
+  T->emit(&em, op, BE_WF64, &dva, &dva, &dvb);      /* va = va OP vb */
+  T->emit(&em, BE_MOV, BE_WF64, &ret, &dva, NULL);  /* return va */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Build `int f(double a)` computing `(int)a` (truncating double→int32). */
+static ListNode_t *build_f2i(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_fpool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_WF64, {.vreg = va}};
+  BeOperand arg0 = {OPK_PHYS, BE_WF64, {.phys = T->arg_reg(0, BE_WF64)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  T->emit(&em, BE_MOV, BE_WF64, &dva, &arg0, NULL);   /* va = a */
+  T->emit(&em, BE_CVT_F2I, BE_W32, &ret, &dva, NULL); /* return (int)va */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Build `double g(int a)` computing `(double)a` (int32→double). */
+static ListNode_t *build_i2f(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_fpool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_WF64, {.vreg = va}};
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_WF64, {.phys = T->return_reg(BE_WF64)}};
+  T->emit(&em, BE_CVT_I2F, BE_WF64, &dva, &arg0, NULL); /* va = (double)a */
+  T->emit(&em, BE_MOV, BE_WF64, &ret, &dva, NULL);      /* return va */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
 /* Concatenate the emitted text of a finished (allocated+emitted) list. */
 static void concat_emitted(ListNode_t *list, char *out, size_t cap) {
   size_t used = 0;
@@ -452,6 +531,82 @@ static void test_exec_const(const Target *T, const char *sym, int value) {
   CHECK(rc == 0, msg);
 }
 
+/* Exec a double-in/double-out binary float op (compares by exact ==, so pass
+ * exactly-representable values). */
+static void test_exec_fbinop(const Target *T, const char *sym, BeOp op, double a,
+                             double b, double expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_fbinop(T, sym, op);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern double %s(double,double);\n"
+           "int main(void){return %s(%.17g,%.17g)==%.17g?0:1;}\n",
+           sym, sym, a, b, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%g,%g)==%g", sym, a, b, expected);
+  CHECK(rc == 0, msg);
+}
+
+/* Exec `int f(double)` = (int)a. */
+static void test_exec_f2i(const Target *T, const char *sym, double a,
+                          int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_f2i(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(double);\nint main(void){return %s(%.17g)==%d?0:1;}\n",
+           sym, sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%g)==%d", sym, a, expected);
+  CHECK(rc == 0, msg);
+}
+
+/* Exec `double g(int)` = (double)a. */
+static void test_exec_i2f(const Target *T, const char *sym, int a,
+                          double expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_i2f(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern double %s(int);\nint main(void){return %s(%d)==%.17g?0:1;}\n",
+           sym, sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%d)==%g", sym, a, expected);
+  CHECK(rc == 0, msg);
+}
+
+/* Golden check for the float path on AArch64: fadd on d-registers, fmov moves,
+ * scvtf (int→float) and fcvtzs (float→int), colored into d8+ with no x86/GP
+ * float leakage. */
+static void test_golden_aarch64_float(const Target *T) {
+  ListNode_t *l1 = build_fbinop(T, "aafadd", BE_ADD);
+  ir_liveness_allocate(l1);
+  ir_emit_function(l1);
+  char a1[4096];
+  concat_emitted(l1, a1, sizeof(a1));
+  CHECK(strstr(a1, "fadd\td") != NULL, "aarch64: fadd on d-register");
+  CHECK(strstr(a1, "fmov") != NULL, "aarch64: fmov for float moves");
+  CHECK(strstr(a1, "d8") != NULL, "aarch64: allocator colored into d8");
+  CHECK(strstr(a1, "d0") != NULL, "aarch64: uses d0 arg/return");
+
+  ListNode_t *l2 = build_i2f(T, "aascvtf");
+  ir_liveness_allocate(l2);
+  ir_emit_function(l2);
+  char a2[4096];
+  concat_emitted(l2, a2, sizeof(a2));
+  CHECK(strstr(a2, "scvtf\td") != NULL, "aarch64: int->float = scvtf");
+
+  ListNode_t *l3 = build_f2i(T, "aafcvtzs");
+  ir_liveness_allocate(l3);
+  ir_emit_function(l3);
+  char a3[4096];
+  concat_emitted(l3, a3, sizeof(a3));
+  CHECK(strstr(a3, "fcvtzs\tw") != NULL, "aarch64: float->int = fcvtzs w<d>");
+}
+
 int main(void) {
   g_current_codegen_abi = KGPC_TARGET_ABI_SYSTEM_V;
   g_stack_home_space_bytes = 0;
@@ -492,12 +647,23 @@ int main(void) {
   test_exec_ext64(T, "besxlq", BE_W32, 1, -5, -5LL);    /* movslq */
   test_exec_ext64(T, "bezxlq", BE_W32, 0, -1, 4294967295LL); /* movl zero-ext */
 
+  /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
+   * float conversions.  Values are exactly representable so `==` is exact. */
+  fprintf(stderr, "-- floating-point (double) --\n");
+  test_exec_fbinop(T, "befadd", BE_ADD, 2.5, 1.5, 4.0);
+  test_exec_fbinop(T, "befsub", BE_SUB, 5.0, 1.5, 3.5);
+  test_exec_fbinop(T, "befmul", BE_MUL, 3.0, 4.0, 12.0);
+  test_exec_fbinop(T, "befdiv", BE_DIV, 9.0, 2.0, 4.5);
+  test_exec_f2i(T, "bef2i", 3.9, 3);   /* (int)3.9 == 3 (truncate) */
+  test_exec_i2f(T, "bei2f", 7, 7.0);   /* (double)7 == 7.0 */
+
   /* M4: neutrality proof via a second backend (golden-asm; no local AArch64
    * toolchain/qemu here to run exec — that tier is intentionally skipped). */
   const Target *A = target_aarch64();
   fprintf(stderr, "-- neutrality: same harness through target=%s --\n", A->name);
   test_golden_aarch64(A);
   test_golden_aarch64_ext(A);
+  test_golden_aarch64_float(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");

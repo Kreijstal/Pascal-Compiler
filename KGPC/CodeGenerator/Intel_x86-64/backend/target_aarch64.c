@@ -26,6 +26,8 @@ static int *vregp(BeEmitter *em) {
   return em->next_vreg_id;
 }
 
+static int aa_is_float(BeWidth w) { return w == BE_WF32 || w == BE_WF64; }
+
 static void aa_lit(const BeOperand *op, char *buf, size_t n) {
   switch (op->kind) {
   case OPK_IMM:
@@ -40,6 +42,79 @@ static void aa_lit(const BeOperand *op, char *buf, size_t n) {
   }
 }
 
+/* AArch64 scalar-FP ops (fadd/fsub/fmul/fdiv/fmov/fcmp) on the d/s register
+ * file.  The float pool's register names carry the width (d8 vs s8), so — like
+ * the integer path — no mnemonic suffix is used; the register name is the
+ * width.  All four name columns of a float pool register are identical, so the
+ * width-substitution heuristic (which keys off a trailing 'l', e.g. fmul) is a
+ * harmless no-op.  Conversions cross register classes and are in aa_emit. */
+static void aa_emit_float(BeEmitter *em, BeOp op, BeWidth w,
+                          const BeOperand *dst, const BeOperand *a,
+                          const BeOperand *b) {
+  (void)w;
+  char tmpl[160];
+  char lit[48];
+  Register_t *defs[2];
+  Register_t *uses[4];
+
+  switch (op) {
+  case BE_MOV:
+    if (dst->kind == OPK_VREG && a->kind == OPK_VREG) {
+      defs[0] = dst->u.vreg;
+      uses[0] = a->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1,
+                                "\tfmov\t%0, %1\n");
+    } else if (dst->kind == OPK_VREG) {
+      aa_lit(a, lit, sizeof(lit));
+      snprintf(tmpl, sizeof(tmpl), "\tfmov\t%%0, %s\n", lit);
+      defs[0] = dst->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+    } else if (a->kind == OPK_VREG) {
+      aa_lit(dst, lit, sizeof(lit));
+      snprintf(tmpl, sizeof(tmpl), "\tfmov\t%s, %%0\n", lit);
+      uses[0] = a->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+    } else {
+      char litd[48];
+      aa_lit(a, lit, sizeof(lit));
+      aa_lit(dst, litd, sizeof(litd));
+      snprintf(tmpl, sizeof(tmpl), "\tfmov\t%s, %s\n", litd, lit);
+      em->list = add_inst(em->list, tmpl);
+    }
+    break;
+
+  case BE_ADD:
+  case BE_SUB:
+  case BE_MUL:
+  case BE_DIV: {
+    /* 3-operand: <mn> dst, a, b */
+    const char *mn = (op == BE_ADD)   ? "fadd"
+                     : (op == BE_SUB) ? "fsub"
+                     : (op == BE_MUL) ? "fmul"
+                                      : "fdiv";
+    assert(dst->kind == OPK_VREG && a->kind == OPK_VREG && b->kind == OPK_VREG);
+    snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %%1, %%2\n", mn);
+    defs[0] = dst->u.vreg;
+    uses[0] = a->u.vreg;
+    uses[1] = b->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 2, tmpl);
+    break;
+  }
+
+  case BE_CMP:
+    assert(a->kind == OPK_VREG && b->kind == OPK_VREG);
+    uses[0] = a->u.vreg;
+    uses[1] = b->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 2,
+                              "\tfcmp\t%0, %1\n");
+    break;
+
+  default:
+    assert(0 && "unsupported aarch64 float op");
+    break;
+  }
+}
+
 static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
                     const BeOperand *a, const BeOperand *b) {
   /* AArch64 encodes width in the register name (w0 vs x0), not the mnemonic,
@@ -50,6 +125,12 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   Register_t *defs[2];
   Register_t *uses[4];
   int use32[6];
+
+  /* Float-width arithmetic/mov/cmp dispatch to the scalar-FP path. */
+  if (aa_is_float(w) && op != BE_CVT_I2F && op != BE_CVT_F2I) {
+    aa_emit_float(em, op, w, dst, a, b);
+    return;
+  }
 
   switch (op) {
   case BE_MOV:
@@ -217,6 +298,26 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     em->list =
         be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 2, tmpl, use32);
     break;
+
+  case BE_CVT_I2F: {
+    /* scvtf <dst float vreg>, <src int phys>.  The int source's register name
+     * (w0 vs x0) carries its width. */
+    assert(dst->kind == OPK_VREG && a->kind == OPK_PHYS);
+    snprintf(tmpl, sizeof(tmpl), "\tscvtf\t%%0, %s\n", a->u.phys);
+    defs[0] = dst->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+    break;
+  }
+
+  case BE_CVT_F2I: {
+    /* fcvtzs <dst int phys>, <src float vreg> (truncating).  The int dest's
+     * register name (w0 vs x0) carries its width. */
+    assert(dst->kind == OPK_PHYS && a->kind == OPK_VREG);
+    snprintf(tmpl, sizeof(tmpl), "\tfcvtzs\t%s, %%0\n", dst->u.phys);
+    uses[0] = a->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+    break;
+  }
 
   case BE_LEA:
   default:
@@ -413,18 +514,29 @@ static void aa_emit_epilogue(BeEmitter *em, const BeFrame *f) {
                       "\tret\n");
 }
 
-/* AAPCS64 arg/return registers (w0-w7 for 32-bit, x0-x7 for 64-bit). */
+/* AAPCS64 arg/return registers (w0-w7 for 32-bit, x0-x7 for 64-bit; d0-d7 for
+ * double / s0-s7 for single float args). */
 static const char *aa_arg_reg(int idx, BeWidth w) {
   static const char *x[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"};
   static const char *wr[] = {"w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7"};
+  static const char *d[] = {"d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"};
+  static const char *s[] = {"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"};
   if (idx < 0 || idx >= 8)
     return NULL;
+  if (w == BE_WF64)
+    return d[idx];
+  if (w == BE_WF32)
+    return s[idx];
   return (w == BE_W32) ? wr[idx] : x[idx];
 }
 
 static int aa_num_int_arg_regs(void) { return 8; }
 
 static const char *aa_return_reg(BeWidth w) {
+  if (w == BE_WF64)
+    return "d0";
+  if (w == BE_WF32)
+    return "s0";
   return (w == BE_W32) ? "w0" : "x0";
 }
 
@@ -443,6 +555,25 @@ static const BackendRegSpec *aa_regpool(int *n) {
   return kAArch64Pool;
 }
 
+/* Allocatable float pool: callee-saved d8..d15 (args/return use d0..d7).  All
+ * four name columns carry the double-precision d-name; the width heuristic is a
+ * no-op.  reg_id is an opaque distinct id (reusing the GP enum values). */
+static const BackendRegSpec kAArch64FPool[] = {
+    {REG_R8, "d8", "d8", "d8", "d8"},
+    {REG_R9, "d9", "d9", "d9", "d9"},
+    {REG_R10, "d10", "d10", "d10", "d10"},
+    {REG_R11, "d11", "d11", "d11", "d11"},
+    {REG_R12, "d12", "d12", "d12", "d12"},
+    {REG_R13, "d13", "d13", "d13", "d13"},
+    {REG_R14, "d14", "d14", "d14", "d14"},
+    {REG_R15, "d15", "d15", "d15", "d15"},
+};
+
+static const BackendRegSpec *aa_fregpool(int *n) {
+  *n = (int)(sizeof(kAArch64FPool) / sizeof(kAArch64FPool[0]));
+  return kAArch64FPool;
+}
+
 static const Target kAArch64 = {
     .name = "aarch64",
     .ptr_width = 8,
@@ -459,6 +590,7 @@ static const Target kAArch64 = {
     .num_int_arg_regs = aa_num_int_arg_regs,
     .return_reg = aa_return_reg,
     .regpool = aa_regpool,
+    .fregpool = aa_fregpool,
 };
 
 const Target *target_aarch64(void) { return &kAArch64; }

@@ -39,6 +39,13 @@ static int *vregp(BeEmitter *em) {
   return em->next_vreg_id;
 }
 
+/* Floating-point widths use the SSE scalar instructions (…sd for double, …ss
+ * for single) and the xmm register file, not the GP mnemonic-suffix path. */
+static int x86_is_float(BeWidth w) { return w == BE_WF32 || w == BE_WF64; }
+
+/* SSE scalar suffix: "sd" for double, "ss" for single. */
+static const char *x86_fsuffix(BeWidth w) { return (w == BE_WF32) ? "ss" : "sd"; }
+
 /* Render a non-register operand (imm / phys / rip-sym) to a literal token.
  * Register operands are handled by the callers via %N placeholders. */
 static void x86_lit(const BeOperand *op, char *buf, size_t n) {
@@ -58,6 +65,86 @@ static void x86_lit(const BeOperand *op, char *buf, size_t n) {
   }
 }
 
+/* SSE scalar float ops (MOV/ADD/SUB/MUL/DIV/CMP) on the xmm register file.
+ * xmm registers have a single name regardless of width, so the vreg's four
+ * name buffers are all identical — whichever width the substitution heuristic
+ * picks yields the same "%xmmN".  Conversions (int↔float) are handled by
+ * x86_emit, not here, because they cross register classes. */
+static void x86_emit_float(BeEmitter *em, BeOp op, BeWidth w,
+                           const BeOperand *dst, const BeOperand *a,
+                           const BeOperand *b) {
+  const char *sfx = x86_fsuffix(w);
+  char tmpl[160];
+  char lit[48];
+  Register_t *defs[2];
+  Register_t *uses[4];
+
+  switch (op) {
+  case BE_MOV: {
+    /* movsd/movss — dst := a, where operands are xmm vregs or xmm phys regs. */
+    if (dst->kind == OPK_VREG && a->kind == OPK_VREG) {
+      snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%%1, %%0\n", sfx);
+      defs[0] = dst->u.vreg;
+      uses[0] = a->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
+    } else if (dst->kind == OPK_VREG) { /* dst := <phys xmm> */
+      x86_lit(a, lit, sizeof(lit));
+      snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%s, %%0\n", sfx, lit);
+      defs[0] = dst->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+    } else if (a->kind == OPK_VREG) { /* <phys xmm> := a */
+      x86_lit(dst, lit, sizeof(lit));
+      snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%%0, %s\n", sfx, lit);
+      uses[0] = a->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+    } else {
+      char litd[48];
+      x86_lit(a, lit, sizeof(lit));
+      x86_lit(dst, litd, sizeof(litd));
+      snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%s, %s\n", sfx, lit, litd);
+      em->list = add_inst(em->list, tmpl);
+    }
+    break;
+  }
+
+  case BE_ADD:
+  case BE_SUB:
+  case BE_MUL:
+  case BE_DIV: {
+    /* addsd/subsd/mulsd/divsd — two-operand: dst := dst OP b.  Fold a into dst
+     * first if a is not already dst. */
+    const char *base = (op == BE_ADD)   ? "add"
+                       : (op == BE_SUB) ? "sub"
+                       : (op == BE_MUL) ? "mul"
+                                        : "div";
+    assert(dst->kind == OPK_VREG && b->kind == OPK_VREG);
+    if (!(a->kind == OPK_VREG && a->u.vreg == dst->u.vreg))
+      x86_emit_float(em, BE_MOV, w, dst, a, NULL);
+    snprintf(tmpl, sizeof(tmpl), "\t%s%s\t%%2, %%0\n", base, sfx);
+    defs[0] = dst->u.vreg;
+    uses[0] = dst->u.vreg;
+    uses[1] = b->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 2, tmpl);
+    break;
+  }
+
+  case BE_CMP: {
+    /* ucomisd/ucomiss — set flags from a ? b (unordered compare). */
+    const char *mn = (w == BE_WF32) ? "ucomiss" : "ucomisd";
+    assert(a->kind == OPK_VREG && b->kind == OPK_VREG);
+    snprintf(tmpl, sizeof(tmpl), "\t%s\t%%1, %%0\n", mn);
+    uses[0] = a->u.vreg;
+    uses[1] = b->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 2, tmpl);
+    break;
+  }
+
+  default:
+    assert(0 && "unsupported float op");
+    break;
+  }
+}
+
 static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
                      const BeOperand *a, const BeOperand *b) {
   char c = x86_suffix(w);
@@ -65,6 +152,12 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   char lit[48];
   Register_t *defs[2];
   Register_t *uses[4];
+
+  /* Float-width arithmetic/mov/cmp dispatch to the SSE path. */
+  if (x86_is_float(w) && op != BE_CVT_I2F && op != BE_CVT_F2I) {
+    x86_emit_float(em, op, w, dst, a, b);
+    return;
+  }
 
   switch (op) {
   case BE_MOV: {
@@ -246,6 +339,31 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     } else {
       assert(0 && "unsupported LEA operand");
     }
+    break;
+  }
+
+  case BE_CVT_I2F: {
+    /* dst(float vreg) := (float)src(int).  src is a physical integer register
+     * (the "other class" operand — see fregpool's mixed-class limitation).
+     * cvtsi2sd/cvtsi2ss; the source's register name (%edi vs %rdi) tells gas
+     * the integer width, so no mnemonic suffix is needed. */
+    assert(dst->kind == OPK_VREG && a->kind == OPK_PHYS);
+    const char *mn = (dst->width == BE_WF32) ? "cvtsi2ss" : "cvtsi2sd";
+    snprintf(tmpl, sizeof(tmpl), "\t%s\t%s, %%0\n", mn, a->u.phys);
+    defs[0] = dst->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+    break;
+  }
+
+  case BE_CVT_F2I: {
+    /* dst(int) := (int)src(float vreg), truncating.  dst is a physical integer
+     * register.  cvttsd2si/cvttss2si; the destination register name (%eax vs
+     * %rax) tells gas the integer width. */
+    assert(dst->kind == OPK_PHYS && a->kind == OPK_VREG);
+    const char *mn = (a->width == BE_WF32) ? "cvttss2si" : "cvttsd2si";
+    snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %s\n", mn, dst->u.phys);
+    uses[0] = a->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
     break;
   }
 
@@ -455,6 +573,10 @@ static void x86_emit_epilogue(BeEmitter *em, const BeFrame *f) {
 static const char *x86_arg_reg(int idx, BeWidth w) {
   static const char *r64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
   static const char *r32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
+  static const char *xmm[] = {"%xmm0", "%xmm1", "%xmm2", "%xmm3",
+                              "%xmm4", "%xmm5", "%xmm6", "%xmm7"};
+  if (w == BE_WF32 || w == BE_WF64)
+    return (idx < 0 || idx >= 8) ? NULL : xmm[idx];
   if (idx < 0 || idx >= 6)
     return NULL;
   return (w == BE_W32) ? r32[idx] : r64[idx];
@@ -463,6 +585,8 @@ static const char *x86_arg_reg(int idx, BeWidth w) {
 static int x86_num_int_arg_regs(void) { return 6; }
 
 static const char *x86_return_reg(BeWidth w) {
+  if (w == BE_WF32 || w == BE_WF64)
+    return "%xmm0";
   return (w == BE_W32) ? "%eax" : "%rax";
 }
 
@@ -481,6 +605,27 @@ static const BackendRegSpec *x86_regpool(int *n) {
   return kX86Pool;
 }
 
+/* Allocatable float pool: SSE xmm8..xmm15.  Args/return use xmm0..xmm7, so
+ * xmm8+ never alias the incoming/outgoing float values (no save needed in a
+ * leaf).  xmm registers have a single width, so all four name columns are the
+ * same "%xmmN" — the width-substitution heuristic is therefore a no-op.  The
+ * reg_id column is an opaque distinct id (reusing the GP enum values). */
+static const BackendRegSpec kX86FPool[] = {
+    {REG_R8, "%xmm8", "%xmm8", "%xmm8", "%xmm8"},
+    {REG_R9, "%xmm9", "%xmm9", "%xmm9", "%xmm9"},
+    {REG_R10, "%xmm10", "%xmm10", "%xmm10", "%xmm10"},
+    {REG_R11, "%xmm11", "%xmm11", "%xmm11", "%xmm11"},
+    {REG_R12, "%xmm12", "%xmm12", "%xmm12", "%xmm12"},
+    {REG_R13, "%xmm13", "%xmm13", "%xmm13", "%xmm13"},
+    {REG_R14, "%xmm14", "%xmm14", "%xmm14", "%xmm14"},
+    {REG_R15, "%xmm15", "%xmm15", "%xmm15", "%xmm15"},
+};
+
+static const BackendRegSpec *x86_fregpool(int *n) {
+  *n = (int)(sizeof(kX86FPool) / sizeof(kX86FPool[0]));
+  return kX86FPool;
+}
+
 static const Target kX86SysV = {
     .name = "x86_64-sysv",
     .ptr_width = 8,
@@ -497,6 +642,7 @@ static const Target kX86SysV = {
     .num_int_arg_regs = x86_num_int_arg_regs,
     .return_reg = x86_return_reg,
     .regpool = x86_regpool,
+    .fregpool = x86_fregpool,
 };
 
 const Target *target_x86_sysv(void) { return &kX86SysV; }
