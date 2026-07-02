@@ -278,6 +278,18 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     break;
 
   case BE_LOAD:
+    if (a->kind == OPK_MEM_FRAME) {
+      /* dst(vreg) := [frame]  →  ldr %0, [<fp/sp>, #disp]  (fixed base) */
+      assert(dst->kind == OPK_VREG);
+      const char *base = (a->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+      snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%s, #%lld]\n", base,
+               a->u.mem_frame.disp);
+      defs[0] = dst->u.vreg;
+      use32[0] = w32; /* loaded value width */
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl, use32);
+      break;
+    }
     assert(dst->kind == OPK_VREG && a->kind == OPK_MEM_BD);
     snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%%1, #%d]\n", a->u.mem_bd.disp);
     defs[0] = dst->u.vreg;
@@ -289,6 +301,18 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     break;
 
   case BE_STORE:
+    if (dst->kind == OPK_MEM_FRAME) {
+      /* [frame] := a(vreg)  →  str %0, [<fp/sp>, #disp]  (fixed base) */
+      assert(a->kind == OPK_VREG);
+      const char *base = (dst->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+      snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%s, #%lld]\n", base,
+               dst->u.mem_frame.disp);
+      uses[0] = a->u.vreg;
+      use32[0] = w32; /* stored value width */
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1, tmpl, use32);
+      break;
+    }
     assert(dst->kind == OPK_MEM_BD && a->kind == OPK_VREG);
     snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%%1, #%d]\n", dst->u.mem_bd.disp);
     uses[0] = a->u.vreg;

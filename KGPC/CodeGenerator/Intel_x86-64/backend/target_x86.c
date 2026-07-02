@@ -16,6 +16,7 @@
 #include "../stackmng/stackmng.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -45,6 +46,23 @@ static int x86_is_float(BeWidth w) { return w == BE_WF32 || w == BE_WF64; }
 
 /* SSE scalar suffix: "sd" for double, "ss" for single. */
 static const char *x86_fsuffix(BeWidth w) { return (w == BE_WF32) ? "ss" : "sd"; }
+
+/* Render a frame-relative memory operand to its AT&T literal: "disp(base)", or
+ * "(base)" when disp == 0 (matching the compiler's zero-displacement spelling).
+ * The base is the fixed frame/stack pointer, rendered here — it is never a pool
+ * placeholder. */
+static void x86_frame(const BeOperand *op, char *buf, size_t n) {
+  const char *base = (op->u.mem_frame.base == BE_BASE_SP) ? "%rsp" : "%rbp";
+  long long d = op->u.mem_frame.disp;
+  /* x86-64 encodes displacements as signed 32-bit.  Real frame offsets always
+   * fit; guard so a mis-sized offset asserts instead of silently truncating. */
+  assert(d >= INT32_MIN && d <= INT32_MAX &&
+         "frame displacement out of x86 signed-32 range");
+  if (d == 0)
+    snprintf(buf, n, "(%s)", base);
+  else
+    snprintf(buf, n, "%lld(%s)", d, base);
+}
 
 /* Render a non-register operand (imm / phys / rip-sym) to a literal token.
  * Register operands are handled by the callers via %N placeholders. */
@@ -192,6 +210,16 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   }
 
   case BE_LOAD: {
+    if (a->kind == OPK_MEM_FRAME) {
+      /* dst(vreg) := [frame]  →  movX disp(%rbp), %0  (fixed base, no use) */
+      assert(dst->kind == OPK_VREG);
+      char fb[40];
+      x86_frame(a, fb, sizeof(fb));
+      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %%0\n", c, fb);
+      defs[0] = dst->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+      break;
+    }
     /* dst(vreg) := [a: MEM_BD(base vreg, disp)]  →  movX disp(%1), %0 */
     assert(dst->kind == OPK_VREG && a->kind == OPK_MEM_BD);
     snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%1), %%0\n", c, a->u.mem_bd.disp);
@@ -202,6 +230,16 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   }
 
   case BE_STORE: {
+    if (dst->kind == OPK_MEM_FRAME) {
+      /* [frame] := a(vreg)  →  movX %0, disp(%rbp)  (fixed base, no def) */
+      assert(a->kind == OPK_VREG);
+      char fb[40];
+      x86_frame(dst, fb, sizeof(fb));
+      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %s\n", c, fb);
+      uses[0] = a->u.vreg;
+      em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+      break;
+    }
     /* [dst: MEM_BD(base vreg, disp)] := a(vreg)  →  movX %0, disp(%1) */
     assert(dst->kind == OPK_MEM_BD && a->kind == OPK_VREG);
     snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %d(%%1)\n", c,

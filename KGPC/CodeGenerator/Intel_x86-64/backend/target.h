@@ -88,15 +88,28 @@ typedef enum {
   BE_D64 = 8  /* .quad  / .xword */
 } BeDataKind;
 
+/* ---- Frame base register (for OPK_MEM_FRAME) ---------------------------- */
+/* A frame-relative memory operand names its base symbolically — the frame
+ * pointer or the stack pointer — never a concrete register.  Each target
+ * renders the ISA register (x86: %rbp/%rsp; AArch64: x29/sp), so the operand
+ * stays neutral.  Unlike OPK_MEM_BD (whose base is an allocatable pool vreg
+ * rendered through a %N placeholder), the frame base is a FIXED register baked
+ * into the template literally — it consumes no placeholder. */
+typedef enum {
+  BE_BASE_FP, /* frame pointer → %rbp / x29 */
+  BE_BASE_SP  /* stack pointer → %rsp / sp  */
+} BeFrameBase;
+
 /* ---- Operands ----------------------------------------------------------- */
 typedef enum {
-  OPK_VREG,    /* virtual register (Register_t* from get_free_reg) */
-  OPK_PHYS,    /* named physical register (arg/return regs: "%edi", "x0") */
-  OPK_IMM,     /* immediate integer */
-  OPK_MEM_BD,  /* base + displacement:      disp(base) */
-  OPK_MEM_BIS, /* base + index*scale + disp: disp(base,index,scale) */
-  OPK_RIP_SYM, /* pc-relative symbol:       sym(%rip) / sym */
-  OPK_LABEL    /* branch/call target label */
+  OPK_VREG,     /* virtual register (Register_t* from get_free_reg) */
+  OPK_PHYS,     /* named physical register (arg/return regs: "%edi", "x0") */
+  OPK_IMM,      /* immediate integer */
+  OPK_MEM_BD,   /* base + displacement:      disp(base) */
+  OPK_MEM_BIS,  /* base + index*scale + disp: disp(base,index,scale) */
+  OPK_MEM_FRAME,/* frame/stack-pointer relative: disp(%rbp) / disp(%rsp) */
+  OPK_RIP_SYM,  /* pc-relative symbol:       sym(%rip) / sym */
+  OPK_LABEL     /* branch/call target label */
 } BeOperandKind;
 
 typedef struct BeOperand {
@@ -116,6 +129,12 @@ typedef struct BeOperand {
       int scale;
       int disp;
     } mem_bis; /* OPK_MEM_BIS */
+    struct {
+      BeFrameBase base; /* frame or stack pointer (fixed, not a pool vreg) */
+      long long disp;   /* signed byte offset; wide enough that real frame
+                         * offsets never truncate (targets assert the ISA
+                         * displacement range) */
+    } mem_frame; /* OPK_MEM_FRAME */
     const char *sym;   /* OPK_RIP_SYM */
     const char *label; /* OPK_LABEL */
   } u;

@@ -750,6 +750,79 @@ static void test_golden_aarch64_data(const Target *T) {
   CHECK(strstr(all, ".quad") == NULL, "aarch64 data: no x86 .quad spelling");
 }
 
+/* Build `int f(int a)`: store the arg into a frame slot via BE_STORE, reload it
+ * via BE_LOAD, and return it — exercising the OPK_MEM_FRAME operand end-to-end.
+ * The value round-trips through memory, so a wrong base/offset/width fails at
+ * run time, not just in a golden check. */
+static ListNode_t *build_frame_roundtrip(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 16, 1}; /* reserve 16 bytes of locals below the saves */
+  T->emit_prologue(&em, &f);
+
+  Register_t *va = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  /* -48(%rbp): inside the 16-byte locals region (x86 saves occupy -8..-40). */
+  BeOperand slot = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -48}}};
+
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);   /* va = a */
+  T->emit(&em, BE_STORE, BE_W32, &slot, &dva, NULL); /* [frame] = va */
+
+  Register_t *vb = get_free_reg(rs, &em.list);
+  BeOperand dvb = {OPK_VREG, BE_W32, {.vreg = vb}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  T->emit(&em, BE_LOAD, BE_W32, &dvb, &slot, NULL); /* vb = [frame] */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dvb, NULL);   /* return vb */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void test_exec_frame(const Target *T, const char *sym, int a) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_frame_roundtrip(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           sym, a, a);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: frame spill/reload %s(%d)==%d", sym, a, a);
+  CHECK(rc == 0, msg);
+}
+
+static void test_golden_x86_frame(const Target *T) {
+  ListNode_t *list = build_frame_roundtrip(T, "x86frame");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, ", -48(%rbp)") != NULL,
+        "x86 frame: BE_STORE renders -48(%rbp) dest");
+  CHECK(strstr(all, "-48(%rbp), %") != NULL,
+        "x86 frame: BE_LOAD renders -48(%rbp) source");
+  CHECK(strstr(all, "movl") != NULL, "x86 frame: 32-bit width suffix");
+}
+
+static void test_golden_aarch64_frame(const Target *T) {
+  ListNode_t *list = build_frame_roundtrip(T, "aaframe");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "str\tw") != NULL, "aarch64 frame: str w-reg (32-bit store)");
+  CHECK(strstr(all, "[x29, #-48]") != NULL,
+        "aarch64 frame: fixed x29 base + disp");
+  CHECK(strstr(all, "ldr\tw") != NULL, "aarch64 frame: ldr w-reg (32-bit load)");
+  CHECK(strstr(all, "%rbp") == NULL && strstr(all, "%rsp") == NULL,
+        "aarch64 frame: no x86 base leakage");
+}
+
 int main(void) {
   g_current_codegen_abi = KGPC_TARGET_ABI_SYSTEM_V;
   g_stack_home_space_bytes = 0;
@@ -790,6 +863,12 @@ int main(void) {
   test_exec_ext64(T, "besxlq", BE_W32, 1, -5, -5LL);    /* movslq */
   test_exec_ext64(T, "bezxlq", BE_W32, 0, -1, 4294967295LL); /* movl zero-ext */
 
+  /* Frame-relative memory operand (OPK_MEM_FRAME): BE_STORE/BE_LOAD spill a
+   * value to a %rbp-relative slot and reload it. */
+  fprintf(stderr, "-- frame-relative memory operand --\n");
+  test_golden_x86_frame(T);
+  test_exec_frame(T, "beframe", 42);
+
   /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
    * float conversions.  Values are exactly representable so `==` is exact. */
   fprintf(stderr, "-- floating-point (double) --\n");
@@ -815,6 +894,7 @@ int main(void) {
   test_golden_aarch64_ext(A);
   test_golden_aarch64_float(A);
   test_golden_aarch64_data(A);
+  test_golden_aarch64_frame(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");
