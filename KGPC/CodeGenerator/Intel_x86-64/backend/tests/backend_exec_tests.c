@@ -177,6 +177,52 @@ static void test_golden_add(const Target *T) {
   CHECK(strstr(all, "ret") != NULL, "golden: has ret");
 }
 
+/* Build `int f(int a)` computing `a <shift-op> n` (n immediate). */
+static ListNode_t *build_shift(const Target *T, const char *sym, BeOp op,
+                               int n) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand imm = {OPK_IMM, BE_W32, {.imm = n}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  T->emit(&em, op, BE_W32, &dva, &dva, &imm);
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dva, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Build `int f(int a)` computing `-a`. */
+static ListNode_t *build_neg(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  T->emit(&em, BE_NEG, BE_W32, &dva, &dva, NULL);
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dva, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
 /* Concatenate the emitted text of a finished (allocated+emitted) list. */
 static void concat_emitted(ListNode_t *list, char *out, size_t cap) {
   size_t used = 0;
@@ -207,9 +253,9 @@ static void test_golden_aarch64(const Target *T) {
 
   CHECK(strstr(all, "aaadd:") != NULL, "aarch64: has function label");
   CHECK(strstr(all, "stp\tx29, x30") != NULL, "aarch64: AAPCS64 prologue");
-  CHECK(strstr(all, "add\t") != NULL, "aarch64: has add");
-  CHECK(strstr(all, "x19") != NULL, "aarch64: allocator colored into x19");
-  CHECK(strstr(all, "x0") != NULL, "aarch64: uses x0 arg/return");
+  CHECK(strstr(all, "add\tw19") != NULL, "aarch64: 32-bit add into w19");
+  CHECK(strstr(all, "w19") != NULL, "aarch64: allocator colored into w19");
+  CHECK(strstr(all, "w0") != NULL, "aarch64: uses w0 arg/return (32-bit)");
   CHECK(strstr(all, "ret") != NULL, "aarch64: has ret");
   /* Neutrality: no x86 registers must appear in AArch64 output. */
   CHECK(strstr(all, "%rbx") == NULL && strstr(all, "%rax") == NULL &&
@@ -228,6 +274,34 @@ static void test_exec_binop(const Target *T, const char *sym, BeOp op, int a,
            sym, sym, a, b, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d,%d)==%d", sym, a, b, expected);
+  CHECK(rc == 0, msg);
+}
+
+static void test_exec_shift(const Target *T, const char *sym, BeOp op, int a,
+                            int n, int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_shift(T, sym, op, n);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%d)==%d", sym, a, expected);
+  CHECK(rc == 0, msg);
+}
+
+static void test_exec_neg(const Target *T, const char *sym, int a,
+                          int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_neg(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%d)==%d", sym, a, expected);
   CHECK(rc == 0, msg);
 }
 
@@ -260,6 +334,12 @@ int main(void) {
   test_exec_binop(T, "besub", BE_SUB, 10, 3, 7);
   test_exec_binop(T, "bemul", BE_MUL, 6, 7, 42);
   test_exec_binop(T, "beaddneg", BE_ADD, -4, 9, 5);
+  test_exec_binop(T, "beand", BE_AND, 12, 10, 8);
+  test_exec_binop(T, "beor", BE_OR, 12, 10, 14);
+  test_exec_binop(T, "bexor", BE_XOR, 12, 10, 6);
+  test_exec_shift(T, "beshl", BE_SHL, 3, 2, 12);
+  test_exec_shift(T, "beshr", BE_SHR, 20, 2, 5);
+  test_exec_neg(T, "beneg", 7, -7);
   test_exec_const(T, "beconst", 12345);
 
   /* M4: neutrality proof via a second backend (golden-asm; no local AArch64

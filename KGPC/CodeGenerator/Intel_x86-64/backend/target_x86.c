@@ -121,10 +121,18 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_ADD:
   case BE_SUB:
-  case BE_MUL: {
+  case BE_MUL:
+  case BE_AND:
+  case BE_OR:
+  case BE_XOR: {
     /* dst := a <op> b, dst is a register.  Two-operand x86: fold a into dst
      * first if needed, then apply b. */
-    const char *mn = (op == BE_ADD) ? "add" : (op == BE_SUB) ? "sub" : "imul";
+    const char *mn = (op == BE_ADD)   ? "add"
+                     : (op == BE_SUB) ? "sub"
+                     : (op == BE_MUL) ? "imul"
+                     : (op == BE_AND) ? "and"
+                     : (op == BE_OR)  ? "or"
+                                      : "xor";
     assert(dst->kind == OPK_VREG);
     if (!(a->kind == OPK_VREG && a->u.vreg == dst->u.vreg)) {
       /* dst := a first */
@@ -146,6 +154,33 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       uses[0] = dst->u.vreg;
       em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
     }
+    break;
+  }
+
+  case BE_NEG: {
+    /* dst := -dst (RMW) */
+    assert(dst->kind == OPK_VREG);
+    if (!(a->kind == OPK_VREG && a->u.vreg == dst->u.vreg))
+      x86_emit(em, BE_MOV, w, dst, a, NULL);
+    snprintf(tmpl, sizeof(tmpl), "\tneg%c\t%%0\n", c);
+    defs[0] = dst->u.vreg;
+    uses[0] = dst->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
+    break;
+  }
+
+  case BE_SHL:
+  case BE_SHR:
+  case BE_SAR: {
+    /* dst := dst <shift> imm.  x86: shl/shr/sar $imm, dst */
+    const char *mn = (op == BE_SHL) ? "shl" : (op == BE_SHR) ? "shr" : "sar";
+    assert(dst->kind == OPK_VREG && b->kind == OPK_IMM);
+    if (!(a->kind == OPK_VREG && a->u.vreg == dst->u.vreg))
+      x86_emit(em, BE_MOV, w, dst, a, NULL);
+    snprintf(tmpl, sizeof(tmpl), "\t%s%c\t$%lld, %%0\n", mn, c, b->u.imm);
+    defs[0] = dst->u.vreg;
+    uses[0] = dst->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
     break;
   }
 

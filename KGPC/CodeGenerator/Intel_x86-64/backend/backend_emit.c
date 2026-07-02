@@ -68,6 +68,13 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst) {
 ListNode_t *be_add_inst_du(ListNode_t *inst_list, int *next_vreg_id,
                            Register_t **defs, int n_defs, Register_t **uses,
                            int n_uses, const char *fmt) {
+  return be_add_inst_du_w(inst_list, next_vreg_id, defs, n_defs, uses, n_uses,
+                          fmt, NULL);
+}
+
+ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
+                             Register_t **defs, int n_defs, Register_t **uses,
+                             int n_uses, const char *fmt, const int *use32) {
   IrInst_t *inst = ir_inst_new(NULL, defs, n_defs, uses, n_uses);
   if (inst == NULL)
     return inst_list;
@@ -102,6 +109,8 @@ ListNode_t *be_add_inst_du(ListNode_t *inst_list, int *next_vreg_id,
                  defs[i]->bit_32);
       else
         inst->reg_names_32[placeholder][0] = '\0';
+      if (use32 != NULL)
+        inst->reg_width_sel[placeholder] = use32[placeholder] ? 2 : 1;
     }
   }
   for (int i = 0;
@@ -122,6 +131,8 @@ ListNode_t *be_add_inst_du(ListNode_t *inst_list, int *next_vreg_id,
                  uses[i]->bit_32);
       else
         inst->reg_names_32[placeholder][0] = '\0';
+      if (use32 != NULL)
+        inst->reg_width_sel[placeholder] = use32[placeholder] ? 2 : 1;
     }
   }
   inst->n_placeholders = placeholder;

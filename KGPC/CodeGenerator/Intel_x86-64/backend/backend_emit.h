@@ -54,6 +54,16 @@ ListNode_t *be_add_inst_du(ListNode_t *inst_list, int *next_vreg_id,
                            Register_t **defs, int n_defs, Register_t **uses,
                            int n_uses, const char *fmt);
 
+/* Width-aware variant: `use32`, when non-NULL, has one entry per placeholder
+ * (defs first, then uses); a non-zero entry forces the 32-bit register name for
+ * that placeholder, zero forces 64-bit.  When `use32` is NULL this behaves
+ * exactly like be_add_inst_du (the x86 mnemonic-suffix heuristic decides).
+ * Targets that don't encode width in the mnemonic (AArch64) pass explicit
+ * widths. */
+ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
+                             Register_t **defs, int n_defs, Register_t **uses,
+                             int n_uses, const char *fmt, const int *use32);
+
 /* Context-free label generator: writes ".L<n>" using ++*label_counter. */
 void be_gen_label(char *buf, int buf_len, int *label_counter);
 

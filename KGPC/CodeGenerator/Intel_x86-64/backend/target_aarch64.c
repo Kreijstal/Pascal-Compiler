@@ -42,29 +42,38 @@ static void aa_lit(const BeOperand *op, char *buf, size_t n) {
 
 static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
                     const BeOperand *a, const BeOperand *b) {
-  (void)w; /* minimal backend uses 64-bit x-registers */
+  /* AArch64 encodes width in the register name (w0 vs x0), not the mnemonic,
+   * so widths are passed explicitly to be_add_inst_du_w. */
+  const int w32 = (w == BE_W32);
   char tmpl[160];
   char lit[48];
   Register_t *defs[2];
   Register_t *uses[4];
+  int use32[6];
 
   switch (op) {
   case BE_MOV:
     if (dst->kind == OPK_VREG && a->kind == OPK_VREG) {
       defs[0] = dst->u.vreg;
       uses[0] = a->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1,
-                                "\tmov\t%0, %1\n");
+      use32[0] = w32;
+      use32[1] = w32;
+      em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 1,
+                                  "\tmov\t%0, %1\n", use32);
     } else if (dst->kind == OPK_VREG) {
       aa_lit(a, lit, sizeof(lit));
       snprintf(tmpl, sizeof(tmpl), "\tmov\t%%0, %s\n", lit);
       defs[0] = dst->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+      use32[0] = w32;
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl, use32);
     } else if (a->kind == OPK_VREG) {
       aa_lit(dst, lit, sizeof(lit));
       snprintf(tmpl, sizeof(tmpl), "\tmov\t%s, %%0\n", lit);
       uses[0] = a->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+      use32[0] = w32;
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1, tmpl, use32);
     } else {
       char litd[48];
       aa_lit(a, lit, sizeof(lit));
@@ -76,16 +85,26 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_ADD:
   case BE_SUB:
-  case BE_MUL: {
+  case BE_MUL:
+  case BE_AND:
+  case BE_OR:
+  case BE_XOR: {
     /* AArch64 is 3-operand: <mn> dst, a, b */
-    const char *mn = (op == BE_ADD) ? "add" : (op == BE_SUB) ? "sub" : "mul";
+    const char *mn = (op == BE_ADD)   ? "add"
+                     : (op == BE_SUB) ? "sub"
+                     : (op == BE_MUL) ? "mul"
+                     : (op == BE_AND) ? "and"
+                     : (op == BE_OR)  ? "orr"
+                                      : "eor";
     assert(dst->kind == OPK_VREG && a->kind == OPK_VREG);
     if (b->kind == OPK_VREG) {
       snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %%1, %%2\n", mn);
       defs[0] = dst->u.vreg;
       uses[0] = a->u.vreg;
       uses[1] = b->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 2, tmpl);
+      use32[0] = use32[1] = use32[2] = w32;
+      em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 2, tmpl,
+                                  use32);
     } else {
       /* add/sub accept an immediate; mul does not (harness uses reg mul). */
       assert(op != BE_MUL && "aarch64 mul immediate unsupported");
@@ -93,8 +112,34 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %%1, %s\n", mn, lit);
       defs[0] = dst->u.vreg;
       uses[0] = a->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
+      use32[0] = use32[1] = w32;
+      em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 1, tmpl,
+                                  use32);
     }
+    break;
+  }
+
+  case BE_NEG:
+    /* AArch64 neg is 2-operand: neg dst, src */
+    assert(dst->kind == OPK_VREG && a->kind == OPK_VREG);
+    defs[0] = dst->u.vreg;
+    uses[0] = a->u.vreg;
+    use32[0] = use32[1] = w32;
+    em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 1,
+                                "\tneg\t%0, %1\n", use32);
+    break;
+
+  case BE_SHL:
+  case BE_SHR:
+  case BE_SAR: {
+    const char *mn = (op == BE_SHL) ? "lsl" : (op == BE_SHR) ? "lsr" : "asr";
+    assert(dst->kind == OPK_VREG && a->kind == OPK_VREG && b->kind == OPK_IMM);
+    snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %%1, #%lld\n", mn, b->u.imm);
+    defs[0] = dst->u.vreg;
+    uses[0] = a->u.vreg;
+    use32[0] = use32[1] = w32;
+    em->list =
+        be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 1, tmpl, use32);
     break;
   }
 
@@ -102,13 +147,16 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     if (a->kind == OPK_VREG && b->kind == OPK_VREG) {
       uses[0] = a->u.vreg;
       uses[1] = b->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 2,
-                                "\tcmp\t%0, %1\n");
+      use32[0] = use32[1] = w32;
+      em->list = be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 2,
+                                  "\tcmp\t%0, %1\n", use32);
     } else if (a->kind == OPK_VREG) {
       aa_lit(b, lit, sizeof(lit));
       snprintf(tmpl, sizeof(tmpl), "\tcmp\t%%0, %s\n", lit);
       uses[0] = a->u.vreg;
-      em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+      use32[0] = w32;
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1, tmpl, use32);
     } else {
       assert(0 && "aarch64 cmp needs a register first operand");
     }
@@ -119,7 +167,10 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%%1, #%d]\n", a->u.mem_bd.disp);
     defs[0] = dst->u.vreg;
     uses[0] = a->u.mem_bd.base;
-    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
+    use32[0] = w32; /* loaded value width */
+    use32[1] = 0;   /* address register is always 64-bit */
+    em->list =
+        be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 1, tmpl, use32);
     break;
 
   case BE_STORE:
@@ -127,7 +178,10 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%%1, #%d]\n", dst->u.mem_bd.disp);
     uses[0] = a->u.vreg;
     uses[1] = dst->u.mem_bd.base;
-    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 2, tmpl);
+    use32[0] = w32; /* stored value width */
+    use32[1] = 0;   /* address register is always 64-bit */
+    em->list =
+        be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 2, tmpl, use32);
     break;
 
   case BE_LEA:
@@ -225,20 +279,19 @@ static void aa_emit_epilogue(BeEmitter *em, const BeFrame *f) {
                       "\tret\n");
 }
 
-/* AAPCS64 arg/return registers.  Minimal backend uses 64-bit x-registers. */
+/* AAPCS64 arg/return registers (w0-w7 for 32-bit, x0-x7 for 64-bit). */
 static const char *aa_arg_reg(int idx, BeWidth w) {
   static const char *x[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"};
-  (void)w;
+  static const char *wr[] = {"w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7"};
   if (idx < 0 || idx >= 8)
     return NULL;
-  return x[idx];
+  return (w == BE_W32) ? wr[idx] : x[idx];
 }
 
 static int aa_num_int_arg_regs(void) { return 8; }
 
 static const char *aa_return_reg(BeWidth w) {
-  (void)w;
-  return "x0";
+  return (w == BE_W32) ? "w0" : "x0";
 }
 
 /* Allocatable pool: AArch64 callee-saved x19-x23.  The reg_id slots are reused

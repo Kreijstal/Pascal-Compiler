@@ -38,6 +38,13 @@ typedef enum {
   BE_ADD,   /* dst := a + b          */
   BE_SUB,   /* dst := a - b          */
   BE_MUL,   /* dst := a * b          (signed) */
+  BE_AND,   /* dst := a & b          */
+  BE_OR,    /* dst := a | b          */
+  BE_XOR,   /* dst := a ^ b          */
+  BE_NEG,   /* dst := -dst           (unary) */
+  BE_SHL,   /* dst := dst << b       (b immediate) */
+  BE_SHR,   /* dst := dst >> b       (logical, b immediate) */
+  BE_SAR,   /* dst := dst >> b       (arithmetic, b immediate) */
   BE_CMP,   /* set condition from a ? b */
   BE_LEA    /* dst := &mem           */
 } BeOp;

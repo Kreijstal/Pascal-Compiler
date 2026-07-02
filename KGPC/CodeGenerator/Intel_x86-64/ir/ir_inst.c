@@ -451,8 +451,15 @@ void ir_emit_function(ListNode_t *inst_list) {
            * This avoids dereferencing the borrowed defs[]/uses[] pointers
            * which may have been freed by reset_reg_stack() when nested
            * subprograms were generated before ir_emit_function() runs. */
+          /* Per-placeholder width override (set by be_add_inst_du_w) takes
+           * precedence over the mnemonic-suffix heuristic. */
+          int this_32 = use_32bit;
+          if (inst->reg_width_sel[idx] == 1)
+            this_32 = 0;
+          else if (inst->reg_width_sel[idx] == 2)
+            this_32 = 1;
           const char *name =
-              use_32bit ? inst->reg_names_32[idx] : inst->reg_names_64[idx];
+              this_32 ? inst->reg_names_32[idx] : inst->reg_names_64[idx];
           if (name[0] != '\0')
             regname = name;
         }
