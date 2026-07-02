@@ -23,7 +23,7 @@
 #include <string.h>
 
 static int *vregp(BeEmitter *em) {
-  return em->cx != NULL ? &em->cx->next_vreg_id : NULL;
+  return em->next_vreg_id;
 }
 
 static void aa_lit(const BeOperand *op, char *buf, size_t n) {

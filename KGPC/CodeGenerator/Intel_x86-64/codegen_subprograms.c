@@ -1753,18 +1753,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
 
       if (codegen_target_is_windows()) {
         {
-          Register_t *u[] = {addr_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rcx\n");
+          /* Integrated: emit the arg move through the target-neutral backend
+           * vtable instead of a raw AT&T template (byte-identical output). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rcx"}};
+          BeOperand src = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+          kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
         }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n",
                  dynamic_array_descriptor_size);
         inst_list = add_inst(inst_list, buffer);
       } else {
         {
-          Register_t *u[] = {addr_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tmovq\t%0, %rdi\n");
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rdi"}};
+          BeOperand src = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+          kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
         }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%esi\n",
                  dynamic_array_descriptor_size);

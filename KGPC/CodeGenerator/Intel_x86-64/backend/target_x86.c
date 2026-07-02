@@ -36,7 +36,7 @@ static char x86_suffix(BeWidth w) {
 }
 
 static int *vregp(BeEmitter *em) {
-  return em->cx != NULL ? &em->cx->next_vreg_id : NULL;
+  return em->next_vreg_id;
 }
 
 /* Render a non-register operand (imm / phys / rip-sym) to a literal token.
@@ -336,3 +336,5 @@ static const Target kX86SysV = {
 };
 
 const Target *target_x86_sysv(void) { return &kX86SysV; }
+
+const Target *kgpc_backend_target(void) { return &kX86SysV; }

@@ -186,6 +186,7 @@ char *codegen_make_unit_qualified_key(int source_unit_index,
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../compilation_context.h"
+#include "backend/target.h"
 #include "stackmng/stackmng.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -431,6 +432,19 @@ typedef struct CodeGenContext {
   int managed_dynarray_temp_count;
   int managed_dynarray_temp_capacity;
 } CodeGenContext;
+
+/* Bridge: build a backend BeEmitter bound to this compilation's instruction
+ * list and CodeGenContext counters, so front-end lowering can emit through the
+ * target-neutral Target vtable.  After emitting, write em.list back to the
+ * caller's inst_list. */
+static inline BeEmitter codegen_beemitter(ListNode_t *inst_list,
+                                          CodeGenContext *ctx) {
+  BeEmitter em;
+  em.list = inst_list;
+  em.next_vreg_id = &ctx->next_vreg_id;
+  em.label_counter = &ctx->label_counter;
+  return em;
+}
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx);

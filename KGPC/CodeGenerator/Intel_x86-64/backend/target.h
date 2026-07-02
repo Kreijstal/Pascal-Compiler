@@ -97,11 +97,25 @@ typedef struct BeFrame {
   int is_leaf;      /* no calls → may skip frame setup where legal */
 } BeFrame;
 
-/* ---- Emitter: the growing instruction list + counters (no CodeGenContext) */
+/* ---- Emitter: the growing instruction list + borrowed counters.
+ * The counters are held by pointer so the same emitter type binds to either a
+ * standalone BackendCtx (tests) or the live compiler's CodeGenContext fields
+ * (integration).  Either pointer may be NULL. */
 typedef struct BeEmitter {
   ListNode_t *list;
-  BackendCtx *cx;
+  int *next_vreg_id;
+  int *label_counter;
 } BeEmitter;
+
+/* Bind an emitter to a standalone BackendCtx (test/harness convenience). */
+static inline BeEmitter be_emitter_from_backendctx(ListNode_t *list,
+                                                   BackendCtx *cx) {
+  BeEmitter em;
+  em.list = list;
+  em.next_vreg_id = cx ? &cx->next_vreg_id : (int *)0;
+  em.label_counter = cx ? &cx->label_counter : (int *)0;
+  return em;
+}
 
 /* ---- The target vtable -------------------------------------------------- */
 typedef struct Target {
@@ -138,5 +152,10 @@ typedef struct Target {
 /* Target factories (defined in target_x86.c / target_aarch64.c). */
 const Target *target_x86_sysv(void);
 const Target *target_aarch64(void);
+
+/* The instruction-emitting target the live compiler lowers through.  x86 today
+ * (SysV/Windows differ only in ABI register selection at the call site, not in
+ * the instructions the vtable emits). */
+const Target *kgpc_backend_target(void);
 
 #endif /* KGPC_BACKEND_TARGET_H */

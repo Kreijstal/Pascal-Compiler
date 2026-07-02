@@ -107,7 +107,7 @@ static int assemble_link_run(const char *tag, const char *asm_path,
 /* Build `int f(int a, int b)` computing `a OP b` and return the finished list. */
 static ListNode_t *build_binop(const Target *T, const char *sym, BeOp op) {
   BackendCtx cx = {0, 0};
-  BeEmitter em = {NULL, &cx};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
   add_inst_invalidate_cache();
   select_target_pool(T);
   reset_reg_stack();
@@ -136,7 +136,7 @@ static ListNode_t *build_binop(const Target *T, const char *sym, BeOp op) {
 /* Build `int f(void)` returning an immediate constant. */
 static ListNode_t *build_const(const Target *T, const char *sym, int value) {
   BackendCtx cx = {0, 0};
-  BeEmitter em = {NULL, &cx};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
   add_inst_invalidate_cache();
   select_target_pool(T);
   reset_reg_stack();
