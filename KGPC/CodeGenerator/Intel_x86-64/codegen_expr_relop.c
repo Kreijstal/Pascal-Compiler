@@ -181,9 +181,12 @@ static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list,
   inst_list = codegen_vect_reg(inst_list, 0);
   inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
   {
-    Register_t *d[] = {value_reg};
-    inst_list =
-        add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
+    /* Integrated: emit through the target-neutral backend vtable (byte-identical). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = value_reg}};
+    BeOperand src = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+    kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
   }
   free_arg_regs();
   return inst_list;
@@ -860,9 +863,12 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     inst_list =
         codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
     {
-      Register_t *d[] = {right_reg};
-      inst_list =
-          add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
+      /* Integrated: emit through the target-neutral backend vtable (byte-identical). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = right_reg}};
+      BeOperand src = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+      kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
     }
     free_arg_regs();
     if (lhs_spill != NULL) {
@@ -892,9 +898,12 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     inst_list =
         codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
     {
-      Register_t *d[] = {left_reg};
-      inst_list =
-          add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
+      /* Integrated: emit through the target-neutral backend vtable (byte-identical). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = left_reg}};
+      BeOperand src = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+      kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
     }
     free_arg_regs();
     if (rhs_spill != NULL) {
