@@ -193,6 +193,21 @@ typedef struct Register {
 #endif
 } Register_t;
 
+/* A target's allocatable register: an opaque slot id plus its 64/32-bit
+ * assembly names.  Lets the register pool be target-provided instead of
+ * hardcoded, so the shared allocator is target-neutral. */
+typedef struct BackendRegSpec {
+  RegisterId_t reg_id;
+  const char *name64;
+  const char *name32;
+} BackendRegSpec;
+
+/* Override the allocatable register pool used by init_reg_stack (and thus
+ * reset_reg_stack).  Pass NULL/0 to restore the default x86-64 pool.  The
+ * `specs` array must outlive all subsequent init/reset calls (targets pass
+ * static tables). */
+void stackmng_set_register_pool(const BackendRegSpec *specs, int n);
+
 /********* StackScope_t **********/
 
 /* Forward declaration; defined in stackmng.c. Used to accelerate

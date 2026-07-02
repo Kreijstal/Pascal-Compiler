@@ -61,7 +61,7 @@ static void x86_lit(const BeOperand *op, char *buf, size_t n) {
 static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
                      const BeOperand *a, const BeOperand *b) {
   char c = x86_suffix(w);
-  char tmpl[96];
+  char tmpl[160];
   char lit[48];
   Register_t *defs[2];
   Register_t *uses[4];
@@ -306,6 +306,19 @@ static const char *x86_return_reg(BeWidth w) {
   return (w == BE_W32) ? "%eax" : "%rax";
 }
 
+/* Allocatable pool: x86-64 callee-saved registers (matches stackmng's default;
+ * provided through the vtable so pool selection is uniform across targets). */
+static const BackendRegSpec kX86Pool[] = {
+    {REG_RBX, "%rbx", "%ebx"},  {REG_R12, "%r12", "%r12d"},
+    {REG_R13, "%r13", "%r13d"}, {REG_R14, "%r14", "%r14d"},
+    {REG_R15, "%r15", "%r15d"},
+};
+
+static const BackendRegSpec *x86_regpool(int *n) {
+  *n = (int)(sizeof(kX86Pool) / sizeof(kX86Pool[0]));
+  return kX86Pool;
+}
+
 static const Target kX86SysV = {
     .name = "x86_64-sysv",
     .ptr_width = 8,
@@ -319,6 +332,7 @@ static const Target kX86SysV = {
     .arg_reg = x86_arg_reg,
     .num_int_arg_regs = x86_num_int_arg_regs,
     .return_reg = x86_return_reg,
+    .regpool = x86_regpool,
 };
 
 const Target *target_x86_sysv(void) { return &kX86SysV; }

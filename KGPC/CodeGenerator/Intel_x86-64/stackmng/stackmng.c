@@ -1052,132 +1052,64 @@ static void apply_register_limit(RegStack_t *reg_stack) {
   reg_stack->num_registers = retained;
 }
 
+/* Default allocatable pool: the x86-64 callee-saved registers, in the order
+ * get_free_reg prefers them.  Only callee-saved registers are in the pool so
+ * values survive across function calls; caller-saved regs (%rax, %rcx, %rdx,
+ * %rsi, %rdi, %r8-%r11) are used explicitly, never allocated here. */
+static const BackendRegSpec kDefaultX86Pool[] = {
+    {REG_RBX, "%rbx", "%ebx"},  {REG_R12, "%r12", "%r12d"},
+    {REG_R13, "%r13", "%r13d"}, {REG_R14, "%r14", "%r14d"},
+    {REG_R15, "%r15", "%r15d"},
+};
+
+static const BackendRegSpec *g_regpool_specs = kDefaultX86Pool;
+static int g_regpool_n = (int)(sizeof(kDefaultX86Pool) / sizeof(kDefaultX86Pool[0]));
+
+void stackmng_set_register_pool(const BackendRegSpec *specs, int n) {
+  if (specs == NULL || n <= 0) {
+    g_regpool_specs = kDefaultX86Pool;
+    g_regpool_n = (int)(sizeof(kDefaultX86Pool) / sizeof(kDefaultX86Pool[0]));
+  } else {
+    g_regpool_specs = specs;
+    g_regpool_n = n;
+  }
+}
+
 RegStack_t *init_reg_stack() {
   /*
-   * Initialize register pool for expression evaluation.
-   *
-   * Strategy: Reserve the MOST COMMONLY USED argument registers to minimize
-   * conflicts with function calls, but keep enough registers available for
-   * complex expressions.
-   *
-   * Windows x64: First 4 args in %rcx, %rdx, %r8, %r9
-   *   - Reserve: %rcx, %rdx (most common - used for 1-2 arg functions)
-   *   - Available: %rax, %rsi, %rdi, %r8, %r9, %r10, %r11 (7 registers)
-   *
-   * Linux x64 (SysV): First 6 args in %rdi, %rsi, %rdx, %rcx, %r8, %r9
-   *   - Reserve: %rdi, %rsi, %rdx (most common - used for 1-3 arg functions)
-   *   - Available: %rax, %rcx, %r8, %r9, %r10, %r11 (6 registers)
-   *
-   * This approach:
-   * 1. Prevents conflicts for the most common case (1-3 argument functions)
-   * 2. Keeps enough registers for complex expressions
-   * 3. The conflict handling code in codegen_statement.c handles cases
-   *    where we need r8/r9 for 3-4 argument functions
+   * Initialize the allocatable register pool from the current target's
+   * register spec (g_regpool_specs, default = x86-64 callee-saved).  The pool
+   * order is the get_free_reg preference order.
    */
   ListNode_t *registers = NULL;
   RegStack_t *reg_stack;
   reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
   assert(reg_stack != NULL);
 
-  /* %rax is caller-saved — not in the allocatable pool.
-     It is used as return value and varargs indicator. */
-
-  /* %r10, %r11 are caller-saved scratch registers.
-     They are NOT in the allocatable pool — only used explicitly
-     (VMT dispatch, division, etc.) and never live across calls. */
-
-  /* %r8, %r9, %r10, %r11 are caller-saved — not added to the pool. */
-
-  /* %rbx, %r12 - callee-saved, survive across function calls.
-     Placed first in the list so get_free_reg prefers them for
-     intermediate values that may live across call instructions. */
-  Register_t *rbx = (Register_t *)malloc(sizeof(Register_t));
-  assert(rbx != NULL);
-  rbx->reg_id = REG_RBX;
-  rbx->bit_64 = strdup("%rbx");
-  rbx->bit_32 = strdup("%ebx");
-  rbx->spill_location = NULL;
-  rbx->last_use_seq = 0;
-  rbx->spill_callback = NULL;
-  rbx->spill_context = NULL;
-  rbx->vreg_id = -1;
+  for (int i = 0; i < g_regpool_n; ++i) {
+    Register_t *r = (Register_t *)malloc(sizeof(Register_t));
+    assert(r != NULL);
+    r->reg_id = g_regpool_specs[i].reg_id;
+    r->bit_64 = strdup(g_regpool_specs[i].name64);
+    r->bit_32 = strdup(g_regpool_specs[i].name32);
+    r->spill_location = NULL;
+    r->last_use_seq = 0;
+    r->spill_callback = NULL;
+    r->spill_context = NULL;
+    r->vreg_id = -1;
 #if USE_GRAPH_COLORING_ALLOCATOR
-  rbx->current_live_range = NULL;
+    r->current_live_range = NULL;
 #endif
-
-  Register_t *r12 = (Register_t *)malloc(sizeof(Register_t));
-  assert(r12 != NULL);
-  r12->reg_id = REG_R12;
-  r12->bit_64 = strdup("%r12");
-  r12->bit_32 = strdup("%r12d");
-  r12->spill_location = NULL;
-  r12->last_use_seq = 0;
-  r12->spill_callback = NULL;
-  r12->spill_context = NULL;
-  r12->vreg_id = -1;
-#if USE_GRAPH_COLORING_ALLOCATOR
-  r12->current_live_range = NULL;
-#endif
-
-  Register_t *r13 = (Register_t *)malloc(sizeof(Register_t));
-  assert(r13 != NULL);
-  r13->reg_id = REG_R13;
-  r13->bit_64 = strdup("%r13");
-  r13->bit_32 = strdup("%r13d");
-  r13->spill_location = NULL;
-  r13->last_use_seq = 0;
-  r13->spill_callback = NULL;
-  r13->spill_context = NULL;
-  r13->vreg_id = -1;
-#if USE_GRAPH_COLORING_ALLOCATOR
-  r13->current_live_range = NULL;
-#endif
-
-  Register_t *r14 = (Register_t *)malloc(sizeof(Register_t));
-  assert(r14 != NULL);
-  r14->reg_id = REG_R14;
-  r14->bit_64 = strdup("%r14");
-  r14->bit_32 = strdup("%r14d");
-  r14->spill_location = NULL;
-  r14->last_use_seq = 0;
-  r14->spill_callback = NULL;
-  r14->spill_context = NULL;
-  r14->vreg_id = -1;
-#if USE_GRAPH_COLORING_ALLOCATOR
-  r14->current_live_range = NULL;
-#endif
-
-  Register_t *r15 = (Register_t *)malloc(sizeof(Register_t));
-  assert(r15 != NULL);
-  r15->reg_id = REG_R15;
-  r15->bit_64 = strdup("%r15");
-  r15->bit_32 = strdup("%r15d");
-  r15->spill_location = NULL;
-  r15->last_use_seq = 0;
-  r15->spill_callback = NULL;
-  r15->spill_context = NULL;
-  r15->vreg_id = -1;
-#if USE_GRAPH_COLORING_ALLOCATOR
-  r15->current_live_range = NULL;
-#endif
-
-  /* Build register list — only callee-saved registers are in the pool.
-     These survive across function calls, so values are never lost.
-     Caller-saved registers (%rax, %rcx, %rdx, %rsi, %rdi, %r8-%r11)
-     are NOT in the pool — they are clobbered by calls. */
-  registers = CreateListNode(rbx, LIST_UNSPECIFIED);
-  registers =
-      PushListNodeBack(registers, CreateListNode(r12, LIST_UNSPECIFIED));
-  registers =
-      PushListNodeBack(registers, CreateListNode(r13, LIST_UNSPECIFIED));
-  registers =
-      PushListNodeBack(registers, CreateListNode(r14, LIST_UNSPECIFIED));
-  registers =
-      PushListNodeBack(registers, CreateListNode(r15, LIST_UNSPECIFIED));
+    ListNode_t *node = CreateListNode(r, LIST_UNSPECIFIED);
+    if (registers == NULL)
+      registers = node;
+    else
+      registers = PushListNodeBack(registers, node);
+  }
 
   reg_stack->registers_allocated = NULL;
   reg_stack->registers_free = registers;
-  reg_stack->num_registers = 5; /* rbx, r12, r13, r14, r15 */
+  reg_stack->num_registers = g_regpool_n;
   reg_stack->use_sequence = 0;
 
 #if USE_GRAPH_COLORING_ALLOCATOR

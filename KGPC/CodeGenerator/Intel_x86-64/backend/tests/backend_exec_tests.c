@@ -43,6 +43,15 @@ static int g_tests = 0;
     }                                                                          \
   } while (0)
 
+/* Point the shared allocator's register pool at this target's registers.
+ * This is the register-file generalization in action: the same allocator
+ * colors into x86 or AArch64 registers depending only on the target. */
+static void select_target_pool(const Target *T) {
+  int n = 0;
+  const BackendRegSpec *specs = T->regpool(&n);
+  stackmng_set_register_pool(specs, n);
+}
+
 /* Run a completed instruction list through allocation + emission and serialize
  * it to `path` as an assembleable .globl'd function. */
 static void finalize_and_write(const char *path, const char *sym,
@@ -100,6 +109,7 @@ static ListNode_t *build_binop(const Target *T, const char *sym, BeOp op) {
   BackendCtx cx = {0, 0};
   BeEmitter em = {NULL, &cx};
   add_inst_invalidate_cache();
+  select_target_pool(T);
   reset_reg_stack();
   RegStack_t *rs = get_reg_stack();
 
@@ -128,6 +138,7 @@ static ListNode_t *build_const(const Target *T, const char *sym, int value) {
   BackendCtx cx = {0, 0};
   BeEmitter em = {NULL, &cx};
   add_inst_invalidate_cache();
+  select_target_pool(T);
   reset_reg_stack();
 
   BeFrame f = {sym, 0, 1};
@@ -164,6 +175,46 @@ static void test_golden_add(const Target *T) {
   CHECK(strstr(all, "addl") != NULL, "golden: has addl");
   CHECK(strstr(all, "%eax") != NULL, "golden: writes return reg");
   CHECK(strstr(all, "ret") != NULL, "golden: has ret");
+}
+
+/* Concatenate the emitted text of a finished (allocated+emitted) list. */
+static void concat_emitted(ListNode_t *list, char *out, size_t cap) {
+  size_t used = 0;
+  out[0] = '\0';
+  for (ListNode_t *n = list; n != NULL; n = n->next) {
+    const char *t = (n->type == LIST_IR_INST) ? ((IrInst_t *)n->cur)->text
+                                              : (const char *)n->cur;
+    if (t == NULL)
+      continue;
+    size_t l = strlen(t);
+    if (used + l < cap) {
+      memcpy(out + used, t, l);
+      used += l;
+      out[used] = '\0';
+    }
+  }
+}
+
+/* M4 neutrality proof: the SAME harness + SAME shared allocator, driven through
+ * the AArch64 target, must emit valid AArch64 assembly with the allocator
+ * coloring into AArch64 registers (x19..) — and no x86 register leakage. */
+static void test_golden_aarch64(const Target *T) {
+  ListNode_t *list = build_binop(T, "aaadd", BE_ADD);
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+
+  CHECK(strstr(all, "aaadd:") != NULL, "aarch64: has function label");
+  CHECK(strstr(all, "stp\tx29, x30") != NULL, "aarch64: AAPCS64 prologue");
+  CHECK(strstr(all, "add\t") != NULL, "aarch64: has add");
+  CHECK(strstr(all, "x19") != NULL, "aarch64: allocator colored into x19");
+  CHECK(strstr(all, "x0") != NULL, "aarch64: uses x0 arg/return");
+  CHECK(strstr(all, "ret") != NULL, "aarch64: has ret");
+  /* Neutrality: no x86 registers must appear in AArch64 output. */
+  CHECK(strstr(all, "%rbx") == NULL && strstr(all, "%rax") == NULL &&
+            strstr(all, "%rbp") == NULL,
+        "aarch64: no x86 register leakage");
 }
 
 static void test_exec_binop(const Target *T, const char *sym, BeOp op, int a,
@@ -210,6 +261,15 @@ int main(void) {
   test_exec_binop(T, "bemul", BE_MUL, 6, 7, 42);
   test_exec_binop(T, "beaddneg", BE_ADD, -4, 9, 5);
   test_exec_const(T, "beconst", 12345);
+
+  /* M4: neutrality proof via a second backend (golden-asm; no local AArch64
+   * toolchain/qemu here to run exec — that tier is intentionally skipped). */
+  const Target *A = target_aarch64();
+  fprintf(stderr, "-- neutrality: same harness through target=%s --\n", A->name);
+  test_golden_aarch64(A);
+  fprintf(stderr,
+          "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
+          "in this environment)\n");
 
   fprintf(stderr, "== %d/%d checks passed ==\n", g_tests - g_failures, g_tests);
   return g_failures == 0 ? 0 : 1;

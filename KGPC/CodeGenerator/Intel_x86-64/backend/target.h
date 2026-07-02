@@ -16,6 +16,10 @@
 
 #include "backend_emit.h" /* BackendCtx, be_add_inst_du, ListNode_t, Register_t */
 
+/* Full definition in stackmng.h; targets return a static table of these to
+ * describe their allocatable register pool. */
+struct BackendRegSpec;
+
 /* ---- Operand widths (value = size in bytes for the integer widths) ------- */
 typedef enum {
   BE_W8 = 1,
@@ -124,6 +128,11 @@ typedef struct Target {
   const char *(*arg_reg)(int idx, BeWidth w);
   int (*num_int_arg_regs)(void);
   const char *(*return_reg)(BeWidth w);
+
+  /* The target's allocatable register pool.  Returns a static table and sets
+   * *n to its length.  Feed to stackmng_set_register_pool() so the shared
+   * allocator colors into this target's registers. */
+  const struct BackendRegSpec *(*regpool)(int *n);
 } Target;
 
 /* Target factories (defined in target_x86.c / target_aarch64.c). */
