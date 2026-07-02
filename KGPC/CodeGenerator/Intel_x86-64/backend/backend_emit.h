@@ -64,6 +64,18 @@ ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
                              Register_t **defs, int n_defs, Register_t **uses,
                              int n_uses, const char *fmt, const int *use32);
 
+/* Explicit-width-code variant: `widthsel`, when non-NULL, has one entry per
+ * placeholder (defs first, then uses) carrying a reg_width_sel code directly:
+ *   0 = mnemonic-suffix heuristic (x86 default)
+ *   1 = 64-bit name, 2 = 32-bit name, 3 = 16-bit name, 4 = 8-bit name
+ * Used by the sign/zero-extend ops, whose source and destination placeholders
+ * live at different widths (e.g. movsbl reads an 8-bit reg, writes a 32-bit
+ * one).  A NULL entry region is left at the heuristic default. */
+ListNode_t *be_add_inst_du_wsel(ListNode_t *inst_list, int *next_vreg_id,
+                                Register_t **defs, int n_defs, Register_t **uses,
+                                int n_uses, const char *fmt,
+                                const int *widthsel);
+
 /* Context-free label generator: writes ".L<n>" using ++*label_counter. */
 void be_gen_label(char *buf, int buf_len, int *label_counter);
 

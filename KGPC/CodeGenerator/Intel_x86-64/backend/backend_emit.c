@@ -65,16 +65,76 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst) {
  * vreg_ids[] is filled in defs-first order: [defs[0], ..., uses[0], ...].
  * Each register without an assigned vreg_id (vreg_id == -1) receives a fresh
  * ID from *next_vreg_id++ when next_vreg_id is non-NULL. */
+/* Shared core (defined below); the public entry points are thin translators
+ * over it that fix the `sel` interpretation. */
+static ListNode_t *be_add_inst_du_impl(ListNode_t *inst_list, int *next_vreg_id,
+                                       Register_t **defs, int n_defs,
+                                       Register_t **uses, int n_uses,
+                                       const char *fmt, const int *sel,
+                                       int sel_is_use32);
+
 ListNode_t *be_add_inst_du(ListNode_t *inst_list, int *next_vreg_id,
                            Register_t **defs, int n_defs, Register_t **uses,
                            int n_uses, const char *fmt) {
-  return be_add_inst_du_w(inst_list, next_vreg_id, defs, n_defs, uses, n_uses,
-                          fmt, NULL);
+  return be_add_inst_du_impl(inst_list, next_vreg_id, defs, n_defs, uses,
+                             n_uses, fmt, NULL, 1);
 }
 
 ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
                              Register_t **defs, int n_defs, Register_t **uses,
                              int n_uses, const char *fmt, const int *use32) {
+  /* Legacy semantics: each entry is a boolean (non-zero → 32-bit name).
+   * Interpreted by the impl as use32-mode. */
+  return be_add_inst_du_impl(inst_list, next_vreg_id, defs, n_defs, uses,
+                             n_uses, fmt, use32, 1);
+}
+
+ListNode_t *be_add_inst_du_wsel(ListNode_t *inst_list, int *next_vreg_id,
+                                Register_t **defs, int n_defs, Register_t **uses,
+                                int n_uses, const char *fmt,
+                                const int *widthsel) {
+  /* Each entry is a direct reg_width_sel code (0..4).  Interpreted by the impl
+   * as select-mode. */
+  return be_add_inst_du_impl(inst_list, next_vreg_id, defs, n_defs, uses,
+                             n_uses, fmt, widthsel, 0);
+}
+
+/* Copy the four sub-register name views from `reg` into placeholder slot `ph`.
+ * Missing names (NULL) become empty strings, distinguishable from a set name. */
+static void be_copy_reg_names(IrInst_t *inst, int ph, Register_t *reg) {
+  if (reg->bit_64)
+    snprintf(inst->reg_names_64[ph], IR_REG_NAME_BUF, "%s", reg->bit_64);
+  else
+    inst->reg_names_64[ph][0] = '\0';
+  if (reg->bit_32)
+    snprintf(inst->reg_names_32[ph], IR_REG_NAME_BUF, "%s", reg->bit_32);
+  else
+    inst->reg_names_32[ph][0] = '\0';
+  if (reg->bit_16)
+    snprintf(inst->reg_names_16[ph], IR_REG_NAME_BUF, "%s", reg->bit_16);
+  else
+    inst->reg_names_16[ph][0] = '\0';
+  if (reg->bit_8)
+    snprintf(inst->reg_names_8[ph], IR_REG_NAME_BUF, "%s", reg->bit_8);
+  else
+    inst->reg_names_8[ph][0] = '\0';
+}
+
+/* Shared implementation of the def/use emission core.
+ *
+ * `sel` (nullable) has one entry per placeholder (defs first, then uses).
+ * When `sel_is_use32` is non-zero each entry is a boolean (non-zero forces the
+ * 32-bit name → width-sel code 2, zero forces 64-bit → code 1); this is the
+ * historical be_add_inst_du_w contract.  When `sel_is_use32` is zero each entry
+ * is a direct width-sel code (0=heuristic, 1=64, 2=32, 3=16, 4=8).  `sel` is
+ * read at exactly the placeholder indices the loops visit, so a NULL `sel`
+ * (be_add_inst_du) leaves the calloc-zeroed heuristic default untouched — the
+ * compiler's ~1,900 be_add_inst_du call sites are byte-for-byte unchanged. */
+static ListNode_t *be_add_inst_du_impl(ListNode_t *inst_list, int *next_vreg_id,
+                                       Register_t **defs, int n_defs,
+                                       Register_t **uses, int n_uses,
+                                       const char *fmt, const int *sel,
+                                       int sel_is_use32) {
   IrInst_t *inst = ir_inst_new(NULL, defs, n_defs, uses, n_uses);
   if (inst == NULL)
     return inst_list;
@@ -85,10 +145,10 @@ ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
 
   /* Assign vreg_ids: defs first, then uses.
    * If next_vreg_id is available, assign fresh IDs to unassigned registers.
-   * Also copy physical register names (bit_64/bit_32) into the instruction
-   * so that ir_emit_function() can resolve placeholder names without
-   * dereferencing the borrowed Register_t pointers (which may be freed by
-   * reset_reg_stack() when nested subprograms are codegen'd before
+   * Also copy physical register names (bit_64/bit_32/bit_16/bit_8) into the
+   * instruction so that ir_emit_function() can resolve placeholder names
+   * without dereferencing the borrowed Register_t pointers (which may be freed
+   * by reset_reg_stack() when nested subprograms are codegen'd before
    * ir_emit_function() is called on the outer function). */
   int placeholder = 0;
   for (int i = 0;
@@ -99,18 +159,11 @@ ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
       if (next_vreg_id != NULL && defs[i]->vreg_id == -1)
         defs[i]->vreg_id = (*next_vreg_id)++;
       inst->vreg_ids[placeholder] = defs[i]->vreg_id;
-      if (defs[i]->bit_64)
-        snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s",
-                 defs[i]->bit_64);
-      else
-        inst->reg_names_64[placeholder][0] = '\0';
-      if (defs[i]->bit_32)
-        snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s",
-                 defs[i]->bit_32);
-      else
-        inst->reg_names_32[placeholder][0] = '\0';
-      if (use32 != NULL)
-        inst->reg_width_sel[placeholder] = use32[placeholder] ? 2 : 1;
+      be_copy_reg_names(inst, placeholder, defs[i]);
+      if (sel != NULL)
+        inst->reg_width_sel[placeholder] =
+            sel_is_use32 ? (sel[placeholder] ? 2 : 1)
+                         : (unsigned char)sel[placeholder];
     }
   }
   for (int i = 0;
@@ -121,18 +174,11 @@ ListNode_t *be_add_inst_du_w(ListNode_t *inst_list, int *next_vreg_id,
       if (next_vreg_id != NULL && uses[i]->vreg_id == -1)
         uses[i]->vreg_id = (*next_vreg_id)++;
       inst->vreg_ids[placeholder] = uses[i]->vreg_id;
-      if (uses[i]->bit_64)
-        snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s",
-                 uses[i]->bit_64);
-      else
-        inst->reg_names_64[placeholder][0] = '\0';
-      if (uses[i]->bit_32)
-        snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s",
-                 uses[i]->bit_32);
-      else
-        inst->reg_names_32[placeholder][0] = '\0';
-      if (use32 != NULL)
-        inst->reg_width_sel[placeholder] = use32[placeholder] ? 2 : 1;
+      be_copy_reg_names(inst, placeholder, uses[i]);
+      if (sel != NULL)
+        inst->reg_width_sel[placeholder] =
+            sel_is_use32 ? (sel[placeholder] ? 2 : 1)
+                         : (unsigned char)sel[placeholder];
     }
   }
   inst->n_placeholders = placeholder;

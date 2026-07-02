@@ -291,6 +291,68 @@ static void aa_emit_setcc(BeEmitter *em, BeCond cc, const BeOperand *dst) {
                               use32);
 }
 
+/* Map a BeWidth to a reg_width_sel code (see ir_inst.h): 1=64,2=32,3=16,4=8.
+ * AArch64 has no distinct 8/16-bit register views — the pool's 16/8 names are
+ * the same "w" register — so codes 3/4 resolve to the w-name too. */
+static int aa_width_sel(BeWidth w) {
+  switch (w) {
+  case BE_W8:
+    return 4;
+  case BE_W16:
+    return 3;
+  case BE_W32:
+    return 2;
+  case BE_W64:
+  default:
+    return 1;
+  }
+}
+
+static void aa_emit_ext(BeEmitter *em, const BeOperand *dst,
+                        const BeOperand *src, BeWidth from, BeWidth to,
+                        int is_signed) {
+  assert(dst->kind == OPK_VREG && src->kind == OPK_VREG);
+  assert(from == BE_W8 || from == BE_W16 || from == BE_W32);
+  assert(to == BE_W32 || to == BE_W64);
+
+  const char *mn;
+  BeWidth dstw;
+
+  if (is_signed) {
+    /* sxtb/sxth take a 32-bit source (Wn) and a W- or X-dest; sxtw is X<-W. */
+    if (from == BE_W8)
+      mn = "sxtb";
+    else if (from == BE_W16)
+      mn = "sxth";
+    else { /* from == BE_W32 */
+      assert(to == BE_W64 && "signed 32→32 extend is a no-op");
+      mn = "sxtw";
+    }
+    dstw = to;
+  } else {
+    /* uxtb/uxth write a W-dest (upper 32 bits of the X-reg are zeroed).
+     * Zero-extending W32→W64 is a plain `mov Wd, Wn` (writing W clears the
+     * upper half). */
+    if (from == BE_W8)
+      mn = "uxtb";
+    else if (from == BE_W16)
+      mn = "uxth";
+    else /* from == BE_W32 */
+      mn = "mov";
+    dstw = BE_W32;
+  }
+
+  char tmpl[64];
+  snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %%1\n", mn);
+  Register_t *defs[1] = {dst->u.vreg};
+  Register_t *uses[1] = {src->u.vreg};
+  int sel[2];
+  sel[0] = aa_width_sel(dstw); /* %0 = destination */
+  sel[1] = 2;                  /* %1 = source is always the 32-bit w-view */
+  em->list = be_add_inst_du_wsel(em->list, vregp(em), defs, 1, uses, 1, tmpl,
+                                 sel);
+}
+
 static void aa_emit_branch(BeEmitter *em, BeCond cc, const char *label) {
   char buf[96];
   snprintf(buf, sizeof(buf), "\t%s\t%s\n", aa_cc_mnemonic(cc), label);
@@ -369,8 +431,11 @@ static const char *aa_return_reg(BeWidth w) {
 /* Allocatable pool: AArch64 callee-saved x19-x23.  The reg_id slots are reused
  * as opaque identifiers (the allocator only needs distinct ids + names). */
 static const BackendRegSpec kAArch64Pool[] = {
-    {REG_RBX, "x19", "w19"}, {REG_R12, "x20", "w20"}, {REG_R13, "x21", "w21"},
-    {REG_R14, "x22", "w22"}, {REG_R15, "x23", "w23"},
+    {REG_RBX, "x19", "w19", "w19", "w19"},
+    {REG_R12, "x20", "w20", "w20", "w20"},
+    {REG_R13, "x21", "w21", "w21", "w21"},
+    {REG_R14, "x22", "w22", "w22", "w22"},
+    {REG_R15, "x23", "w23", "w23", "w23"},
 };
 
 static const BackendRegSpec *aa_regpool(int *n) {
@@ -383,6 +448,7 @@ static const Target kAArch64 = {
     .ptr_width = 8,
     .emit = aa_emit,
     .emit_setcc = aa_emit_setcc,
+    .emit_ext = aa_emit_ext,
     .emit_branch = aa_emit_branch,
     .emit_call = aa_emit_call,
     .emit_ret = aa_emit_ret,

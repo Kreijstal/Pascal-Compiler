@@ -140,6 +140,13 @@ typedef struct Target {
    * preceding BE_CMP. */
   void (*emit_setcc)(BeEmitter *em, BeCond cc, const BeOperand *dst);
 
+  /* Integer width conversion: dst := extend(src) where src holds a `from`-wide
+   * value and dst receives a `to`-wide one (to >= from).  `is_signed` selects
+   * sign-extension (movsbl/sxtb …) vs zero-extension (movzbl/uxtb …).  Both
+   * operands are OPK_VREG. */
+  void (*emit_ext)(BeEmitter *em, const BeOperand *dst, const BeOperand *src,
+                   BeWidth from, BeWidth to, int is_signed);
+
   /* Control flow. */
   void (*emit_branch)(BeEmitter *em, BeCond cc, const char *label);
   void (*emit_call)(BeEmitter *em, const char *sym, Register_t *indirect);

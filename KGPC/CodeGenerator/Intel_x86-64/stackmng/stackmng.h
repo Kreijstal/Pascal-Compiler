@@ -178,6 +178,8 @@ typedef struct Register {
   RegisterId_t reg_id;
   char *bit_64;
   char *bit_32;
+  char *bit_16; /* 16-bit sub-register name (e.g. "%bx"); may be NULL */
+  char *bit_8;  /* 8-bit  sub-register name (e.g. "%bl"); may be NULL */
   /* Spill tracking - if spilled, this points to the stack location */
   StackNode_t *spill_location;
   /* Sequence number for LRU tracking */
@@ -200,6 +202,8 @@ typedef struct BackendRegSpec {
   RegisterId_t reg_id;
   const char *name64;
   const char *name32;
+  const char *name16; /* 16-bit sub-register name; may be NULL */
+  const char *name8;  /* 8-bit  sub-register name; may be NULL */
 } BackendRegSpec;
 
 /* Override the allocatable register pool used by init_reg_stack (and thus

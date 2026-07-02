@@ -1043,6 +1043,8 @@ static void apply_register_limit(RegStack_t *reg_stack) {
     if (reg != NULL) {
       free(reg->bit_64);
       free(reg->bit_32);
+      free(reg->bit_16);
+      free(reg->bit_8);
       free(reg);
     }
     free(cur);
@@ -1057,9 +1059,11 @@ static void apply_register_limit(RegStack_t *reg_stack) {
  * values survive across function calls; caller-saved regs (%rax, %rcx, %rdx,
  * %rsi, %rdi, %r8-%r11) are used explicitly, never allocated here. */
 static const BackendRegSpec kDefaultX86Pool[] = {
-    {REG_RBX, "%rbx", "%ebx"},  {REG_R12, "%r12", "%r12d"},
-    {REG_R13, "%r13", "%r13d"}, {REG_R14, "%r14", "%r14d"},
-    {REG_R15, "%r15", "%r15d"},
+    {REG_RBX, "%rbx", "%ebx", "%bx", "%bl"},
+    {REG_R12, "%r12", "%r12d", "%r12w", "%r12b"},
+    {REG_R13, "%r13", "%r13d", "%r13w", "%r13b"},
+    {REG_R14, "%r14", "%r14d", "%r14w", "%r14b"},
+    {REG_R15, "%r15", "%r15d", "%r15w", "%r15b"},
 };
 
 static const BackendRegSpec *g_regpool_specs = kDefaultX86Pool;
@@ -1092,6 +1096,10 @@ RegStack_t *init_reg_stack() {
     r->reg_id = g_regpool_specs[i].reg_id;
     r->bit_64 = strdup(g_regpool_specs[i].name64);
     r->bit_32 = strdup(g_regpool_specs[i].name32);
+    r->bit_16 =
+        g_regpool_specs[i].name16 ? strdup(g_regpool_specs[i].name16) : NULL;
+    r->bit_8 =
+        g_regpool_specs[i].name8 ? strdup(g_regpool_specs[i].name8) : NULL;
     r->spill_location = NULL;
     r->last_use_seq = 0;
     r->spill_callback = NULL;
@@ -1562,6 +1570,8 @@ void free_reg_stack(RegStack_t *reg_stack) {
 
     free(reg->bit_64);
     free(reg->bit_32);
+    free(reg->bit_16);
+    free(reg->bit_8);
     free(reg);
     free(cur);
   }
@@ -1575,6 +1585,8 @@ void free_reg_stack(RegStack_t *reg_stack) {
 
     free(reg->bit_64);
     free(reg->bit_32);
+    free(reg->bit_16);
+    free(reg->bit_8);
     free(reg);
     free(cur);
   }

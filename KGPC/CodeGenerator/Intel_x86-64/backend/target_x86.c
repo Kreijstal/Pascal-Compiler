@@ -322,6 +322,67 @@ static void x86_emit_setcc(BeEmitter *em, BeCond cc, const BeOperand *dst) {
                               "\tmovzbl\t%al, %0\n", use32);
 }
 
+/* Map a BeWidth to a reg_width_sel code (see ir_inst.h): 1=64,2=32,3=16,4=8. */
+static int x86_width_sel(BeWidth w) {
+  switch (w) {
+  case BE_W8:
+    return 4;
+  case BE_W16:
+    return 3;
+  case BE_W32:
+    return 2;
+  case BE_W64:
+  default:
+    return 1;
+  }
+}
+
+static void x86_emit_ext(BeEmitter *em, const BeOperand *dst,
+                         const BeOperand *src, BeWidth from, BeWidth to,
+                         int is_signed) {
+  assert(dst->kind == OPK_VREG && src->kind == OPK_VREG);
+  assert(from == BE_W8 || from == BE_W16 || from == BE_W32);
+  assert(to == BE_W32 || to == BE_W64);
+
+  const char *mn;
+  BeWidth dstw; /* width the destination register name is rendered at */
+
+  if (is_signed) {
+    /* movsbl/movsbq, movswl/movswq, movslq — dst rendered at `to`. */
+    if (from == BE_W8)
+      mn = (to == BE_W64) ? "movsbq" : "movsbl";
+    else if (from == BE_W16)
+      mn = (to == BE_W64) ? "movswq" : "movswl";
+    else { /* from == BE_W32 → to must be W64 */
+      assert(to == BE_W64 && "signed 32→32 extend is a no-op");
+      mn = "movslq";
+    }
+    dstw = to;
+  } else {
+    /* Zero-extend.  movzbl/movzwl write a 32-bit dest, which the CPU
+     * zero-fills into the full 64-bit register — so the dest is always
+     * rendered 32-bit even when `to` is W64.  Zero-extending W32→W64 is a
+     * plain 32-bit mov (writing e-reg clears the upper half). */
+    if (from == BE_W8)
+      mn = "movzbl";
+    else if (from == BE_W16)
+      mn = "movzwl";
+    else /* from == BE_W32 */
+      mn = "movl";
+    dstw = BE_W32;
+  }
+
+  char tmpl[64];
+  snprintf(tmpl, sizeof(tmpl), "\t%s\t%%1, %%0\n", mn);
+  Register_t *defs[1] = {dst->u.vreg};
+  Register_t *uses[1] = {src->u.vreg};
+  int sel[2];
+  sel[0] = x86_width_sel(dstw);  /* %0 = destination */
+  sel[1] = x86_width_sel(from);  /* %1 = source */
+  em->list = be_add_inst_du_wsel(em->list, vregp(em), defs, 1, uses, 1, tmpl,
+                                 sel);
+}
+
 static void x86_emit_branch(BeEmitter *em, BeCond cc, const char *label) {
   char buf[96];
   snprintf(buf, sizeof(buf), "\t%s\t%s\n", x86_cc_mnemonic(cc), label);
@@ -408,9 +469,11 @@ static const char *x86_return_reg(BeWidth w) {
 /* Allocatable pool: x86-64 callee-saved registers (matches stackmng's default;
  * provided through the vtable so pool selection is uniform across targets). */
 static const BackendRegSpec kX86Pool[] = {
-    {REG_RBX, "%rbx", "%ebx"},  {REG_R12, "%r12", "%r12d"},
-    {REG_R13, "%r13", "%r13d"}, {REG_R14, "%r14", "%r14d"},
-    {REG_R15, "%r15", "%r15d"},
+    {REG_RBX, "%rbx", "%ebx", "%bx", "%bl"},
+    {REG_R12, "%r12", "%r12d", "%r12w", "%r12b"},
+    {REG_R13, "%r13", "%r13d", "%r13w", "%r13b"},
+    {REG_R14, "%r14", "%r14d", "%r14w", "%r14b"},
+    {REG_R15, "%r15", "%r15d", "%r15w", "%r15b"},
 };
 
 static const BackendRegSpec *x86_regpool(int *n) {
@@ -423,6 +486,7 @@ static const Target kX86SysV = {
     .ptr_width = 8,
     .emit = x86_emit,
     .emit_setcc = x86_emit_setcc,
+    .emit_ext = x86_emit_ext,
     .emit_branch = x86_emit_branch,
     .emit_call = x86_emit_call,
     .emit_ret = x86_emit_ret,

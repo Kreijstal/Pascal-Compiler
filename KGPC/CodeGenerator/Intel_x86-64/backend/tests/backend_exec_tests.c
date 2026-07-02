@@ -250,6 +250,38 @@ static ListNode_t *build_cmp(const Target *T, const char *sym, BeCond cc) {
   return em.list;
 }
 
+/* Build `f(int a)` computing `(<narrow>)a`: load the arg, extend its low
+ * `from` bits (signed or unsigned) into a `to`-wide result, return it.
+ * Return type is int when to==BE_W32, long when to==BE_W64. */
+static ListNode_t *build_ext(const Target *T, const char *sym, BeWidth from,
+                             BeWidth to, int is_signed) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vr = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvr = {OPK_VREG, to, {.vreg = vr}};
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, to, {.phys = T->return_reg(to)}};
+
+  /* va = a (low 32 bits carry the byte/half we care about) */
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  /* vr = extend(va) */
+  T->emit_ext(&em, &dvr, &dva, from, to, is_signed);
+  /* return vr */
+  T->emit(&em, BE_MOV, to, &ret, &dvr, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
 /* Concatenate the emitted text of a finished (allocated+emitted) list. */
 static void concat_emitted(ListNode_t *list, char *out, size_t cap) {
   size_t used = 0;
@@ -288,6 +320,37 @@ static void test_golden_aarch64(const Target *T) {
   CHECK(strstr(all, "%rbx") == NULL && strstr(all, "%rax") == NULL &&
             strstr(all, "%rbp") == NULL,
         "aarch64: no x86 register leakage");
+}
+
+/* Golden check for the extend ops on AArch64: signed byte → sxtb (32-bit
+ * dest w-reg), unsigned byte → uxtb, signed byte → 64-bit → sxtb into x-reg. */
+static void test_golden_aarch64_ext(const Target *T) {
+  /* signed byte → W32 */
+  ListNode_t *l1 = build_ext(T, "aasxtb", BE_W8, BE_W32, 1);
+  ir_liveness_allocate(l1);
+  ir_emit_function(l1);
+  char a1[4096];
+  concat_emitted(l1, a1, sizeof(a1));
+  CHECK(strstr(a1, "sxtb\tw") != NULL,
+        "aarch64: signed byte ext = sxtb w<d>, w<s>");
+
+  /* unsigned byte → W32 */
+  ListNode_t *l2 = build_ext(T, "aauxtb", BE_W8, BE_W32, 0);
+  ir_liveness_allocate(l2);
+  ir_emit_function(l2);
+  char a2[4096];
+  concat_emitted(l2, a2, sizeof(a2));
+  CHECK(strstr(a2, "uxtb\tw") != NULL,
+        "aarch64: unsigned byte ext = uxtb w<d>, w<s>");
+
+  /* signed byte → W64: dest is an x-register, source stays w. */
+  ListNode_t *l3 = build_ext(T, "aasxtbq", BE_W8, BE_W64, 1);
+  ir_liveness_allocate(l3);
+  ir_emit_function(l3);
+  char a3[4096];
+  concat_emitted(l3, a3, sizeof(a3));
+  CHECK(strstr(a3, "sxtb\tx") != NULL,
+        "aarch64: byte->64 signed ext = sxtb x<d>, w<s>");
 }
 
 static void test_exec_binop(const Target *T, const char *sym, BeOp op, int a,
@@ -346,6 +409,36 @@ static void test_exec_cmp(const Target *T, const char *sym, BeCond cc, int a,
   CHECK(rc == 0, msg);
 }
 
+/* Exec an extend into a 32-bit result (int f(int)). */
+static void test_exec_ext(const Target *T, const char *sym, BeWidth from,
+                          int is_signed, int a, int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_ext(T, sym, from, BE_W32, is_signed);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%d)==%d", sym, a, expected);
+  CHECK(rc == 0, msg);
+}
+
+/* Exec an extend into a 64-bit result (long f(int)). */
+static void test_exec_ext64(const Target *T, const char *sym, BeWidth from,
+                            int is_signed, int a, long long expected) {
+  char spath[256], driver[512], msg[160];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_ext(T, sym, from, BE_W64, is_signed);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern long %s(int);\nint main(void){return %s(%d)==%lldL?0:1;}\n",
+           sym, sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%d)==%lld", sym, a, expected);
+  CHECK(rc == 0, msg);
+}
+
 static void test_exec_const(const Target *T, const char *sym, int value) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -389,11 +482,22 @@ int main(void) {
   test_exec_cmp(T, "beeq_t", BE_EQ, 4, 4, 1);
   test_exec_const(T, "beconst", 12345);
 
+  /* Sign / zero extend (movsbl/movzbl/movswl/movzwl/movsbq/movslq/movl). */
+  test_exec_ext(T, "besxtb", BE_W8, 1, 0xFF, -1);       /* (signed char)0xFF */
+  test_exec_ext(T, "bezxtb", BE_W8, 0, 0xFF, 255);      /* (byte)0xFF */
+  test_exec_ext(T, "besxth", BE_W16, 1, 0x8000, -32768);/* (int16)0x8000 */
+  test_exec_ext(T, "bezxth", BE_W16, 0, 0x8000, 32768); /* (uint16)0x8000 */
+  test_exec_ext64(T, "besxtbq", BE_W8, 1, 0xFF, -1LL);  /* byte→64 signed */
+  test_exec_ext64(T, "bezxtbq", BE_W8, 0, 0xFF, 255LL); /* byte→64 zero */
+  test_exec_ext64(T, "besxlq", BE_W32, 1, -5, -5LL);    /* movslq */
+  test_exec_ext64(T, "bezxlq", BE_W32, 0, -1, 4294967295LL); /* movl zero-ext */
+
   /* M4: neutrality proof via a second backend (golden-asm; no local AArch64
    * toolchain/qemu here to run exec — that tier is intentionally skipped). */
   const Target *A = target_aarch64();
   fprintf(stderr, "-- neutrality: same harness through target=%s --\n", A->name);
   test_golden_aarch64(A);
+  test_golden_aarch64_ext(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");
