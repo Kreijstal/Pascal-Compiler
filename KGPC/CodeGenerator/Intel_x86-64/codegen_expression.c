@@ -4890,22 +4890,28 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr,
 
       if (target_tag == EXTENDED_TYPE || saw_extended_cast) {
         {
-          char buffer_tmpl[128];
-          if (codegen_target_is_windows())
-            snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovq\t%%0, %%rcx\n");
-          else
-            snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovq\t%%0, %%rdi\n");
-          Register_t *u[] = {addr_reg};
-          inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
+          /* Integrated: emit through the target-neutral backend vtable
+           * (byte-identical). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64,
+                           {.phys = codegen_target_is_windows() ? "%rcx"
+                                                                : "%rdi"}};
+          BeOperand src = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+          kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
         }
         inst_list = codegen_vect_reg(inst_list, 0);
         inst_list = codegen_call_with_shadow_space(
             inst_list, "kgpc_load_extended_to_bits");
         free_arg_regs();
         {
-          Register_t *d[] = {result_reg};
-          inst_list =
-              add_inst_du(inst_list, ctx, d, 1, NULL, 0, "\tmovq\t%rax, %0\n");
+          /* Integrated: emit through the target-neutral backend vtable
+           * (byte-identical). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_VREG, BE_W64, {.vreg = result_reg}};
+          BeOperand src = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+          kgpc_backend_target()->emit(&em, BE_MOV, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
         }
       } else {
         long long real_size =
