@@ -803,8 +803,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx,
       gen_label(skip_label, sizeof(skip_label), ctx);
       snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", arg_reg, arg_reg);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_EQ, skip_label);
+        inst_list = em.list;
+      }
 
       /* Load VMT from (Self), then the method pointer from
        * <slot*VMT_SLOT_SIZE_BYTES>(VMT), and dispatch. */
@@ -4527,8 +4530,11 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list,
                    arr->init_guard_label);
           inst_list = add_inst(inst_list, buffer);
           inst_list = add_inst(inst_list, "\ttestb\t%al, %al\n");
-          snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", done_label);
-          inst_list = add_inst(inst_list, buffer);
+          {
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            kgpc_backend_target()->emit_branch(&em, BE_NE, done_label);
+            inst_list = em.list;
+          }
 
           inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
 

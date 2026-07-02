@@ -1883,8 +1883,11 @@ static ListNode_t *codegen_emit_class_cast_check_from_instance_ptr(
   snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n",
            instance_ptr_reg->bit_64, instance_ptr_reg->bit_64);
   inst_list = add_inst(inst_list, buffer);
-  snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_EQ, skip_label);
+    inst_list = em.list;
+  }
 
   Register_t *typeinfo_reg = NULL;
   inst_list = codegen_load_typeinfo_from_instance_ptr(
@@ -1943,8 +1946,11 @@ static ListNode_t *codegen_emit_class_cast_check_from_class_vmt_ptr(
   snprintf(buffer, sizeof(buffer), "\ttestq\t%s, %s\n", class_vmt_reg->bit_64,
            class_vmt_reg->bit_64);
   inst_list = add_inst(inst_list, buffer);
-  snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_EQ, skip_label);
+    inst_list = em.list;
+  }
 
   Register_t *typeinfo_reg = NULL;
   inst_list = codegen_load_typeinfo_from_class_vmt_ptr(

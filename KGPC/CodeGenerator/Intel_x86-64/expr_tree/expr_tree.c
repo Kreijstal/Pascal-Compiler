@@ -2709,8 +2709,11 @@ static ListNode_t *gencode_shortcircuit_bool(expr_node_t *node,
   inst_list = add_inst(inst_list, buffer);
   snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", reg8, reg32);
   inst_list = add_inst(inst_list, buffer);
-  snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, done_label);
+    inst_list = em.list;
+  }
 
   snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
   inst_list = add_inst(inst_list, buffer);

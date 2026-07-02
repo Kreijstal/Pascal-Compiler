@@ -342,15 +342,21 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       Register_t *u[] = {left_reg};
       inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
     }
-    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", cs_oob);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LT, cs_oob);
+      inst_list = em.list;
+    }
     {
       Register_t *u[] = {left_reg};
       inst_list =
           add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$255, %0\n");
     }
-    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", cs_oob);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_GT, cs_oob);
+      inst_list = em.list;
+    }
     {
       char buffer_tmpl[128];
       snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tbtl\t%%0, (%s)\n",
@@ -364,8 +370,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       inst_list =
           add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tsbbl\t%0, %1\n");
     }
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", cs_done);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, cs_done);
+      inst_list = em.list;
+    }
     /* out-of-domain: force the element register to 0 (false) */
     snprintf(buffer, sizeof(buffer), "%s:\n", cs_oob);
     inst_list = add_inst(inst_list, buffer);
@@ -481,8 +490,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       inst_list =
           add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
     }
-    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", in_oob_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LT, in_oob_label);
+      inst_list = em.list;
+    }
     {
       char cmp_template[128];
       snprintf(cmp_template, sizeof(cmp_template), "\tcmpl\t$%d, %%0\n",
@@ -490,8 +502,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
       Register_t *u[] = {elem_reg};
       inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, cmp_template);
     }
-    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", in_oob_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_GT, in_oob_label);
+      inst_list = em.list;
+    }
 
     if (set_addr_reg != NULL) {
       char btl_template[128];
@@ -507,8 +522,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", elem_reg->bit_32,
              elem_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", in_done_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, in_done_label);
+      inst_list = em.list;
+    }
 
     snprintf(buffer, sizeof(buffer), "%s:\n", in_oob_label);
     inst_list = add_inst(inst_list, buffer);
@@ -1260,8 +1278,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list =
             add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
       }
-      snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", cs_oob);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_LT, cs_oob);
+        inst_list = em.list;
+      }
       {
         char buffer_tmpl[128];
         snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tcmpl\t$%d, %%0\n",
@@ -1269,8 +1290,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         Register_t *u[] = {left_reg};
         inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, buffer_tmpl);
       }
-      snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", cs_oob);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_GT, cs_oob);
+        inst_list = em.list;
+      }
 
       {
         char buffer_tmpl[128];
@@ -1284,8 +1308,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list =
             add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tsbbl\t%0, %1\n");
       }
-      snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", cs_done);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, cs_done);
+        inst_list = em.list;
+      }
 
       snprintf(buffer, sizeof(buffer), "%s:\n", cs_oob);
       inst_list = add_inst(inst_list, buffer);
@@ -1335,15 +1362,21 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list =
             add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
       }
-      snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", ch_oob);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_LT, ch_oob);
+        inst_list = em.list;
+      }
       {
         Register_t *u[] = {left_reg};
         inst_list =
             add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$255, %0\n");
       }
-      snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", ch_oob);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_GT, ch_oob);
+        inst_list = em.list;
+      }
 
       {
         char buffer_tmpl[128];
@@ -1357,8 +1390,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list =
             add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tsbbl\t%0, %1\n");
       }
-      snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", ch_done);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, ch_done);
+        inst_list = em.list;
+      }
 
       snprintf(buffer, sizeof(buffer), "%s:\n", ch_oob);
       inst_list = add_inst(inst_list, buffer);
@@ -1404,15 +1440,21 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
         }
-        snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", es_oob);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          kgpc_backend_target()->emit_branch(&em, BE_LT, es_oob);
+          inst_list = em.list;
+        }
         {
           Register_t *u[] = {left_reg};
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$31, %0\n");
         }
-        snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", es_oob);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          kgpc_backend_target()->emit_branch(&em, BE_GT, es_oob);
+          inst_list = em.list;
+        }
 
         snprintf(buffer, sizeof(buffer), "\tbtl\t%s, -%d(%%rbp)\n",
                  left_reg->bit_32, set_spill->offset);
@@ -1422,8 +1464,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tsbbl\t%0, %1\n");
         }
-        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", es_done);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, es_done);
+          inst_list = em.list;
+        }
 
         snprintf(buffer, sizeof(buffer), "%s:\n", es_oob);
         inst_list = add_inst(inst_list, buffer);
@@ -1441,15 +1486,21 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$0, %0\n");
         }
-        snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", es_oob);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          kgpc_backend_target()->emit_branch(&em, BE_LT, es_oob);
+          inst_list = em.list;
+        }
         {
           Register_t *u[] = {left_reg};
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 1, "\tcmpl\t$31, %0\n");
         }
-        snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", es_oob);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          kgpc_backend_target()->emit_branch(&em, BE_GT, es_oob);
+          inst_list = em.list;
+        }
 
         snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left_reg->bit_32,
                  right_reg->bit_32);
@@ -1460,8 +1511,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
           inst_list =
               add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tsbbl\t%0, %1\n");
         }
-        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", es_done);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, es_done);
+          inst_list = em.list;
+        }
 
         snprintf(buffer, sizeof(buffer), "%s:\n", es_oob);
         inst_list = add_inst(inst_list, buffer);
@@ -1544,45 +1598,66 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     case EQ:
       snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tje\t%s\n", true_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_EQ, true_label);
+        inst_list = em.list;
+      }
       break;
     case NE:
       snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", true_label);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", true_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_NE, true_label);
+        inst_list = em.list;
+      }
       break;
     case LT:
       snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tjb\t%s\n", true_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_ULT, true_label);
+        inst_list = em.list;
+      }
       break;
     case LE:
       snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tjbe\t%s\n", true_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_ULE, true_label);
+        inst_list = em.list;
+      }
       break;
     case GT:
       snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tja\t%s\n", true_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_UGT, true_label);
+        inst_list = em.list;
+      }
       break;
     case GE:
       snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tjae\t%s\n", true_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_UGE, true_label);
+        inst_list = em.list;
+      }
       break;
     default:
       break;
     }
 
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, done_label);
+      inst_list = em.list;
+    }
     snprintf(buffer, sizeof(buffer), "%s:\n", true_label);
     inst_list = add_inst(inst_list, buffer);
     {

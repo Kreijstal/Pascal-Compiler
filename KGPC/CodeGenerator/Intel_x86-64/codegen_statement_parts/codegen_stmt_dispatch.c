@@ -505,8 +505,11 @@ ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx,
   ctx->finally_depth += 1;
 
   if (target_label != NULL) {
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", target_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, target_label);
+      inst_list = em.list;
+    }
   }
 
   return inst_list;
@@ -739,8 +742,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
     format_pascal_label(label_name, sizeof(label_name), ctx,
                         stmt->stmt_data.goto_data.label);
     char buffer[272];
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", label_name);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, label_name);
+      inst_list = em.list;
+    }
     break;
   }
   case STMT_IF_THEN:

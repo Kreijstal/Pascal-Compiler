@@ -3156,9 +3156,13 @@ ListNode_t *codegen_emit_interface_dispatch(
   } else {
     inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
   }
-  snprintf(buffer, sizeof(buffer), "\tjmp\t.L%s_done_%d\n", label_prefix,
-           label_id);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    char lbl[CODEGEN_MAX_INST_BUF];
+    snprintf(lbl, sizeof(lbl), ".L%s_done_%d", label_prefix, label_id);
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, lbl);
+    inst_list = em.list;
+  }
 
   snprintf(buffer, sizeof(buffer), ".L%s_direct_%d:\n", label_prefix, label_id);
   inst_list = add_inst(inst_list, buffer);

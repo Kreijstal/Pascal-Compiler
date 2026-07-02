@@ -4655,8 +4655,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list, movenext_node->mangled_id != NULL ? movenext_node->mangled_id
                                                      : movenext_node->id);
     inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
-    snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_NE, body_label);
+      inst_list = em.list;
+    }
     free_reg(get_reg_stack(), enum_cond_reg);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
@@ -5149,8 +5152,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
 
     // Jump to body if index < count
-    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LT, body_label);
+      inst_list = em.list;
+    }
 
     // Exit label
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
@@ -5366,8 +5372,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
 
     // Jump to body if index <= length
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LE, body_label);
+      inst_list = em.list;
+    }
 
     // Exit label
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
@@ -5500,8 +5509,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n",
              enum_domain_upper, index_slot->offset);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LE, body_label);
+      inst_list = em.list;
+    }
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
@@ -5772,8 +5784,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", upper_bound,
              index_slot->offset);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LE, body_label);
+      inst_list = em.list;
+    }
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
@@ -6166,8 +6181,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
     }
     free_reg(get_reg_stack(), len_reg);
-    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LT, body_label);
+      inst_list = em.list;
+    }
   } else {
     // Compare index with end_index
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", end_index,
@@ -6175,8 +6193,11 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
 
     // Jump to body if index <= end_index
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_LE, body_label);
+      inst_list = em.list;
+    }
   }
 
   // Exit label
@@ -6310,8 +6331,11 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
       }
       free_reg(get_reg_stack(), guard_reg);
-      snprintf(buffer, sizeof(buffer), "\tje\t%s\n", exit_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_EQ, exit_label);
+        inst_list = em.list;
+      }
     } else if (guard_reg != NULL) {
       free_reg(get_reg_stack(), guard_reg);
     }
@@ -6389,8 +6413,11 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list,
   }
   snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", branch_instr, body_label);
   inst_list = add_inst(inst_list, buffer);
-  snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, exit_label);
+    inst_list = em.list;
+  }
 
   free_reg(get_reg_stack(), loop_value_reg);
   loop_value_reg = NULL;
@@ -6519,8 +6546,11 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list,
                 snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n",
                          RETURN_REG_32);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  kgpc_backend_target()->emit_branch(&em, BE_EQ, branch_label);
+                  inst_list = em.list;
+                }
                 free_arg_regs();
               }
               free_reg(get_reg_stack(), label_reg);
@@ -6531,8 +6561,11 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list,
             inst_list = codegen_emit_cmp_spill_immediate(
                 inst_list, ctx, selector_is_qword, label_expr->expr_data.i_num,
                 selector_spill->offset);
-            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              kgpc_backend_target()->emit_branch(&em, BE_EQ, branch_label);
+              inst_list = em.list;
+            }
           } else if (!selector_is_string) {
             /* For non-constant labels, evaluate label and compare with spilled
              * selector */
@@ -6552,8 +6585,11 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list,
                 Register_t *u[] = {label_reg};
                 inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
               }
-              snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
-              inst_list = add_inst(inst_list, buffer);
+              {
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                kgpc_backend_target()->emit_branch(&em, BE_EQ, branch_label);
+                inst_list = em.list;
+              }
               free_reg(get_reg_stack(), label_reg);
             }
           }
@@ -6596,9 +6632,11 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list,
               }
 
               if (emitted_lower_cmp) {
-                snprintf(buffer, sizeof(buffer), "\tjl\t%s\n",
-                         range_skip_label);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  kgpc_backend_target()->emit_branch(&em, BE_LT, range_skip_label);
+                  inst_list = em.list;
+                }
               }
             }
 
@@ -6634,8 +6672,11 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list,
               }
 
               if (emitted_upper_cmp) {
-                snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", branch_label);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  kgpc_backend_target()->emit_branch(&em, BE_LE, branch_label);
+                  inst_list = em.list;
+                }
               }
             }
 
@@ -6648,16 +6689,22 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list,
       }
 
       /* If no match, jump to next branch */
-      snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", next_branch_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, next_branch_label);
+        inst_list = em.list;
+      }
 
       /* Branch matched - execute statement */
       snprintf(buffer, sizeof(buffer), "%s:\n", branch_label);
       inst_list = add_inst(inst_list, buffer);
       if (branch->stmt != NULL)
         inst_list = codegen_stmt(branch->stmt, inst_list, ctx, symtab);
-      snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", end_label);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, end_label);
+        inst_list = em.list;
+      }
 
       /* Next branch label */
       snprintf(buffer, sizeof(buffer), "%s:\n", next_branch_label);
@@ -6867,8 +6914,11 @@ ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list,
 
   /* If setjmp returned non-zero, we got here from longjmp → jump to except */
   inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
-  snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", except_label);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_NE, except_label);
+    inst_list = em.list;
+  }
 
   /* ── try body (setjmp returned 0) ── */
   if (!codegen_push_except(ctx, except_label)) {
@@ -6972,8 +7022,11 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list,
         add_inst(inst_list, "\tmovq\tkgpc_current_exception(%rip), %rax\n");
     /* If exception is nil, skip this handler */
     inst_list = add_inst(inst_list, "\ttestq\t%rax, %rax\n");
-    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_EQ, skip_label);
+      inst_list = em.list;
+    }
     /* Load typeinfo from exception instance: VMT pointer → typeinfo slot */
     inst_list = add_inst(inst_list, "\tmovq\t(%rax), %rax\n"); /* VMT pointer */
     snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rax), %%rax\n",
@@ -6997,8 +7050,11 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list,
     free_arg_regs();
     /* If kgpc_rtti_is returned 0, skip this handler */
     inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
-    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_EQ, skip_label);
+      inst_list = em.list;
+    }
   }
 
   /* Only create variable binding for the 'on E: Type do' form
@@ -7041,8 +7097,11 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list,
 
   /* After executing the handler body, jump past the remaining handlers */
   if (has_type_check && ctx->on_except_after_label != NULL) {
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", ctx->on_except_after_label);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, ctx->on_except_after_label);
+      inst_list = em.list;
+    }
   }
 
   /* Skip label for when exception type doesn't match this handler */
