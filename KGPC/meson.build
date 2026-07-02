@@ -99,10 +99,6 @@ kgpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/codegen_subprograms.c',
   'CodeGenerator/Intel_x86-64/codegen_string_set.c',
   'CodeGenerator/Intel_x86-64/codegen_symbol_resolution.c',
-  'CodeGenerator/Intel_x86-64/ir/ir_inst.c',
-  'CodeGenerator/Intel_x86-64/ir/ir_cfg.c',
-  'CodeGenerator/Intel_x86-64/ir/ir_liveness.c',
-  'CodeGenerator/Intel_x86-64/ir/ir_peephole.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_infrastructure.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_assignment.c',
   'CodeGenerator/Intel_x86-64/codegen_statement_parts/codegen_stmt_dispatch.c',
@@ -115,8 +111,6 @@ kgpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/codegen_expr_relop.c',
   'CodeGenerator/Intel_x86-64/codegen_expr_sizeof.c',
   'CodeGenerator/Intel_x86-64/codegen_builtins.c',
-  'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
-  'CodeGenerator/Intel_x86-64/graph_coloring_allocator.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree_string.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree_op.c',
@@ -130,10 +124,33 @@ kgpc_cparser_sources = [
   'compilation_context.c',
 ]
 
+# Standalone, target-independent backend emission core (instruction list,
+# IR layer, register allocator, stack manager).  No Pascal front-end / AST
+# dependency — links into both the compiler and the standalone backend tests
+# from the SAME object files, so the USE_GRAPH_COLORING_ALLOCATOR-sensitive
+# Register_t/RegStack_t layout is guaranteed identical.  External refs (List.c)
+# are resolved at final link.
+kgpc_backend_lib = static_library('kgpc_backend',
+  [
+    'CodeGenerator/Intel_x86-64/backend/backend_emit.c',
+    'CodeGenerator/Intel_x86-64/backend/regalloc_driver.c',
+    'CodeGenerator/Intel_x86-64/backend/target_x86.c',
+    'CodeGenerator/Intel_x86-64/ir/ir_inst.c',
+    'CodeGenerator/Intel_x86-64/ir/ir_cfg.c',
+    'CodeGenerator/Intel_x86-64/ir/ir_liveness.c',
+    'CodeGenerator/Intel_x86-64/ir/ir_peephole.c',
+    'CodeGenerator/Intel_x86-64/graph_coloring_allocator.c',
+    'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
+  ],
+  include_directories: inc_dirs,
+  c_args: kgpc_c_args,
+)
+
 kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,
   include_directories: inc_dirs,
   dependencies: kgpc_deps,
   c_args: kgpc_c_args,
+  link_with: kgpc_backend_lib,
 )
 
 debug_deserializer_tests = executable('debug_deserializer_tests',
@@ -146,6 +163,29 @@ debug_deserializer_tests = executable('debug_deserializer_tests',
 )
 
 test('debug deserializer unit tests', debug_deserializer_tests, timeout: 1800)
+
+# Standalone backend end-to-end tests: build functions through the target-neutral
+# vtable, run the real allocator/emitter, assemble+link+run, assert results.
+# Links only the backend library (+ the generic List/xmem it references) — no
+# Pascal front-end.  Shells out to $CC to assemble the generated .s.
+backend_exec_tests = executable('backend_exec_tests',
+  [
+    'CodeGenerator/Intel_x86-64/backend/tests/backend_exec_tests.c',
+    'Parser/List/List.c',
+    '../common/xmem.c',
+  ],
+  include_directories: inc_dirs,
+  c_args: kgpc_c_args,
+  link_with: kgpc_backend_lib,
+)
+
+backend_test_env = environment()
+backend_test_env.set('CC', ' '.join(compiler.cmd_array()))
+test('backend exec tests', backend_exec_tests,
+  env: backend_test_env,
+  workdir: meson.current_build_dir(),
+  timeout: 1800,
+)
 
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 

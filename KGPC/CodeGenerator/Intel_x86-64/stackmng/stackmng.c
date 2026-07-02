@@ -6,7 +6,7 @@
 #include "stackmng.h"
 #include "../../../Parser/List/List.h"
 #include "../../../identifier_utils.h"
-#include "../codegen.h"
+#include "../backend/backend_emit.h"
 #include "../register_types.h"
 #include "xmem.h"
 #include <assert.h>
@@ -25,6 +25,14 @@ const char *g_reg_debug_context = "default";
 #else
 #define REG_DEBUG_LOG(...) ((void)0)
 #endif
+
+/* Backend target/ABI state.  Defined here (in the standalone backend library)
+ * rather than in the front-end codegen.c so the library is self-contained; the
+ * front-end assigns these via the extern declarations in register_types.h /
+ * stackmng.h. */
+kgpc_target_abi_t g_current_codegen_abi = KGPC_TARGET_ABI_SYSTEM_V;
+int g_stack_home_space_bytes = 0;
+int num_args_alloced = 0;
 
 /* Sets num_args_alloced to 0 */
 void free_arg_regs(void) { num_args_alloced = 0; }

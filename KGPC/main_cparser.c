@@ -154,7 +154,8 @@ extern ast_t *ast_nil;
 
 /* Legacy globals referenced in other components */
 Tree_t *parse_tree = NULL;
-int num_args_alloced = 0;
+/* num_args_alloced is defined in the backend library (stackmng.c) so the
+ * library is self-contained. */
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;

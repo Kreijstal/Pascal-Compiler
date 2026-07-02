@@ -106,17 +106,12 @@
 extern kgpc_target_abi_t g_current_codegen_abi;
 extern int g_stack_home_space_bytes;
 
-#ifdef KGPC_DEBUG_CODEGEN
-#define DEBUG_CODEGEN
-#endif
-#ifdef DEBUG_CODEGEN
-#define CODEGEN_DEBUG(...) fprintf(stderr, __VA_ARGS__)
-#else
-#define CODEGEN_DEBUG(...) ((void)0)
-#endif
+/* The backend library owns CODEGEN_DEBUG / DEBUG_CODEGEN (backend_debug.h) and
+ * REQUIRED_OFFSET (backend_emit.h), so the standalone emission core can share
+ * them.  backend_emit.h transitively includes backend_debug.h. */
+#include "backend/backend_emit.h"
 #define CODEGEN_MAX_INST_BUF 512
 #define MAX_ARGS 3
-#define REQUIRED_OFFSET 16
 
 static inline int codegen_target_is_windows(void) {
   return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
