@@ -45,6 +45,8 @@ typedef enum {
   BE_SHL,   /* dst := dst << b       (b immediate) */
   BE_SHR,   /* dst := dst >> b       (logical, b immediate) */
   BE_SAR,   /* dst := dst >> b       (arithmetic, b immediate) */
+  BE_DIV,   /* dst := a / b          (signed quotient) */
+  BE_MOD,   /* dst := a % b          (signed remainder) */
   BE_CMP,   /* set condition from a ? b */
   BE_LEA    /* dst := &mem           */
 } BeOp;
@@ -133,6 +135,10 @@ typedef struct Target {
    * unary/two-operand forms (MOV/LOAD/STORE/LEA/CMP dst,a). */
   void (*emit)(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
                const BeOperand *a, const BeOperand *b);
+
+  /* Materialize a condition (a boolean 0/1) into dst from the flags set by a
+   * preceding BE_CMP. */
+  void (*emit_setcc)(BeEmitter *em, BeCond cc, const BeOperand *dst);
 
   /* Control flow. */
   void (*emit_branch)(BeEmitter *em, BeCond cc, const char *label);

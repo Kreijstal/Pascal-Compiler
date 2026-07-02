@@ -143,6 +143,40 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     break;
   }
 
+  case BE_DIV:
+    /* sdiv dst, a, b */
+    assert(dst->kind == OPK_VREG && a->kind == OPK_VREG && b->kind == OPK_VREG);
+    defs[0] = dst->u.vreg;
+    uses[0] = a->u.vreg;
+    uses[1] = b->u.vreg;
+    use32[0] = use32[1] = use32[2] = w32;
+    em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 2,
+                                "\tsdiv\t%0, %1, %2\n", use32);
+    break;
+
+  case BE_MOD: {
+    /* No direct remainder: q = a / b; dst = a - q*b  via  sdiv + msub. */
+    assert(dst->kind == OPK_VREG && a->kind == OPK_VREG && b->kind == OPK_VREG);
+    Register_t *scr = get_free_reg(get_reg_stack(), &em->list);
+    assert(scr != NULL && "no scratch register for aarch64 mod");
+    defs[0] = scr;
+    uses[0] = a->u.vreg;
+    uses[1] = b->u.vreg;
+    use32[0] = use32[1] = use32[2] = w32;
+    em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 2,
+                                "\tsdiv\t%0, %1, %2\n", use32);
+    /* msub dst, scr, b, a  →  dst = a - scr*b */
+    defs[0] = dst->u.vreg;
+    uses[0] = scr;
+    uses[1] = b->u.vreg;
+    uses[2] = a->u.vreg;
+    use32[0] = use32[1] = use32[2] = use32[3] = w32;
+    em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 3,
+                                "\tmsub\t%0, %1, %2, %3\n", use32);
+    free_reg(get_reg_stack(), scr);
+    break;
+  }
+
   case BE_CMP:
     if (a->kind == OPK_VREG && b->kind == OPK_VREG) {
       uses[0] = a->u.vreg;
@@ -217,6 +251,44 @@ static const char *aa_cc_mnemonic(BeCond cc) {
   default:
     return "b";
   }
+}
+
+static const char *aa_cset_cond(BeCond cc) {
+  switch (cc) {
+  case BE_EQ:
+    return "eq";
+  case BE_NE:
+    return "ne";
+  case BE_LT:
+    return "lt";
+  case BE_LE:
+    return "le";
+  case BE_GT:
+    return "gt";
+  case BE_GE:
+    return "ge";
+  case BE_ULT:
+    return "lo";
+  case BE_ULE:
+    return "ls";
+  case BE_UGT:
+    return "hi";
+  case BE_UGE:
+    return "hs";
+  default:
+    return "eq";
+  }
+}
+
+static void aa_emit_setcc(BeEmitter *em, BeCond cc, const BeOperand *dst) {
+  /* cset dst, <cond> — materialize the boolean directly (no %al dance). */
+  assert(dst->kind == OPK_VREG);
+  char tmpl[64];
+  snprintf(tmpl, sizeof(tmpl), "\tcset\t%%0, %s\n", aa_cset_cond(cc));
+  Register_t *defs[1] = {dst->u.vreg};
+  int use32[1] = {(dst->width == BE_W32)};
+  em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl,
+                              use32);
 }
 
 static void aa_emit_branch(BeEmitter *em, BeCond cc, const char *label) {
@@ -310,6 +382,7 @@ static const Target kAArch64 = {
     .name = "aarch64",
     .ptr_width = 8,
     .emit = aa_emit,
+    .emit_setcc = aa_emit_setcc,
     .emit_branch = aa_emit_branch,
     .emit_call = aa_emit_call,
     .emit_ret = aa_emit_ret,

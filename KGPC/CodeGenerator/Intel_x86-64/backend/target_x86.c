@@ -184,6 +184,31 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     break;
   }
 
+  case BE_DIV:
+  case BE_MOD: {
+    /* Signed division: dividend in (r/e)ax, sign-extended into (r/e)dx by
+     * cltd/cqto, idiv by the divisor; quotient in (r/e)ax, remainder in
+     * (r/e)dx.  rax/rdx are not in the allocatable pool, so clobbering them is
+     * safe.  a, b, dst are pool vregs. */
+    assert(dst->kind == OPK_VREG && a->kind == OPK_VREG && b->kind == OPK_VREG);
+    const char *ax = (w == BE_W32) ? "%eax" : "%rax";
+    const char *dx = (w == BE_W32) ? "%edx" : "%rdx";
+    const char *cvt = (w == BE_W32) ? "\tcltd\n" : "\tcqto\n";
+    const char *res = (op == BE_DIV) ? ax : dx;
+    Register_t *u1[1];
+    snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %s\n", c, ax);
+    u1[0] = a->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, u1, 1, tmpl);
+    em->list = add_inst(em->list, cvt);
+    snprintf(tmpl, sizeof(tmpl), "\tidiv%c\t%%0\n", c);
+    u1[0] = b->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, u1, 1, tmpl);
+    snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %%0\n", c, res);
+    defs[0] = dst->u.vreg;
+    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+    break;
+  }
+
   case BE_CMP: {
     /* compare a to b: cmpX <b>, <a>  (flags reflect a ? b) */
     if (a->kind == OPK_VREG && b->kind == OPK_VREG) {
@@ -256,6 +281,45 @@ static const char *x86_cc_mnemonic(BeCond cc) {
   default:
     return "jmp";
   }
+}
+
+static const char *x86_setcc_mnemonic(BeCond cc) {
+  switch (cc) {
+  case BE_EQ:
+    return "sete";
+  case BE_NE:
+    return "setne";
+  case BE_LT:
+    return "setl";
+  case BE_LE:
+    return "setle";
+  case BE_GT:
+    return "setg";
+  case BE_GE:
+    return "setge";
+  case BE_ULT:
+    return "setb";
+  case BE_ULE:
+    return "setbe";
+  case BE_UGT:
+    return "seta";
+  case BE_UGE:
+    return "setae";
+  default:
+    return "sete";
+  }
+}
+
+static void x86_emit_setcc(BeEmitter *em, BeCond cc, const BeOperand *dst) {
+  /* setCC %al ; movzbl %al, <dst32> — materialize the boolean into dst. */
+  assert(dst->kind == OPK_VREG);
+  char buf[64];
+  snprintf(buf, sizeof(buf), "\t%s\t%%al\n", x86_setcc_mnemonic(cc));
+  em->list = add_inst(em->list, buf);
+  Register_t *defs[1] = {dst->u.vreg};
+  int use32[1] = {1};
+  em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0,
+                              "\tmovzbl\t%al, %0\n", use32);
 }
 
 static void x86_emit_branch(BeEmitter *em, BeCond cc, const char *label) {
@@ -358,6 +422,7 @@ static const Target kX86SysV = {
     .name = "x86_64-sysv",
     .ptr_width = 8,
     .emit = x86_emit,
+    .emit_setcc = x86_emit_setcc,
     .emit_branch = x86_emit_branch,
     .emit_call = x86_emit_call,
     .emit_ret = x86_emit_ret,

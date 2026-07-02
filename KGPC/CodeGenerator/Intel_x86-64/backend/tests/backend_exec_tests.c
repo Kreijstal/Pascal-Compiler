@@ -223,6 +223,33 @@ static ListNode_t *build_neg(const Target *T, const char *sym) {
   return em.list;
 }
 
+/* Build `int f(int a, int b)` computing `a <cc> b` as 0/1 (CMP + SETcc). */
+static ListNode_t *build_cmp(const Target *T, const char *sym, BeCond cc) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 0, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vb = get_free_reg(rs, &em.list);
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvb = {OPK_VREG, BE_W32, {.vreg = vb}};
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand arg1 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(1, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  T->emit(&em, BE_MOV, BE_W32, &dvb, &arg1, NULL);
+  T->emit(&em, BE_CMP, BE_W32, NULL, &dva, &dvb);
+  T->emit_setcc(&em, cc, &dva);
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dva, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
 /* Concatenate the emitted text of a finished (allocated+emitted) list. */
 static void concat_emitted(ListNode_t *list, char *out, size_t cap) {
   size_t used = 0;
@@ -305,6 +332,20 @@ static void test_exec_neg(const Target *T, const char *sym, int a,
   CHECK(rc == 0, msg);
 }
 
+static void test_exec_cmp(const Target *T, const char *sym, BeCond cc, int a,
+                          int b, int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_cmp(T, sym, cc);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int,int);\nint main(void){return %s(%d,%d)==%d?0:1;}\n",
+           sym, sym, a, b, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s(%d,%d)==%d", sym, a, b, expected);
+  CHECK(rc == 0, msg);
+}
+
 static void test_exec_const(const Target *T, const char *sym, int value) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -340,6 +381,12 @@ int main(void) {
   test_exec_shift(T, "beshl", BE_SHL, 3, 2, 12);
   test_exec_shift(T, "beshr", BE_SHR, 20, 2, 5);
   test_exec_neg(T, "beneg", 7, -7);
+  test_exec_binop(T, "bediv", BE_DIV, 20, 3, 6);
+  test_exec_binop(T, "bemod", BE_MOD, 20, 3, 2);
+  test_exec_binop(T, "bedivneg", BE_DIV, -20, 3, -6);
+  test_exec_cmp(T, "belt_t", BE_LT, 3, 5, 1);
+  test_exec_cmp(T, "belt_f", BE_LT, 5, 3, 0);
+  test_exec_cmp(T, "beeq_t", BE_EQ, 4, 4, 1);
   test_exec_const(T, "beconst", 12345);
 
   /* M4: neutrality proof via a second backend (golden-asm; no local AArch64
