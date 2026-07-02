@@ -3097,11 +3097,16 @@ ListNode_t *codegen_emit_interface_vtable_slot_init(
       continue;
     long long offset = base_size + slot_idx * 8;
     {
-      char tmpl[CODEGEN_MAX_INST_BUF];
-      snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s_INTF_%s_VTABLE(%%rip), %%0\n",
-               class_type_id, class_record->interface_names[ii]);
-      Register_t *defs_arr[] = {ivtbl_reg};
-      inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+      /* Integrated: emit through the target-neutral backend vtable
+       * (byte-identical). */
+      char sym[CODEGEN_MAX_INST_BUF];
+      snprintf(sym, sizeof(sym), "%s_INTF_%s_VTABLE", class_type_id,
+               class_record->interface_names[ii]);
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = ivtbl_reg}};
+      BeOperand a = {OPK_RIP_SYM, BE_W64, {.sym = sym}};
+      kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
     }
     {
       char tmpl[CODEGEN_MAX_INST_BUF];

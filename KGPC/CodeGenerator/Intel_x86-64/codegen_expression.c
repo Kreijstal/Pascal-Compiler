@@ -4337,11 +4337,13 @@ ListNode_t *codegen_expr_tree_value(struct Expression *expr,
       codegen_typeinfo_label_for_type_id(ctx->symtab, type_id, label,
                                          sizeof(label));
       {
-        char buffer_tmpl[2 * CODEGEN_MAX_INST_BUF];
-        snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tleaq\t%s(%%rip), %%0\n",
-                 label);
-        Register_t *d[] = {tmp_reg};
-        inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, buffer_tmpl);
+        /* Integrated: emit through the target-neutral backend vtable
+         * (byte-identical). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = tmp_reg}};
+        BeOperand a = {OPK_RIP_SYM, BE_W64, {.sym = label}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &a, NULL);
+        inst_list = em.list;
       }
 
       if (out_reg != NULL)
