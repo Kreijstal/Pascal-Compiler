@@ -2050,10 +2050,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           Register_t *u[] = {ptr_reg};
           inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
         } else {
-          char tmpl[64];
-          snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n", ptr_reg->bit_64);
-          Register_t *u[] = {reg};
-          inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+          /* Integrated: 32-bit store through the vtable; the base address is
+           * a tracked vreg USE (was a baked name, invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {ptr_reg, 0}}};
+          BeOperand a = {OPK_VREG, BE_W32, {.vreg = reg}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+          inst_list = em.list;
         }
         free_reg(get_reg_stack(), ptr_reg);
         free_reg(get_reg_stack(), reg);
@@ -2203,11 +2206,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
             Register_t *u[] = {frame_reg};
             inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
           } else {
-            char tmpl[96];
-            snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, -%d(%s)\n", var->offset,
-                     frame_reg->bit_64);
-            Register_t *u[] = {value_reload};
-            inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+            /* Integrated: 32-bit store to -offset(frame_reg) through the
+             * vtable; the static-link base is a tracked vreg USE (was a
+             * baked name, invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_MEM_BD, BE_W32,
+                             {.mem_bd = {frame_reg, -(int)var->offset}}};
+            BeOperand a = {OPK_VREG, BE_W32, {.vreg = value_reload}};
+            kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+            inst_list = em.list;
           }
           if (value_reload != reg)
             free_reg(get_reg_stack(), value_reload);
@@ -2643,11 +2650,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
         }
       } else {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-                 addr_reload->bit_64);
-        Register_t *u[] = {value_reg};
-        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+        /* Integrated: 32-bit store through the vtable; the base address is
+         * a tracked vreg USE (was a baked name, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {addr_reload, 0}}};
+        BeOperand a = {OPK_VREG, BE_W32, {.vreg = value_reg}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+        inst_list = em.list;
       }
     }
 
@@ -3007,11 +3016,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
           inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
         }
       } else {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-                 addr_reload->bit_64);
-        Register_t *u[] = {value_reg};
-        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+        /* Integrated: 32-bit store through the vtable; the base address is
+         * a tracked vreg USE (was a baked name, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {addr_reload, 0}}};
+        BeOperand a = {OPK_VREG, BE_W32, {.vreg = value_reg}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+        inst_list = em.list;
       }
     }
 
@@ -3366,11 +3377,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
             inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
           }
         } else {
-          char tmpl[64];
-          snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-                   addr_reload->bit_64);
-          Register_t *u[] = {value_reg};
-          inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+          /* Integrated: 32-bit store through the vtable; the base address is
+           * a tracked vreg USE (was a baked name, invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {addr_reload, 0}}};
+          BeOperand a = {OPK_VREG, BE_W32, {.vreg = value_reg}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+          inst_list = em.list;
         }
       }
     }
@@ -4852,28 +4865,46 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     // Load FCount and store to stack slot (to prevent register clobbering in
     // loop body)
     if (fcount_size <= 4) {
-      snprintf(buffer, sizeof(buffer), "\tmovl\t%lld(%s), %s\n", fcount_offset,
-               temp_reg->bit_64, temp_reg->bit_32);
-      inst_list = add_inst(inst_list, buffer);
       {
-        /* Integrated: store a physical register to the frame slot via the vtable. */
+        /* Integrated: 32-bit load FCount(obj) through the vtable; the base
+         * address is a tracked vreg USE and the destination a tracked DEF
+         * (were baked names, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W32, {.vreg = temp_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W32,
+                         {.mem_bd = {temp_reg, (int)fcount_offset}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src, NULL);
+        inst_list = em.list;
+      }
+      {
+        /* Integrated: store the tracked vreg to the frame slot via the
+         * vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
         BeOperand dst = {OPK_MEM_FRAME, BE_W64,
                          {.mem_frame = {BE_BASE_FP, -(long long)(count_slot->offset)}}};
-        BeOperand a = {OPK_PHYS, BE_W64, {.phys = temp_reg->bit_64}};
+        BeOperand a = {OPK_VREG, BE_W64, {.vreg = temp_reg}};
         kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
         inst_list = em.list;
       }
     } else {
-      snprintf(buffer, sizeof(buffer), "\tmovq\t%lld(%s), %s\n", fcount_offset,
-               temp_reg->bit_64, temp_reg->bit_64);
-      inst_list = add_inst(inst_list, buffer);
       {
-        /* Integrated: store a physical register to the frame slot via the vtable. */
+        /* Integrated: 64-bit load FCount(obj) through the vtable; the base
+         * address is a tracked vreg USE and the destination a tracked DEF
+         * (were baked names, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = temp_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W64,
+                         {.mem_bd = {temp_reg, (int)fcount_offset}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
+      {
+        /* Integrated: store the tracked vreg to the frame slot via the
+         * vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
         BeOperand dst = {OPK_MEM_FRAME, BE_W64,
                          {.mem_frame = {BE_BASE_FP, -(long long)(count_slot->offset)}}};
-        BeOperand a = {OPK_PHYS, BE_W64, {.phys = temp_reg->bit_64}};
+        BeOperand a = {OPK_VREG, BE_W64, {.vreg = temp_reg}};
         kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
         inst_list = em.list;
       }
@@ -5202,11 +5233,13 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       Register_t *u[] = {loop_var_addr_reg};
       inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
     } else if (element_size == 4) {
-      char tmpl[64];
-      snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-               loop_var_addr_reg->bit_64);
-      Register_t *u[] = {elem_reg};
-      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+      /* Integrated: 32-bit store through the vtable; the base address is a
+       * tracked vreg USE (was a baked name, invisible to liveness). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {loop_var_addr_reg, 0}}};
+      BeOperand a = {OPK_VREG, BE_W32, {.vreg = elem_reg}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+      inst_list = em.list;
     } else if (element_size == 8) {
       Register_t *u[] = {elem_reg, loop_var_addr_reg};
       inst_list =
@@ -5661,11 +5694,14 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
               add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
         }
       } else {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-                 loop_var_addr_reg->bit_64);
-        Register_t *u[] = {idx_reg};
-        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+        /* Integrated: 32-bit store through the vtable; the base address is
+         * a tracked vreg USE (was a baked name, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_BD, BE_W32,
+                         {.mem_bd = {loop_var_addr_reg, 0}}};
+        BeOperand a = {OPK_VREG, BE_W32, {.vreg = idx_reg}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+        inst_list = em.list;
       }
     }
 
@@ -5946,11 +5982,14 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
               add_inst_du(inst_list, ctx, NULL, 0, u, 2, "\tmovq\t%0, (%1)\n");
         }
       } else {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-                 loop_var_addr_reg->bit_64);
-        Register_t *u[] = {idx_reg};
-        inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+        /* Integrated: 32-bit store through the vtable; the base address is
+         * a tracked vreg USE (was a baked name, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_BD, BE_W32,
+                         {.mem_bd = {loop_var_addr_reg, 0}}};
+        BeOperand a = {OPK_VREG, BE_W32, {.vreg = idx_reg}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+        inst_list = em.list;
       }
     }
 
@@ -6243,20 +6282,28 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
        element_size != 8);
 
   if (element_size == 1) {
-    char tmpl[64];
-    snprintf(tmpl, sizeof(tmpl), "\tmovzbl\t(%s), %%0\n", element_reg->bit_64);
-    Register_t *du[] = {element_reg};
-    inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, tmpl);
+    /* Integrated: zero-extend byte load (element_reg) through the vtable;
+     * the base address is a tracked vreg USE (was a baked name, invisible
+     * to liveness). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W32, {.vreg = element_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {element_reg, 0}}};
+    kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
+    inst_list = em.list;
   } else if (element_size == 2) {
-    char tmpl[64];
-    snprintf(tmpl, sizeof(tmpl), "\tmovzwl\t(%s), %%0\n", element_reg->bit_64);
-    Register_t *du[] = {element_reg};
-    inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, tmpl);
+    /* Integrated: zero-extend word load (element_reg) through the vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W32, {.vreg = element_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W16, {.mem_bd = {element_reg, 0}}};
+    kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W16, BE_W32, 0);
+    inst_list = em.list;
   } else if (element_size == 4) {
-    char tmpl[64];
-    snprintf(tmpl, sizeof(tmpl), "\tmovl\t(%s), %%0\n", element_reg->bit_64);
-    Register_t *du[] = {element_reg};
-    inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, tmpl);
+    /* Integrated: 32-bit load (element_reg) through the vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W32, {.vreg = element_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W32, {.mem_bd = {element_reg, 0}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src, NULL);
+    inst_list = em.list;
   } else if (element_size == 8) {
     {
       Register_t *du[] = {element_reg};
@@ -6349,11 +6396,13 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     Register_t *u[] = {loop_var_addr_reg};
     inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
   } else if (element_size == 4) {
-    char tmpl[64];
-    snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n",
-             loop_var_addr_reg->bit_64);
-    Register_t *u[] = {element_reg};
-    inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+    /* Integrated: 32-bit store through the vtable; the base address is a
+     * tracked vreg USE (was a baked name, invisible to liveness). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {loop_var_addr_reg, 0}}};
+    BeOperand a = {OPK_VREG, BE_W32, {.vreg = element_reg}};
+    kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+    inst_list = em.list;
   } else if (element_size == 8) {
     Register_t *u[] = {element_reg, loop_var_addr_reg};
     inst_list =
