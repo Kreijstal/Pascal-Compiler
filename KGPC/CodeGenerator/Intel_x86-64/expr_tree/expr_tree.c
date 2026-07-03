@@ -781,9 +781,13 @@ static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
                  value_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
       } else if (arg_is_inline_storage) {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                 stack_node->offset, value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = value_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(stack_node->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       } else if (stack_node->is_static) {
         const char *label = stack_node->static_label != NULL
                                 ? stack_node->static_label
@@ -2028,9 +2032,15 @@ load_real_operand_into_xmm(CodeGenContext *ctx, struct Expression *operand_expr,
       Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
       if (ext_slot == NULL || dest_addr == NULL)
         return inst_list;
-      snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-               ext_slot->offset, dest_addr->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = dest_addr->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(ext_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
       inst_list = codegen_materialize_extended_expr(operand_expr, inst_list,
                                                     ctx, dest_addr);
       free_reg(get_reg_stack(), dest_addr);
@@ -4824,9 +4834,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     if (has_record_return && !is_constructor && sret_slot != NULL) {
       const char *ret_reg = current_arg_reg64(0);
       if (ret_reg != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                 sret_slot->offset, ret_reg);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = ret_reg}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(sret_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       }
     }
 
@@ -5766,9 +5780,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       free_reg(get_reg_stack(), self_reg);
 
       /* Step 3: load the address of the temp into target_reg. */
-      snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-               tm_slot->offset, target_reg->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(tm_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
 
       if (collision_label != NULL)
         free(collision_label);
