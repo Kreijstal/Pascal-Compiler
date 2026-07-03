@@ -2812,14 +2812,15 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         }
 
         if (record_size <= 4) {
-          /* For movl, ir_emit_function uses bit_32 for ALL placeholders.
-           * The address register in (%1) must remain 64-bit on x86-64, so
-           * dest_reg->bit_64 is embedded in the template string directly.
-           * value_reg uses %0 which correctly expands to bit_32 for movl. */
-          char tmpl[64];
-          snprintf(tmpl, sizeof(tmpl), "\tmovl\t%%0, (%s)\n", dest_reg->bit_64);
-          Register_t *u[] = {value_reg};
-          inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+          /* Integrated: 32-bit value store through the vtable; the value and
+           * the destination-address base are both tracked vreg USES (the
+           * base was a baked name, invisible to liveness) with per-operand
+           * width selectors keeping the base at its 64-bit name. */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W32, {.mem_bd = {dest_reg, 0}}};
+          BeOperand a = {OPK_VREG, BE_W32, {.vreg = value_reg}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+          inst_list = em.list;
         } else {
           Register_t *u[] = {value_reg, dest_reg};
           inst_list =

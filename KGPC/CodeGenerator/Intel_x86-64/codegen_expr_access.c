@@ -114,22 +114,29 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr,
 
   long long load_size = expr_effective_size_bytes(expr);
   {
-    char buffer_tmpl[CODEGEN_MAX_INST_BUF];
-    if (load_size == 1)
-      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovzbl\t(%s), %%0\n",
-               addr_reg->bit_64);
-    else if (load_size == 2) {
+    /* Integrated: pointer-deref value load through the vtable; the address
+     * base is a tracked vreg USE (was a baked name, invisible to liveness)
+     * and the destination a tracked DEF.  Narrow widths go through emit_ext
+     * as sign/zero-extending loads (mnemonics unchanged). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
+    if (load_size == 1) {
+      BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
+    } else if (load_size == 2) {
       const int is_signed = expr_is_signed_kgpctype(expr);
-      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\t%s\t(%s), %%0\n",
-               is_signed ? "movswl" : "movzwl", addr_reg->bit_64);
-    } else if (expr_uses_qword_kgpctype(expr))
-      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovq\t(%s), %%0\n",
-               addr_reg->bit_64);
-    else
-      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovl\t(%s), %%0\n",
-               addr_reg->bit_64);
-    Register_t *d[] = {target_reg};
-    inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, buffer_tmpl);
+      BeOperand src = {OPK_MEM_BD, BE_W16, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W16, BE_W32,
+                                      is_signed);
+    } else if (expr_uses_qword_kgpctype(expr)) {
+      BeOperand dst64 = {OPK_VREG, BE_W64, {.vreg = target_reg}};
+      BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst64, &src, NULL);
+    } else {
+      BeOperand src = {OPK_MEM_BD, BE_W32, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src, NULL);
+    }
+    inst_list = em.list;
   }
 
   free_reg(get_reg_stack(), addr_reg);
@@ -676,14 +683,21 @@ ListNode_t *codegen_record_access(struct Expression *expr,
        * like `pointer(rec.dyn_arr)` would yield the descriptor's
        * address rather than the heap data pointer, producing
        * struct-shaped garbage when the result is later read as
-       * raw bytes. */
-      snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64,
-               target_reg->bit_64);
+       * raw bytes.
+       *
+       * Integrated: 64-bit data-pointer load through the vtable; the
+       * descriptor base is a tracked vreg USE and the destination a tracked
+       * DEF (were baked names, invisible to liveness). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = target_reg}};
+      BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
     } else {
       snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64,
                target_reg->bit_64);
+      inst_list = add_inst(inst_list, buffer);
     }
-    inst_list = add_inst(inst_list, buffer);
     free_reg(get_reg_stack(), addr_reg);
     return inst_list;
   }
@@ -764,30 +778,33 @@ ListNode_t *codegen_record_access(struct Expression *expr,
     return inst_list;
   }
   {
-    char buffer_tmpl[64];
+    /* Integrated: record/class field value load through the vtable; the
+     * field-address base is a tracked vreg USE (was a baked name, invisible
+     * to liveness) and the destination a tracked DEF.  Narrow widths go
+     * through emit_ext as sign/zero-extending loads (mnemonics unchanged). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
     if (!is_single_real_field &&
-        (expr_uses_qword_kgpctype(expr) || field_size == 8))
-      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovq\t(%s), %%0\n",
-               addr_reg->bit_64);
-    else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE)) {
-      if (type_tag != CHAR_TYPE && codegen_type_is_signed(type_tag))
-        snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovsbl\t(%s), %%0\n",
-                 addr_reg->bit_64);
-      else
-        snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovzbl\t(%s), %%0\n",
-                 addr_reg->bit_64);
+        (expr_uses_qword_kgpctype(expr) || field_size == 8)) {
+      BeOperand dst64 = {OPK_VREG, BE_W64, {.vreg = target_reg}};
+      BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst64, &src, NULL);
+    } else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE)) {
+      const int is_signed =
+          (type_tag != CHAR_TYPE && codegen_type_is_signed(type_tag));
+      BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32,
+                                      is_signed);
     } else if (field_size == 2) {
-      if (codegen_type_is_signed(type_tag))
-        snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovswl\t(%s), %%0\n",
-                 addr_reg->bit_64);
-      else
-        snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovzwl\t(%s), %%0\n",
-                 addr_reg->bit_64);
-    } else
-      snprintf(buffer_tmpl, sizeof(buffer_tmpl), "\tmovl\t(%s), %%0\n",
-               addr_reg->bit_64);
-    Register_t *d[] = {target_reg};
-    inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, buffer_tmpl);
+      const int is_signed = codegen_type_is_signed(type_tag);
+      BeOperand src = {OPK_MEM_BD, BE_W16, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W16, BE_W32,
+                                      is_signed);
+    } else {
+      BeOperand src = {OPK_MEM_BD, BE_W32, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src, NULL);
+    }
+    inst_list = em.list;
   }
 
   free_reg(get_reg_stack(), addr_reg);
