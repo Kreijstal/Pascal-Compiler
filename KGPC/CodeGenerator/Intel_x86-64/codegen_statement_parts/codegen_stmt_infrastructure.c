@@ -203,10 +203,13 @@ ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
       inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
     }
     {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tcmpq\t%%0, -%d(%%rbp)\n", spill_offset);
-      Register_t *uses_arr[] = {imm_reg};
-      inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, tmpl);
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(spill_offset)}}};
+      BeOperand b = {OPK_VREG, BE_W64, {.vreg = imm_reg}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W64, NULL, &a, &b);
+      inst_list = em.list;
     }
     free_reg(get_reg_stack(), imm_reg);
     return inst_list;

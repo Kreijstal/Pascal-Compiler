@@ -5267,9 +5267,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     }
 
     // Compare directly against cached FCount from stack slot
-    snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %%rax\n",
-             count_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+      BeOperand b = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(count_slot->offset)}}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W64, NULL, &a, &b);
+      inst_list = em.list;
+    }
 
     // Jump to body if index < count
     {
@@ -5511,9 +5517,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
       inst_list = em.list;
     }
-    snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %%rax\n",
-             length_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+      BeOperand b = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(length_slot->offset)}}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W64, NULL, &a, &b);
+      inst_list = em.list;
+    }
 
     // Jump to body if index <= length
     {
@@ -5658,9 +5670,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n",
-             enum_domain_upper, index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_MEM_FRAME, BE_W32,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand b = {OPK_IMM, BE_W32, {.imm = (long long)(enum_domain_upper)}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W32, NULL, &a, &b);
+      inst_list = em.list;
+    }
     {
       BeEmitter em = codegen_beemitter(inst_list, ctx);
       kgpc_backend_target()->emit_branch(&em, BE_LE, body_label);
@@ -5943,9 +5961,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", upper_bound,
-             index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_MEM_FRAME, BE_W32,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand b = {OPK_IMM, BE_W32, {.imm = (long long)(upper_bound)}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W32, NULL, &a, &b);
+      inst_list = em.list;
+    }
     {
       BeEmitter em = codegen_beemitter(inst_list, ctx);
       kgpc_backend_target()->emit_branch(&em, BE_LE, body_label);
@@ -6359,11 +6383,13 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       inst_list = em.list;
     }
     {
-      Register_t *u[] = {len_reg};
-      char tmpl[64];
-      snprintf(tmpl, sizeof(tmpl), "\tcmpl\t%%0, -%d(%%rbp)\n",
-               index_slot->offset);
-      inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1, tmpl);
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_MEM_FRAME, BE_W32,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand b = {OPK_VREG, BE_W32, {.vreg = len_reg}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W32, NULL, &a, &b);
+      inst_list = em.list;
     }
     free_reg(get_reg_stack(), len_reg);
     {
@@ -6373,9 +6399,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     }
   } else {
     // Compare index with end_index
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", end_index,
-             index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: frame compare through the backend vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand a = {OPK_MEM_FRAME, BE_W32,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand b = {OPK_IMM, BE_W32, {.imm = (long long)(end_index)}};
+      kgpc_backend_target()->emit(&em, BE_CMP, BE_W32, NULL, &a, &b);
+      inst_list = em.list;
+    }
 
     // Jump to body if index <= end_index
     {
