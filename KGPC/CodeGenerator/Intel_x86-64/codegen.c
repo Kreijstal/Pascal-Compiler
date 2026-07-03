@@ -2229,11 +2229,14 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx,
         return NULL;
 
       {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
-                 ctx->static_link_spill_slot->offset);
-        Register_t *defs_arr[] = {reloaded};
-        *inst_list = add_inst_du(*inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        /* Integrated: load from the frame slot through the backend vtable. */
+        BeEmitter em = codegen_beemitter(*inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = reloaded}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(ctx->static_link_spill_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        *inst_list = em.list;
       }
 
       ctx->static_link_reg = reloaded;
@@ -2288,10 +2291,13 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx,
   }
 
   {
-    char tmpl[128];
-    snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", offsets[0]);
-    Register_t *defs_arr[] = {reg};
-    *inst_list = add_inst_du(*inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+    /* Integrated: load from the frame slot through the backend vtable. */
+    BeEmitter em = codegen_beemitter(*inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = reg}};
+    BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(offsets[0])}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    *inst_list = em.list;
   }
 
   for (int i = 1; i < levels_to_traverse; ++i) {

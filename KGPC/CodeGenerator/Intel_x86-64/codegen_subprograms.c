@@ -1811,11 +1811,13 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
           ctx, "ERROR: Unable to allocate registers for record return copy.");
     } else {
       {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
-                 return_dest_slot->offset);
-        Register_t *defs_arr[] = {dest_reg};
-        inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        /* Integrated: load from the frame slot through the backend vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = dest_reg}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(return_dest_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       }
 
       {
@@ -3247,12 +3249,14 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args,
             if (src_ptr_reg == NULL)
               src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
             if (src_ptr_reg != NULL) {
-              char tmpl[64];
-              snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
-                       presaved_slot->offset);
-              Register_t *defs_arr[] = {src_ptr_reg};
-              inst_list =
-                  add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+              /* Integrated: load from the frame slot through the backend vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_VREG, BE_W64, {.vreg = src_ptr_reg}};
+              BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP,
+                                              -(long long)(presaved_slot->offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
               source_ptr = src_ptr_reg->bit_64;
             }
           }
@@ -3276,12 +3280,14 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args,
             if (src_ptr_reg == NULL)
               src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
             if (src_ptr_reg != NULL) {
-              char tmpl[64];
-              snprintf(tmpl, sizeof(tmpl), "\tmovq\t%d(%%rbp), %%0\n",
-                       stack_arg_offset);
-              Register_t *defs_arr[] = {src_ptr_reg};
-              inst_list =
-                  add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+              /* Integrated: load from the frame slot through the backend vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_VREG, BE_W64, {.vreg = src_ptr_reg}};
+              BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP,
+                                              (long long)(stack_arg_offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
               stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
               source_ptr = src_ptr_reg->bit_64;
             }

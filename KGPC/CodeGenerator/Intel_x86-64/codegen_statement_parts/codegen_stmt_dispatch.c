@@ -1395,11 +1395,14 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
            * Result slot and reload into %xmm0 after cleanup; otherwise
            * copy GPR → xmm0 directly. */
           if (exit_return_slot != NULL) {
-            char buf[64];
-            Register_t *uses_arr[] = {result_reg};
-            snprintf(buf, sizeof(buf), "\tmovq\t%%0, -%d(%%rbp)\n",
-                     exit_return_slot->offset);
-            inst_list = add_inst_du(inst_list, ctx, NULL, 0, uses_arr, 1, buf);
+            /* Integrated: store to the frame slot through the backend vtable. */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                             {.mem_frame = {BE_BASE_FP,
+                                            -(long long)(exit_return_slot->offset)}}};
+            BeOperand a = {OPK_VREG, BE_W64, {.vreg = result_reg}};
+            kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+            inst_list = em.list;
             exit_return_in_slot = 1;
             exit_return_is_real = 1;
           } else {
