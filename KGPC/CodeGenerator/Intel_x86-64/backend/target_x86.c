@@ -211,10 +211,18 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_LOAD: {
     if (a->kind == OPK_MEM_FRAME) {
-      /* dst(vreg) := [frame]  →  movX disp(%rbp), %0  (fixed base, no use) */
-      assert(dst->kind == OPK_VREG);
       char fb[40];
       x86_frame(a, fb, sizeof(fb));
+      if (dst->kind == OPK_PHYS) {
+        /* <phys> := [frame]  →  movX <frame>, <phys>  (both operands literal:
+         * no %N placeholder, no def/use — a fixed physical register is never
+         * allocated, so this is a plain string emission). */
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, fb, dst->u.phys);
+        em->list = add_inst(em->list, tmpl);
+        break;
+      }
+      /* dst(vreg) := [frame]  →  movX disp(%rbp), %0  (fixed base, no use) */
+      assert(dst->kind == OPK_VREG);
       snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %%0\n", c, fb);
       defs[0] = dst->u.vreg;
       em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
@@ -231,10 +239,17 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_STORE: {
     if (dst->kind == OPK_MEM_FRAME) {
-      /* [frame] := a(vreg)  →  movX %0, disp(%rbp)  (fixed base, no def) */
-      assert(a->kind == OPK_VREG);
       char fb[40];
       x86_frame(dst, fb, sizeof(fb));
+      if (a->kind == OPK_PHYS) {
+        /* [frame] := <phys>  →  movX <phys>, <frame>  (both operands literal:
+         * no placeholder, no def/use). */
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, a->u.phys, fb);
+        em->list = add_inst(em->list, tmpl);
+        break;
+      }
+      /* [frame] := a(vreg)  →  movX %0, disp(%rbp)  (fixed base, no def) */
+      assert(a->kind == OPK_VREG);
       snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %s\n", c, fb);
       uses[0] = a->u.vreg;
       em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);

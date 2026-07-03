@@ -783,6 +783,66 @@ static ListNode_t *build_frame_roundtrip(const Target *T, const char *sym) {
   return em.list;
 }
 
+/* Build `int f(int a)` that stores the incoming argument register STRAIGHT to a
+ * frame slot (BE_STORE with a PHYSICAL value operand) and reloads it into the
+ * return register (BE_LOAD with a PHYSICAL dest) — no pool vreg involved.  Both
+ * operands are literal, so these lower with no %N placeholder and no def/use. */
+static ListNode_t *build_frame_phys(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand slot = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -48}}};
+  T->emit(&em, BE_STORE, BE_W32, &slot, &arg0, NULL); /* [slot] = arg0 (phys) */
+  T->emit(&em, BE_LOAD, BE_W32, &ret, &slot, NULL);   /* ret(phys) = [slot] */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void test_exec_frame_phys(const Target *T, const char *sym, int a) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_frame_phys(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           sym, a, a);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: phys frame spill/reload %s(%d)==%d", sym, a,
+           a);
+  CHECK(rc == 0, msg);
+}
+
+static void test_golden_x86_frame_phys(const Target *T) {
+  ListNode_t *list = build_frame_phys(T, "x86framep");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "movl\t%edi, -48(%rbp)") != NULL,
+        "x86 frame-phys: BE_STORE renders <arg phys>, -48(%rbp)");
+  CHECK(strstr(all, "movl\t-48(%rbp), %eax") != NULL,
+        "x86 frame-phys: BE_LOAD renders -48(%rbp), <ret phys>");
+}
+
+static void test_golden_aarch64_frame_phys(const Target *T) {
+  ListNode_t *list = build_frame_phys(T, "aaframep");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "str\tw0, [x29, #-48]") != NULL,
+        "aarch64 frame-phys: str <arg phys>, [x29, #-48]");
+  CHECK(strstr(all, "ldr\tw0, [x29, #-48]") != NULL,
+        "aarch64 frame-phys: ldr <ret phys>, [x29, #-48]");
+}
+
 static void test_exec_frame(const Target *T, const char *sym, int a) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -868,6 +928,8 @@ int main(void) {
   fprintf(stderr, "-- frame-relative memory operand --\n");
   test_golden_x86_frame(T);
   test_exec_frame(T, "beframe", 42);
+  test_golden_x86_frame_phys(T);
+  test_exec_frame_phys(T, "beframep", 99);
 
   /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
    * float conversions.  Values are exactly representable so `==` is exact. */
@@ -895,6 +957,7 @@ int main(void) {
   test_golden_aarch64_float(A);
   test_golden_aarch64_data(A);
   test_golden_aarch64_frame(A);
+  test_golden_aarch64_frame_phys(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");

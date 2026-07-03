@@ -279,9 +279,17 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_LOAD:
     if (a->kind == OPK_MEM_FRAME) {
+      const char *base = (a->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+      if (dst->kind == OPK_PHYS) {
+        /* <phys> := [frame]  →  ldr <phys>, [<fp/sp>, #disp]  (both literal,
+         * no placeholder/def-use — a physical register is never allocated). */
+        snprintf(tmpl, sizeof(tmpl), "\tldr\t%s, [%s, #%lld]\n", dst->u.phys,
+                 base, a->u.mem_frame.disp);
+        em->list = add_inst(em->list, tmpl);
+        break;
+      }
       /* dst(vreg) := [frame]  →  ldr %0, [<fp/sp>, #disp]  (fixed base) */
       assert(dst->kind == OPK_VREG);
-      const char *base = (a->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
       snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%s, #%lld]\n", base,
                a->u.mem_frame.disp);
       defs[0] = dst->u.vreg;
@@ -302,9 +310,16 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_STORE:
     if (dst->kind == OPK_MEM_FRAME) {
+      const char *base = (dst->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+      if (a->kind == OPK_PHYS) {
+        /* [frame] := <phys>  →  str <phys>, [<fp/sp>, #disp]  (both literal). */
+        snprintf(tmpl, sizeof(tmpl), "\tstr\t%s, [%s, #%lld]\n", a->u.phys, base,
+                 dst->u.mem_frame.disp);
+        em->list = add_inst(em->list, tmpl);
+        break;
+      }
       /* [frame] := a(vreg)  →  str %0, [<fp/sp>, #disp]  (fixed base) */
       assert(a->kind == OPK_VREG);
-      const char *base = (dst->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
       snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%s, #%lld]\n", base,
                dst->u.mem_frame.disp);
       uses[0] = a->u.vreg;
