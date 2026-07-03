@@ -2332,9 +2332,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
             kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
             inst_list = em.list;
           }
-          snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm1\n",
-                   lhs_spill->offset);
-          inst_list = add_inst(inst_list, buffer);
+          {
+            /* Integrated: float load from the frame slot into an xmm register. */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_PHYS, BE_WF64, {.phys = "%xmm1"}};
+            BeOperand src = {OPK_MEM_FRAME, BE_WF64,
+                             {.mem_frame = {BE_BASE_FP,
+                                            -(long long)(lhs_spill->offset)}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_WF64, &dst, &src, NULL);
+            inst_list = em.list;
+          }
         }
 
         if (lhs_spill == NULL && left != NULL) {
@@ -2450,9 +2457,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
                                               NULL);
                   inst_list = em.list;
                 }
-                snprintf(buffer, sizeof(buffer),
-                         "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                  /* Integrated: float load from the frame slot into an xmm
+                   * register. */
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  BeOperand dst = {OPK_PHYS, BE_WF64, {.phys = "%xmm0"}};
+                  BeOperand src = {
+                      OPK_MEM_FRAME, BE_WF64,
+                      {.mem_frame = {BE_BASE_FP,
+                                     -(long long)(rhs_spill->offset)}}};
+                  kgpc_backend_target()->emit(&em, BE_LOAD, BE_WF64, &dst, &src,
+                                              NULL);
+                  inst_list = em.list;
+                }
                 rhs_loaded = 1;
               }
             }

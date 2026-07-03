@@ -4517,9 +4517,14 @@ ListNode_t *codegen_pass_arguments(
         int source_is_single_payload = arg_infos[i].spill_is_single;
 
         if (source_is_single_payload) {
-          snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n",
-                   arg_infos[i].spill->offset);
-          inst_list = add_inst(inst_list, buffer);
+          /* Integrated: float load from the frame slot into an xmm register. */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_WF32, {.phys = "%xmm0"}};
+          BeOperand src = {OPK_MEM_FRAME, BE_WF32,
+                           {.mem_frame = {BE_BASE_FP,
+                                          -(long long)(arg_infos[i].spill->offset)}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_WF32, &dst, &src, NULL);
+          inst_list = em.list;
         } else {
           temp_reg = get_free_reg(get_reg_stack(), &inst_list);
           if (temp_reg == NULL)
