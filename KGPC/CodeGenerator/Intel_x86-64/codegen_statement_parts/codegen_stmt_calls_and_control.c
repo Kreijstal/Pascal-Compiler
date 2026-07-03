@@ -5103,38 +5103,49 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       return inst_list;
     }
     if (element_size == 1) {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovzbl\t(%s,%s,1), %%0\n",
-               fitems_reg->bit_64, idx_reg->bit_64);
-      Register_t *d[] = {elem_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+      /* Integrated: zero-extend byte load FItems[index] through the vtable;
+       * base/index are tracked vreg USES (were baked names, invisible to
+       * liveness). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W32, {.vreg = elem_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W8,
+                       {.mem_bis = {fitems_reg, idx_reg, 1, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
+      inst_list = em.list;
     } else if (element_size == 2) {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovzwl\t(%s,%s,1), %%0\n",
-               fitems_reg->bit_64, idx_reg->bit_64);
-      Register_t *d[] = {elem_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+      /* Integrated: zero-extend word load FItems[index] through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W32, {.vreg = elem_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W16,
+                       {.mem_bis = {fitems_reg, idx_reg, 1, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W16, BE_W32, 0);
+      inst_list = em.list;
     } else if (element_size == 4) {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovl\t(%s,%s,1), %%0\n",
-               fitems_reg->bit_64, idx_reg->bit_64);
-      Register_t *d[] = {elem_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+      /* Integrated: 32-bit load FItems[index] through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W32, {.vreg = elem_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W32,
+                       {.mem_bis = {fitems_reg, idx_reg, 1, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src, NULL);
+      inst_list = em.list;
     } else if (element_size == 8) {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovq\t(%s,%s,1), %%0\n",
-               fitems_reg->bit_64, idx_reg->bit_64);
-      Register_t *d[] = {elem_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+      /* Integrated: 64-bit load FItems[index] through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = elem_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W64,
+                       {.mem_bis = {fitems_reg, idx_reg, 1, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
     } else if (using_flist && element_size > 8) {
       /* TStringList's FList stores TStringItem records (FString + FObject).
        * The stride is element_size (16) but we only need the first 8 bytes
        * (the FString pointer) from each entry. */
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovq\t(%s,%s,1), %%0\n",
-               fitems_reg->bit_64, idx_reg->bit_64);
-      Register_t *d[] = {elem_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = elem_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W64,
+                       {.mem_bis = {fitems_reg, idx_reg, 1, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
     } else {
       free_reg(get_reg_stack(), elem_reg);
       free_reg(get_reg_stack(), idx_reg);
@@ -5447,12 +5458,14 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       return inst_list;
     }
     {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovzbl\t(%s,%s,1), %%0\n",
-               base_reg->bit_64, idx_reg->bit_64);
-      Register_t *d[] = {char_reg};
-      Register_t *u[] = {base_reg, idx_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, u, 2, tmpl);
+      /* Integrated: zero-extend byte load base[index] through the vtable;
+       * base/index are tracked vreg USES. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W32, {.vreg = char_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W8,
+                       {.mem_bis = {base_reg, idx_reg, 1, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
+      inst_list = em.list;
     }
 
     free_reg(get_reg_stack(), base_reg);
@@ -5801,12 +5814,14 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tandl\t$7, %0\n");
     }
     {
-      char tmpl[96];
-      snprintf(tmpl, sizeof(tmpl), "\tmovzbl\t(%s,%s,1), %%0\n",
-               base_reg->bit_64, byte_index_reg->bit_64);
-      Register_t *d[] = {byte_val_reg};
-      Register_t *u[] = {base_reg, byte_index_reg};
-      inst_list = add_inst_du(inst_list, ctx, d, 1, u, 2, tmpl);
+      /* Integrated: zero-extend byte load base[byte_index] through the
+       * vtable; base/index are tracked vreg USES. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W32, {.vreg = byte_val_reg}};
+      BeOperand src = {OPK_MEM_BIS, BE_W8,
+                       {.mem_bis = {base_reg, byte_index_reg, 1, 0}}};
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
+      inst_list = em.list;
     }
     {
       Register_t *d[] = {mask_reg};
