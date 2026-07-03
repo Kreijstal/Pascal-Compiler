@@ -4881,9 +4881,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     free_reg(get_reg_stack(), temp_reg);
 
     // Initialize index to 0
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-             index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
 
     // Jump to condition check
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
@@ -5356,9 +5362,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     }
 
     // Initialize index to 1 (Pascal strings are 1-indexed)
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$1, -%d(%%rbp)\n",
-             index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand a = {OPK_IMM, BE_W64, {.imm = 1}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
 
     // Jump to condition check
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
@@ -5535,9 +5547,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       return inst_list;
     }
 
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$%lld, -%d(%%rbp)\n",
-             enum_domain_lower, index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W32,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand a = {OPK_IMM, BE_W32, {.imm = (long long)(enum_domain_lower)}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+      inst_list = em.list;
+    }
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
@@ -5676,9 +5694,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       return inst_list;
     }
 
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n",
-             index_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W32,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+      BeOperand a = {OPK_IMM, BE_W32, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+      inst_list = em.list;
+    }
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
@@ -6049,9 +6073,15 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
   }
 
   // Initialize index to start_index
-  snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, -%d(%%rbp)\n", start_index,
-           index_slot->offset);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    /* Integrated: store an immediate to the frame slot through the vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_MEM_FRAME, BE_W32,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(index_slot->offset)}}};
+    BeOperand a = {OPK_IMM, BE_W32, {.imm = (long long)(start_index)}};
+    kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+    inst_list = em.list;
+  }
 
   // Jump to condition check
   inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);

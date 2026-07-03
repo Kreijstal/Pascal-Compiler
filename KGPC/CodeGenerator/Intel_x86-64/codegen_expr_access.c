@@ -1103,8 +1103,13 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
     char buffer[128];
     for (int i = 0; i < 8; i++) {
       int offset = char_set_temp->offset - (i * 4);
-      snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n", offset);
-      inst_list = add_inst(inst_list, buffer);
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W32,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(offset)}}};
+      BeOperand a = {OPK_IMM, BE_W32, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+      inst_list = em.list;
     }
 
     /* Get address register for the set buffer */

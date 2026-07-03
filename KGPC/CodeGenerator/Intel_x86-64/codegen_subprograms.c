@@ -4507,9 +4507,15 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list,
           if (array_node != NULL && array_node->is_dynamic &&
               array_node->offset > 0) {
             char buffer[128];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-                     array_node->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              /* Integrated: store an immediate to the frame slot via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(array_node->offset)}}};
+              BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+              kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+              inst_list = em.list;
+            }
             int length_offset = array_node->offset - 2 * DOUBLEWORD;
             if (length_offset < array_node->offset) {
               snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
@@ -4532,11 +4538,14 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list,
           char *var_name = (char *)ids->cur;
           StackNode_t *file_node = find_label(var_name);
           if (file_node != NULL) {
-            char buffer[128];
             if (!file_node->is_static) {
-              snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-                       file_node->offset);
-              inst_list = add_inst(inst_list, buffer);
+              /* Integrated: store an immediate to the frame slot via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(file_node->offset)}}};
+              BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+              kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+              inst_list = em.list;
             }
 
             long long file_elem_size = 0;
@@ -4602,9 +4611,15 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list,
           if (array_node != NULL && array_node->is_dynamic &&
               array_node->offset > 0) {
             char buffer[128];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-                     array_node->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              /* Integrated: store an immediate to the frame slot via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(array_node->offset)}}};
+              BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+              kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+              inst_list = em.list;
+            }
             int length_offset = array_node->offset - 2 * DOUBLEWORD;
             if (length_offset < array_node->offset) {
               snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",

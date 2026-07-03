@@ -1606,9 +1606,15 @@ ListNode_t *codegen_builtin_insert(struct Statement *stmt,
     }
 
     if (target_is_shortstring) {
-      snprintf(buffer, sizeof(buffer), "\tmovb\t$1, -%d(%%rbp)\n",
-               char_buffer->offset);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: store an immediate to the frame slot through the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_FRAME, BE_W8,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(char_buffer->offset)}}};
+        BeOperand a = {OPK_IMM, BE_W8, {.imm = 1}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W8, &dst, &a, NULL);
+        inst_list = em.list;
+      }
       {
         /* Integrated: store a physical register to the frame slot via the vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
@@ -1628,9 +1634,15 @@ ListNode_t *codegen_builtin_insert(struct Statement *stmt,
         inst_list = em.list;
       }
     } else {
-      snprintf(buffer, sizeof(buffer), "\tmovb\t$0, -%d(%%rbp)\n",
-               char_buffer->offset - 1);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: store an immediate to the frame slot through the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_FRAME, BE_W8,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(char_buffer->offset - 1)}}};
+        BeOperand a = {OPK_IMM, BE_W8, {.imm = 0}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W8, &dst, &a, NULL);
+        inst_list = em.list;
+      }
       {
         /* Integrated: store a physical register to the frame slot via the vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);

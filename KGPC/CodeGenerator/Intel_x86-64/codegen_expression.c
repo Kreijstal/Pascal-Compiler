@@ -2326,20 +2326,35 @@ ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
       return inst_list;
     }
 
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-             desc_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-             desc_slot->offset - pointer_bytes);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(desc_slot->offset)}}};
+      BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(desc_slot->offset - pointer_bytes)}}};
+      BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
 
     int field_count = descriptor_size / pointer_bytes;
     for (int field = 2; field < field_count; ++field) {
       int field_offset = desc_slot->offset - field * pointer_bytes;
-      snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
-               field_offset);
-      inst_list = add_inst(inst_list, buffer);
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(field_offset)}}};
+      BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
     }
 
     {
@@ -2537,7 +2552,6 @@ ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     return inst_list;
   }
 
-  char buffer[128];
   {
     /* Integrated: address-of the frame slot into a pool register via the vtable. */
     BeEmitter em = codegen_beemitter(inst_list, ctx);
@@ -2577,8 +2591,13 @@ ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
   int field_count = descriptor_size / pointer_bytes;
   for (int field = 2; field < field_count; ++field) {
     int field_offset = desc_slot->offset - field * pointer_bytes;
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", field_offset);
-    inst_list = add_inst(inst_list, buffer);
+    /* Integrated: store an immediate to the frame slot through the vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(field_offset)}}};
+    BeOperand a = {OPK_IMM, BE_W64, {.imm = 0}};
+    kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+    inst_list = em.list;
   }
 
   {
@@ -2667,12 +2686,24 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
     }
 
     int element_offset = data_slot->offset - index * element_size;
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, -%d(%%rbp)\n", kind,
-             element_offset);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n",
-             element_offset - 4);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W32,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(element_offset)}}};
+      BeOperand a = {OPK_IMM, BE_W32, {.imm = (long long)(kind)}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+      inst_list = em.list;
+    }
+    {
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W32,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(element_offset - 4)}}};
+      BeOperand a = {OPK_IMM, BE_W32, {.imm = 0}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W32, &dst, &a, NULL);
+      inst_list = em.list;
+    }
 
     int data_offset = element_offset - 8;
     if (kind == KGPC_TVAR_KIND_REAL) {

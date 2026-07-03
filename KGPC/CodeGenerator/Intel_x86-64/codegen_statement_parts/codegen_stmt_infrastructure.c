@@ -1591,10 +1591,13 @@ ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     }
     {
       /* descriptor.length (offset 8) := element count */
-      char buffer[96];
-      snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, -%d(%%rbp)\n", count,
-               src_desc->offset - 8);
-      inst_list = add_inst(inst_list, buffer);
+      /* Integrated: store an immediate to the frame slot through the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(src_desc->offset - 8)}}};
+      BeOperand a = {OPK_IMM, BE_W64, {.imm = (long long)(count)}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
     }
     free_reg(get_reg_stack(), src_addr);
 
