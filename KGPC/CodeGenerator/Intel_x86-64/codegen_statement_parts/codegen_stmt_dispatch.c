@@ -1557,9 +1557,15 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
               kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
               inst_list = em.list;
             }
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdx\n",
-                     return_var->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              /* Integrated: address-of the frame slot into a physical register via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rdx"}};
+              BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(return_var->offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
+            }
             snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r8\n",
                      record_size);
             inst_list = add_inst(inst_list, buffer);
@@ -1574,9 +1580,15 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
               kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
               inst_list = em.list;
             }
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rsi\n",
-                     return_var->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              /* Integrated: address-of the frame slot into a physical register via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rsi"}};
+              BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(return_var->offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
+            }
             snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdx\n",
                      record_size);
             inst_list = add_inst(inst_list, buffer);
@@ -1603,16 +1615,28 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list,
           /* For dynamic arrays, call kgpc_dynarray_clone_descriptor
            * to return a cloned descriptor, not the local one */
           if (codegen_target_is_windows()) {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n",
-                     return_var->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              /* Integrated: address-of the frame slot into a physical register via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rcx"}};
+              BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(return_var->offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
+            }
             snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n",
                      ctx->dynamic_array_descriptor_size);
             inst_list = add_inst(inst_list, buffer);
           } else {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n",
-                     return_var->offset);
-            inst_list = add_inst(inst_list, buffer);
+            {
+              /* Integrated: address-of the frame slot into a physical register via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rdi"}};
+              BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                               {.mem_frame = {BE_BASE_FP, -(long long)(return_var->offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
+            }
             snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%esi\n",
                      ctx->dynamic_array_descriptor_size);
             inst_list = add_inst(inst_list, buffer);
