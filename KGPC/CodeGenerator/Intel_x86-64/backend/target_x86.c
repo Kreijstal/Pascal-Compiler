@@ -345,6 +345,24 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
           be_add_inst_du_wsel(em->list, vregp(em), NULL, 0, uses, 3, tmpl, sel);
       break;
     }
+    if (dst->kind == OPK_MEM_BD && a->kind == OPK_IMM) {
+      /* [base(vreg)+disp] := $imm  →  movX $imm, disp(%0).  The immediate is
+       * literal; the base(%0) is a tracked vreg USE at 64-bit. */
+      char lit[48];
+      x86_lit(a, lit, sizeof(lit));
+      if (dst->u.mem_bd.disp == 0)
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, (%%0)\n", c, lit);
+      else
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %d(%%0)\n", c, lit,
+                 dst->u.mem_bd.disp);
+      uses[0] = dst->u.mem_bd.base;
+      {
+        int sel[1] = {1}; /* base address = 64-bit */
+        em->list = be_add_inst_du_wsel(em->list, vregp(em), NULL, 0, uses, 1,
+                                       tmpl, sel);
+      }
+      break;
+    }
     /* [dst: MEM_BD(base vreg, disp)] := a(vreg)  →  movX %0, disp(%1).
      * value(%0) at width w; base(%1) is a tracked vreg USE at 64-bit. */
     assert(dst->kind == OPK_MEM_BD && a->kind == OPK_VREG);

@@ -436,6 +436,36 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
           be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 3, tmpl, use32);
       break;
     }
+    if (dst->kind == OPK_MEM_BD && a->kind == OPK_IMM) {
+      /* AArch64 has no store-immediate.  Zero stores the zero register
+       * directly; any other value is materialized into a scratch register
+       * first (the neutral counterpart to x86's single movX $imm,disp(reg)).
+       * The base stays a tracked vreg USE at 64-bit. */
+      if (a->u.imm == 0) {
+        snprintf(tmpl, sizeof(tmpl), "\tstr\t%s, [%%0, #%d]\n",
+                 w32 ? "wzr" : "xzr", dst->u.mem_bd.disp);
+        uses[0] = dst->u.mem_bd.base;
+        use32[0] = 0; /* address register is always 64-bit */
+        em->list =
+            be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1, tmpl, use32);
+      } else {
+        Register_t *scr = get_free_reg(get_reg_stack(), &em->list);
+        assert(scr != NULL && "no scratch register for aarch64 imm store");
+        BeOperand sd = {OPK_VREG, w, {.vreg = scr}};
+        BeOperand si = {OPK_IMM, w, {.imm = a->u.imm}};
+        aa_emit(em, BE_MOV, w, &sd, &si, NULL); /* mov scr, #imm */
+        snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%%1, #%d]\n",
+                 dst->u.mem_bd.disp);
+        uses[0] = scr;
+        uses[1] = dst->u.mem_bd.base;
+        use32[0] = w32; /* stored value width */
+        use32[1] = 0;   /* address register is always 64-bit */
+        em->list =
+            be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 2, tmpl, use32);
+        free_reg(get_reg_stack(), scr);
+      }
+      break;
+    }
     assert(dst->kind == OPK_MEM_BD && a->kind == OPK_VREG);
     snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%%1, #%d]\n", dst->u.mem_bd.disp);
     uses[0] = a->u.vreg;

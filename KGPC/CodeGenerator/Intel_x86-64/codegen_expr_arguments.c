@@ -1550,9 +1550,14 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id,
             return inst_list;
 
           if (record_type_is_class(with_record)) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                     addr_reg->bit_64, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            /* Integrated: same-register 64-bit pointer deref through the
+             * vtable; the base is a tracked vreg USE (was a baked name,
+             * invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+            BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
           }
 
           if (field_offset != 0) {
@@ -2230,14 +2235,28 @@ ListNode_t *codegen_pass_arguments(
           inst_list = em.list;
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                 data_addr_reg->bit_64, desc_addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          /* Integrated: 64-bit data-pointer store through the vtable; value
+           * and base are tracked vreg USES (were baked names, invisible to
+           * liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W64, {.mem_bd = {desc_addr_reg, 0}}};
+          BeOperand a = {OPK_VREG, BE_W64, {.vreg = data_addr_reg}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
+        }
         free_reg(get_reg_stack(), data_addr_reg);
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, 8(%s)\n",
-                 element_count, desc_addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          /* Integrated: 64-bit element-count immediate store through the
+           * vtable; the descriptor base is a tracked vreg USE (was a baked
+           * name, invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W64, {.mem_bd = {desc_addr_reg, 8}}};
+          BeOperand a = {OPK_IMM, BE_W64, {.imm = element_count}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
+        }
 
         StackNode_t *arg_spill = add_l_t("arg_eval");
         if (arg_spill != NULL && arg_infos != NULL) {
@@ -2328,16 +2347,28 @@ ListNode_t *codegen_pass_arguments(
                  data_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        /* Store string pointer at descriptor[0] */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                 data_addr_reg->bit_64, desc_addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Store string pointer at descriptor[0].
+         * Integrated: 64-bit store through the vtable; value and base are
+         * tracked vreg USES (were baked names, invisible to liveness). */
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W64, {.mem_bd = {desc_addr_reg, 0}}};
+          BeOperand a = {OPK_VREG, BE_W64, {.vreg = data_addr_reg}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
+        }
         free_reg(get_reg_stack(), data_addr_reg);
 
-        /* Store element count at descriptor[1] (offset 8) */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, 8(%s)\n", str_len,
-                 desc_addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Store element count at descriptor[1] (offset 8).
+         * Integrated: immediate store through the vtable; the descriptor base
+         * is a tracked vreg USE (was a baked name, invisible to liveness). */
+        {
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_BD, BE_W64, {.mem_bd = {desc_addr_reg, 8}}};
+          BeOperand a = {OPK_IMM, BE_W64, {.imm = str_len}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
+        }
 
         StackNode_t *arg_spill = add_l_t("arg_eval");
         if (arg_spill != NULL && arg_infos != NULL) {
@@ -2783,18 +2814,28 @@ ListNode_t *codegen_pass_arguments(
                   BUILTIN_CALL_ASSIGNED &&
               address_expr != NULL && address_expr->type == EXPR_ARRAY_ACCESS &&
               address_expr->expr_data.array_access_data.extra_indices != NULL) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                     addr_reg->bit_64, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            /* Integrated: same-register 64-bit pointer deref through the
+             * vtable; the base is a tracked vreg USE (was a baked name,
+             * invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+            BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
           }
 
           if (addr_reg != NULL && formal_arg_decl != NULL &&
               formal_arg_decl->type == TREE_VAR_DECL &&
               formal_arg_decl->tree_data.var_decl_data.is_untyped_param &&
               codegen_expr_is_open_array_descriptor_arg(address_expr, ctx)) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                     addr_reg->bit_64, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            /* Integrated: same-register 64-bit pointer deref through the
+             * vtable; the base is a tracked vreg USE (was a baked name,
+             * invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+            BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
             forward_open_array_data = 1;
           }
 
@@ -2839,9 +2880,15 @@ ListNode_t *codegen_pass_arguments(
             }
 
             if (should_dereference) {
-              snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                       addr_reg->bit_64, addr_reg->bit_64);
-              inst_list = add_inst(inst_list, buffer);
+              /* Integrated: same-register 64-bit pointer deref through the
+               * vtable; the base is a tracked vreg USE (was a baked name,
+               * invisible to liveness). */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+              BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+              kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                          NULL);
+              inst_list = em.list;
             }
           }
         }
@@ -3076,9 +3123,14 @@ ListNode_t *codegen_pass_arguments(
                 BUILTIN_CALL_ASSIGNED &&
             arg_expr != NULL && arg_expr->type == EXPR_ARRAY_ACCESS &&
             arg_expr->expr_data.array_access_data.extra_indices != NULL) {
-          snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                   addr_reg->bit_64, addr_reg->bit_64);
-          inst_list = add_inst(inst_list, buffer);
+          /* Integrated: same-register 64-bit pointer deref through the
+           * vtable; the base is a tracked vreg USE (was a baked name,
+           * invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
         }
 
         StackNode_t *arg_spill = add_l_t("arg_eval");
@@ -3231,10 +3283,16 @@ ListNode_t *codegen_pass_arguments(
           if (codegen_had_error(ctx) || src_reg == NULL)
             return inst_list;
         }
-        char load_buf[128];
-        snprintf(load_buf, sizeof(load_buf), "\tmovq\t(%s), %s\n",
-                 src_reg->bit_64, src_reg->bit_64);
-        inst_list = add_inst(inst_list, load_buf);
+        {
+          /* Integrated: same-register 64-bit pointer deref through the
+           * vtable; the base is a tracked vreg USE (was a baked name,
+           * invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_VREG, BE_W64, {.vreg = src_reg}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {src_reg, 0}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
+        }
 
         StackNode_t *arg_spill = add_l_t("arg_eval");
         if (arg_spill != NULL && arg_infos != NULL) {
@@ -3279,10 +3337,16 @@ ListNode_t *codegen_pass_arguments(
           if (codegen_had_error(ctx) || src_reg == NULL)
             return inst_list;
         }
-        char load_buf[128];
-        snprintf(load_buf, sizeof(load_buf), "\tmovq\t(%s), %s\n",
-                 src_reg->bit_64, src_reg->bit_64);
-        inst_list = add_inst(inst_list, load_buf);
+        {
+          /* Integrated: same-register 64-bit pointer deref through the
+           * vtable; the base is a tracked vreg USE (was a baked name,
+           * invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_VREG, BE_W64, {.vreg = src_reg}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {src_reg, 0}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
+        }
 
         StackNode_t *arg_spill = add_l_t("arg_eval");
         if (arg_spill != NULL && arg_infos != NULL) {
@@ -3617,22 +3681,37 @@ ListNode_t *codegen_pass_arguments(
             inst_list = em.list;
           }
 
-          /* Dereference: load the value from the address */
-          if (record_size == 1) {
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzbl\t(%s), %s\n",
-                     result_reg->bit_64, result_reg->bit_32);
-          } else if (record_size == 2) {
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzwl\t(%s), %s\n",
-                     result_reg->bit_64, result_reg->bit_32);
-          } else if (record_size <= 4) {
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tmovl\t(%s), %s\n",
-                     result_reg->bit_64, result_reg->bit_32);
-          } else /* record_size <= 8 */
+          /* Dereference: load the value from the address.
+           * Integrated: same-register load through the vtable; the base is a
+           * tracked vreg USE and the destination a tracked DEF (were baked
+           * names, invisible to liveness).  Narrow widths go through emit_ext
+           * as zero-extending loads (movz mnemonics unchanged). */
           {
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t(%s), %s\n",
-                     result_reg->bit_64, result_reg->bit_64);
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            if (record_size == 1) {
+              BeOperand dst = {OPK_VREG, BE_W32, {.vreg = result_reg}};
+              BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {result_reg, 0}}};
+              kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32,
+                                              0);
+            } else if (record_size == 2) {
+              BeOperand dst = {OPK_VREG, BE_W32, {.vreg = result_reg}};
+              BeOperand src = {OPK_MEM_BD, BE_W16, {.mem_bd = {result_reg, 0}}};
+              kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W16, BE_W32,
+                                              0);
+            } else if (record_size <= 4) {
+              BeOperand dst = {OPK_VREG, BE_W32, {.vreg = result_reg}};
+              BeOperand src = {OPK_MEM_BD, BE_W32, {.mem_bd = {result_reg, 0}}};
+              kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src,
+                                          NULL);
+            } else /* record_size <= 8 */
+            {
+              BeOperand dst = {OPK_VREG, BE_W64, {.vreg = result_reg}};
+              BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {result_reg, 0}}};
+              kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                          NULL);
+            }
+            inst_list = em.list;
           }
-          inst_list = add_inst(inst_list, copy_buffer);
         } else {
           /* Normal case: pass pointer to struct */
           {
@@ -4021,9 +4100,14 @@ ListNode_t *codegen_pass_arguments(
               codegen_expr_needs_class_method_vmt_self(arg_expr, ctx) &&
               !(ctx != NULL &&
                 ctx->current_subprogram_is_nonstatic_class_method)) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                     top_reg->bit_64, top_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            /* Integrated: same-register 64-bit pointer deref through the
+             * vtable; the base is a tracked vreg USE (was a baked name,
+             * invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_VREG, BE_W64, {.vreg = top_reg}};
+            BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {top_reg, 0}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
           }
 
           /* ARCHITECTURAL FIX: Immediately spill argument to stack to prevent

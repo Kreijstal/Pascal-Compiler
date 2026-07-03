@@ -1169,14 +1169,26 @@ static ListNode_t *codegen_load_typeinfo_from_instance_ptr(
   if (typeinfo_reg == NULL)
     return inst_list;
 
-  char buffer[128];
-  snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-           instance_ptr_reg->bit_64, typeinfo_reg->bit_64);
-  inst_list = add_inst(inst_list, buffer);
-  /* Load vTypeInfo from VMT (VMT_VTYPEINFO_OFFSET = slot 7 = byte 56) */
-  snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n", VMT_VTYPEINFO_OFFSET,
-           typeinfo_reg->bit_64, typeinfo_reg->bit_64);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    /* Integrated: 64-bit VMT-pointer load through the vtable; the instance
+     * base is a tracked vreg USE and the destination a tracked DEF (were
+     * baked names, invisible to liveness). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = typeinfo_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {instance_ptr_reg, 0}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
+  }
+  {
+    /* Load vTypeInfo from VMT (VMT_VTYPEINFO_OFFSET = slot 7 = byte 56).
+     * Integrated: same-register 64-bit load via the vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = typeinfo_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W64,
+                     {.mem_bd = {typeinfo_reg, VMT_VTYPEINFO_OFFSET}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
+  }
 
   if (out_reg != NULL)
     *out_reg = typeinfo_reg;
@@ -1199,11 +1211,18 @@ static ListNode_t *codegen_load_typeinfo_from_class_vmt_ptr(
   if (typeinfo_reg == NULL)
     return inst_list;
 
-  char buffer[128];
-  /* Load vTypeInfo from VMT (VMT_VTYPEINFO_OFFSET = slot 7 = byte 56) */
-  snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n", VMT_VTYPEINFO_OFFSET,
-           class_vmt_reg->bit_64, typeinfo_reg->bit_64);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    /* Load vTypeInfo from VMT (VMT_VTYPEINFO_OFFSET = slot 7 = byte 56).
+     * Integrated: 64-bit load through the vtable; the VMT base is a tracked
+     * vreg USE and the destination a tracked DEF (were baked names,
+     * invisible to liveness). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = typeinfo_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W64,
+                     {.mem_bd = {class_vmt_reg, VMT_VTYPEINFO_OFFSET}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
+  }
 
   if (out_reg != NULL)
     *out_reg = typeinfo_reg;
@@ -1269,7 +1288,6 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
     return inst_list;
 
   Register_t *typeinfo_reg = NULL;
-  char buffer[128];
   if (is_class_var) {
     Register_t *instance_ptr_reg =
         codegen_try_get_reg(&inst_list, ctx, "class instance");
@@ -1277,9 +1295,16 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
       free_reg(get_reg_stack(), addr_reg);
       return inst_list;
     }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64,
-             instance_ptr_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: 64-bit pointer deref through the vtable; the address base
+       * is a tracked vreg USE and the destination a tracked DEF (were baked
+       * names, invisible to liveness). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = instance_ptr_reg}};
+      BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
+    }
     inst_list = codegen_load_typeinfo_from_instance_ptr(
         inst_list, ctx, instance_ptr_reg, &typeinfo_reg);
     free_reg(get_reg_stack(), instance_ptr_reg);
@@ -1887,12 +1912,18 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
       if (class_ref_reg == NULL)
         return inst_list;
       /* The field value is a class reference (VMT pointer).
-       * Extract TYPEINFO from VMT slot 7 (VMT_VTYPEINFO_OFFSET). */
-      char ti_buf[128];
-      snprintf(ti_buf, sizeof(ti_buf), "\tmovq\t%d(%s), %s\n",
-               VMT_VTYPEINFO_OFFSET, class_ref_reg->bit_64,
-               class_ref_reg->bit_64);
-      inst_list = add_inst(inst_list, ti_buf);
+       * Extract TYPEINFO from VMT slot 7 (VMT_VTYPEINFO_OFFSET).
+       * Integrated: same-register 64-bit load through the vtable; the VMT
+       * base is a tracked vreg USE (was a baked name, invisible to
+       * liveness). */
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = class_ref_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W64,
+                         {.mem_bd = {class_ref_reg, VMT_VTYPEINFO_OFFSET}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
       target_typeinfo_reg = class_ref_reg;
     }
   }
@@ -2116,10 +2147,13 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
 
   Register_t *instance_ptr_reg = addr_reg;
   if (is_class_var) {
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64,
-             addr_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    /* Integrated: same-register 64-bit pointer deref through the vtable; the
+     * base is a tracked vreg USE (was a baked name, invisible to liveness). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = addr_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
   }
 
   return codegen_emit_class_cast_check_from_instance_ptr(expr, inst_list, ctx,
