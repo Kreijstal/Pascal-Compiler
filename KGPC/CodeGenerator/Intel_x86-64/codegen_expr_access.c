@@ -1116,9 +1116,15 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
       return inst_list;
     }
 
-    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-             char_set_temp->offset, addr_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: address-of the frame slot into a physical register via the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_PHYS, BE_W64, {.phys = addr_reg->bit_64}};
+      BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(char_set_temp->offset)}}};
+      kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
+    }
 
     /* Now set each element in the character set */
     for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL;
@@ -1492,9 +1498,15 @@ ListNode_t *codegen_char_set_address(struct Expression *expr,
 
       /* Set up call: runtime_func(dest, left, right) */
       addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-      snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", temp->offset,
-               addr_reg->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = addr_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(temp->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
 
       if (codegen_target_is_windows()) {
         {
@@ -1552,9 +1564,15 @@ ListNode_t *codegen_char_set_address(struct Expression *expr,
 
       /* addr_reg now points to the temp buffer with the 32-byte result.
          Reload it in case the call clobbered it. */
-      snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", temp->offset,
-               addr_reg->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = addr_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(temp->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
     } else {
       /* Unknown set op — fall back to value-based codegen */
       inst_list = codegen_set_expr(expr, inst_list, ctx, &addr_reg);
