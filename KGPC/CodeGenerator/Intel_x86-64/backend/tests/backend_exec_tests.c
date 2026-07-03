@@ -1029,6 +1029,96 @@ static void test_golden_aarch64_frame_imm(const Target *T) {
         "aarch64 frame-imm: non-zero materializes into a scratch then str");
 }
 
+/* Build `int f(int a)`: store a to a frame slot, load the constant 5 into a
+ * vreg, compare the vreg against the frame slot (BE_CMP with an OPK_MEM_FRAME
+ * operand), and return (5 > a) as 0/1.  Exercises a frame compare end-to-end. */
+static ListNode_t *build_frame_cmp(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vc = get_free_reg(rs, &em.list);
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand slot = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -48}}};
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvc = {OPK_VREG, BE_W32, {.vreg = vc}};
+  BeOperand five = {OPK_IMM, BE_W32, {.imm = 5}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);   /* va = a */
+  T->emit(&em, BE_STORE, BE_W32, &slot, &dva, NULL); /* [slot] = a */
+  T->emit(&em, BE_MOV, BE_W32, &dvc, &five, NULL);   /* vc = 5 */
+  T->emit(&em, BE_CMP, BE_W32, NULL, &dvc, &slot);   /* flags: 5 ? [slot] */
+  T->emit_setcc(&em, BE_GT, &dvc);                   /* vc = (5 > a) */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dvc, NULL);    /* return vc */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void test_exec_frame_cmp(const Target *T, const char *sym, int a,
+                                int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_frame_cmp(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           sym, a, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: frame cmp (5>%d)==%d via %s", a, expected,
+           sym);
+  CHECK(rc == 0, msg);
+}
+
+/* Golden: emit all four cmp-with-frame operand combinations and assert the
+ * rendered AT&T form of each (frame as either operand; other = vreg/imm/phys). */
+static void test_golden_x86_frame_cmp(const Target *T) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+  Register_t *v = get_free_reg(rs, &em.list);
+  BeOperand dv = {OPK_VREG, BE_W32, {.vreg = v}};
+  BeOperand slot = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -48}}};
+  BeOperand imm = {OPK_IMM, BE_W32, {.imm = 9}};
+  BeOperand eax = {OPK_PHYS, BE_W32, {.phys = "%eax"}};
+  T->emit(&em, BE_CMP, BE_W32, NULL, &dv, &slot);   /* D: cmpl -48(%rbp), %v */
+  T->emit(&em, BE_CMP, BE_W32, NULL, &slot, &dv);   /* A: cmpl %v, -48(%rbp) */
+  T->emit(&em, BE_CMP, BE_W32, NULL, &slot, &imm);  /* B: cmpl $9, -48(%rbp) */
+  T->emit(&em, BE_CMP, BE_W32, NULL, &eax, &slot);  /* C: cmpl -48(%rbp), %eax */
+  ir_liveness_allocate(em.list);
+  ir_emit_function(em.list);
+  char all[4096];
+  concat_emitted(em.list, all, sizeof(all));
+  CHECK(strstr(all, "-48(%rbp), %") != NULL,
+        "x86 frame-cmp: frame as compared operand (cmp -48(%rbp), reg)");
+  CHECK(strstr(all, ", -48(%rbp)") != NULL,
+        "x86 frame-cmp: frame as destination operand (cmp x, -48(%rbp))");
+  CHECK(strstr(all, "cmpl\t$9, -48(%rbp)") != NULL,
+        "x86 frame-cmp: immediate vs frame (cmpl $9, -48(%rbp))");
+  CHECK(strstr(all, "cmpl\t-48(%rbp), %eax") != NULL,
+        "x86 frame-cmp: frame vs physical reg (cmpl -48(%rbp), %eax)");
+}
+
+static void test_golden_aarch64_frame_cmp(const Target *T) {
+  ListNode_t *list = build_frame_cmp(T, "aacmp");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "ldr\t") != NULL && strstr(all, "[x29, #-48]") != NULL,
+        "aarch64 frame-cmp: loads the frame operand into a scratch");
+  CHECK(strstr(all, "cmp\t") != NULL,
+        "aarch64 frame-cmp: compares register-to-register after the load");
+}
+
 static void test_exec_frame(const Target *T, const char *sym, int a) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -1123,6 +1213,9 @@ int main(void) {
   test_golden_x86_frame_imm(T);
   test_exec_frame_imm(T, "beframei", 123);
   test_exec_frame_imm(T, "beframei0", 0);
+  test_golden_x86_frame_cmp(T);
+  test_exec_frame_cmp(T, "beframec1", 3, 1); /* 5 > 3 -> 1 */
+  test_exec_frame_cmp(T, "beframec0", 7, 0); /* 5 > 7 -> 0 */
 
   /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
    * float conversions.  Values are exactly representable so `==` is exact. */
@@ -1154,6 +1247,7 @@ int main(void) {
   test_golden_aarch64_frame_ext(A);
   test_golden_aarch64_frame_lea(A);
   test_golden_aarch64_frame_imm(A);
+  test_golden_aarch64_frame_cmp(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");

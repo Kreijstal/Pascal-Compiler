@@ -359,6 +359,38 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_CMP: {
     /* compare a to b: cmpX <b>, <a>  (flags reflect a ? b) */
+    if (a->kind == OPK_MEM_FRAME || b->kind == OPK_MEM_FRAME) {
+      /* One operand is a frame slot (fixed base, literal — no placeholder).
+       * cmp is a pure read: no def, and the only use is the other operand when
+       * it is a vreg.  AT&T order is `cmp <b>, <a>`. */
+      char fb[40];
+      if (a->kind == OPK_MEM_FRAME && b->kind == OPK_VREG) {
+        /* cmpX %0, <frameA> : use b */
+        x86_frame(a, fb, sizeof(fb));
+        snprintf(tmpl, sizeof(tmpl), "\tcmp%c\t%%0, %s\n", c, fb);
+        uses[0] = b->u.vreg;
+        em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+      } else if (a->kind == OPK_MEM_FRAME) {
+        /* cmpX <b-lit>, <frameA> : b is imm/phys — both literal */
+        x86_frame(a, fb, sizeof(fb));
+        x86_lit(b, lit, sizeof(lit));
+        snprintf(tmpl, sizeof(tmpl), "\tcmp%c\t%s, %s\n", c, lit, fb);
+        em->list = add_inst(em->list, tmpl);
+      } else if (a->kind == OPK_VREG) {
+        /* cmpX <frameB>, %0 : use a */
+        x86_frame(b, fb, sizeof(fb));
+        snprintf(tmpl, sizeof(tmpl), "\tcmp%c\t%s, %%0\n", c, fb);
+        uses[0] = a->u.vreg;
+        em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
+      } else {
+        /* cmpX <frameB>, <a-lit> : a is imm/phys — both literal */
+        x86_frame(b, fb, sizeof(fb));
+        x86_lit(a, lit, sizeof(lit));
+        snprintf(tmpl, sizeof(tmpl), "\tcmp%c\t%s, %s\n", c, fb, lit);
+        em->list = add_inst(em->list, tmpl);
+      }
+      break;
+    }
     if (a->kind == OPK_VREG && b->kind == OPK_VREG) {
       snprintf(tmpl, sizeof(tmpl), "\tcmp%c\t%%1, %%0\n", c);
       uses[0] = a->u.vreg;
