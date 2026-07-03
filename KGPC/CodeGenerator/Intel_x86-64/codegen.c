@@ -2188,14 +2188,19 @@ ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
   if (ctx == NULL || ctx->managed_dynarray_temp_count == 0)
     return inst_list;
 
-  char buffer[128];
   const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
 
   for (int i = 0; i < ctx->managed_dynarray_temp_count; ++i) {
     int rbp_offset = ctx->managed_dynarray_temp_offsets[i];
-    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", rbp_offset,
-             arg_reg);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: address-of the frame slot into a physical register via the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_PHYS, BE_W64, {.phys = arg_reg}};
+      BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(rbp_offset)}}};
+      kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
+    }
     inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
     inst_list = codegen_call_with_shadow_space(inst_list,
                                                "kgpc_dynarray_finalize_local");
