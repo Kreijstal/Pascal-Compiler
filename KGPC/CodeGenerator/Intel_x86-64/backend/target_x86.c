@@ -171,8 +171,12 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   Register_t *defs[2];
   Register_t *uses[4];
 
-  /* Float-width arithmetic/mov/cmp dispatch to the SSE path. */
-  if (x86_is_float(w) && op != BE_CVT_I2F && op != BE_CVT_F2I) {
+  /* Float-width arithmetic/mov/cmp dispatch to the SSE path.  LOAD/STORE are
+   * excluded: a float frame load/store is a plain movsd/movss to/from an xmm
+   * register, handled by the frame branches of BE_LOAD/BE_STORE below (the SSE
+   * arithmetic path does not model memory operands). */
+  if (x86_is_float(w) && op != BE_CVT_I2F && op != BE_CVT_F2I &&
+      op != BE_LOAD && op != BE_STORE) {
     x86_emit_float(em, op, w, dst, a, b);
     return;
   }
@@ -216,8 +220,13 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       if (dst->kind == OPK_PHYS) {
         /* <phys> := [frame]  →  movX <frame>, <phys>  (both operands literal:
          * no %N placeholder, no def/use — a fixed physical register is never
-         * allocated, so this is a plain string emission). */
-        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, fb, dst->u.phys);
+         * allocated, so this is a plain string emission).  A float width uses
+         * the SSE scalar mnemonic (movsd/movss) into an xmm register. */
+        if (x86_is_float(w))
+          snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%s, %s\n", x86_fsuffix(w), fb,
+                   dst->u.phys);
+        else
+          snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, fb, dst->u.phys);
         em->list = add_inst(em->list, tmpl);
         break;
       }
@@ -243,10 +252,15 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       x86_frame(dst, fb, sizeof(fb));
       if (a->kind == OPK_PHYS || a->kind == OPK_IMM) {
         /* [frame] := <phys/imm>  →  movX <phys/$imm>, <frame>  (both operands
-         * literal: no placeholder, no def/use). */
+         * literal: no placeholder, no def/use).  A float width uses the SSE
+         * scalar mnemonic (movsd/movss) from an xmm register. */
         char lit[48];
         x86_lit(a, lit, sizeof(lit));
-        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, lit, fb);
+        if (x86_is_float(w))
+          snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%s, %s\n", x86_fsuffix(w), lit,
+                   fb);
+        else
+          snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, lit, fb);
         em->list = add_inst(em->list, tmpl);
         break;
       }

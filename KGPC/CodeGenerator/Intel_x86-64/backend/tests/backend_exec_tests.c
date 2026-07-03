@@ -1119,6 +1119,66 @@ static void test_golden_aarch64_frame_cmp(const Target *T) {
         "aarch64 frame-cmp: compares register-to-register after the load");
 }
 
+/* Build `double f(double a)`: store the incoming xmm argument to a frame slot
+ * (BE_STORE, float width, physical xmm operand) and reload it into the xmm
+ * return register (BE_LOAD) — exercising the frame float mov path (movsd on
+ * x86; ldr/str d-reg on AArch64). */
+static ListNode_t *build_frame_float(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  BeOperand arg0 = {OPK_PHYS, BE_WF64, {.phys = T->arg_reg(0, BE_WF64)}};
+  BeOperand ret = {OPK_PHYS, BE_WF64, {.phys = T->return_reg(BE_WF64)}};
+  BeOperand slot = {OPK_MEM_FRAME, BE_WF64, {.mem_frame = {BE_BASE_FP, -48}}};
+  T->emit(&em, BE_STORE, BE_WF64, &slot, &arg0, NULL); /* [slot] = xmm0 */
+  T->emit(&em, BE_LOAD, BE_WF64, &ret, &slot, NULL);   /* xmm0 = [slot] */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void test_exec_frame_float(const Target *T, const char *sym) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_frame_float(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern double %s(double);\n"
+           "int main(void){return %s(3.5)==3.5?0:1;}\n",
+           sym, sym);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: frame float spill/reload %s(3.5)==3.5", sym);
+  CHECK(rc == 0, msg);
+}
+
+static void test_golden_x86_frame_float(const Target *T) {
+  ListNode_t *list = build_frame_float(T, "x86framef");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "movsd\t%xmm0, -48(%rbp)") != NULL,
+        "x86 frame-float: BE_STORE renders movsd %xmm0, -48(%rbp)");
+  CHECK(strstr(all, "movsd\t-48(%rbp), %xmm0") != NULL,
+        "x86 frame-float: BE_LOAD renders movsd -48(%rbp), %xmm0");
+}
+
+static void test_golden_aarch64_frame_float(const Target *T) {
+  ListNode_t *list = build_frame_float(T, "aaframef");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "str\td0, [x29, #-48]") != NULL,
+        "aarch64 frame-float: BE_STORE renders str d0, [x29, #-48]");
+  CHECK(strstr(all, "ldr\td0, [x29, #-48]") != NULL,
+        "aarch64 frame-float: BE_LOAD renders ldr d0, [x29, #-48]");
+}
+
 static void test_exec_frame(const Target *T, const char *sym, int a) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -1216,6 +1276,8 @@ int main(void) {
   test_golden_x86_frame_cmp(T);
   test_exec_frame_cmp(T, "beframec1", 3, 1); /* 5 > 3 -> 1 */
   test_exec_frame_cmp(T, "beframec0", 7, 0); /* 5 > 7 -> 0 */
+  test_golden_x86_frame_float(T);
+  test_exec_frame_float(T, "beframef");
 
   /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
    * float conversions.  Values are exactly representable so `==` is exact. */
@@ -1248,6 +1310,7 @@ int main(void) {
   test_golden_aarch64_frame_lea(A);
   test_golden_aarch64_frame_imm(A);
   test_golden_aarch64_frame_cmp(A);
+  test_golden_aarch64_frame_float(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");

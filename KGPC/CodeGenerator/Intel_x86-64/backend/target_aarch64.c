@@ -126,8 +126,12 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   Register_t *uses[4];
   int use32[6];
 
-  /* Float-width arithmetic/mov/cmp dispatch to the scalar-FP path. */
-  if (aa_is_float(w) && op != BE_CVT_I2F && op != BE_CVT_F2I) {
+  /* Float-width arithmetic/mov/cmp dispatch to the scalar-FP path.  LOAD/STORE
+   * are excluded: an AArch64 float frame load/store is a plain ldr/str to/from
+   * a d/s register (the register name carries the width), handled by the frame
+   * branches of BE_LOAD/BE_STORE below. */
+  if (aa_is_float(w) && op != BE_CVT_I2F && op != BE_CVT_F2I &&
+      op != BE_LOAD && op != BE_STORE) {
     aa_emit_float(em, op, w, dst, a, b);
     return;
   }
