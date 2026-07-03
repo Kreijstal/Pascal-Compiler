@@ -1179,6 +1179,158 @@ static void test_golden_aarch64_frame_float(const Target *T) {
         "aarch64 frame-float: BE_LOAD renders ldr d0, [x29, #-48]");
 }
 
+/* Build `int f(int a)`: take the address of a frame slot into a vreg pointer,
+ * store a THROUGH that pointer (BE_STORE via OPK_MEM_BD, base=vreg), reload it
+ * (BE_LOAD via OPK_MEM_BD) and return — base rendered as a 64-bit tracked USE. */
+static ListNode_t *build_mem_bd(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vp = get_free_reg(rs, &em.list);
+  Register_t *vr = get_free_reg(rs, &em.list);
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand lea_src = {OPK_MEM_FRAME, BE_W64, {.mem_frame = {BE_BASE_FP, -48}}};
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvp = {OPK_VREG, BE_W64, {.vreg = vp}};
+  BeOperand dvr = {OPK_VREG, BE_W32, {.vreg = vr}};
+  BeOperand mem = {OPK_MEM_BD, BE_W32, {.mem_bd = {vp, 0}}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  T->emit(&em, BE_LEA, BE_W64, &dvp, &lea_src, NULL); /* vp = &slot */
+  T->emit(&em, BE_STORE, BE_W32, &mem, &dva, NULL);   /* [vp] = a */
+  T->emit(&em, BE_LOAD, BE_W32, &dvr, &mem, NULL);    /* vr = [vp] */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dvr, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Build `int f(int a)`: store a to base[index] (index=1, scale=4) via
+ * OPK_MEM_BIS and reload it — base+index rendered as 64-bit tracked USES. */
+static ListNode_t *build_mem_bis(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+  BeFrame f = {sym, 32, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vb = get_free_reg(rs, &em.list);
+  Register_t *vi = get_free_reg(rs, &em.list);
+  Register_t *vr = get_free_reg(rs, &em.list);
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand lea_base = {OPK_MEM_FRAME, BE_W64, {.mem_frame = {BE_BASE_FP, -64}}};
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvb = {OPK_VREG, BE_W64, {.vreg = vb}};
+  BeOperand dvi = {OPK_VREG, BE_W64, {.vreg = vi}};
+  BeOperand dvr = {OPK_VREG, BE_W32, {.vreg = vr}};
+  BeOperand one = {OPK_IMM, BE_W64, {.imm = 1}};
+  BeOperand mem = {OPK_MEM_BIS, BE_W32, {.mem_bis = {vb, vi, 4, 0}}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  T->emit(&em, BE_LEA, BE_W64, &dvb, &lea_base, NULL); /* vb = &array */
+  T->emit(&em, BE_MOV, BE_W64, &dvi, &one, NULL);      /* vi = 1 */
+  T->emit(&em, BE_STORE, BE_W32, &mem, &dva, NULL);    /* array[1] = a */
+  T->emit(&em, BE_LOAD, BE_W32, &dvr, &mem, NULL);     /* vr = array[1] */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dvr, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+/* Build `int f(int a)`: store the low byte of a through a pointer, then
+ * sign/zero-extend it back via emit_ext with an OPK_MEM_BD source. */
+static ListNode_t *build_ext_deref(const Target *T, const char *sym,
+                                   int is_signed) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vp = get_free_reg(rs, &em.list);
+  Register_t *vr = get_free_reg(rs, &em.list);
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand lea_src = {OPK_MEM_FRAME, BE_W64, {.mem_frame = {BE_BASE_FP, -48}}};
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvp = {OPK_VREG, BE_W64, {.vreg = vp}};
+  BeOperand dvr = {OPK_VREG, BE_W32, {.vreg = vr}};
+  BeOperand mem = {OPK_MEM_BD, BE_W8, {.mem_bd = {vp, 0}}};
+  BeOperand memr = {OPK_MEM_BD, BE_W8, {.mem_bd = {vp, 0}}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);
+  T->emit(&em, BE_LEA, BE_W64, &dvp, &lea_src, NULL);     /* vp = &slot */
+  T->emit(&em, BE_STORE, BE_W8, &mem, &dva, NULL);        /* [vp] = (byte)a */
+  T->emit_ext(&em, &dvr, &memr, BE_W8, BE_W32, is_signed); /* vr = ext([vp]) */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dvr, NULL);
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void run_exec(const char *tag, const char *sym, ListNode_t *list,
+                     const char *proto_arg, int arg, int expected,
+                     const char *what) {
+  char spath[256], driver[512], msg[160];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(%s);\nint main(void){return %s(%d)==%d?0:1;}\n", sym,
+           proto_arg, sym, arg, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: %s %s(%d)==%d", what, sym, arg, expected);
+  (void)tag;
+  CHECK(rc == 0, msg);
+}
+
+static void test_mem_operands_x86(const Target *T) {
+  run_exec("bd", "bemembd", build_mem_bd(T, "bemembd"), "int", 42, 42,
+           "MEM_BD ptr deref roundtrip");
+  run_exec("bis", "bemembis", build_mem_bis(T, "bemembis"), "int", 77, 77,
+           "MEM_BIS array[index] roundtrip");
+  run_exec("zx", "beextz", build_ext_deref(T, "beextz", 0), "int", 0xFF, 255,
+           "emit_ext zero-extend from MEM_BD");
+  run_exec("sx", "beexts", build_ext_deref(T, "beexts", 1), "int", 0xFF, -1,
+           "emit_ext sign-extend from MEM_BD");
+}
+
+static void test_golden_x86_mem_operands(const Target *T) {
+  ListNode_t *l = build_mem_bis(T, "x86bis");
+  ir_liveness_allocate(l);
+  ir_emit_function(l);
+  char all[4096];
+  concat_emitted(l, all, sizeof(all));
+  CHECK(strstr(all, ",4), %") != NULL || strstr(all, ",4)") != NULL,
+        "x86 MEM_BIS: renders (base,index,4) index form");
+  ListNode_t *l2 = build_mem_bd(T, "x86bd");
+  ir_liveness_allocate(l2);
+  ir_emit_function(l2);
+  char all2[4096];
+  concat_emitted(l2, all2, sizeof(all2));
+  CHECK(strstr(all2, "(%r") != NULL,
+        "x86 MEM_BD: renders (%rbase) with a 64-bit base register");
+}
+
+static void test_golden_aarch64_mem_operands(const Target *T) {
+  ListNode_t *l = build_mem_bis(T, "aabis");
+  ir_liveness_allocate(l);
+  ir_emit_function(l);
+  char all[4096];
+  concat_emitted(l, all, sizeof(all));
+  CHECK(strstr(all, "lsl #2") != NULL,
+        "aarch64 MEM_BIS: renders [base, index, lsl #2] for scale 4");
+  CHECK(strstr(all, "%rbp") == NULL && strstr(all, "%rax") == NULL,
+        "aarch64 MEM_BIS: no x86 register leakage");
+}
+
 static void test_exec_frame(const Target *T, const char *sym, int a) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -1278,6 +1430,8 @@ int main(void) {
   test_exec_frame_cmp(T, "beframec0", 7, 0); /* 5 > 7 -> 0 */
   test_golden_x86_frame_float(T);
   test_exec_frame_float(T, "beframef");
+  test_golden_x86_mem_operands(T);
+  test_mem_operands_x86(T);
 
   /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
    * float conversions.  Values are exactly representable so `==` is exact. */
@@ -1311,6 +1465,7 @@ int main(void) {
   test_golden_aarch64_frame_imm(A);
   test_golden_aarch64_frame_cmp(A);
   test_golden_aarch64_frame_float(A);
+  test_golden_aarch64_mem_operands(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");

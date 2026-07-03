@@ -44,6 +44,11 @@ static int *vregp(BeEmitter *em) {
  * for single) and the xmm register file, not the GP mnemonic-suffix path. */
 static int x86_is_float(BeWidth w) { return w == BE_WF32 || w == BE_WF64; }
 
+/* Map a BeWidth to a reg_width_sel code (defined below; forward-declared so the
+ * memory-operand loads can force a 64-bit address base regardless of the value
+ * mnemonic's suffix). */
+static int x86_width_sel(BeWidth w);
+
 /* SSE scalar suffix: "sd" for double, "ss" for single. */
 static const char *x86_fsuffix(BeWidth w) { return (w == BE_WF32) ? "ss" : "sd"; }
 
@@ -237,12 +242,42 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
       break;
     }
-    /* dst(vreg) := [a: MEM_BD(base vreg, disp)]  →  movX disp(%1), %0 */
+    if (a->kind == OPK_MEM_BIS) {
+      /* dst(vreg) := [base + index*scale + disp]  →  movX disp(%1,%2,scale), %0.
+       * base(%1) and index(%2) are tracked vreg USES rendered at 64-bit (address
+       * registers), independent of the value mnemonic; dst(%0) is at width w. */
+      assert(dst->kind == OPK_VREG);
+      int dd = a->u.mem_bis.disp;
+      if (dd == 0)
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t(%%1,%%2,%d), %%0\n", c,
+                 a->u.mem_bis.scale);
+      else
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%1,%%2,%d), %%0\n", c, dd,
+                 a->u.mem_bis.scale);
+      defs[0] = dst->u.vreg;
+      uses[0] = a->u.mem_bis.base;
+      uses[1] = a->u.mem_bis.index;
+      int sel[3] = {x86_width_sel(w), 1, 1};
+      em->list =
+          be_add_inst_du_wsel(em->list, vregp(em), defs, 1, uses, 2, tmpl, sel);
+      break;
+    }
+    /* dst(vreg) := [a: MEM_BD(base vreg, disp)]  →  movX disp(%1), %0.
+     * The base(%1) is a tracked vreg USE rendered at 64-bit (an address is
+     * always 64-bit), independent of the value mnemonic's suffix. */
     assert(dst->kind == OPK_VREG && a->kind == OPK_MEM_BD);
-    snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%1), %%0\n", c, a->u.mem_bd.disp);
+    if (a->u.mem_bd.disp == 0)
+      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t(%%1), %%0\n", c);
+    else
+      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%1), %%0\n", c,
+               a->u.mem_bd.disp);
     defs[0] = dst->u.vreg;
     uses[0] = a->u.mem_bd.base;
-    em->list = be_add_inst_du(em->list, vregp(em), defs, 1, uses, 1, tmpl);
+    {
+      int sel[2] = {x86_width_sel(w), 1};
+      em->list =
+          be_add_inst_du_wsel(em->list, vregp(em), defs, 1, uses, 1, tmpl, sel);
+    }
     break;
   }
 
@@ -271,13 +306,41 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
       break;
     }
-    /* [dst: MEM_BD(base vreg, disp)] := a(vreg)  →  movX %0, disp(%1) */
+    if (dst->kind == OPK_MEM_BIS) {
+      /* [base + index*scale + disp] := a(vreg)  →  movX %0, disp(%1,%2,scale).
+       * value(%0) at width w; base(%1)/index(%2) are tracked vreg USES at
+       * 64-bit. */
+      assert(a->kind == OPK_VREG);
+      int dd = dst->u.mem_bis.disp;
+      if (dd == 0)
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, (%%1,%%2,%d)\n", c,
+                 dst->u.mem_bis.scale);
+      else
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %d(%%1,%%2,%d)\n", c, dd,
+                 dst->u.mem_bis.scale);
+      uses[0] = a->u.vreg;
+      uses[1] = dst->u.mem_bis.base;
+      uses[2] = dst->u.mem_bis.index;
+      int sel[3] = {x86_width_sel(w), 1, 1};
+      em->list =
+          be_add_inst_du_wsel(em->list, vregp(em), NULL, 0, uses, 3, tmpl, sel);
+      break;
+    }
+    /* [dst: MEM_BD(base vreg, disp)] := a(vreg)  →  movX %0, disp(%1).
+     * value(%0) at width w; base(%1) is a tracked vreg USE at 64-bit. */
     assert(dst->kind == OPK_MEM_BD && a->kind == OPK_VREG);
-    snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %d(%%1)\n", c,
-             dst->u.mem_bd.disp);
+    if (dst->u.mem_bd.disp == 0)
+      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, (%%1)\n", c);
+    else
+      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%%0, %d(%%1)\n", c,
+               dst->u.mem_bd.disp);
     uses[0] = a->u.vreg;
     uses[1] = dst->u.mem_bd.base;
-    em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 2, tmpl);
+    {
+      int sel[2] = {x86_width_sel(w), 1};
+      em->list =
+          be_add_inst_du_wsel(em->list, vregp(em), NULL, 0, uses, 2, tmpl, sel);
+    }
     break;
   }
 
@@ -621,6 +684,43 @@ static void x86_emit_ext(BeEmitter *em, const BeOperand *dst,
     char ftmpl[80];
     snprintf(ftmpl, sizeof(ftmpl), "\t%s\t%s, %s\n", mn, fb, dst->u.phys);
     em->list = add_inst(em->list, ftmpl);
+    return;
+  }
+
+  /* Memory-source sign/zero-extend load into a vreg:
+   *   <mn> (%1), %0        (MEM_BD)   or   <mn> disp(%1,%2,scale), %0 (MEM_BIS)
+   * dst(%0) is rendered at dstw; the address registers base(%1)/index(%2) are
+   * tracked vreg USES rendered at 64-bit — closing the liveness hole the raw
+   * ->bit_64 name-baking left open. */
+  if (src->kind == OPK_MEM_BD || src->kind == OPK_MEM_BIS) {
+    assert(dst->kind == OPK_VREG);
+    char memstr[48], mtmpl[80];
+    Register_t *muses[2];
+    int nu, sel[3];
+    if (src->kind == OPK_MEM_BD) {
+      if (src->u.mem_bd.disp == 0)
+        snprintf(memstr, sizeof(memstr), "(%%1)");
+      else
+        snprintf(memstr, sizeof(memstr), "%d(%%1)", src->u.mem_bd.disp);
+      muses[0] = src->u.mem_bd.base;
+      nu = 1;
+    } else {
+      if (src->u.mem_bis.disp == 0)
+        snprintf(memstr, sizeof(memstr), "(%%1,%%2,%d)", src->u.mem_bis.scale);
+      else
+        snprintf(memstr, sizeof(memstr), "%d(%%1,%%2,%d)", src->u.mem_bis.disp,
+                 src->u.mem_bis.scale);
+      muses[0] = src->u.mem_bis.base;
+      muses[1] = src->u.mem_bis.index;
+      nu = 2;
+    }
+    snprintf(mtmpl, sizeof(mtmpl), "\t%s\t%s, %%0\n", mn, memstr);
+    Register_t *mdefs[1] = {dst->u.vreg};
+    sel[0] = x86_width_sel(dstw); /* %0 = destination */
+    sel[1] = 1;                   /* base address = 64-bit */
+    sel[2] = 1;                   /* index address = 64-bit */
+    em->list = be_add_inst_du_wsel(em->list, vregp(em), mdefs, 1, muses, nu,
+                                   mtmpl, sel);
     return;
   }
 

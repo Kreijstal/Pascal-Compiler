@@ -28,6 +28,20 @@ static int *vregp(BeEmitter *em) {
 
 static int aa_is_float(BeWidth w) { return w == BE_WF32 || w == BE_WF64; }
 
+/* Index scale (1/2/4/8) -> AArch64 lsl shift amount (0/1/2/3). */
+static int aa_scale_shift(int scale) {
+  switch (scale) {
+  case 2:
+    return 1;
+  case 4:
+    return 2;
+  case 8:
+    return 3;
+  default:
+    return 0;
+  }
+}
+
 static void aa_lit(const BeOperand *op, char *buf, size_t n) {
   switch (op->kind) {
   case OPK_IMM:
@@ -324,6 +338,22 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
           be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl, use32);
       break;
     }
+    if (a->kind == OPK_MEM_BIS) {
+      /* dst(vreg) := [base + index*scale]  →  ldr %0, [%1, %2, lsl #shift].
+       * base(%1)/index(%2) are tracked vreg USES at 64-bit; value at width w. */
+      assert(dst->kind == OPK_VREG);
+      int shift = aa_scale_shift(a->u.mem_bis.scale);
+      snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%%1, %%2, lsl #%d]\n", shift);
+      defs[0] = dst->u.vreg;
+      uses[0] = a->u.mem_bis.base;
+      uses[1] = a->u.mem_bis.index;
+      use32[0] = w32; /* value width */
+      use32[1] = 0;   /* base = 64-bit */
+      use32[2] = 0;   /* index = 64-bit */
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 2, tmpl, use32);
+      break;
+    }
     assert(dst->kind == OPK_VREG && a->kind == OPK_MEM_BD);
     snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%%1, #%d]\n", a->u.mem_bd.disp);
     defs[0] = dst->u.vreg;
@@ -376,6 +406,21 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       use32[0] = w32; /* stored value width */
       em->list =
           be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1, tmpl, use32);
+      break;
+    }
+    if (dst->kind == OPK_MEM_BIS) {
+      /* [base + index*scale] := a(vreg)  →  str %0, [%1, %2, lsl #shift]. */
+      assert(a->kind == OPK_VREG);
+      int shift = aa_scale_shift(dst->u.mem_bis.scale);
+      snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%%1, %%2, lsl #%d]\n", shift);
+      uses[0] = a->u.vreg;
+      uses[1] = dst->u.mem_bis.base;
+      uses[2] = dst->u.mem_bis.index;
+      use32[0] = w32; /* value width */
+      use32[1] = 0;   /* base = 64-bit */
+      use32[2] = 0;   /* index = 64-bit */
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 3, tmpl, use32);
       break;
     }
     assert(dst->kind == OPK_MEM_BD && a->kind == OPK_VREG);
@@ -546,6 +591,42 @@ static void aa_emit_ext(BeEmitter *em, const BeOperand *dst,
     snprintf(ftmpl, sizeof(ftmpl), "\t%s\t%s, [%s, #%lld]\n", lmn, dst->u.phys,
              base, src->u.mem_frame.disp);
     em->list = add_inst(em->list, ftmpl);
+    return;
+  }
+
+  /* Memory-source extend load into a vreg: the load-with-extend family from a
+   * tracked base(%1) [+ index(%2)] address.  base/index are 64-bit USES; the
+   * dest register name (w vs x) carries its width. */
+  if (src->kind == OPK_MEM_BD || src->kind == OPK_MEM_BIS) {
+    assert(dst->kind == OPK_VREG);
+    const char *lmn = is_signed
+                          ? (from == BE_W8 ? "ldrsb"
+                             : from == BE_W16 ? "ldrsh"
+                                              : "ldrsw")
+                          : (from == BE_W8 ? "ldrb"
+                             : from == BE_W16 ? "ldrh"
+                                              : "ldr");
+    char mtmpl[80];
+    Register_t *muses[2];
+    int nu, sel[3];
+    if (src->kind == OPK_MEM_BD) {
+      snprintf(mtmpl, sizeof(mtmpl), "\t%s\t%%0, [%%1, #%d]\n", lmn,
+               src->u.mem_bd.disp);
+      muses[0] = src->u.mem_bd.base;
+      nu = 1;
+    } else {
+      snprintf(mtmpl, sizeof(mtmpl), "\t%s\t%%0, [%%1, %%2, lsl #%d]\n", lmn,
+               aa_scale_shift(src->u.mem_bis.scale));
+      muses[0] = src->u.mem_bis.base;
+      muses[1] = src->u.mem_bis.index;
+      nu = 2;
+    }
+    Register_t *mdefs[1] = {dst->u.vreg};
+    sel[0] = aa_width_sel(to == BE_W64 && is_signed ? BE_W64 : BE_W32);
+    sel[1] = 1; /* base 64-bit */
+    sel[2] = 1; /* index 64-bit */
+    em->list = be_add_inst_du_wsel(em->list, vregp(em), mdefs, 1, muses, nu,
+                                   mtmpl, sel);
     return;
   }
 
