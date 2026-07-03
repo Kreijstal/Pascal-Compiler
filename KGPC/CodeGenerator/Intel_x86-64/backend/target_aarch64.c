@@ -359,6 +359,30 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   }
 
   case BE_LEA:
+    if (a->kind == OPK_MEM_FRAME) {
+      /* dst := &frame-slot.  AArch64 has no lea; a frame-slot address is
+       * base +/- disp: add for a non-negative offset, sub for a negative one
+       * (the immediate is unsigned).  Neutral counterpart to x86 leaq
+       * disp(%rbp),<dst> — the divergent add/sub spelling is the proof. */
+      const char *base = (a->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+      long long d = a->u.mem_frame.disp;
+      const char *op_mn = (d < 0) ? "sub" : "add";
+      long long mag = (d < 0) ? -d : d;
+      if (dst->kind == OPK_PHYS) {
+        snprintf(tmpl, sizeof(tmpl), "\t%s\t%s, %s, #%lld\n", op_mn,
+                 dst->u.phys, base, mag);
+        em->list = add_inst(em->list, tmpl);
+      } else {
+        assert(dst->kind == OPK_VREG);
+        snprintf(tmpl, sizeof(tmpl), "\t%s\t%%0, %s, #%lld\n", op_mn, base, mag);
+        defs[0] = dst->u.vreg;
+        use32[0] = 0; /* an address is always 64-bit */
+        em->list =
+            be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl, use32);
+      }
+      break;
+    }
+    /* fall through to unsupported */
   default:
     assert(0 && "unsupported aarch64 op");
     break;

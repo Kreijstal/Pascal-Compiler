@@ -378,6 +378,24 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
   }
 
   case BE_LEA: {
+    if (a->kind == OPK_MEM_FRAME) {
+      /* dst := &frame-slot  ->  leaq disp(%rbp), <dst>.  The address is always
+       * 64-bit (leaq), independent of the op width.  A vreg dst uses the %0
+       * placeholder (def, no use); a physical dst renders literally via
+       * add_inst (no placeholder/def-use). */
+      char fb[40];
+      x86_frame(a, fb, sizeof(fb));
+      if (dst->kind == OPK_PHYS) {
+        snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s, %s\n", fb, dst->u.phys);
+        em->list = add_inst(em->list, tmpl);
+      } else {
+        assert(dst->kind == OPK_VREG);
+        snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s, %%0\n", fb);
+        defs[0] = dst->u.vreg;
+        em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
+      }
+      break;
+    }
     /* dst(vreg) := &a  (RIP symbol or MEM_BD) */
     assert(dst->kind == OPK_VREG);
     if (a->kind == OPK_RIP_SYM) {
