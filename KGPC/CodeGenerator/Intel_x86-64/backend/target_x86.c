@@ -241,10 +241,12 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     if (dst->kind == OPK_MEM_FRAME) {
       char fb[40];
       x86_frame(dst, fb, sizeof(fb));
-      if (a->kind == OPK_PHYS) {
-        /* [frame] := <phys>  →  movX <phys>, <frame>  (both operands literal:
-         * no placeholder, no def/use). */
-        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, a->u.phys, fb);
+      if (a->kind == OPK_PHYS || a->kind == OPK_IMM) {
+        /* [frame] := <phys/imm>  →  movX <phys/$imm>, <frame>  (both operands
+         * literal: no placeholder, no def/use). */
+        char lit[48];
+        x86_lit(a, lit, sizeof(lit));
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, lit, fb);
         em->list = add_inst(em->list, tmpl);
         break;
       }

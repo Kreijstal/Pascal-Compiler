@@ -963,6 +963,72 @@ static void test_golden_aarch64_frame_lea(const Target *T) {
         "aarch64 frame-lea: BE_LEA renders sub <dst>, x29, #48");
 }
 
+/* Build `int f(void)`: store an immediate straight to a frame slot (BE_STORE
+ * with an OPK_IMM value), reload it, and return it — exercising the immediate
+ * value operand. */
+static ListNode_t *build_frame_imm(const Target *T, const char *sym, int imm) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *vv = get_free_reg(rs, &em.list);
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand slot = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -48}}};
+  BeOperand ival = {OPK_IMM, BE_W32, {.imm = imm}};
+  BeOperand dvv = {OPK_VREG, BE_W32, {.vreg = vv}};
+  T->emit(&em, BE_STORE, BE_W32, &slot, &ival, NULL); /* [slot] = $imm */
+  T->emit(&em, BE_LOAD, BE_W32, &dvv, &slot, NULL);   /* vv = [slot] */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dvv, NULL);     /* return vv */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void test_exec_frame_imm(const Target *T, const char *sym, int imm) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_frame_imm(T, sym, imm);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(void);\nint main(void){return %s()==%d?0:1;}\n", sym,
+           sym, imm);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: frame imm store %s()==%d", sym, imm);
+  CHECK(rc == 0, msg);
+}
+
+static void test_golden_x86_frame_imm(const Target *T) {
+  ListNode_t *list = build_frame_imm(T, "x86framei", 123);
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "movl\t$123, -48(%rbp)") != NULL,
+        "x86 frame-imm: BE_STORE renders movl $123, -48(%rbp)");
+}
+
+static void test_golden_aarch64_frame_imm(const Target *T) {
+  ListNode_t *l0 = build_frame_imm(T, "aaframei0", 0);
+  ir_liveness_allocate(l0);
+  ir_emit_function(l0);
+  char a0[4096];
+  concat_emitted(l0, a0, sizeof(a0));
+  CHECK(strstr(a0, "str\twzr, [x29, #-48]") != NULL,
+        "aarch64 frame-imm: zero stores via the zero register (str wzr)");
+  ListNode_t *l1 = build_frame_imm(T, "aaframei1", 7);
+  ir_liveness_allocate(l1);
+  ir_emit_function(l1);
+  char a1[4096];
+  concat_emitted(l1, a1, sizeof(a1));
+  CHECK(strstr(a1, "mov\t") != NULL && strstr(a1, "#7") != NULL &&
+            strstr(a1, "str\t") != NULL,
+        "aarch64 frame-imm: non-zero materializes into a scratch then str");
+}
+
 static void test_exec_frame(const Target *T, const char *sym, int a) {
   char spath[256], driver[512], msg[128];
   snprintf(spath, sizeof(spath), "be_%s.s", sym);
@@ -1054,6 +1120,9 @@ int main(void) {
   test_exec_frame_ext(T, "beframex", -5);
   test_golden_x86_frame_lea(T);
   test_exec_frame_lea(T, "beframel", 77);
+  test_golden_x86_frame_imm(T);
+  test_exec_frame_imm(T, "beframei", 123);
+  test_exec_frame_imm(T, "beframei0", 0);
 
   /* Floating-point (double / IEEE-754 64-bit): SSE scalar arithmetic + int↔
    * float conversions.  Values are exactly representable so `==` is exact. */
@@ -1084,6 +1153,7 @@ int main(void) {
   test_golden_aarch64_frame_phys(A);
   test_golden_aarch64_frame_ext(A);
   test_golden_aarch64_frame_lea(A);
+  test_golden_aarch64_frame_imm(A);
   fprintf(stderr,
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");

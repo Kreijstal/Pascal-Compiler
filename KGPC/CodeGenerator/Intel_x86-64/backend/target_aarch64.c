@@ -318,6 +318,30 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
         em->list = add_inst(em->list, tmpl);
         break;
       }
+      if (a->kind == OPK_IMM) {
+        /* AArch64 has no store-immediate.  Zero stores the zero register
+         * directly; any other value is materialized into a scratch register
+         * first (the neutral counterpart to x86's single movX $imm,disp(%rbp)). */
+        if (a->u.imm == 0) {
+          snprintf(tmpl, sizeof(tmpl), "\tstr\t%s, [%s, #%lld]\n",
+                   w32 ? "wzr" : "xzr", base, dst->u.mem_frame.disp);
+          em->list = add_inst(em->list, tmpl);
+        } else {
+          Register_t *scr = get_free_reg(get_reg_stack(), &em->list);
+          assert(scr != NULL && "no scratch register for aarch64 imm store");
+          BeOperand sd = {OPK_VREG, w, {.vreg = scr}};
+          BeOperand si = {OPK_IMM, w, {.imm = a->u.imm}};
+          aa_emit(em, BE_MOV, w, &sd, &si, NULL); /* mov scr, #imm */
+          snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%s, #%lld]\n", base,
+                   dst->u.mem_frame.disp);
+          uses[0] = scr;
+          use32[0] = w32;
+          em->list = be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1,
+                                      tmpl, use32);
+          free_reg(get_reg_stack(), scr);
+        }
+        break;
+      }
       /* [frame] := a(vreg)  →  str %0, [<fp/sp>, #disp]  (fixed base) */
       assert(a->kind == OPK_VREG);
       snprintf(tmpl, sizeof(tmpl), "\tstr\t%%0, [%s, #%lld]\n", base,
