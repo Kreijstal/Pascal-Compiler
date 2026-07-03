@@ -4442,9 +4442,19 @@ ListNode_t *codegen_pass_arguments(
         temp_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (temp_reg == NULL)
           return inst_list;
-        snprintf(buffer, sizeof(buffer), "\tmovslq\t-%d(%%rbp), %s\n",
-                 arg_infos[i].spill->offset, temp_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          /* Integrated: sign-extend load from the frame slot straight into a
+           * physical register through the backend vtable (byte-identical). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64, {.phys = temp_reg->bit_64}};
+          BeOperand src = {
+              OPK_MEM_FRAME,
+              BE_W32,
+              {.mem_frame = {BE_BASE_FP,
+                             -(long long)arg_infos[i].spill->offset}}};
+          kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W32, BE_W64, 1);
+          inst_list = em.list;
+        }
       } else {
         temp_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (temp_reg == NULL)

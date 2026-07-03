@@ -451,9 +451,31 @@ static int aa_width_sel(BeWidth w) {
 static void aa_emit_ext(BeEmitter *em, const BeOperand *dst,
                         const BeOperand *src, BeWidth from, BeWidth to,
                         int is_signed) {
-  assert(dst->kind == OPK_VREG && src->kind == OPK_VREG);
   assert(from == BE_W8 || from == BE_W16 || from == BE_W32);
   assert(to == BE_W32 || to == BE_W64);
+
+  /* Frame-source extend load into a fixed physical register: the AArch64
+   * load-with-extend family (ldrsb/ldrsh/ldrsw signed; ldrb/ldrh/ldr unsigned),
+   * rendered literally.  Neutral counterpart to x86's movsX/movzX disp(%rbp),
+   * <phys>.  The dest register name (w vs x) carries its width. */
+  if (src->kind == OPK_MEM_FRAME) {
+    assert(dst->kind == OPK_PHYS);
+    const char *base = (src->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+    const char *lmn = is_signed
+                          ? (from == BE_W8 ? "ldrsb"
+                             : from == BE_W16 ? "ldrsh"
+                                              : "ldrsw")
+                          : (from == BE_W8 ? "ldrb"
+                             : from == BE_W16 ? "ldrh"
+                                              : "ldr");
+    char ftmpl[80];
+    snprintf(ftmpl, sizeof(ftmpl), "\t%s\t%s, [%s, #%lld]\n", lmn, dst->u.phys,
+             base, src->u.mem_frame.disp);
+    em->list = add_inst(em->list, ftmpl);
+    return;
+  }
+
+  assert(dst->kind == OPK_VREG && src->kind == OPK_VREG);
 
   const char *mn;
   BeWidth dstw;

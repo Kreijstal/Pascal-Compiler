@@ -511,7 +511,6 @@ static int x86_width_sel(BeWidth w) {
 static void x86_emit_ext(BeEmitter *em, const BeOperand *dst,
                          const BeOperand *src, BeWidth from, BeWidth to,
                          int is_signed) {
-  assert(dst->kind == OPK_VREG && src->kind == OPK_VREG);
   assert(from == BE_W8 || from == BE_W16 || from == BE_W32);
   assert(to == BE_W32 || to == BE_W64);
 
@@ -543,6 +542,23 @@ static void x86_emit_ext(BeEmitter *em, const BeOperand *dst,
     dstw = BE_W32;
   }
 
+  /* Frame-source sign/zero-extend load into a fixed physical register:
+   *   <mn> disp(%rbp), <phys>   (e.g. movslq -N(%rbp), %rax)
+   * Both operands are literal — no %N placeholder, no def/use (a physical
+   * register is never allocated).  The destination's register name (%rax vs
+   * %eax) already carries `dstw`, so no width-sel is needed.  Matches the raw
+   * add_inst templates the live compiler uses for spill-slot widening loads. */
+  if (src->kind == OPK_MEM_FRAME) {
+    assert(dst->kind == OPK_PHYS);
+    char fb[40];
+    x86_frame(src, fb, sizeof(fb));
+    char ftmpl[80];
+    snprintf(ftmpl, sizeof(ftmpl), "\t%s\t%s, %s\n", mn, fb, dst->u.phys);
+    em->list = add_inst(em->list, ftmpl);
+    return;
+  }
+
+  assert(dst->kind == OPK_VREG && src->kind == OPK_VREG);
   char tmpl[64];
   snprintf(tmpl, sizeof(tmpl), "\t%s\t%%1, %%0\n", mn);
   Register_t *defs[1] = {dst->u.vreg};
