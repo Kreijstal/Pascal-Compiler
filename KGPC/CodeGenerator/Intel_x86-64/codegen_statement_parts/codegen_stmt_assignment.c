@@ -35,10 +35,15 @@ static ListNode_t *codegen_reload_if_spilled(ListNode_t *inst_list,
   if (new_reg == NULL)
     return inst_list;
 
-  char buffer[128];
-  snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-           tracker->spill_slot->offset, new_reg->bit_64);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    /* Integrated: load from the frame slot into a physical register via the vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_PHYS, BE_W64, {.phys = new_reg->bit_64}};
+    BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(tracker->spill_slot->offset)}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
+  }
 
   /* Release the old (spilled) Register_t entry and swap to the new one.
    * Clearing the spill callback is implicit since free_reg clears it. */
@@ -2468,10 +2473,13 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
            * after argument evaluation so it cannot be clobbered. */
           {
             const char *self_reg = current_arg_reg64(0);
-            char tmpl[96];
-            snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %s\n",
-                     dest_save_slot->offset, self_reg);
-            inst_list = add_inst(inst_list, tmpl);
+            /* Integrated: load from the frame slot into a physical register via the vtable. */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_PHYS, BE_W64, {.phys = self_reg}};
+            BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                             {.mem_frame = {BE_BASE_FP, -(long long)(dest_save_slot->offset)}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
           }
 
           char buffer[128];
@@ -2726,9 +2734,15 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
               0);
 
           char buffer[128];
-          snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                   dest_save_slot->offset, ret_ptr_reg);
-          inst_list = add_inst(inst_list, buffer);
+          {
+            /* Integrated: load from the frame slot into a physical register via the vtable. */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_PHYS, BE_W64, {.phys = ret_ptr_reg}};
+            BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                             {.mem_frame = {BE_BASE_FP, -(long long)(dest_save_slot->offset)}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
+          }
 
           /* For class method calls, dereference Self to get VMT pointer.
            * Self is at arg reg 1 (after SRET buffer at arg reg 0). */
