@@ -262,6 +262,25 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
           be_add_inst_du_wsel(em->list, vregp(em), defs, 1, uses, 2, tmpl, sel);
       break;
     }
+    if (dst->kind == OPK_PHYS) {
+      /* <phys> := [a: MEM_BD(base vreg, disp)]  →  movX disp(%0), <phys>.
+       * The destination is a fixed physical register (never allocated, so it
+       * stays literal); the base(%0) is a tracked vreg USE rendered at 64-bit,
+       * mirroring the MEM_FRAME phys-dst branch above. */
+      assert(a->kind == OPK_MEM_BD);
+      if (a->u.mem_bd.disp == 0)
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t(%%0), %s\n", c, dst->u.phys);
+      else
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%0), %s\n", c,
+                 a->u.mem_bd.disp, dst->u.phys);
+      uses[0] = a->u.mem_bd.base;
+      {
+        int sel[1] = {1}; /* base address = 64-bit */
+        em->list = be_add_inst_du_wsel(em->list, vregp(em), NULL, 0, uses, 1,
+                                       tmpl, sel);
+      }
+      break;
+    }
     /* dst(vreg) := [a: MEM_BD(base vreg, disp)]  →  movX disp(%1), %0.
      * The base(%1) is a tracked vreg USE rendered at 64-bit (an address is
      * always 64-bit), independent of the value mnemonic's suffix. */

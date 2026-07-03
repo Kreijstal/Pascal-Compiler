@@ -354,6 +354,19 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
           be_add_inst_du_w(em->list, vregp(em), defs, 1, uses, 2, tmpl, use32);
       break;
     }
+    if (dst->kind == OPK_PHYS) {
+      /* <phys> := [base(vreg)+disp]  →  ldr <phys>, [%0, #disp].  The
+       * destination is a fixed physical register (literal); the base(%0) is a
+       * tracked vreg USE at 64-bit, mirroring the MEM_FRAME phys-dst branch. */
+      assert(a->kind == OPK_MEM_BD);
+      snprintf(tmpl, sizeof(tmpl), "\tldr\t%s, [%%0, #%d]\n", dst->u.phys,
+               a->u.mem_bd.disp);
+      uses[0] = a->u.mem_bd.base;
+      use32[0] = 0; /* address register is always 64-bit */
+      em->list =
+          be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1, tmpl, use32);
+      break;
+    }
     assert(dst->kind == OPK_VREG && a->kind == OPK_MEM_BD);
     snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%%1, #%d]\n", a->u.mem_bd.disp);
     defs[0] = dst->u.vreg;

@@ -1424,8 +1424,18 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
         const char *res32 = reg_to_reg32(left, left_reg);
         const char *res8 = reg32_to_reg8(res32, left_reg);
         if (ca64 != NULL && res64 != NULL && res32 != NULL && res8 != NULL) {
-          snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", ca64, res64);
-          inst_list = add_inst(inst_list, buffer);
+          {
+            /* Integrated: 64-bit load of the dynarray data pointer through the
+             * vtable; the descriptor base is a tracked vreg USE (was a baked
+             * name, invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_VREG, BE_W64,
+                             {.vreg = (Register_t *)left_reg}};
+            BeOperand src = {OPK_MEM_BD, BE_W64,
+                             {.mem_bd = {(Register_t *)ca_reg, 0}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
+          }
           snprintf(buffer, sizeof(buffer), "\tcmpq\t$0, %s\n", res64);
           inst_list = add_inst(inst_list, buffer);
           snprintf(buffer, sizeof(buffer), "\t%s\t%s\n",
@@ -1751,9 +1761,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
       inst_list = add_inst(inst_list, buffer);
       for (int i = 0; i < 4; ++i) {
         int byte_off = i * 8;
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n", byte_off,
-                 left_addr->bit_64, tmp->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          /* Integrated: 64-bit load of the set qword through the vtable; the
+           * base address is a tracked vreg USE (was a baked name, invisible
+           * to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_VREG, BE_W64, {.vreg = tmp}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {left_addr, byte_off}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
+        }
         snprintf(buffer, sizeof(buffer), "\txorq\t%d(%s), %s\n", byte_off,
                  right_addr->bit_64, tmp->bit_64);
         inst_list = add_inst(inst_list, buffer);
@@ -1868,8 +1885,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
          * For GE:  accum |= RHS[i] AND NOT LHS[i] */
         const char *a_addr =
             (relop_kind == LE) ? left_addr->bit_64 : right_addr->bit_64;
-        const char *b_addr =
-            (relop_kind == LE) ? right_addr->bit_64 : left_addr->bit_64;
+        Register_t *b_base = (relop_kind == LE) ? right_addr : left_addr;
 
         snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", left_reg->bit_64,
                  left_reg->bit_64);
@@ -1878,9 +1894,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
         int qwords = 4;
         for (int i = 0; i < qwords; ++i) {
           int byte_off = i * 8;
-          snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%s), %s\n", byte_off,
-                   b_addr, tmp->bit_64);
-          inst_list = add_inst(inst_list, buffer);
+          {
+            /* Integrated: 64-bit load of the set qword through the vtable;
+             * the base address is a tracked vreg USE (was a baked name,
+             * invisible to liveness). */
+            BeEmitter em = codegen_beemitter(inst_list, ctx);
+            BeOperand dst = {OPK_VREG, BE_W64, {.vreg = tmp}};
+            BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {b_base, byte_off}}};
+            kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+            inst_list = em.list;
+          }
           snprintf(buffer, sizeof(buffer), "\tnotq\t%s\n", tmp->bit_64);
           inst_list = add_inst(inst_list, buffer);
           snprintf(buffer, sizeof(buffer), "\tandq\t%d(%s), %s\n", byte_off,
@@ -2577,15 +2600,27 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left,
       Register_t *left_mem_tmp = NULL;
       Register_t *right_mem_tmp = NULL;
       if (left_is_tconstexprint && left_reg != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
-                 left_reg->bit_64, left_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: 64-bit load of the TConstExprInt payload through the
+         * vtable; the base is a tracked vreg USE (was a baked name, invisible
+         * to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = (Register_t *)left_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W64,
+                         {.mem_bd = {(Register_t *)left_reg, 8}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
         cmp_left = left_reg->bit_64;
       }
       if (right_is_tconstexprint && right_reg != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
-                 right_reg->bit_64, right_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: 64-bit load of the TConstExprInt payload through the
+         * vtable; the base is a tracked vreg USE (was a baked name, invisible
+         * to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = (Register_t *)right_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W64,
+                         {.mem_bd = {(Register_t *)right_reg, 8}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
         cmp_right = right_reg->bit_64;
       }
       if (use_qword) {
