@@ -2493,6 +2493,36 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
                                   "UnicodeChar"))) {
       element_size = 2;
     }
+    /* Single-precision array element (array[..] of Single, 4-byte stride):
+     * real values are materialized as double bits in a GPR, and
+     * codegen_maybe_convert_int_like_to_real widens integer sources to
+     * double as well.  Narrow to raw single bits and take the 32-bit store
+     * path below; a qword store would write 8 bytes of double layout over a
+     * 4-byte slot (clobbering the neighbouring element) while the read side
+     * loads 4 bytes and cvtss2sd's them.  Mirrors the scalar-var and
+     * record-field single handling. */
+    if (is_single_float_type(var_type, element_size)) {
+      use_qword = 0;
+      int source_is_real =
+          coerced_to_real || expr_get_type_tag(assign_expr) == REAL_TYPE;
+      if (source_is_real &&
+          !expr_holds_raw_single_bits(assign_expr,
+                                      ctx != NULL ? ctx->symtab : NULL)) {
+        {
+          Register_t *u[] = {value_reg};
+          inst_list = add_inst_du(inst_list, ctx, NULL, 0, u, 1,
+                                  "\tmovq\t%0, %xmm0\n");
+        }
+        inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+        {
+          char tmpl[64];
+          snprintf(tmpl, sizeof(tmpl), "\tmovd\t%%xmm0, %s\n",
+                   value_reg->bit_32);
+          Register_t *d[] = {value_reg};
+          inst_list = add_inst_du(inst_list, ctx, d, 1, NULL, 0, tmpl);
+        }
+      }
+    }
     int use_word = (!use_qword && element_size == 2);
 
     /* Check if target is a shortstring element (e.g., array[...] of string[10])

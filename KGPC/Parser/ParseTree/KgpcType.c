@@ -1671,11 +1671,15 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
             create_primitive_type_with_size(SHORTSTRING_TYPE, (int)ek_size);
       }
     }
-    /* Resolve element type */
-    if (elem_type == NULL && elem_type_tag != UNKNOWN_TYPE &&
-        elem_type_tag != -1) {
-      elem_type = create_primitive_type(elem_type_tag);
-    } else if (elem_type_id != NULL && symtab != NULL) {
+    /* Resolve element type.  Prefer the NAMED element type from the symbol
+     * table over the parse-time tag: the tag promotes sub-register scalars
+     * to their register width (ShortInt/SmallInt carry INT_TYPE), so
+     * fabricating a primitive from it yields a 4-byte element while the
+     * declaration's semantic registration used the authoritative 1/2-byte
+     * symbol-table type.  Codegen re-registers unit globals through this
+     * path; if it disagrees with the layout, typed-const init writes
+     * over-stride the allocation and clobber adjacent symbols. */
+    if (elem_type == NULL && elem_type_id != NULL && symtab != NULL) {
       /* Look up named element type in symbol table */
       struct HashNode *elem_node = kgpc_find_type_node_with_unit_flag_owner(
           symtab, elem_type_id,
@@ -1685,6 +1689,10 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab,
         elem_type = elem_node->type;
         elem_type_borrowed = 1;
       }
+    }
+    if (elem_type == NULL && elem_type_tag != UNKNOWN_TYPE &&
+        elem_type_tag != -1) {
+      elem_type = create_primitive_type(elem_type_tag);
     }
 
     if (elem_type != NULL) {
