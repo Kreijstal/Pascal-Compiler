@@ -6086,7 +6086,7 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
   int is_runtime_len = kgpc_type_is_dynamic_array(array_type);
   StackNode_t *data_slot = NULL;
   StackNode_t *len_slot = NULL;
-  if (is_runtime_len) {
+if (is_runtime_len) {
     /* Acquire the descriptor pointer the same way Length()/indexing do:
      * by value for reference / var parameters (open arrays), by address for
      * an inline local dynamic-array variable. */
@@ -6134,29 +6134,29 @@ ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
       Register_t *u[] = {desc_reg};
       inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, "\tmovq\t8(%1), %0\n");
     }
-    {
-      /* Integrated: store a physical register to the frame slot via the vtable. */
-      BeEmitter em = codegen_beemitter(inst_list, ctx);
-      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
-                       {.mem_frame = {BE_BASE_FP, -(long long)(len_slot->offset)}}};
-      BeOperand a = {OPK_PHYS, BE_W64, {.phys = len_reg->bit_64}};
-      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
-      inst_list = em.list;
-    }
+      {
+        /* Integrated: store a physical register to the frame slot via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(len_slot->offset)}}};
+        BeOperand a = {OPK_PHYS, BE_W64, {.phys = len_reg->bit_64}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+        inst_list = em.list;
+      }
     free_reg(get_reg_stack(), len_reg);
     {
       Register_t *du[] = {desc_reg};
       inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tmovq\t(%0), %0\n");
     }
-    {
-      /* Integrated: store a physical register to the frame slot via the vtable. */
-      BeEmitter em = codegen_beemitter(inst_list, ctx);
-      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
-                       {.mem_frame = {BE_BASE_FP, -(long long)(data_slot->offset)}}};
-      BeOperand a = {OPK_PHYS, BE_W64, {.phys = desc_reg->bit_64}};
-      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
-      inst_list = em.list;
-    }
+      {
+        /* Integrated: store a physical register to the frame slot via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(data_slot->offset)}}};
+        BeOperand a = {OPK_PHYS, BE_W64, {.phys = desc_reg->bit_64}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+        inst_list = em.list;
+      }
     free_reg(get_reg_stack(), desc_reg);
 
     /* Iterate the descriptor by zero-based position. */
