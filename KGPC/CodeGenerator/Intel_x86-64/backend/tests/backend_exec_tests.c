@@ -1153,6 +1153,86 @@ static void test_golden_aarch64_frame_cmp(const Target *T) {
         "aarch64 frame-cmp: compares register-to-register after the load");
 }
 
+/* Build `int f(int a, int b)`: spill both args to frame slots, then BE_CMP
+ * with BOTH operands frame-relative and return (a == b) as 0/1.  Regression:
+ * aliasing the two sides to one scratch yields cmp scr, scr — always equal. */
+static ListNode_t *build_frame_frame_cmp(const Target *T, const char *sym) {
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  add_inst_invalidate_cache();
+  select_target_pool(T);
+  reset_reg_stack();
+  RegStack_t *rs = get_reg_stack();
+
+  BeFrame f = {sym, 16, 1};
+  T->emit_prologue(&em, &f);
+  Register_t *va = get_free_reg(rs, &em.list);
+  Register_t *vb = get_free_reg(rs, &em.list);
+  BeOperand arg0 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(0, BE_W32)}};
+  BeOperand arg1 = {OPK_PHYS, BE_W32, {.phys = T->arg_reg(1, BE_W32)}};
+  BeOperand ret = {OPK_PHYS, BE_W32, {.phys = T->return_reg(BE_W32)}};
+  BeOperand slot_a = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -48}}};
+  BeOperand slot_b = {OPK_MEM_FRAME, BE_W32, {.mem_frame = {BE_BASE_FP, -56}}};
+  BeOperand dva = {OPK_VREG, BE_W32, {.vreg = va}};
+  BeOperand dvb = {OPK_VREG, BE_W32, {.vreg = vb}};
+  T->emit(&em, BE_MOV, BE_W32, &dva, &arg0, NULL);     /* va = a */
+  T->emit(&em, BE_STORE, BE_W32, &slot_a, &dva, NULL); /* [slotA] = a */
+  T->emit(&em, BE_MOV, BE_W32, &dvb, &arg1, NULL);     /* vb = b */
+  T->emit(&em, BE_STORE, BE_W32, &slot_b, &dvb, NULL); /* [slotB] = b */
+  T->emit(&em, BE_CMP, BE_W32, NULL, &slot_a, &slot_b); /* [slotA] ? [slotB] */
+  T->emit_setcc(&em, BE_EQ, &dva);                     /* va = (a == b) */
+  T->emit(&em, BE_MOV, BE_W32, &ret, &dva, NULL);      /* return va */
+  T->emit_epilogue(&em, &f);
+  return em.list;
+}
+
+static void test_exec_frame_frame_cmp(const Target *T, const char *sym, int a,
+                                      int b, int expected) {
+  char spath[256], driver[512], msg[128];
+  snprintf(spath, sizeof(spath), "be_%s.s", sym);
+  ListNode_t *list = build_frame_frame_cmp(T, sym);
+  finalize_and_write(spath, sym, list);
+  snprintf(driver, sizeof(driver),
+           "extern int %s(int,int);\nint main(void){return %s(%d,%d)==%d?0:1;}\n",
+           sym, sym, a, b, expected);
+  int rc = assemble_link_run(sym, spath, driver);
+  snprintf(msg, sizeof(msg), "exec: frame-frame cmp (%d==%d)==%d via %s", a, b,
+           expected, sym);
+  CHECK_EXEC(rc, msg);
+}
+
+static void test_golden_x86_frame_frame_cmp(const Target *T) {
+  ListNode_t *list = build_frame_frame_cmp(T, "x86ffcmp");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "movl\t-56(%rbp), %") != NULL,
+        "x86 frame-frame cmp: loads one side into a scratch");
+  const char *cmp = strstr(all, "\tcmpl\t");
+  CHECK(cmp != NULL && strstr(cmp, ", -48(%rbp)") != NULL,
+        "x86 frame-frame cmp: compares scratch against the other frame slot");
+}
+
+static void test_golden_aarch64_frame_frame_cmp(const Target *T) {
+  ListNode_t *list = build_frame_frame_cmp(T, "aaffcmp");
+  ir_liveness_allocate(list);
+  ir_emit_function(list);
+  char all[4096];
+  concat_emitted(list, all, sizeof(all));
+  CHECK(strstr(all, "[x29, #-48]") != NULL &&
+            strstr(all, "[x29, #-56]") != NULL,
+        "aarch64 frame-frame cmp: loads BOTH frame operands");
+  const char *cmp = strstr(all, "\tcmp\t");
+  CHECK(cmp != NULL, "aarch64 frame-frame cmp: has a cmp");
+  if (cmp != NULL) {
+    char r1[16] = {0}, r2[16] = {0};
+    CHECK(sscanf(cmp, "\tcmp\t%15[^,], %15[^\n]", r1, r2) == 2 &&
+              strcmp(r1, r2) != 0,
+          "aarch64 frame-frame cmp: compares two DISTINCT scratches");
+  }
+}
+
 /* Build `double f(double a)`: store the incoming xmm argument to a frame slot
  * (BE_STORE, float width, physical xmm operand) and reload it into the xmm
  * return register (BE_LOAD) — exercising the frame float mov path (movsd on
@@ -1462,6 +1542,9 @@ int main(void) {
   test_golden_x86_frame_cmp(T);
   test_exec_frame_cmp(T, "beframec1", 3, 1); /* 5 > 3 -> 1 */
   test_exec_frame_cmp(T, "beframec0", 7, 0); /* 5 > 7 -> 0 */
+  test_golden_x86_frame_frame_cmp(T);
+  test_exec_frame_frame_cmp(T, "beffceq", 4, 4, 1); /* 4 == 4 -> 1 */
+  test_exec_frame_frame_cmp(T, "beffcne", 3, 5, 0); /* 3 == 5 -> 0 */
   test_golden_x86_frame_float(T);
   test_exec_frame_float(T, "beframef");
   test_golden_x86_mem_operands(T);
@@ -1498,6 +1581,7 @@ int main(void) {
   test_golden_aarch64_frame_lea(A);
   test_golden_aarch64_frame_imm(A);
   test_golden_aarch64_frame_cmp(A);
+  test_golden_aarch64_frame_frame_cmp(A);
   test_golden_aarch64_frame_float(A);
   test_golden_aarch64_mem_operands(A);
   fprintf(stderr,

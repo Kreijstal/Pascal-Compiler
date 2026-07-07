@@ -121,8 +121,10 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr,
     BeEmitter em = codegen_beemitter(inst_list, ctx);
     BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
     if (load_size == 1) {
+      const int is_signed = expr_is_signed_kgpctype(expr);
       BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {addr_reg, 0}}};
-      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
+      kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32,
+                                      is_signed);
     } else if (load_size == 2) {
       const int is_signed = expr_is_signed_kgpctype(expr);
       BeOperand src = {OPK_MEM_BD, BE_W16, {.mem_bd = {addr_reg, 0}}};
@@ -1496,7 +1498,6 @@ ListNode_t *codegen_char_set_address(struct Expression *expr,
       /* Spill left/right to stack since the call clobbers argument regs */
       StackNode_t *left_spill = codegen_alloc_temp_bytes("cset_lspill", 8);
       StackNode_t *right_spill = codegen_alloc_temp_bytes("cset_rspill", 8);
-      char buffer[128];
       {
         /* Integrated: store a physical register to the frame slot via the vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
@@ -1520,6 +1521,14 @@ ListNode_t *codegen_char_set_address(struct Expression *expr,
 
       /* Set up call: runtime_func(dest, left, right) */
       addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+      if (addr_reg == NULL)
+        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+      if (addr_reg == NULL) {
+        codegen_report_error(
+            ctx, "ERROR: Unable to allocate register for char-set compare.");
+        *out_reg = NULL;
+        return inst_list;
+      }
       {
         /* Integrated: address-of the frame slot into a physical register via the vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);

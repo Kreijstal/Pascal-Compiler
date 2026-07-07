@@ -278,25 +278,44 @@ static void aa_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_CMP:
     if (a->kind == OPK_MEM_FRAME || b->kind == OPK_MEM_FRAME) {
-      /* AArch64 has no compare-with-memory: load the frame operand into a
-       * scratch register, then compare register-to-{register,immediate}.  The
-       * load-then-compare sequence is the neutral counterpart to x86's
+      /* AArch64 has no compare-with-memory: load each frame operand into its
+       * own scratch register, then compare register-to-{register,immediate}.
+       * The load-then-compare sequence is the neutral counterpart to x86's
        * single cmp <mem>,<reg>. */
-      const BeOperand *frame = (a->kind == OPK_MEM_FRAME) ? a : b;
-      const char *base = (frame->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
-      Register_t *scr = get_free_reg(get_reg_stack(), &em->list);
-      assert(scr != NULL && "no scratch for aarch64 cmp-with-frame");
-      snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%s, #%lld]\n", base,
-               frame->u.mem_frame.disp);
-      defs[0] = scr;
-      use32[0] = w32;
-      em->list =
-          be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl, use32);
-      BeOperand sreg = {OPK_VREG, w, {.vreg = scr}};
-      const BeOperand *na = (a->kind == OPK_MEM_FRAME) ? &sreg : a;
-      const BeOperand *nb = (b->kind == OPK_MEM_FRAME) ? &sreg : b;
+      Register_t *scr_a = NULL, *scr_b = NULL;
+      BeOperand sreg_a, sreg_b;
+      const BeOperand *na = a, *nb = b;
+      if (a->kind == OPK_MEM_FRAME) {
+        const char *base = (a->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+        scr_a = get_free_reg(get_reg_stack(), &em->list);
+        assert(scr_a != NULL && "no scratch for aarch64 cmp-with-frame");
+        snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%s, #%lld]\n", base,
+                 a->u.mem_frame.disp);
+        defs[0] = scr_a;
+        use32[0] = w32;
+        em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl,
+                                    use32);
+        sreg_a = (BeOperand){OPK_VREG, w, {.vreg = scr_a}};
+        na = &sreg_a;
+      }
+      if (b->kind == OPK_MEM_FRAME) {
+        const char *base = (b->u.mem_frame.base == BE_BASE_SP) ? "sp" : "x29";
+        scr_b = get_free_reg(get_reg_stack(), &em->list);
+        assert(scr_b != NULL && "no scratch for aarch64 cmp-with-frame");
+        snprintf(tmpl, sizeof(tmpl), "\tldr\t%%0, [%s, #%lld]\n", base,
+                 b->u.mem_frame.disp);
+        defs[0] = scr_b;
+        use32[0] = w32;
+        em->list = be_add_inst_du_w(em->list, vregp(em), defs, 1, NULL, 0, tmpl,
+                                    use32);
+        sreg_b = (BeOperand){OPK_VREG, w, {.vreg = scr_b}};
+        nb = &sreg_b;
+      }
       aa_emit(em, BE_CMP, w, NULL, na, nb); /* reg/reg or reg/imm compare */
-      free_reg(get_reg_stack(), scr);
+      if (scr_b != NULL)
+        free_reg(get_reg_stack(), scr_b);
+      if (scr_a != NULL)
+        free_reg(get_reg_stack(), scr_a);
       break;
     }
     if (a->kind == OPK_VREG && b->kind == OPK_VREG) {

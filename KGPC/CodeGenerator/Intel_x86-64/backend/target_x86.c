@@ -16,9 +16,35 @@
 #include "../stackmng/stackmng.h"
 
 #include <assert.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* Buffer sizes for formatted assembly fragments.  RIP-relative operands and
+ * call targets carry full mangled unit/class/method labels, which are
+ * unbounded; the sizes are generous headroom, and x86_fmt() below turns any
+ * overflow into a hard internal error instead of silently truncating into
+ * syntactically-valid-but-wrong assembly. */
+#define X86_LIT_BUF 256
+#define X86_TMPL_BUF 512
+
+/* snprintf wrapper for fragments whose inputs include unbounded symbol names:
+ * truncation must fail hard, never be emitted. */
+static void x86_fmt(char *buf, size_t n, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int wrote = vsnprintf(buf, n, fmt, ap);
+  va_end(ap);
+  if (wrote < 0 || (size_t)wrote >= n) {
+    fprintf(stderr,
+            "KGPC internal error: assembly fragment exceeds %zu-byte buffer "
+            "(symbol too long): %.80s...\n",
+            n, buf);
+    abort();
+  }
+}
 
 /* 32- vs 64-bit mnemonic suffix.  The width heuristic in ir_emit_function
  * keys register-name width off this same suffix, so it must be correct. */
@@ -80,7 +106,7 @@ static void x86_lit(const BeOperand *op, char *buf, size_t n) {
     snprintf(buf, n, "%s", op->u.phys);
     break;
   case OPK_RIP_SYM:
-    snprintf(buf, n, "%s(%%rip)", op->u.sym);
+    x86_fmt(buf, n, "%s(%%rip)", op->u.sym);
     break;
   default:
     snprintf(buf, n, "?");
@@ -97,8 +123,8 @@ static void x86_emit_float(BeEmitter *em, BeOp op, BeWidth w,
                            const BeOperand *dst, const BeOperand *a,
                            const BeOperand *b) {
   const char *sfx = x86_fsuffix(w);
-  char tmpl[160];
-  char lit[48];
+  char tmpl[X86_TMPL_BUF];
+  char lit[X86_LIT_BUF];
   Register_t *defs[2];
   Register_t *uses[4];
 
@@ -121,10 +147,10 @@ static void x86_emit_float(BeEmitter *em, BeOp op, BeWidth w,
       uses[0] = a->u.vreg;
       em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
     } else {
-      char litd[48];
+      char litd[X86_LIT_BUF];
       x86_lit(a, lit, sizeof(lit));
       x86_lit(dst, litd, sizeof(litd));
-      snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%s, %s\n", sfx, lit, litd);
+      x86_fmt(tmpl, sizeof(tmpl), "\tmov%s\t%s, %s\n", sfx, lit, litd);
       em->list = add_inst(em->list, tmpl);
     }
     break;
@@ -171,8 +197,8 @@ static void x86_emit_float(BeEmitter *em, BeOp op, BeWidth w,
 static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
                      const BeOperand *a, const BeOperand *b) {
   char c = x86_suffix(w);
-  char tmpl[160];
-  char lit[48];
+  char tmpl[X86_TMPL_BUF];
+  char lit[X86_LIT_BUF];
   Register_t *defs[2];
   Register_t *uses[4];
 
@@ -209,10 +235,10 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
     } else {
       /* both literal/phys — no placeholders */
-      char litd[48];
+      char litd[X86_LIT_BUF];
       x86_lit(a, lit, sizeof(lit));
       x86_lit(dst, litd, sizeof(litd));
-      snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, lit, litd);
+      x86_fmt(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", c, lit, litd);
       em->list = add_inst(em->list, tmpl);
     }
     break;
@@ -308,7 +334,7 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
         /* [frame] := <phys/imm>  →  movX <phys/$imm>, <frame>  (both operands
          * literal: no placeholder, no def/use).  A float width uses the SSE
          * scalar mnemonic (movsd/movss) from an xmm register. */
-        char lit[48];
+        char lit[X86_LIT_BUF];
         x86_lit(a, lit, sizeof(lit));
         if (x86_is_float(w))
           snprintf(tmpl, sizeof(tmpl), "\tmov%s\t%s, %s\n", x86_fsuffix(w), lit,
@@ -348,7 +374,7 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     if (dst->kind == OPK_MEM_BD && a->kind == OPK_IMM) {
       /* [base(vreg)+disp] := $imm  →  movX $imm, disp(%0).  The immediate is
        * literal; the base(%0) is a tracked vreg USE at 64-bit. */
-      char lit[48];
+      char lit[X86_LIT_BUF];
       x86_lit(a, lit, sizeof(lit));
       if (dst->u.mem_bd.disp == 0)
         snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, (%%0)\n", c, lit);
@@ -473,6 +499,17 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
 
   case BE_CMP: {
     /* compare a to b: cmpX <b>, <a>  (flags reflect a ? b) */
+    if (a->kind == OPK_MEM_FRAME && b->kind == OPK_MEM_FRAME) {
+      /* x86 cmp cannot take two memory operands: load b into a scratch vreg,
+       * then recurse into the frame-vs-register path. */
+      Register_t *scr = get_free_reg(get_reg_stack(), &em->list);
+      assert(scr != NULL && "no scratch for x86 cmp frame-vs-frame");
+      BeOperand sreg = {OPK_VREG, w, {.vreg = scr}};
+      x86_emit(em, BE_LOAD, w, &sreg, b, NULL);
+      x86_emit(em, BE_CMP, w, NULL, a, &sreg);
+      free_reg(get_reg_stack(), scr);
+      break;
+    }
     if (a->kind == OPK_MEM_FRAME || b->kind == OPK_MEM_FRAME) {
       /* One operand is a frame slot (fixed base, literal — no placeholder).
        * cmp is a pure read: no def, and the only use is the other operand when
@@ -516,10 +553,10 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
       uses[0] = a->u.vreg;
       em->list = be_add_inst_du(em->list, vregp(em), NULL, 0, uses, 1, tmpl);
     } else {
-      char lita[48];
+      char lita[X86_LIT_BUF];
       x86_lit(b, lit, sizeof(lit));
       x86_lit(a, lita, sizeof(lita));
-      snprintf(tmpl, sizeof(tmpl), "\tcmp%c\t%s, %s\n", c, lit, lita);
+      x86_fmt(tmpl, sizeof(tmpl), "\tcmp%c\t%s, %s\n", c, lit, lita);
       em->list = add_inst(em->list, tmpl);
     }
     break;
@@ -547,7 +584,7 @@ static void x86_emit(BeEmitter *em, BeOp op, BeWidth w, const BeOperand *dst,
     /* dst(vreg) := &a  (RIP symbol or MEM_BD) */
     assert(dst->kind == OPK_VREG);
     if (a->kind == OPK_RIP_SYM) {
-      snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n", a->u.sym);
+      x86_fmt(tmpl, sizeof(tmpl), "\tleaq\t%s(%%rip), %%0\n", a->u.sym);
       defs[0] = dst->u.vreg;
       em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
     } else if (a->kind == OPK_MEM_BD) {
@@ -780,9 +817,9 @@ static void x86_emit_branch(BeEmitter *em, BeCond cc, const char *label) {
 }
 
 static void x86_emit_call(BeEmitter *em, const char *sym, Register_t *indirect) {
-  char buf[96];
+  char buf[X86_LIT_BUF];
   if (sym != NULL) {
-    snprintf(buf, sizeof(buf), "\tcall\t%s\n", sym);
+    x86_fmt(buf, sizeof(buf), "\tcall\t%s\n", sym);
     em->list = add_inst(em->list, buf);
   } else {
     Register_t *uses[1] = {indirect};
@@ -796,8 +833,8 @@ static void x86_emit_ret(BeEmitter *em) {
 }
 
 static void x86_emit_label(BeEmitter *em, const char *label) {
-  char buf[128];
-  snprintf(buf, sizeof(buf), "%s:\n", label);
+  char buf[X86_LIT_BUF];
+  x86_fmt(buf, sizeof(buf), "%s:\n", label);
   em->list = add_inst(em->list, buf);
 }
 

@@ -3869,6 +3869,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     int is_constructor = expr->expr_data.function_call_data.is_constructor_call;
     Register_t *constructor_instance_reg = NULL;
     StackNode_t *constructor_instance_slot = NULL;
+    /* Set only when this call pushed its own pending-ctor-temp entry (the
+     * heap-allocating path).  The instance-receiver path fills
+     * constructor_instance_slot without pushing, and must not be counted
+     * when the post-call clamp decides how many entries to keep. */
+    int constructor_temp_pushed = 0;
 
     /* Record static factories (e.g., TGUID.Create) can also be named Create
      * but they are not class constructors and must not use constructor
@@ -4396,6 +4401,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
              * pushed by argument evaluation. */
             codegen_push_pending_ctor_temp(ctx,
                                            constructor_instance_slot->offset);
+            constructor_temp_pushed = 1;
           }
 
           if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL) {
@@ -5411,7 +5417,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
      * boundary. */
     if (ctx != NULL) {
       int keep_count = ctor_pending_snapshot_before_push;
-      if (is_constructor && constructor_instance_slot != NULL)
+      if (is_constructor && constructor_temp_pushed)
         keep_count += 1;
       if (ctx->pending_ctor_temp_count > keep_count)
         ctx->pending_ctor_temp_count = keep_count;
@@ -5423,7 +5429,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       free_reg(get_reg_stack(), constructor_instance_reg);
     if (ctx != NULL) {
       int keep_count = ctor_pending_snapshot_before_push;
-      if (is_constructor && constructor_instance_slot != NULL)
+      if (is_constructor && constructor_temp_pushed)
         keep_count += 1;
       if (ctx->pending_ctor_temp_count > keep_count)
         ctx->pending_ctor_temp_count = keep_count;

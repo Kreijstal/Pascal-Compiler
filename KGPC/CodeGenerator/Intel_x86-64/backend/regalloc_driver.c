@@ -16,6 +16,7 @@
 #include "../../../Parser/List/List.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,7 +45,7 @@
  *  6. Run the simplify/select/color loop (preferred_color keeps existing
  *     assignments stable when there is no conflict).
  *  7. If the coloring succeeds with no spills, apply it by updating
- *     IrInst_t.reg_names_64[] and reg_names_32[] in every instruction.
+ *     IrInst_t.reg_names_64/32/16/8[] in every instruction.
  *  8. Free all temporary data structures.
  */
 void ir_liveness_allocate(ListNode_t *inst_list) {
@@ -72,6 +73,8 @@ void ir_liveness_allocate(ListNode_t *inst_list) {
 #define LIVENESS_MAX_POOL 16
   const char *pool_names_64[LIVENESS_MAX_POOL];
   const char *pool_names_32[LIVENESS_MAX_POOL];
+  const char *pool_names_16[LIVENESS_MAX_POOL];
+  const char *pool_names_8[LIVENESS_MAX_POOL];
   int pool_size = 0;
 
   RegStack_t *rstack = get_reg_stack();
@@ -82,6 +85,8 @@ void ir_liveness_allocate(ListNode_t *inst_list) {
       if (reg != NULL && reg->bit_64 != NULL) {
         pool_names_64[pool_size] = reg->bit_64;
         pool_names_32[pool_size] = reg->bit_32;
+        pool_names_16[pool_size] = reg->bit_16;
+        pool_names_8[pool_size] = reg->bit_8;
         pool_size++;
       }
     }
@@ -91,6 +96,8 @@ void ir_liveness_allocate(ListNode_t *inst_list) {
       if (reg != NULL && reg->bit_64 != NULL) {
         pool_names_64[pool_size] = reg->bit_64;
         pool_names_32[pool_size] = reg->bit_32;
+        pool_names_16[pool_size] = reg->bit_16;
+        pool_names_8[pool_size] = reg->bit_8;
         pool_size++;
       }
     }
@@ -170,15 +177,18 @@ void ir_liveness_allocate(ListNode_t *inst_list) {
         continue; /* not a pooled register */
       if (vreg_to_color[v] < 0) {
         vreg_to_color[v] = c;
-      } else {
+      } else if (vreg_to_color[v] != c) {
         /* Same vreg_id must always map to the same physical register.
          * A mismatch indicates a compiler bug in vreg ID scoping — the
          * register state was not properly reset between nested function
          * compilations, causing stale IDs to leak into the outer
-         * function's instruction list. */
-        assert(
-            vreg_to_color[v] == c &&
-            "vreg ID collision: same vreg_id maps to two physical registers");
+         * function's instruction list.  Continuing would apply a wrong
+         * register mapping, so fail hard even with NDEBUG. */
+        fprintf(stderr,
+                "KGPC internal error: vreg ID collision — vreg %d maps to "
+                "both %s and %s\n",
+                v, pool_names_64[vreg_to_color[v]], pool_names_64[c]);
+        abort();
       }
     }
   }
@@ -292,9 +302,14 @@ void ir_liveness_allocate(ListNode_t *inst_list) {
   /* The register pool consists solely of the callee-saved registers that
    * the LRU allocator has already pre-assigned.  With preferred colors
    * locked in, graph coloring is effectively just a consistency check and
-   * should never produce spills.  A spill here indicates a compiler bug. */
-  assert(spilled == NULL && "graph coloring produced spills — impossible with "
-                            "pre-allocated callee-saved registers");
+   * should never produce spills.  A spill here indicates a compiler bug;
+   * applying a coloring that dropped ranges would emit wrong code, so
+   * fail hard even with NDEBUG. */
+  if (spilled != NULL) {
+    fprintf(stderr, "KGPC internal error: graph coloring produced spills — "
+                    "impossible with pre-allocated callee-saved registers\n");
+    abort();
+  }
 
   /* ------------------------------------------------------------------ */
   /* Step 7: apply coloring                                              */
@@ -320,6 +335,19 @@ void ir_liveness_allocate(ListNode_t *inst_list) {
         if (pool_names_32[color] != NULL)
           snprintf(inst->reg_names_32[i], IR_REG_NAME_BUF, "%s",
                    pool_names_32[color]);
+        /* ir_emit_function() also substitutes 16/8-bit names for narrow
+         * operands; keep them in sync with the chosen color (clearing when
+         * the register has no narrow alias, mirroring be_add_inst_du). */
+        if (pool_names_16[color] != NULL)
+          snprintf(inst->reg_names_16[i], IR_REG_NAME_BUF, "%s",
+                   pool_names_16[color]);
+        else
+          inst->reg_names_16[i][0] = '\0';
+        if (pool_names_8[color] != NULL)
+          snprintf(inst->reg_names_8[i], IR_REG_NAME_BUF, "%s",
+                   pool_names_8[color]);
+        else
+          inst->reg_names_8[i][0] = '\0';
       }
     }
   }

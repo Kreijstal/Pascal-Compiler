@@ -6135,11 +6135,12 @@ if (is_runtime_len) {
       inst_list = add_inst_du(inst_list, ctx, d, 1, u, 1, "\tmovq\t8(%1), %0\n");
     }
       {
-        /* Integrated: store a physical register to the frame slot via the vtable. */
+        /* Integrated: store the allocated register to the frame slot via the
+         * vtable as a tracked vreg USE so its live range spans the store. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
         BeOperand dst = {OPK_MEM_FRAME, BE_W64,
                          {.mem_frame = {BE_BASE_FP, -(long long)(len_slot->offset)}}};
-        BeOperand a = {OPK_PHYS, BE_W64, {.phys = len_reg->bit_64}};
+        BeOperand a = {OPK_VREG, BE_W64, {.vreg = len_reg}};
         kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
         inst_list = em.list;
       }
@@ -6149,11 +6150,12 @@ if (is_runtime_len) {
       inst_list = add_inst_du(inst_list, ctx, du, 1, du, 1, "\tmovq\t(%0), %0\n");
     }
       {
-        /* Integrated: store a physical register to the frame slot via the vtable. */
+        /* Integrated: store the allocated register to the frame slot via the
+         * vtable as a tracked vreg USE so its live range spans the store. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
         BeOperand dst = {OPK_MEM_FRAME, BE_W64,
                          {.mem_frame = {BE_BASE_FP, -(long long)(data_slot->offset)}}};
-        BeOperand a = {OPK_PHYS, BE_W64, {.phys = desc_reg->bit_64}};
+        BeOperand a = {OPK_VREG, BE_W64, {.vreg = desc_reg}};
         kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
         inst_list = em.list;
       }
