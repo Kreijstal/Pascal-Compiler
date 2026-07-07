@@ -31,6 +31,7 @@
 
 static int g_failures = 0;
 static int g_tests = 0;
+static int g_exec_skips = 0;
 
 #define CHECK(cond, msg)                                                        \
   do {                                                                          \
@@ -41,6 +42,32 @@ static int g_tests = 0;
     } else {                                                                    \
       fprintf(stderr, "ok:   %s\n", (msg));                                    \
     }                                                                          \
+  } while (0)
+
+/* The assemble-link-run tier executes the emitted x86_64 System V assembly
+ * natively, so it needs a host whose C ABI is x86-64 SysV.  Windows hosts —
+ * including MSYS/Cygwin, whose runtime is POSIX but whose calling convention
+ * is MS x64 — can only run the golden-asm tier (the same constraint that
+ * skips the AArch64 exec tier).  The POSIX wait-status decoding in
+ * assemble_link_run is likewise only valid where this is set. */
+#if defined(__x86_64__) && !defined(_WIN32) && !defined(__CYGWIN__)
+#define HOST_CAN_EXEC_SYSV 1
+#else
+#define HOST_CAN_EXEC_SYSV 0
+#endif
+
+/* Sentinel returned by assemble_link_run when the host cannot execute the
+ * emitted code; distinct from -1 (compile/link/run failure). */
+#define EXEC_SKIP (-2)
+
+#define CHECK_EXEC(rc, msg)                                                     \
+  do {                                                                          \
+    if ((rc) == EXEC_SKIP) {                                                    \
+      ++g_exec_skips;                                                           \
+      fprintf(stderr, "skip: %s (host C ABI is not x86-64 SysV)\n", (msg));    \
+    } else {                                                                    \
+      CHECK((rc) == 0, msg);                                                    \
+    }                                                                           \
   } while (0)
 
 /* Point the shared allocator's register pool at this target's registers.
@@ -84,6 +111,12 @@ static void finalize_and_write(const char *path, const char *sym,
  * code, or -1 on a compile/link failure. */
 static int assemble_link_run(const char *tag, const char *asm_path,
                              const char *driver_src) {
+#if !HOST_CAN_EXEC_SYSV
+  (void)tag;
+  (void)asm_path;
+  (void)driver_src;
+  return EXEC_SKIP;
+#else
   char driver_path[256], exe_path[256], cmd[1024];
   snprintf(driver_path, sizeof(driver_path), "be_%s_driver.c", tag);
   snprintf(exe_path, sizeof(exe_path), "./be_%s_exe", tag);
@@ -111,6 +144,7 @@ static int assemble_link_run(const char *tag, const char *asm_path,
   if (run == -1)
     return -1;
   return (run >> 8) & 0xff;
+#endif
 }
 
 /* Build `int f(int a, int b)` computing `a OP b` and return the finished list. */
@@ -443,7 +477,7 @@ static void test_exec_binop(const Target *T, const char *sym, BeOp op, int a,
            sym, sym, a, b, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d,%d)==%d", sym, a, b, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_exec_shift(const Target *T, const char *sym, BeOp op, int a,
@@ -457,7 +491,7 @@ static void test_exec_shift(const Target *T, const char *sym, BeOp op, int a,
            sym, a, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d)==%d", sym, a, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_exec_neg(const Target *T, const char *sym, int a,
@@ -471,7 +505,7 @@ static void test_exec_neg(const Target *T, const char *sym, int a,
            sym, a, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d)==%d", sym, a, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_exec_cmp(const Target *T, const char *sym, BeCond cc, int a,
@@ -485,7 +519,7 @@ static void test_exec_cmp(const Target *T, const char *sym, BeCond cc, int a,
            sym, sym, a, b, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d,%d)==%d", sym, a, b, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Exec an extend into a 32-bit result (int f(int)). */
@@ -500,7 +534,7 @@ static void test_exec_ext(const Target *T, const char *sym, BeWidth from,
            sym, a, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d)==%d", sym, a, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Exec an extend into a 64-bit result (long f(int)). */
@@ -515,7 +549,7 @@ static void test_exec_ext64(const Target *T, const char *sym, BeWidth from,
            sym, sym, a, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d)==%lld", sym, a, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_exec_const(const Target *T, const char *sym, int value) {
@@ -528,7 +562,7 @@ static void test_exec_const(const Target *T, const char *sym, int value) {
            sym, value);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s()==%d", sym, value);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Exec a double-in/double-out binary float op (compares by exact ==, so pass
@@ -545,7 +579,7 @@ static void test_exec_fbinop(const Target *T, const char *sym, BeOp op, double a
            sym, sym, a, b, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%g,%g)==%g", sym, a, b, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Exec `int f(double)` = (int)a. */
@@ -560,7 +594,7 @@ static void test_exec_f2i(const Target *T, const char *sym, double a,
            sym, sym, a, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%g)==%d", sym, a, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Exec `double g(int)` = (double)a. */
@@ -575,7 +609,7 @@ static void test_exec_i2f(const Target *T, const char *sym, int a,
            sym, sym, a, expected);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s(%d)==%g", sym, a, expected);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Golden check for the float path on AArch64: fadd on d-registers, fmov moves,
@@ -688,7 +722,7 @@ static void test_exec_data_const(const Target *T) {
   const char *drv =
       "extern long getk(void);\nint main(void){return getk()==42?0:1;}\n";
   int rc = assemble_link_run("getk", "be_getk.s", drv);
-  CHECK(rc == 0, "exec: .rodata .quad 42 loaded RIP-relative returns 42");
+  CHECK_EXEC(rc, "exec: .rodata .quad 42 loaded RIP-relative returns 42");
 }
 
 /* Exec: .data three-.long array; function returns arr[1]==20. */
@@ -698,7 +732,7 @@ static void test_exec_data_array(const Target *T) {
   const char *drv =
       "extern int getarr1(void);\nint main(void){return getarr1()==20?0:1;}\n";
   int rc = assemble_link_run("getarr1", "be_getarr1.s", drv);
-  CHECK(rc == 0, "exec: .data .long array returns arr[1]==20");
+  CHECK_EXEC(rc, "exec: .data .long array returns arr[1]==20");
 }
 
 /* Golden: x86 renders the neutral data channel as AT&T GAS. */
@@ -816,7 +850,7 @@ static void test_exec_frame_phys(const Target *T, const char *sym, int a) {
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: phys frame spill/reload %s(%d)==%d", sym, a,
            a);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_golden_x86_frame_phys(const Target *T) {
@@ -876,7 +910,7 @@ static void test_exec_frame_ext(const Target *T, const char *sym, int a) {
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: frame sign-extend load %s(%d)==%d", sym, a,
            a);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_golden_x86_frame_ext(const Target *T) {
@@ -940,7 +974,7 @@ static void test_exec_frame_lea(const Target *T, const char *sym, int a) {
            sym, a, a);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: frame lea addr-of %s(%d)==%d", sym, a, a);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_golden_x86_frame_lea(const Target *T) {
@@ -998,7 +1032,7 @@ static void test_exec_frame_imm(const Target *T, const char *sym, int imm) {
            sym, imm);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: frame imm store %s()==%d", sym, imm);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_golden_x86_frame_imm(const Target *T) {
@@ -1072,7 +1106,7 @@ static void test_exec_frame_cmp(const Target *T, const char *sym, int a,
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: frame cmp (5>%d)==%d via %s", a, expected,
            sym);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 /* Golden: emit all four cmp-with-frame operand combinations and assert the
@@ -1152,7 +1186,7 @@ static void test_exec_frame_float(const Target *T, const char *sym) {
            sym, sym);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: frame float spill/reload %s(3.5)==3.5", sym);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_golden_x86_frame_float(const Target *T) {
@@ -1288,7 +1322,7 @@ static void run_exec(const char *tag, const char *sym, ListNode_t *list,
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: %s %s(%d)==%d", what, sym, arg, expected);
   (void)tag;
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_mem_operands_x86(const Target *T) {
@@ -1341,7 +1375,7 @@ static void test_exec_frame(const Target *T, const char *sym, int a) {
            sym, a, a);
   int rc = assemble_link_run(sym, spath, driver);
   snprintf(msg, sizeof(msg), "exec: frame spill/reload %s(%d)==%d", sym, a, a);
-  CHECK(rc == 0, msg);
+  CHECK_EXEC(rc, msg);
 }
 
 static void test_golden_x86_frame(const Target *T) {
@@ -1470,6 +1504,11 @@ int main(void) {
           "note: AArch64 assemble-link-run skipped (no aarch64 toolchain/qemu "
           "in this environment)\n");
 
+  if (g_exec_skips > 0)
+    fprintf(stderr,
+            "note: assemble-link-run tier skipped (%d execs): host C ABI is "
+            "not x86-64 System V\n",
+            g_exec_skips);
   fprintf(stderr, "== %d/%d checks passed ==\n", g_tests - g_failures, g_tests);
   return g_failures == 0 ? 0 : 1;
 }
