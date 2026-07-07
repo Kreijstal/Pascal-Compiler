@@ -2415,8 +2415,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls) {
                 tree->tree_data.arr_decl_data.type_id
                     ? tree->tree_data.arr_decl_data.type_id
                     : "(null)");
-          } else {
-            /* Fallback: check for builtin types not in symbol table */
+          }
+          if (element_type == NULL) {
+            /* Fallback: check for builtin types not in symbol table.
+             * Only when the symbol table did NOT resolve the element type:
+             * the builtin name map promotes sub-int scalars to their
+             * register width (ShortInt/SmallInt -> INT_TYPE, 4 bytes), so
+             * letting it overwrite a resolved type discards the authentic
+             * storage size and mis-sizes every element of the array. */
             const char *type_id = tree->tree_data.arr_decl_data.type_id;
             if (type_id == NULL && element_type_ref != NULL)
               type_id = type_ref_base_name(element_type_ref);

@@ -2580,12 +2580,13 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type,
 
   if (alias->is_array) {
     alias->array_element_type = actual_type;
-    if (actual_type == UNKNOWN_TYPE && type_id != NULL)
-      alias->array_element_type_id = type_id;
-    else if (type_id != NULL)
-      free(type_id);
-    else
-      alias->array_element_type_id = NULL;
+    /* Keep the element type name even when a primitive tag was mapped:
+     * names like ShortInt/SmallInt carry INT_TYPE as their legacy tag but
+     * their authoritative storage width (1/2 bytes) lives in the symbol
+     * table entry for the name.  Dropping the name here forces
+     * create_kgpc_type_from_type_alias to fabricate a register-width
+     * element (4 bytes), mis-sizing every element of the array. */
+    alias->array_element_type_id = type_id;
     if (alias->array_element_type_id != NULL) {
       QualifiedIdent *qid =
           qualified_ident_from_dotted(alias->array_element_type_id);

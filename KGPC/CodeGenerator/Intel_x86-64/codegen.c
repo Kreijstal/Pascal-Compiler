@@ -36,6 +36,7 @@
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
+#include "backend/backend_emit.h"
 #include "ir/ir_cfg.h"
 #include "ir/ir_inst.h"
 #include "ir/ir_liveness.h"
@@ -77,324 +78,8 @@ ListNode_t *g_codegen_available_subprograms = NULL;
  * g_available_subprograms_tail declared after CodeGenStringSet definition below
  */
 
-#if USE_GRAPH_COLORING_ALLOCATOR
-/*
- * ir_liveness_allocate — graph-coloring register allocator driven by IR
- * liveness analysis.
- *
- * Uses stable integer vreg IDs (stored in IrInst_t.vreg_ids[] at
- * add_inst_du() time) rather than Register_t* pointers, so this is safe
- * to call after reset_reg_stack() has freed the original register objects.
- *
- * Algorithm:
- *  1. Build the CFG for the function's instruction list.
- *  2. Compute live-in / live-out sets via backward dataflow (liveness_compute).
- *  3. Discover the physical register pool from the current reg_stack.
- *  4. Scan the instruction list to:
- *       a. determine the maximum vreg_id used, and
- *       b. map each vreg_id to its current physical register name
- * (preferred_color).
- *  5. Build an interference graph: two vregs interfere if they appear
- *     simultaneously in any live_out[B] or live_in[B] set, or if they are
- *     both defs of the same instruction.
- *  6. Run the simplify/select/color loop (preferred_color keeps existing
- *     assignments stable when there is no conflict).
- *  7. If the coloring succeeds with no spills, apply it by updating
- *     IrInst_t.reg_names_64[] and reg_names_32[] in every instruction.
- *  8. Free all temporary data structures.
- */
-void ir_liveness_allocate(ListNode_t *inst_list) {
-  if (inst_list == NULL)
-    return;
-
-  /* ------------------------------------------------------------------ */
-  /* Step 1 & 2: CFG + liveness                                          */
-  /* ------------------------------------------------------------------ */
-  Cfg_t *cfg = cfg_build(inst_list);
-  if (cfg == NULL)
-    return;
-
-  LivenessInfo_t *liveness = liveness_compute(cfg);
-  if (liveness == NULL) {
-    cfg_free(cfg);
-    return;
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Step 3: physical register pool from reg_stack                       */
-  /* The reg_stack always holds the same 5 callee-saved registers        */
-  /* (%rbx, %r12-%r15).  We enumerate them to build a color→name table. */
-  /* ------------------------------------------------------------------ */
-#define LIVENESS_MAX_POOL 16
-  const char *pool_names_64[LIVENESS_MAX_POOL];
-  const char *pool_names_32[LIVENESS_MAX_POOL];
-  int pool_size = 0;
-
-  RegStack_t *rstack = get_reg_stack();
-  if (rstack != NULL) {
-    for (ListNode_t *n = rstack->registers_free;
-         n != NULL && pool_size < LIVENESS_MAX_POOL; n = n->next) {
-      Register_t *reg = (Register_t *)n->cur;
-      if (reg != NULL && reg->bit_64 != NULL) {
-        pool_names_64[pool_size] = reg->bit_64;
-        pool_names_32[pool_size] = reg->bit_32;
-        pool_size++;
-      }
-    }
-    for (ListNode_t *n = rstack->registers_allocated;
-         n != NULL && pool_size < LIVENESS_MAX_POOL; n = n->next) {
-      Register_t *reg = (Register_t *)n->cur;
-      if (reg != NULL && reg->bit_64 != NULL) {
-        pool_names_64[pool_size] = reg->bit_64;
-        pool_names_32[pool_size] = reg->bit_32;
-        pool_size++;
-      }
-    }
-  }
-
-  if (pool_size == 0) {
-    liveness_free(liveness);
-    cfg_free(cfg);
-    return;
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Step 4a: find maximum vreg_id used in this function's instruction   */
-  /* list.                                                               */
-  /* ------------------------------------------------------------------ */
-  int max_vreg = -1;
-  for (ListNode_t *n = inst_list; n != NULL; n = n->next) {
-    if (n->type == LIST_IR_INST) {
-      const IrInst_t *inst = (const IrInst_t *)n->cur;
-      if (inst == NULL)
-        continue;
-      int total = inst->n_defs + inst->n_uses;
-      for (int i = 0; i < total && i < IR_MAX_DEFS + IR_MAX_USES; ++i) {
-        if (inst->vreg_ids[i] > max_vreg)
-          max_vreg = inst->vreg_ids[i];
-      }
-    }
-  }
-
-  if (max_vreg < 0) {
-    /* No virtual registers — nothing to allocate. */
-    liveness_free(liveness);
-    cfg_free(cfg);
-    return;
-  }
-
-  int n_vregs = max_vreg + 1;
-
-  /* ------------------------------------------------------------------ */
-  /* Step 4b: map vreg_id → preferred color (= current pool index)       */
-  /* ------------------------------------------------------------------ */
-  int *vreg_to_color = (int *)malloc((size_t)n_vregs * sizeof(int));
-  if (vreg_to_color == NULL) {
-    liveness_free(liveness);
-    cfg_free(cfg);
-    return;
-  }
-  for (int i = 0; i < n_vregs; ++i)
-    vreg_to_color[i] = -1;
-
-  /* Build vreg_id → preferred color (= pool index) map by scanning the
-   * instruction list.  All occurrences of the same vreg_id must map to the
-   * same physical register; any divergence is a compiler bug. */
-  for (ListNode_t *n = inst_list; n != NULL; n = n->next) {
-    if (n->type != LIST_IR_INST)
-      continue;
-    const IrInst_t *inst = (const IrInst_t *)n->cur;
-    if (inst == NULL)
-      continue;
-    int total = inst->n_defs + inst->n_uses;
-    for (int i = 0; i < total && i < IR_MAX_DEFS + IR_MAX_USES; ++i) {
-      int v = inst->vreg_ids[i];
-      if (v < 0 || v >= n_vregs)
-        continue;
-      if (inst->reg_names_64[i][0] == '\0')
-        continue;
-      /* Find this register's pool index. */
-      int c = -1;
-      for (int k = 0; k < pool_size; ++k) {
-        if (pool_names_64[k] != NULL &&
-            strcmp(inst->reg_names_64[i], pool_names_64[k]) == 0) {
-          c = k;
-          break;
-        }
-      }
-      if (c < 0)
-        continue; /* not a pooled register */
-      if (vreg_to_color[v] < 0) {
-        vreg_to_color[v] = c;
-      } else {
-        /* Same vreg_id must always map to the same physical register.
-         * A mismatch indicates a compiler bug in vreg ID scoping — the
-         * register state was not properly reset between nested function
-         * compilations, causing stale IDs to leak into the outer
-         * function's instruction list. */
-        assert(
-            vreg_to_color[v] == c &&
-            "vreg ID collision: same vreg_id maps to two physical registers");
-      }
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Step 5: build interference graph                                    */
-  /* ------------------------------------------------------------------ */
-  InterferenceGraph_t *graph = create_interference_graph(pool_size);
-  if (graph == NULL) {
-    free(vreg_to_color);
-    liveness_free(liveness);
-    cfg_free(cfg);
-    return;
-  }
-
-  LiveRange_t **ranges =
-      (LiveRange_t **)calloc((size_t)n_vregs, sizeof(LiveRange_t *));
-  if (ranges == NULL) {
-    free_interference_graph(graph);
-    free(vreg_to_color);
-    liveness_free(liveness);
-    cfg_free(cfg);
-    return;
-  }
-
-  /* Create one LiveRange per live vreg (those with a known pool mapping). */
-  int ranges_ok = 1;
-  for (int v = 0; v < n_vregs; ++v) {
-    if (vreg_to_color[v] < 0)
-      continue;
-    ranges[v] = create_live_range(v, 0, 0);
-    if (ranges[v] == NULL) {
-      ranges_ok = 0;
-      break;
-    }
-    ranges[v]->preferred_color = vreg_to_color[v];
-  }
-  if (!ranges_ok) {
-    /* Ranges not yet added to graph — free them directly. */
-    for (int v = 0; v < n_vregs; ++v)
-      free(ranges[v]);
-    free(ranges);
-    free_interference_graph(graph);
-    free(vreg_to_color);
-    liveness_free(liveness);
-    cfg_free(cfg);
-    return;
-  }
-
-  /* Now add all successfully created ranges to the graph. */
-  for (int v = 0; v < n_vregs; ++v) {
-    if (ranges[v] != NULL)
-      add_live_range(graph, ranges[v]);
-  }
-
-  /* Add interference edges for each block's live_out set (all pairs). */
-  for (int b = 0; b < liveness->n_blocks; ++b) {
-    const LiveSet_t *lout = &liveness->live_out[b];
-    for (int i = 0; i < lout->n_regs; ++i) {
-      int vi = lout->vreg_ids[i];
-      if (vi < 0 || vi >= n_vregs || ranges[vi] == NULL)
-        continue;
-      for (int j = i + 1; j < lout->n_regs; ++j) {
-        int vj = lout->vreg_ids[j];
-        if (vj < 0 || vj >= n_vregs || vj == vi || ranges[vj] == NULL)
-          continue;
-        add_interference_edge(ranges[vi], ranges[vj]);
-      }
-    }
-    /* Also add interference for live_in pairs (handles values live at
-     * block entry that are never defined within the block, e.g. function
-     * parameters that flow across multiple blocks). */
-    const LiveSet_t *lin = &liveness->live_in[b];
-    for (int i = 0; i < lin->n_regs; ++i) {
-      int vi = lin->vreg_ids[i];
-      if (vi < 0 || vi >= n_vregs || ranges[vi] == NULL)
-        continue;
-      for (int j = i + 1; j < lin->n_regs; ++j) {
-        int vj = lin->vreg_ids[j];
-        if (vj < 0 || vj >= n_vregs || vj == vi || ranges[vj] == NULL)
-          continue;
-        add_interference_edge(ranges[vi], ranges[vj]);
-      }
-    }
-  }
-
-  /* Add interference between co-defs of the same instruction. */
-  for (ListNode_t *n = inst_list; n != NULL; n = n->next) {
-    if (n->type != LIST_IR_INST)
-      continue;
-    const IrInst_t *inst = (const IrInst_t *)n->cur;
-    if (inst == NULL)
-      continue;
-    for (int di = 0; di < inst->n_defs; ++di) {
-      int d1 = inst->vreg_ids[di];
-      if (d1 < 0 || d1 >= n_vregs || ranges[d1] == NULL)
-        continue;
-      for (int di2 = di + 1; di2 < inst->n_defs; ++di2) {
-        int d2 = inst->vreg_ids[di2];
-        if (d2 < 0 || d2 >= n_vregs || d2 == d1 || ranges[d2] == NULL)
-          continue;
-        add_interference_edge(ranges[d1], ranges[d2]);
-      }
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Step 6: run graph coloring                                          */
-  /* ------------------------------------------------------------------ */
-  ListNode_t *spilled = allocate_registers_graph_coloring_prebuilt(graph);
-  /* The register pool consists solely of the callee-saved registers that
-   * the LRU allocator has already pre-assigned.  With preferred colors
-   * locked in, graph coloring is effectively just a consistency check and
-   * should never produce spills.  A spill here indicates a compiler bug. */
-  assert(spilled == NULL && "graph coloring produced spills — impossible with "
-                            "pre-allocated callee-saved registers");
-
-  /* ------------------------------------------------------------------ */
-  /* Step 7: apply coloring                                              */
-  /* ------------------------------------------------------------------ */
-  {
-    for (ListNode_t *n = inst_list; n != NULL; n = n->next) {
-      if (n->type != LIST_IR_INST)
-        continue;
-      IrInst_t *inst = (IrInst_t *)n->cur;
-      if (inst == NULL)
-        continue;
-      int total = inst->n_defs + inst->n_uses;
-      for (int i = 0; i < total && i < IR_MAX_DEFS + IR_MAX_USES; ++i) {
-        int v = inst->vreg_ids[i];
-        if (v < 0 || v >= n_vregs || ranges[v] == NULL)
-          continue;
-        int color = ranges[v]->assigned_reg_num;
-        if (color < 0 || color >= pool_size)
-          continue;
-        if (pool_names_64[color] != NULL)
-          snprintf(inst->reg_names_64[i], IR_REG_NAME_BUF, "%s",
-                   pool_names_64[color]);
-        if (pool_names_32[color] != NULL)
-          snprintf(inst->reg_names_32[i], IR_REG_NAME_BUF, "%s",
-                   pool_names_32[color]);
-      }
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Step 8: cleanup                                                     */
-  /* free_interference_graph frees neighbor lists (sets them to NULL);   */
-  /* we then free the LiveRange_t objects via free_live_range.           */
-  /* ------------------------------------------------------------------ */
-  free_interference_graph(graph);
-  for (int v = 0; v < n_vregs; ++v)
-    free_live_range(ranges[v]);
-  free(ranges);
-  free(vreg_to_color);
-  liveness_free(liveness);
-  cfg_free(cfg);
-}
-#undef LIVENESS_MAX_POOL
-#endif /* USE_GRAPH_COLORING_ALLOCATOR */
+/* ir_liveness_allocate moved to backend/regalloc_driver.c (declared in
+ * codegen_subprograms_internal.h, which this file includes). */
 
 /* Return a lazily-created, process-lifetime canonical KgpcType for
  * SHORTSTRING_TYPE.  This avoids allocating ad-hoc instances via
@@ -967,7 +652,8 @@ static void codegen_mark_class_constructors_used(ListNode_t *type_decls,
 
 static ListNode_t *codegen_class_constructor_calls(ListNode_t *inst_list,
                                                    ListNode_t *type_decls,
-                                                   SymTab_t *symtab) {
+                                                   SymTab_t *symtab,
+                                                   CodeGenContext *ctx) {
   for (ListNode_t *node = type_decls; node != NULL; node = node->next) {
     if (node->type != LIST_TREE || node->cur == NULL)
       continue;
@@ -987,11 +673,13 @@ static ListNode_t *codegen_class_constructor_calls(ListNode_t *inst_list,
       if (tmpl->kind != METHOD_TEMPLATE_CONSTRUCTOR || !tmpl->is_class_method ||
           !tmpl->is_static || tmpl->name == NULL)
         continue;
-      char buffer[1024];
       const char *target =
           codegen_class_constructor_target(symtab, owner, tmpl, NULL);
-      snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", target);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        kgpc_backend_target()->emit_call(&em, target, NULL);
+        inst_list = em.list;
+      }
     }
   }
   return inst_list;
@@ -1608,8 +1296,9 @@ static int codegen_storage_size_from_type_alias(const struct TypeAlias *alias) {
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list,
                                      CodeGenContext *ctx, SymTab_t *symtab);
 
-kgpc_target_abi_t g_current_codegen_abi = KGPC_TARGET_ABI_SYSTEM_V;
-int g_stack_home_space_bytes = 0;
+/* g_current_codegen_abi / g_stack_home_space_bytes are defined in the backend
+ * library (stackmng.c) so it is self-contained; the front-end still writes them
+ * via the extern declarations in codegen.h / register_types.h. */
 
 static int align_to_multiple(int value, int alignment) {
   if (alignment <= 0)
@@ -2427,14 +2116,20 @@ ListNode_t *codegen_flush_pending_ctor_temps(CodeGenContext *ctx,
   if (ctx == NULL || ctx->pending_ctor_temp_count == 0)
     return inst_list;
 
-  char buffer[128];
   const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
 
   for (int i = 0; i < ctx->pending_ctor_temp_count; ++i) {
     int rbp_offset = ctx->pending_ctor_temp_offsets[i];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", rbp_offset,
-             arg_reg);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: load from the frame slot into a physical register via the
+       * vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_PHYS, BE_W64, {.phys = arg_reg}};
+      BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(rbp_offset)}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
+    }
     inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
     inst_list =
         codegen_call_with_shadow_space(inst_list, "kgpc_release_class_temp");
@@ -2493,14 +2188,19 @@ ListNode_t *codegen_emit_managed_dynarray_temp_cleanup(CodeGenContext *ctx,
   if (ctx == NULL || ctx->managed_dynarray_temp_count == 0)
     return inst_list;
 
-  char buffer[128];
   const char *arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
 
   for (int i = 0; i < ctx->managed_dynarray_temp_count; ++i) {
     int rbp_offset = ctx->managed_dynarray_temp_offsets[i];
-    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", rbp_offset,
-             arg_reg);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: address-of the frame slot into a physical register via the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_PHYS, BE_W64, {.phys = arg_reg}};
+      BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(rbp_offset)}}};
+      kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
+    }
     inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
     inst_list = codegen_call_with_shadow_space(inst_list,
                                                "kgpc_dynarray_finalize_local");
@@ -2540,11 +2240,14 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx,
         return NULL;
 
       {
-        char tmpl[64];
-        snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n",
-                 ctx->static_link_spill_slot->offset);
-        Register_t *defs_arr[] = {reloaded};
-        *inst_list = add_inst_du(*inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+        /* Integrated: load from the frame slot through the backend vtable. */
+        BeEmitter em = codegen_beemitter(*inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = reloaded}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(ctx->static_link_spill_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        *inst_list = em.list;
       }
 
       ctx->static_link_reg = reloaded;
@@ -2599,10 +2302,13 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx,
   }
 
   {
-    char tmpl[128];
-    snprintf(tmpl, sizeof(tmpl), "\tmovq\t-%d(%%rbp), %%0\n", offsets[0]);
-    Register_t *defs_arr[] = {reg};
-    *inst_list = add_inst_du(*inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+    /* Integrated: load from the frame slot through the backend vtable. */
+    BeEmitter em = codegen_beemitter(*inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = reg}};
+    BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(offsets[0])}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    *inst_list = em.list;
   }
 
   for (int i = 1; i < levels_to_traverse; ++i) {
@@ -3359,154 +3065,23 @@ static void codegen_emit_enum_typeinfo(CodeGenContext *ctx, SymTab_t *symtab,
   for (int i = 0; i < emitted_count; ++i)
     free((void *)emitted_labels[i]);
 }
-/* Generates a label */
+/* Generates a label.  Shim over the context-free be_gen_label in the backend
+ * library (which owns the shared .L<n> counter logic). */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx) {
-#ifdef DEBUG_CODEGEN
-  CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
-#endif
-  assert(buf != NULL);
   assert(ctx != NULL);
-  snprintf(buf, buf_len, ".L%d", ++ctx->label_counter);
-#ifdef DEBUG_CODEGEN
-  CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-#endif
+  be_gen_label(buf, buf_len, &ctx->label_counter);
 }
 
-/* Adds instruction to instruction list */
-/* WARNING: Makes copy of given char * */
-/* Tail pointer for O(1) add_inst append.
- * Tracks the (head, tail) of the last inst_list built by add_inst.
- * When the same head is passed and the cached tail's ->next is still NULL,
- * we append in O(1) instead of walking the entire list (O(n)).
- * MUST be invalidated before free_inst_list and ConcatList. */
-static ListNode_t *g_inst_tail = NULL;
-static ListNode_t *g_inst_head = NULL;
-
-void add_inst_invalidate_cache(void) {
-  g_inst_tail = NULL;
-  g_inst_head = NULL;
-}
-
-ListNode_t *add_inst(ListNode_t *inst_list, const char *inst) {
-#ifdef DEBUG_CODEGEN
-  CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
-#endif
-  ListNode_t *new_node;
-
-  assert(inst != NULL);
-  new_node = CreateListNode(strdup(inst), LIST_STRING);
-  if (inst_list == NULL) {
-    inst_list = new_node;
-  } else if (g_inst_head == inst_list && g_inst_tail != NULL &&
-             g_inst_tail->next == NULL) {
-    /* Fast path: cached tail is valid, O(1) append */
-    g_inst_tail->next = new_node;
-  } else {
-    /* Slow path: walk to end */
-    PushListNodeBack(inst_list, new_node);
-  }
-  g_inst_head = inst_list;
-  g_inst_tail = new_node;
-
-#ifdef DEBUG_CODEGEN
-  CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-#endif
-  return inst_list;
-}
-
-/* add_inst_du — emit an instruction template with def/use metadata.
+/* add_inst / add_inst_invalidate_cache moved to backend/backend_emit.c.
  *
- * fmt is a template string where %0, %1, ... are placeholders for
- * the physical register names of the def/use registers.  Placeholders
- * are substituted by ir_emit_function() before code emission.
- *
- * defs[0..n_defs-1] are written by this instruction.
- * uses[0..n_uses-1] are read by this instruction.
- * vreg_ids[] is filled in defs-first order: [defs[0], ..., uses[0], ...].
- * Each register without an assigned vreg_id (vreg_id == -1) receives a
- * fresh ID from ctx->next_vreg_id++.
- *
- * The trailing ... is accepted but ignored (kept for signature compatibility).
- */
+ * add_inst_du — shim over the context-free be_add_inst_du in the backend
+ * library.  The only CodeGenContext use was ctx->next_vreg_id; the trailing
+ * ... has always been accepted but ignored. */
 ListNode_t *add_inst_du(ListNode_t *inst_list, CodeGenContext *ctx,
                         Register_t **defs, int n_defs, Register_t **uses,
                         int n_uses, const char *fmt, ...) {
-  IrInst_t *inst = ir_inst_new(NULL, defs, n_defs, uses, n_uses);
-  if (inst == NULL)
-    return inst_list;
-
-  /* Store template string */
-  inst->tmpl = fmt ? strdup(fmt) : NULL;
-  inst->text = NULL;
-
-  /* Assign vreg_ids: defs first, then uses.
-   * If ctx is available, assign fresh IDs to unassigned registers.
-   * Also copy physical register names (bit_64/bit_32) into the instruction
-   * so that ir_emit_function() can resolve placeholder names without
-   * dereferencing the borrowed Register_t pointers (which may be freed by
-   * reset_reg_stack() when nested subprograms are codegen'd before
-   * ir_emit_function() is called on the outer function). */
-  int placeholder = 0;
-  for (int i = 0;
-       i < n_defs && i < IR_MAX_DEFS &&
-       placeholder < (int)(sizeof(inst->vreg_ids) / sizeof(inst->vreg_ids[0]));
-       ++i, ++placeholder) {
-    if (defs[i] != NULL) {
-      if (ctx != NULL && defs[i]->vreg_id == -1)
-        defs[i]->vreg_id = ctx->next_vreg_id++;
-      inst->vreg_ids[placeholder] = defs[i]->vreg_id;
-      if (defs[i]->bit_64)
-        snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s",
-                 defs[i]->bit_64);
-      else
-        inst->reg_names_64[placeholder][0] = '\0';
-      if (defs[i]->bit_32)
-        snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s",
-                 defs[i]->bit_32);
-      else
-        inst->reg_names_32[placeholder][0] = '\0';
-    }
-  }
-  for (int i = 0;
-       i < n_uses && i < IR_MAX_USES &&
-       placeholder < (int)(sizeof(inst->vreg_ids) / sizeof(inst->vreg_ids[0]));
-       ++i, ++placeholder) {
-    if (uses[i] != NULL) {
-      if (ctx != NULL && uses[i]->vreg_id == -1)
-        uses[i]->vreg_id = ctx->next_vreg_id++;
-      inst->vreg_ids[placeholder] = uses[i]->vreg_id;
-      if (uses[i]->bit_64)
-        snprintf(inst->reg_names_64[placeholder], IR_REG_NAME_BUF, "%s",
-                 uses[i]->bit_64);
-      else
-        inst->reg_names_64[placeholder][0] = '\0';
-      if (uses[i]->bit_32)
-        snprintf(inst->reg_names_32[placeholder], IR_REG_NAME_BUF, "%s",
-                 uses[i]->bit_32);
-      else
-        inst->reg_names_32[placeholder][0] = '\0';
-    }
-  }
-  inst->n_placeholders = placeholder;
-
-  ListNode_t *new_node = CreateListNode(inst, LIST_IR_INST);
-  if (new_node == NULL) {
-    ir_inst_free(inst);
-    return inst_list;
-  }
-
-  if (inst_list == NULL) {
-    inst_list = new_node;
-  } else if (g_inst_head == inst_list && g_inst_tail != NULL &&
-             g_inst_tail->next == NULL) {
-    g_inst_tail->next = new_node;
-  } else {
-    PushListNodeBack(inst_list, new_node);
-  }
-  g_inst_head = inst_list;
-  g_inst_tail = new_node;
-
-  return inst_list;
+  return be_add_inst_du(inst_list, ctx != NULL ? &ctx->next_vreg_id : NULL,
+                        defs, n_defs, uses, n_uses, fmt);
 }
 
 ListNode_t *codegen_emit_interface_vtable_slot_init(
@@ -3542,11 +3117,16 @@ ListNode_t *codegen_emit_interface_vtable_slot_init(
       continue;
     long long offset = base_size + slot_idx * 8;
     {
-      char tmpl[CODEGEN_MAX_INST_BUF];
-      snprintf(tmpl, sizeof(tmpl), "\tleaq\t%s_INTF_%s_VTABLE(%%rip), %%0\n",
-               class_type_id, class_record->interface_names[ii]);
-      Register_t *defs_arr[] = {ivtbl_reg};
-      inst_list = add_inst_du(inst_list, ctx, defs_arr, 1, NULL, 0, tmpl);
+      /* Integrated: emit through the target-neutral backend vtable
+       * (byte-identical). */
+      char sym[CODEGEN_MAX_INST_BUF];
+      snprintf(sym, sizeof(sym), "%s_INTF_%s_VTABLE", class_type_id,
+               class_record->interface_names[ii]);
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_VREG, BE_W64, {.vreg = ivtbl_reg}};
+      BeOperand a = {OPK_RIP_SYM, BE_W64, {.sym = sym}};
+      kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
     }
     {
       char tmpl[CODEGEN_MAX_INST_BUF];
@@ -3596,9 +3176,13 @@ ListNode_t *codegen_emit_interface_dispatch(
   } else {
     inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
   }
-  snprintf(buffer, sizeof(buffer), "\tjmp\t.L%s_done_%d\n", label_prefix,
-           label_id);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    char lbl[CODEGEN_MAX_INST_BUF];
+    snprintf(lbl, sizeof(lbl), ".L%s_done_%d", label_prefix, label_id);
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, lbl);
+    inst_list = em.list;
+  }
 
   snprintf(buffer, sizeof(buffer), ".L%s_direct_%d:\n", label_prefix, label_id);
   inst_list = add_inst(inst_list, buffer);
@@ -3623,23 +3207,47 @@ ListNode_t *codegen_emit_interface_dispatch(
     snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", vmt_index,
              current_arg_reg32(2));
     inst_list = add_inst(inst_list, buffer);
-    inst_list = add_inst(inst_list, "\tcall\t__kgpc_resolve_intf_method\n");
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n",
-             target_slot->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      kgpc_backend_target()->emit_call(&em, "__kgpc_resolve_intf_method", NULL);
+      inst_list = em.list;
+    }
+    {
+      /* Integrated: store a physical register to the frame slot via the vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP, -(long long)(target_slot->offset)}}};
+      BeOperand a = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
     inst_list = restore_fn(inst_list, arg_spills, xmm_spills);
     if (preserve_indirect_call_regs) {
       CallerSaveState caller_state;
       regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
-      snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-               target_slot->offset);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(target_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
       inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
       regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
     } else {
-      snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-               target_slot->offset);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(target_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
       inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
     }
   }
@@ -5018,31 +4626,10 @@ void codegen_stack_space(CodeGenContext *ctx) {
 }
 
 /* Writes instruction list to file */
+/* Shim over be_inst_list_write in the backend library. */
 void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx) {
-#ifdef DEBUG_CODEGEN
-  CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
-#endif
-
   assert(ctx != NULL);
-
-  while (inst_list != NULL) {
-    const char *text;
-    if (inst_list->type == LIST_IR_INST) {
-      IrInst_t *ir = (IrInst_t *)inst_list->cur;
-      assert(ir != NULL);
-      text = ir->text;
-    } else {
-      text = (const char *)inst_list->cur;
-    }
-    assert(text != NULL);
-
-    fprintf(ctx->output_file, "%s", text);
-
-    inst_list = inst_list->next;
-  }
-#ifdef DEBUG_CODEGEN
-  CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-#endif
+  be_inst_list_write(ctx->output_file, inst_list);
 }
 
 /* Returns the program name for use with main */
@@ -5307,14 +4894,15 @@ char *codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
       if (unit == NULL || unit->type != TREE_UNIT)
         continue;
       inst_list = codegen_class_constructor_calls(
-          inst_list, unit->tree_data.unit_data.interface_type_decls, symtab);
+          inst_list, unit->tree_data.unit_data.interface_type_decls, symtab,
+          ctx);
       inst_list = codegen_class_constructor_calls(
           inst_list, unit->tree_data.unit_data.implementation_type_decls,
-          symtab);
+          symtab, ctx);
     }
   }
   inst_list = codegen_class_constructor_calls(inst_list, data->type_declaration,
-                                              symtab);
+                                              symtab, ctx);
 
   /* Windows FPC-RTL startup: mark the program a console application before any
    * unit initialization section runs.  In a normal FPC build the console entry

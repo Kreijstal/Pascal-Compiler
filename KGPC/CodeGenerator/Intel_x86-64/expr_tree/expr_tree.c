@@ -567,10 +567,14 @@ static ListNode_t *codegen_builtin_new_function_call(struct Expression *expr,
   destroy_stmt(new_stmt);
 
   if (!codegen_had_error(ctx)) {
-    char buffer[96];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-             temp_slot->offset, target_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    /* Integrated: load from the frame slot into a physical register via the
+     * vtable. */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+    BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                     {.mem_frame = {BE_BASE_FP, -(long long)(temp_slot->offset)}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
   }
 
   return inst_list;
@@ -679,19 +683,31 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
   if (codegen_had_error(ctx) || desc_reg == NULL)
     return inst_list;
 
-  char buffer[128];
-  snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n", desc_reg->bit_64,
-           target_reg->bit_64);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    /* Integrated: 64-bit load of the dynarray length through the vtable; the
+     * descriptor base is a tracked vreg USE and the destination a tracked DEF
+     * (were baked names, invisible to liveness). */
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    BeOperand dst = {OPK_VREG, BE_W64, {.vreg = target_reg}};
+    BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {desc_reg, 8}}};
+    kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+    inst_list = em.list;
+  }
 
   if (desc_is_heap_temp) {
     /* Spill length result before the release call clobbers caller-saved
      * registers (including target_reg). */
     StackNode_t *len_spill = add_l_t("dynarray_length_spill");
     if (len_spill != NULL) {
-      snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-               target_reg->bit_64, len_spill->offset);
-      inst_list = add_inst(inst_list, buffer);
+      /* Integrated: store a physical register to the frame slot via the
+       * vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP,
+                                      -(long long)(len_spill->offset)}}};
+      BeOperand a = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
     }
     if (codegen_target_is_windows()) {
       Register_t *u[] = {desc_reg};
@@ -707,9 +723,15 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
         inst_list, "kgpc_dynarray_release_temp_descriptor");
     free_arg_regs();
     if (len_spill != NULL) {
-      snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-               len_spill->offset, target_reg->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      /* Integrated: load from the frame slot into a physical register via the
+       * vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+      BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP,
+                                      -(long long)(len_spill->offset)}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
     }
   }
 
@@ -748,9 +770,15 @@ static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
 
       char buffer[128];
       if (arg_is_inline_storage && stack_node->is_reference) {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                 stack_node->offset, value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = value_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(stack_node->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       } else if (arg_is_inline_storage && stack_node->is_static) {
         const char *label = stack_node->static_label != NULL
                                 ? stack_node->static_label
@@ -759,9 +787,13 @@ static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
                  value_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
       } else if (arg_is_inline_storage) {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                 stack_node->offset, value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = value_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(stack_node->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       } else if (stack_node->is_static) {
         const char *label = stack_node->static_label != NULL
                                 ? stack_node->static_label
@@ -770,13 +802,24 @@ static ListNode_t *codegen_builtin_string_length(struct Expression *expr,
                  value_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
       } else {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                 stack_node->offset, value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = value_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(stack_node->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
         if (stack_node->is_reference) {
-          snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                   value_reg->bit_64, value_reg->bit_64);
-          inst_list = add_inst(inst_list, buffer);
+          /* Integrated: 64-bit pointer deref through the vtable; the base is
+           * a tracked vreg USE and the destination a tracked DEF (were baked
+           * names, invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_VREG, BE_W64, {.vreg = value_reg}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {value_reg, 0}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
         }
       }
     }
@@ -2000,9 +2043,15 @@ load_real_operand_into_xmm(CodeGenContext *ctx, struct Expression *operand_expr,
       Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
       if (ext_slot == NULL || dest_addr == NULL)
         return inst_list;
-      snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-               ext_slot->offset, dest_addr->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = dest_addr->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(ext_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
       inst_list = codegen_materialize_extended_expr(operand_expr, inst_list,
                                                     ctx, dest_addr);
       free_reg(get_reg_stack(), dest_addr);
@@ -2709,8 +2758,11 @@ static ListNode_t *gencode_shortcircuit_bool(expr_node_t *node,
   inst_list = add_inst(inst_list, buffer);
   snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", reg8, reg32);
   inst_list = add_inst(inst_list, buffer);
-  snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
-  inst_list = add_inst(inst_list, buffer);
+  {
+    BeEmitter em = codegen_beemitter(inst_list, ctx);
+    kgpc_backend_target()->emit_branch(&em, BE_ALWAYS, done_label);
+    inst_list = em.list;
+  }
 
   snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
   inst_list = add_inst(inst_list, buffer);
@@ -3238,9 +3290,17 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
       inst_list = promote_wide_operand_to_string(node->right_expr, inst_list,
                                                  ctx, target_reg);
     }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-             target_reg->bit_64, spill_loc->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store a physical register to the frame slot via the
+       * vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP,
+                                      -(long long)(spill_loc->offset)}}};
+      BeOperand a = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
     if (result_is_wide)
@@ -3259,16 +3319,32 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
       snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n",
                target_reg->bit_64);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n",
-               spill_loc->offset);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rdx"}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(spill_loc->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
     } else {
       snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n",
                target_reg->bit_64);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n",
-               spill_loc->offset);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%rsi"}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(spill_loc->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
     }
   } else {
     StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
@@ -3290,9 +3366,17 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
       inst_list = promote_wide_operand_to_string(node->left_expr, inst_list,
                                                  ctx, target_reg);
     }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-             target_reg->bit_64, lhs_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: store a physical register to the frame slot via the
+       * vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP,
+                                      -(long long)(lhs_spill->offset)}}};
+      BeOperand a = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+      kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+      inst_list = em.list;
+    }
 
     inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
     if (result_is_wide)
@@ -3307,9 +3391,17 @@ static ListNode_t *gencode_string_concat(expr_node_t *node,
                                                  ctx, rhs_reg);
     }
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-             lhs_spill->offset, target_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    {
+      /* Integrated: load from the frame slot into a physical register via the
+       * vtable. */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
+      BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+      BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                       {.mem_frame = {BE_BASE_FP,
+                                      -(long long)(lhs_spill->offset)}}};
+      kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+      inst_list = em.list;
+    }
 
     if (codegen_target_is_windows()) {
       // For chained concatenations, we need to be careful about register usage
@@ -3777,6 +3869,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     int is_constructor = expr->expr_data.function_call_data.is_constructor_call;
     Register_t *constructor_instance_reg = NULL;
     StackNode_t *constructor_instance_slot = NULL;
+    /* Set only when this call pushed its own pending-ctor-temp entry (the
+     * heap-allocating path).  The instance-receiver path fills
+     * constructor_instance_slot without pushing, and must not be counted
+     * when the post-call clamp decides how many entries to keep. */
+    int constructor_temp_pushed = 0;
 
     /* Record static factories (e.g., TGUID.Create) can also be named Create
      * but they are not class constructors and must not use constructor
@@ -3808,9 +3905,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
         strcmp(func_mangled_name, ctx->current_subprogram_mangled) == 0) {
       StackNode_t *self_slot = find_label("Self");
       if (self_slot != NULL && target_reg != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                 self_slot->offset, target_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(self_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
         return inst_list;
       }
     }
@@ -4181,10 +4284,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
             constructor_instance_reg = inst_reg;
             constructor_instance_slot = add_l_t("ctor_instance");
             if (constructor_instance_slot != NULL) {
-              snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                       constructor_instance_reg->bit_64,
-                       constructor_instance_slot->offset);
-              inst_list = add_inst(inst_list, buffer);
+              /* Integrated: store a physical register to the frame slot via the
+               * vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {
+                  OPK_MEM_FRAME, BE_W64,
+                  {.mem_frame = {BE_BASE_FP,
+                                 -(long long)(constructor_instance_slot->offset)}}};
+              BeOperand a = {OPK_PHYS, BE_W64,
+                             {.phys = constructor_instance_reg->bit_64}};
+              kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+              inst_list = em.list;
             }
           } else {
           /* Allocate memory through the runtime helper. */
@@ -4201,13 +4311,30 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                 free_expr_tree(receiver_tree);
                 constructor_vmt_slot = add_l_t("ctor_vmt");
                 if (constructor_vmt_slot != NULL) {
-                  snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                           vmt_reg->bit_64, constructor_vmt_slot->offset);
-                  inst_list = add_inst(inst_list, buffer);
+                  /* Integrated: store a physical register to the frame slot via
+                   * the vtable. */
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  BeOperand dst = {
+                      OPK_MEM_FRAME, BE_W64,
+                      {.mem_frame = {BE_BASE_FP,
+                                     -(long long)(constructor_vmt_slot->offset)}}};
+                  BeOperand a = {OPK_PHYS, BE_W64, {.phys = vmt_reg->bit_64}};
+                  kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a,
+                                              NULL);
+                  inst_list = em.list;
                 }
-                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                         vmt_reg->bit_64, alloc_arg_reg);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                  /* Integrated: 64-bit load of the instance size through the
+                   * vtable into the fixed ABI argument register; the VMT base
+                   * is a tracked vreg USE (was a baked name, invisible to
+                   * liveness). */
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  BeOperand dst = {OPK_PHYS, BE_W64, {.phys = alloc_arg_reg}};
+                  BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {vmt_reg, 0}}};
+                  kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                              NULL);
+                  inst_list = em.list;
+                }
               } else {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
                          instance_size, alloc_arg_reg);
@@ -4247,10 +4374,19 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
            * call. */
           constructor_instance_slot = add_l_t("ctor_instance");
           if (constructor_instance_slot != NULL) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                     constructor_instance_reg->bit_64,
-                     constructor_instance_slot->offset);
-            inst_list = add_inst(inst_list, buffer);
+            /* Integrated: store a physical register to the frame slot via the
+             * vtable. */
+            {
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {
+                  OPK_MEM_FRAME, BE_W64,
+                  {.mem_frame = {BE_BASE_FP,
+                                 -(long long)(constructor_instance_slot->offset)}}};
+              BeOperand a = {OPK_PHYS, BE_W64,
+                             {.phys = constructor_instance_reg->bit_64}};
+              kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+              inst_list = em.list;
+            }
 
             /* Track the spill slot for transient-temp cleanup.
              * The reaching expr_tree.c path runs only when the
@@ -4265,6 +4401,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
              * pushed by argument evaluation. */
             codegen_push_pending_ctor_temp(ctx,
                                            constructor_instance_slot->offset);
+            constructor_temp_pushed = 1;
           }
 
           if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL) {
@@ -4283,24 +4420,72 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
             if (vmt_reg != NULL && inst_reg != NULL &&
                 constructor_vmt_slot != NULL &&
                 constructor_instance_slot != NULL) {
-              snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                       constructor_vmt_slot->offset, vmt_reg->bit_64);
-              inst_list = add_inst(inst_list, buffer);
-              snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                       constructor_instance_slot->offset, inst_reg->bit_64);
-              inst_list = add_inst(inst_list, buffer);
-              snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                       vmt_reg->bit_64, inst_reg->bit_64);
-              inst_list = add_inst(inst_list, buffer);
+              {
+                /* Integrated: load from the frame slot into a physical register
+                 * via the vtable. */
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                BeOperand dst = {OPK_PHYS, BE_W64, {.phys = vmt_reg->bit_64}};
+                BeOperand src = {
+                    OPK_MEM_FRAME, BE_W64,
+                    {.mem_frame = {BE_BASE_FP,
+                                   -(long long)(constructor_vmt_slot->offset)}}};
+                kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                            NULL);
+                inst_list = em.list;
+              }
+              {
+                /* Integrated: load from the frame slot into a physical register
+                 * via the vtable. */
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                BeOperand dst = {OPK_PHYS, BE_W64, {.phys = inst_reg->bit_64}};
+                BeOperand src = {
+                    OPK_MEM_FRAME, BE_W64,
+                    {.mem_frame = {
+                         BE_BASE_FP,
+                         -(long long)(constructor_instance_slot->offset)}}};
+                kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                            NULL);
+                inst_list = em.list;
+              }
+              {
+                /* Integrated: 64-bit VMT-pointer store through the vtable;
+                 * value and base are tracked vreg USES (were baked names,
+                 * invisible to liveness). */
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                BeOperand dst = {OPK_MEM_BD, BE_W64, {.mem_bd = {inst_reg, 0}}};
+                BeOperand a = {OPK_VREG, BE_W64, {.vreg = vmt_reg}};
+                kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a,
+                                            NULL);
+                inst_list = em.list;
+              }
             } else if (vmt_reg != NULL && constructor_vmt_slot != NULL) {
               /* Fallback: live instance register path (no inst_reg available)
                */
-              snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                       constructor_vmt_slot->offset, vmt_reg->bit_64);
-              inst_list = add_inst(inst_list, buffer);
-              snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                       vmt_reg->bit_64, constructor_instance_reg->bit_64);
-              inst_list = add_inst(inst_list, buffer);
+              {
+                /* Integrated: load from the frame slot into a physical register
+                 * via the vtable. */
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                BeOperand dst = {OPK_PHYS, BE_W64, {.phys = vmt_reg->bit_64}};
+                BeOperand src = {
+                    OPK_MEM_FRAME, BE_W64,
+                    {.mem_frame = {BE_BASE_FP,
+                                   -(long long)(constructor_vmt_slot->offset)}}};
+                kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                            NULL);
+                inst_list = em.list;
+              }
+              {
+                /* Integrated: 64-bit VMT-pointer store through the vtable;
+                 * value and base are tracked vreg USES (were baked names,
+                 * invisible to liveness). */
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                BeOperand dst = {OPK_MEM_BD, BE_W64,
+                                 {.mem_bd = {constructor_instance_reg, 0}}};
+                BeOperand a = {OPK_VREG, BE_W64, {.vreg = vmt_reg}};
+                kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a,
+                                            NULL);
+                inst_list = em.list;
+              }
             }
             if (inst_reg != NULL)
               free_reg(get_reg_stack(), inst_reg);
@@ -4336,10 +4521,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                   snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                            vmt_label, fallback_vmt_reg->bit_64);
                   inst_list = add_inst(inst_list, buffer);
-                  snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                           fallback_vmt_reg->bit_64,
-                           constructor_instance_reg->bit_64);
-                  inst_list = add_inst(inst_list, buffer);
+                  {
+                    /* Integrated: 64-bit VMT-pointer store through the
+                     * vtable; value and base are tracked vreg USES (were
+                     * baked names, invisible to liveness). */
+                    BeEmitter em = codegen_beemitter(inst_list, ctx);
+                    BeOperand dst = {OPK_MEM_BD, BE_W64,
+                                     {.mem_bd = {constructor_instance_reg, 0}}};
+                    BeOperand a = {OPK_VREG, BE_W64, {.vreg = fallback_vmt_reg}};
+                    kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a,
+                                                NULL);
+                    inst_list = em.list;
+                  }
                   free_reg(get_reg_stack(), fallback_vmt_reg);
                 }
               }
@@ -4373,9 +4566,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                          vmt_label, vmt_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                         vmt_reg->bit_64, constructor_instance_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                {
+                  /* Integrated: 64-bit VMT-pointer store through the vtable;
+                   * value and base are tracked vreg USES (were baked names,
+                   * invisible to liveness). */
+                  BeEmitter em = codegen_beemitter(inst_list, ctx);
+                  BeOperand dst = {OPK_MEM_BD, BE_W64,
+                                   {.mem_bd = {constructor_instance_reg, 0}}};
+                  BeOperand a = {OPK_VREG, BE_W64, {.vreg = vmt_reg}};
+                  kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a,
+                                              NULL);
+                  inst_list = em.list;
+                }
                 free_reg(get_reg_stack(), vmt_reg);
               }
             }
@@ -4581,18 +4783,51 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
           return inst_list;
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %%r11\n",
-                 descriptor_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, -%d(%%rbp)\n",
-                 procvar_method_self_spill->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %%r11\n",
-                 descriptor_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, -%d(%%rbp)\n",
-                 procvar_method_code_spill->offset);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          /* Integrated: 64-bit load of the method-pointer Self through the
+           * vtable into the fixed %r11 scratch; the descriptor base is a
+           * tracked vreg USE (was a baked name, invisible to liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {descriptor_reg, 8}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
+        }
+        {
+          /* Integrated: store a physical register to the frame slot via the
+           * vtable. */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {
+              OPK_MEM_FRAME, BE_W64,
+              {.mem_frame = {BE_BASE_FP,
+                             -(long long)(procvar_method_self_spill->offset)}}};
+          BeOperand a = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
+        }
+        {
+          /* Integrated: 64-bit load of the method-pointer code address
+           * through the vtable into the fixed %r11 scratch; the descriptor
+           * base is a tracked vreg USE (was a baked name, invisible to
+           * liveness). */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+          BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {descriptor_reg, 0}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
+        }
+        {
+          /* Integrated: store a physical register to the frame slot via the
+           * vtable. */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {
+              OPK_MEM_FRAME, BE_W64,
+              {.mem_frame = {BE_BASE_FP,
+                             -(long long)(procvar_method_code_spill->offset)}}};
+          BeOperand a = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
+        }
         free_reg(get_reg_stack(), descriptor_reg);
 
         procvar_method_self_index = arg_start_index;
@@ -4645,11 +4880,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                  dest_reg);
         inst_list = add_inst(inst_list, link_buffer);
         break;
-      case STATIC_LINK_FROM_SLOT:
-        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                 static_link_slot_offset, dest_reg);
-        inst_list = add_inst(inst_list, link_buffer);
+      case STATIC_LINK_FROM_SLOT: {
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = dest_reg}};
+        BeOperand src = {
+            OPK_MEM_FRAME, BE_W64,
+            {.mem_frame = {BE_BASE_FP, -(long long)(static_link_slot_offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
         break;
+      }
       case STATIC_LINK_FROM_REG:
         if (static_link_reg != NULL) {
           snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %s\n",
@@ -4667,9 +4909,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     if (has_record_return && !is_constructor && sret_slot != NULL) {
       const char *ret_reg = current_arg_reg64(0);
       if (ret_reg != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                 sret_slot->offset, ret_reg);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = ret_reg}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(sret_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       }
     }
 
@@ -4693,9 +4939,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       const char *self_arg_reg = current_arg_reg64(procvar_method_self_index);
       assert(self_arg_reg != NULL &&
              "current_arg_reg64(..) should never return NULL");
-      snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-               procvar_method_self_spill->offset, self_arg_reg);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = self_arg_reg}};
+        BeOperand src = {
+            OPK_MEM_FRAME, BE_W64,
+            {.mem_frame = {BE_BASE_FP,
+                           -(long long)(procvar_method_self_spill->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
     }
 
     if (static_link_expr_active)
@@ -4719,9 +4974,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     /* Check if this is a call through a procedural variable */
     if (expr->expr_data.function_call_data.is_procedural_var_call) {
       if (procvar_method_code_spill != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-                 procvar_method_code_spill->offset);
-        inst_list = add_inst(inst_list, buffer);
+        {
+          /* Integrated: load from the frame slot into a physical register via
+           * the vtable. */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+          BeOperand src = {
+              OPK_MEM_FRAME, BE_W64,
+              {.mem_frame = {BE_BASE_FP,
+                             -(long long)(procvar_method_code_spill->offset)}}};
+          kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+          inst_list = em.list;
+        }
         snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
         inst_list = add_inst(inst_list, buffer);
       } else if (expr->expr_data.function_call_data.procedural_var_expr !=
@@ -4763,22 +5027,34 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                                       : stack_node->label;
               snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n", label,
                        func_ptr_reg->bit_64);
+              inst_list = add_inst(inst_list, buffer);
             } else if (proc_var_scope_depth > 0) {
               /* Non-local variable: access through static link */
               Register_t *frame_reg = codegen_acquire_static_link(
                   ctx, &inst_list, proc_var_scope_depth);
-              if (frame_reg != NULL)
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
-                         stack_node->offset, frame_reg->bit_64,
-                         func_ptr_reg->bit_64);
-              else
+              if (frame_reg != NULL) {
+                /* Integrated: 64-bit load of the function pointer through the
+                 * vtable; the static-link base is a tracked vreg USE and the
+                 * destination a tracked DEF (were baked names, invisible to
+                 * liveness). */
+                BeEmitter em = codegen_beemitter(inst_list, ctx);
+                BeOperand dst = {OPK_VREG, BE_W64, {.vreg = func_ptr_reg}};
+                BeOperand src = {
+                    OPK_MEM_BD, BE_W64,
+                    {.mem_bd = {frame_reg, -(int)stack_node->offset}}};
+                kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src,
+                                            NULL);
+                inst_list = em.list;
+              } else {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                          stack_node->offset, func_ptr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+              }
             } else {
               snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                        stack_node->offset, func_ptr_reg->bit_64);
+              inst_list = add_inst(inst_list, buffer);
             }
-            inst_list = add_inst(inst_list, buffer);
 
             /* Call through the function pointer */
             snprintf(buffer, sizeof(buffer), "\tcall\t*%s\n",
@@ -4874,9 +5150,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
               NULL)) {
         StackNode_t *ctor_self_slot = add_l_t("ctor_self_vmt");
         if (ctor_self_slot != NULL) {
-          snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", self_reg,
-                   ctor_self_slot->offset);
-          inst_list = add_inst(inst_list, buffer);
+          /* Integrated: store a physical register to the frame slot via the
+           * vtable. */
+          BeEmitter em = codegen_beemitter(inst_list, ctx);
+          BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                           {.mem_frame = {BE_BASE_FP,
+                                          -(long long)(ctor_self_slot->offset)}}};
+          BeOperand a = {OPK_PHYS, BE_W64, {.phys = self_reg}};
+          kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+          inst_list = em.list;
         }
 
         Register_t *ctor_vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -4888,9 +5170,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
                 gencode_expr_tree(receiver_tree, inst_list, ctx, ctor_vmt_reg);
             free_expr_tree(receiver_tree);
             if (ctor_self_slot != NULL) {
-              snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-                       ctor_self_slot->offset);
-              inst_list = add_inst(inst_list, buffer);
+              /* Integrated: load from the frame slot into a physical register
+               * via the vtable. */
+              BeEmitter em = codegen_beemitter(inst_list, ctx);
+              BeOperand dst = {OPK_PHYS, BE_W64, {.phys = "%r11"}};
+              BeOperand src = {
+                  OPK_MEM_FRAME, BE_W64,
+                  {.mem_frame = {BE_BASE_FP,
+                                 -(long long)(ctor_self_slot->offset)}}};
+              kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+              inst_list = em.list;
             } else {
               snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
               inst_list = add_inst(inst_list, buffer);
@@ -5028,9 +5317,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       /* Use the allocated instance pointer as the result, regardless of what
        * the callee returns. */
       if (constructor_instance_slot != NULL) {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                 constructor_instance_slot->offset, target_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Integrated: load from the frame slot into a physical register via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+        BeOperand src = {
+            OPK_MEM_FRAME, BE_W64,
+            {.mem_frame = {BE_BASE_FP,
+                           -(long long)(constructor_instance_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
       } else {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
                  constructor_instance_reg->bit_64, target_reg->bit_64);
@@ -5121,7 +5417,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
      * boundary. */
     if (ctx != NULL) {
       int keep_count = ctor_pending_snapshot_before_push;
-      if (is_constructor && constructor_instance_slot != NULL)
+      if (is_constructor && constructor_temp_pushed)
         keep_count += 1;
       if (ctx->pending_ctor_temp_count > keep_count)
         ctx->pending_ctor_temp_count = keep_count;
@@ -5133,7 +5429,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       free_reg(get_reg_stack(), constructor_instance_reg);
     if (ctx != NULL) {
       int keep_count = ctor_pending_snapshot_before_push;
-      if (is_constructor && constructor_instance_slot != NULL)
+      if (is_constructor && constructor_temp_pushed)
         keep_count += 1;
       if (ctx->pending_ctor_temp_count > keep_count)
         ctx->pending_ctor_temp_count = keep_count;
@@ -5264,10 +5560,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
     if (addr_reg != NULL) {
       char buffer[64];
       if (is_dynarray_src) {
-        /* descriptor.data is at offset 0; load via target. */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64,
-                 target_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* descriptor.data is at offset 0; load via target.
+         * Integrated: 64-bit load through the vtable; the descriptor base is
+         * a tracked vreg USE and the destination a tracked DEF (were baked
+         * names, invisible to liveness). */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = target_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {addr_reg, 0}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
         if (addr_reg != target_reg)
           free_reg(get_reg_stack(), addr_reg);
       } else if (addr_reg != target_reg) {
@@ -5523,9 +5824,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
       snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label,
                code_reg->bit_64);
       inst_list = add_inst(inst_list, buffer);
-      snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-               code_reg->bit_64, tm_slot->offset);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: store a physical register to the frame slot via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(tm_slot->offset)}}};
+        BeOperand a = {OPK_PHYS, BE_W64, {.phys = code_reg->bit_64}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+        inst_list = em.list;
+      }
       free_reg(get_reg_stack(), code_reg);
 
       /* Step 2: store the receiver Self pointer at offset 8 of the temp.
@@ -5549,15 +5858,29 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
           free(resolved_label);
         return inst_list;
       }
-      snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-               self_reg->bit_64, tm_slot->offset - 8);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: store a physical register to the frame slot via the
+         * vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP,
+                                        -(long long)(tm_slot->offset - 8)}}};
+        BeOperand a = {OPK_PHYS, BE_W64, {.phys = self_reg->bit_64}};
+        kgpc_backend_target()->emit(&em, BE_STORE, BE_W64, &dst, &a, NULL);
+        inst_list = em.list;
+      }
       free_reg(get_reg_stack(), self_reg);
 
       /* Step 3: load the address of the temp into target_reg. */
-      snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-               tm_slot->offset, target_reg->bit_64);
-      inst_list = add_inst(inst_list, buffer);
+      {
+        /* Integrated: address-of the frame slot into a physical register via the vtable. */
+        BeEmitter em = codegen_beemitter(inst_list, ctx);
+        BeOperand dst = {OPK_PHYS, BE_W64, {.phys = target_reg->bit_64}};
+        BeOperand src = {OPK_MEM_FRAME, BE_W64,
+                         {.mem_frame = {BE_BASE_FP, -(long long)(tm_slot->offset)}}};
+        kgpc_backend_target()->emit(&em, BE_LEA, BE_W64, &dst, &src, NULL);
+        inst_list = em.list;
+      }
 
       if (collision_label != NULL)
         free(collision_label);
@@ -5978,36 +6301,38 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list,
         return inst_list;
       }
 
-      char load_value[80];
       int use_qword = expr_requires_qword(expr) ||
                       codegen_type_uses_qword(expr_type) ||
                       expr_type == UNKNOWN_TYPE;
+      /* Integrated: pointer-deref value load through the vtable; the base is
+       * a tracked vreg USE and the destination a tracked DEF (were baked
+       * names, invisible to liveness).  Narrow widths go through emit_ext as
+       * sign/zero-extending loads (movs/movz mnemonics unchanged). */
+      BeEmitter em = codegen_beemitter(inst_list, ctx);
       if (use_qword) {
-        snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
-                 target_reg->bit_64, target_reg->bit_64);
+        BeOperand dst = {OPK_VREG, BE_W64, {.vreg = target_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W64, {.mem_bd = {target_reg, 0}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W64, &dst, &src, NULL);
       } else if (expr_type == CHAR_TYPE || expr_type == BOOL) {
-        snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
-                 target_reg->bit_64, target_reg->bit_32);
+        BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {target_reg, 0}}};
+        kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32, 0);
       } else if (storage_size == 2) {
-        if (codegen_type_is_signed(expr_type))
-          snprintf(load_value, sizeof(load_value), "\tmovswl\t(%s), %s\n",
-                   target_reg->bit_64, target_reg->bit_32);
-        else
-          snprintf(load_value, sizeof(load_value), "\tmovzwl\t(%s), %s\n",
-                   target_reg->bit_64, target_reg->bit_32);
+        BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W16, {.mem_bd = {target_reg, 0}}};
+        kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W16, BE_W32,
+                                        codegen_type_is_signed(expr_type));
       } else if (storage_size == 1) {
-        if (codegen_type_is_signed(expr_type))
-          snprintf(load_value, sizeof(load_value), "\tmovsbl\t(%s), %s\n",
-                   target_reg->bit_64, target_reg->bit_32);
-        else
-          snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
-                   target_reg->bit_64, target_reg->bit_32);
+        BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W8, {.mem_bd = {target_reg, 0}}};
+        kgpc_backend_target()->emit_ext(&em, &dst, &src, BE_W8, BE_W32,
+                                        codegen_type_is_signed(expr_type));
       } else {
-        snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
-                 target_reg->bit_64, target_reg->bit_32);
+        BeOperand dst = {OPK_VREG, BE_W32, {.vreg = target_reg}};
+        BeOperand src = {OPK_MEM_BD, BE_W32, {.mem_bd = {target_reg, 0}}};
+        kgpc_backend_target()->emit(&em, BE_LOAD, BE_W32, &dst, &src, NULL);
       }
-
-      inst_list = add_inst(inst_list, load_value);
+      inst_list = em.list;
       return inst_list;
     }
 

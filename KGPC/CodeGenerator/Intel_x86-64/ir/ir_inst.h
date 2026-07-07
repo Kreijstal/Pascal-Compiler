@@ -61,6 +61,18 @@ typedef struct IrInst {
 #define IR_REG_NAME_BUF 12
   char reg_names_64[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
   char reg_names_32[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
+  char reg_names_16[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
+  char reg_names_8[IR_MAX_DEFS + IR_MAX_USES][IR_REG_NAME_BUF];
+
+  /* Per-placeholder register-width selector (0 = use the mnemonic-suffix
+   * heuristic, the x86 default; 1 = force 64-bit name; 2 = force 32-bit name;
+   * 3 = force 16-bit name; 4 = force 8-bit name).
+   * calloc-zeroed, so the legacy heuristic path is the default and unchanged.
+   * A target that does not encode width in the mnemonic (e.g. AArch64, where
+   * width is the register name w0 vs x0) sets this explicitly via
+   * be_add_inst_du_w() / be_add_inst_du_wsel().  The 16/8-bit codes are used by
+   * the sign/zero-extend ops (movsbl, sxtb, …) which read a narrow source. */
+  unsigned char reg_width_sel[IR_MAX_DEFS + IR_MAX_USES];
 } IrInst_t;
 
 /* Allocate and initialise a new IrInst_t.

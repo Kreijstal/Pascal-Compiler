@@ -80,6 +80,8 @@ void ir_inst_free(IrInst_t *inst) {
       if (inst->defs[i] != NULL) {
         free(inst->defs[i]->bit_64);
         free(inst->defs[i]->bit_32);
+        free(inst->defs[i]->bit_16);
+        free(inst->defs[i]->bit_8);
         free(inst->defs[i]);
         inst->defs[i] = NULL;
       }
@@ -88,6 +90,8 @@ void ir_inst_free(IrInst_t *inst) {
       if (inst->uses[i] != NULL) {
         free(inst->uses[i]->bit_64);
         free(inst->uses[i]->bit_32);
+        free(inst->uses[i]->bit_16);
+        free(inst->uses[i]->bit_8);
         free(inst->uses[i]);
         inst->uses[i] = NULL;
       }
@@ -210,13 +214,17 @@ static Register_t *make_synthetic_reg(const char *name) {
   r->bit_64[0] = '%';
   memcpy(r->bit_64 + 1, name, nlen + 1);
 
-  /* bit_32 is left as an empty string to satisfy any NULL checks. */
+  /* bit_32/bit_16/bit_8 are left as empty strings to satisfy any NULL checks.
+   * The textual IR round-trip only carries 64-bit names; narrow sub-register
+   * names are never reconstructed from parsed text. */
   r->bit_32 = strdup("");
   if (r->bit_32 == NULL) {
     free(r->bit_64);
     free(r);
     return NULL;
   }
+  r->bit_16 = NULL;
+  r->bit_8 = NULL;
 
   return r;
 }
@@ -451,8 +459,26 @@ void ir_emit_function(ListNode_t *inst_list) {
            * This avoids dereferencing the borrowed defs[]/uses[] pointers
            * which may have been freed by reset_reg_stack() when nested
            * subprograms were generated before ir_emit_function() runs. */
-          const char *name =
-              use_32bit ? inst->reg_names_32[idx] : inst->reg_names_64[idx];
+          /* Per-placeholder width override (set by be_add_inst_du_w) takes
+           * precedence over the mnemonic-suffix heuristic. */
+          const char *name;
+          switch (inst->reg_width_sel[idx]) {
+          case 1:
+            name = inst->reg_names_64[idx];
+            break;
+          case 2:
+            name = inst->reg_names_32[idx];
+            break;
+          case 3:
+            name = inst->reg_names_16[idx];
+            break;
+          case 4:
+            name = inst->reg_names_8[idx];
+            break;
+          default:
+            name = use_32bit ? inst->reg_names_32[idx] : inst->reg_names_64[idx];
+            break;
+          }
           if (name[0] != '\0')
             regname = name;
         }

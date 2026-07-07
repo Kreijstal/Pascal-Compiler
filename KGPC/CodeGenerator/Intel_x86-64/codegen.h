@@ -106,17 +106,12 @@
 extern kgpc_target_abi_t g_current_codegen_abi;
 extern int g_stack_home_space_bytes;
 
-#ifdef KGPC_DEBUG_CODEGEN
-#define DEBUG_CODEGEN
-#endif
-#ifdef DEBUG_CODEGEN
-#define CODEGEN_DEBUG(...) fprintf(stderr, __VA_ARGS__)
-#else
-#define CODEGEN_DEBUG(...) ((void)0)
-#endif
+/* The backend library owns CODEGEN_DEBUG / DEBUG_CODEGEN (backend_debug.h) and
+ * REQUIRED_OFFSET (backend_emit.h), so the standalone emission core can share
+ * them.  backend_emit.h transitively includes backend_debug.h. */
+#include "backend/backend_emit.h"
 #define CODEGEN_MAX_INST_BUF 512
 #define MAX_ARGS 3
-#define REQUIRED_OFFSET 16
 
 static inline int codegen_target_is_windows(void) {
   return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
@@ -191,6 +186,7 @@ char *codegen_make_unit_qualified_key(int source_unit_index,
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../compilation_context.h"
+#include "backend/target.h"
 #include "stackmng/stackmng.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -436,6 +432,19 @@ typedef struct CodeGenContext {
   int managed_dynarray_temp_count;
   int managed_dynarray_temp_capacity;
 } CodeGenContext;
+
+/* Bridge: build a backend BeEmitter bound to this compilation's instruction
+ * list and CodeGenContext counters, so front-end lowering can emit through the
+ * target-neutral Target vtable.  After emitting, write em.list back to the
+ * caller's inst_list. */
+static inline BeEmitter codegen_beemitter(ListNode_t *inst_list,
+                                          CodeGenContext *ctx) {
+  BeEmitter em;
+  em.list = inst_list;
+  em.next_vreg_id = &ctx->next_vreg_id;
+  em.label_counter = &ctx->label_counter;
+  return em;
+}
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx);

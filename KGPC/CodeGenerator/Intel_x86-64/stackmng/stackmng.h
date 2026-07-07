@@ -178,6 +178,8 @@ typedef struct Register {
   RegisterId_t reg_id;
   char *bit_64;
   char *bit_32;
+  char *bit_16; /* 16-bit sub-register name (e.g. "%bx"); may be NULL */
+  char *bit_8;  /* 8-bit  sub-register name (e.g. "%bl"); may be NULL */
   /* Spill tracking - if spilled, this points to the stack location */
   StackNode_t *spill_location;
   /* Sequence number for LRU tracking */
@@ -192,6 +194,23 @@ typedef struct Register {
       *current_live_range; /* Active live range for this register */
 #endif
 } Register_t;
+
+/* A target's allocatable register: an opaque slot id plus its 64/32-bit
+ * assembly names.  Lets the register pool be target-provided instead of
+ * hardcoded, so the shared allocator is target-neutral. */
+typedef struct BackendRegSpec {
+  RegisterId_t reg_id;
+  const char *name64;
+  const char *name32;
+  const char *name16; /* 16-bit sub-register name; may be NULL */
+  const char *name8;  /* 8-bit  sub-register name; may be NULL */
+} BackendRegSpec;
+
+/* Override the allocatable register pool used by init_reg_stack (and thus
+ * reset_reg_stack).  Pass NULL/0 to restore the default x86-64 pool.  The
+ * `specs` array must outlive all subsequent init/reset calls (targets pass
+ * static tables). */
+void stackmng_set_register_pool(const BackendRegSpec *specs, int n);
 
 /********* StackScope_t **********/
 
