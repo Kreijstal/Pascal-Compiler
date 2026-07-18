@@ -249,6 +249,7 @@ typedef struct Target {
 
 /* Target factories (defined in target_x86.c / target_aarch64.c). */
 const Target *target_x86_sysv(void);
+const Target *target_i386_sysv(void);
 const Target *target_aarch64(void);
 
 /* The instruction-emitting target the live compiler lowers through.  x86 today

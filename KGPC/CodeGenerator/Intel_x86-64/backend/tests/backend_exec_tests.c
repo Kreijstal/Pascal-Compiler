@@ -1045,6 +1045,29 @@ static void test_golden_x86_frame_imm(const Target *T) {
         "x86 frame-imm: BE_STORE renders movl $123, -48(%rbp)");
 }
 
+static void test_i386_target(void) {
+  const Target *T = target_i386_sysv();
+  CHECK(strcmp(T->name, "i386-sysv") == 0, "i386: target name");
+  CHECK(T->ptr_width == 4, "i386: 32-bit pointers");
+  CHECK(T->num_int_arg_regs() == 0, "i386: arguments use the stack");
+  CHECK(T->arg_reg(0, BE_W32) == NULL, "i386: no register argument");
+  CHECK(strcmp(T->return_reg(BE_W32), "%eax") == 0,
+        "i386: returns integers in %eax");
+
+  ListNode_t *list = build_const(T, "i386const", 12345);
+  finalize_and_write("be_i386_const.s", "i386const", list);
+  char emitted[4096];
+  concat_emitted(list, emitted, sizeof(emitted));
+  CHECK(strstr(emitted, "pushl\t%ebp") != NULL,
+        "i386: emits a 32-bit frame prologue");
+  CHECK(strstr(emitted, "movl\t$12345, %eax") != NULL,
+        "i386: emits a 32-bit return value");
+  CHECK(strstr(emitted, "%r") == NULL && strstr(emitted, "q\t") == NULL,
+        "i386: emitted code contains no x86-64 registers or instructions");
+  CHECK(system("as --32 -o be_i386_const.o be_i386_const.s") == 0,
+        "i386: generated assembly assembles as ELF32");
+}
+
 static void test_golden_aarch64_frame_imm(const Target *T) {
   ListNode_t *l0 = build_frame_imm(T, "aaframei0", 0);
   ir_liveness_allocate(l0);
@@ -1539,6 +1562,7 @@ int main(void) {
   test_golden_x86_frame_imm(T);
   test_exec_frame_imm(T, "beframei", 123);
   test_exec_frame_imm(T, "beframei0", 0);
+  test_i386_target();
   test_golden_x86_frame_cmp(T);
   test_exec_frame_cmp(T, "beframec1", 3, 1); /* 5 > 3 -> 1 */
   test_exec_frame_cmp(T, "beframec0", 7, 0); /* 5 > 7 -> 0 */
