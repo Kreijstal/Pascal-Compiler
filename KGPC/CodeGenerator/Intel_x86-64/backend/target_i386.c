@@ -22,8 +22,10 @@ static char i386_suffix(BeWidth width) {
   case BE_W16:
     return 'w';
   case BE_W32:
+    return 'l';
   case BE_W64:
   default:
+    assert(0 && "i386 does not support 64-bit scalar values");
     return 'l';
   }
 }
@@ -35,8 +37,10 @@ static int i386_width_sel(BeWidth width) {
   case BE_W16:
     return 3;
   case BE_W32:
+    return 2;
   case BE_W64:
   default:
+    assert(0 && "i386 does not support 64-bit scalar values");
     return 2;
   }
 }
