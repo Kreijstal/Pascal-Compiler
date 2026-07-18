@@ -1064,8 +1064,9 @@ static void test_i386_target(void) {
         "i386: emits a 32-bit return value");
   CHECK(strstr(emitted, "%r") == NULL && strstr(emitted, "q\t") == NULL,
         "i386: emitted code contains no x86-64 registers or instructions");
-  CHECK(system("as --32 -o be_i386_const.o be_i386_const.s") == 0,
-        "i386: generated assembly assembles as ELF32");
+  int assembler_status = system("as --32 -o be_i386_const.o be_i386_const.s");
+  remove("be_i386_const.o");
+  CHECK(assembler_status == 0, "i386: generated assembly assembles as ELF32");
 }
 
 static void test_golden_aarch64_frame_imm(const Target *T) {

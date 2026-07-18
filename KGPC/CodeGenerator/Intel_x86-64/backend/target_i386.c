@@ -327,6 +327,8 @@ static const char *i386_return_reg(BeWidth width) {
   return width == BE_WF32 || width == BE_WF64 ? NULL : "%eax";
 }
 
+/* RegisterId_t is an allocator slot identifier, not an ISA register encoding;
+ * reuse the stable slots for the matching i386 callee-saved registers. */
 static const BackendRegSpec kI386Pool[] = {
     {REG_RBX, "%ebx", "%ebx", "%bx", "%bl"},
     {REG_RSI, "%esi", "%esi", "%si", "%sil"},
