@@ -1065,8 +1065,44 @@ static void test_i386_target(void) {
   CHECK(strstr(emitted, "%r") == NULL && strstr(emitted, "q\t") == NULL,
         "i386: emitted code contains no x86-64 registers or instructions");
   int assembler_status = system("as --32 -o be_i386_const.o be_i386_const.s");
-  remove("be_i386_const.o");
   CHECK(assembler_status == 0, "i386: generated assembly assembles as ELF32");
+
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+  FILE *driver = fopen("be_i386_const_start.s", "w");
+  if (driver == NULL) {
+    CHECK(0, "i386: create ELF32 integration driver");
+  } else {
+    fputs("\t.text\n"
+          "\t.globl\t_start\n"
+          "_start:\n"
+          "\tcall\ti386const\n"
+          "\tmovl\t%eax, %ebx\n"
+          "\tmovl\t$1, %eax\n"
+          "\tint\t$0x80\n",
+          driver);
+    fclose(driver);
+
+    int driver_status =
+        system("as --32 -o be_i386_const_start.o be_i386_const_start.s");
+    int link_status =
+        driver_status == 0
+            ? system("ld -m elf_i386 -o be_i386_const be_i386_const.o "
+                     "be_i386_const_start.o")
+            : -1;
+    int run_status = link_status == 0 ? system("./be_i386_const") : -1;
+    CHECK(driver_status == 0, "i386: ELF32 integration driver assembles");
+    CHECK(link_status == 0, "i386: generated object links as ELF32");
+    CHECK(run_status != -1 && ((run_status >> 8) & 0xff) == (12345 & 0xff),
+          "i386: linked ELF32 program executes generated code");
+  }
+#else
+  fprintf(stderr, "skip: i386: ELF32 execution requires a Linux x86 host\n");
+#endif
+
+  remove("be_i386_const.o");
+  remove("be_i386_const_start.o");
+  remove("be_i386_const_start.s");
+  remove("be_i386_const");
 }
 
 static void test_golden_aarch64_frame_imm(const Target *T) {
