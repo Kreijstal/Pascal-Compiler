@@ -1098,7 +1098,7 @@ static void test_i386_target(void) {
     int run_status = link_status == 0 ? system("./be_i386_const") : -1;
     CHECK(driver_status == 0, "i386: ELF32 integration driver assembles");
     CHECK(link_status == 0, "i386: generated object links as ELF32");
-    CHECK(run_status != -1 && ((run_status >> 8) & 0xff) == 0,
+    CHECK(run_status == 0,
           "i386: linked ELF32 program executes generated code");
   }
 #else
