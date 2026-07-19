@@ -257,4 +257,8 @@ const Target *target_aarch64(void);
  * the instructions the vtable emits). */
 const Target *kgpc_backend_target(void);
 
+/* Set the active backend target (called once at startup from the front-end
+ * after parsing --target flags).  NULL is ignored. */
+void kgpc_backend_target_set(const Target *t);
+
 #endif /* KGPC_BACKEND_TARGET_H */

@@ -256,6 +256,39 @@ kgpc_runtime_lib = static_library('kgpc_runtime',
   install: false,
 )
 
+# i386 (32-bit) variant of the runtime for --target=i386 end-to-end tests.
+# Only built on Linux hosts where gcc -m32 is available.
+have_i386_runtime = false
+if host_machine.system() == 'linux' and host_machine.cpu_family() == 'x86_64'
+  m32_check = compiler.run(
+    'int main(void){return sizeof(void*)==4?0:1;}',
+    args: ['-m32'],
+    name: 'gcc -m32 support check'
+  )
+  if m32_check.compiled() and m32_check.returncode() == 0
+    runtime_i386_sources = [
+      'runtime.c',
+      'runtime_string.c',
+      'runtime_baseunix.c',
+      'runtime_unix.c',
+      'runtime_widechar_assign_olevariant.c',
+      'runtime_olevariant_assign.c',
+      'runtime_fpc_pchar_to_shortstr.c',
+      'runtime_fpc_pchar_to_shortstr_upper.c',
+      'runtime_fpc_assign.c',
+      'runtime_fpc_init.c',
+    ]
+    runtime_i386_c_args = runtime_c_args + ['-m32']
+    kgpc_runtime_i386_lib = static_library('kgpc_runtime_i386',
+      runtime_i386_sources,
+      c_args: runtime_i386_c_args,
+      dependencies: runtime_deps,
+      install: false,
+    )
+    have_i386_runtime = true
+  endif
+endif
+
 ctypes_helper = shared_library('ctypes_helper',
   meson.project_source_root() / 'tests/test_cases/ctypes_helper.c',
   install: false,
@@ -274,6 +307,9 @@ env.set('RUN_VALGRIND_TESTS', run_valgrind_tests ? 'true' : 'false')
 
 env.set('CC', ' '.join(compiler.cmd_array()))
 env.set('KGPC_RUNTIME_LIB', kgpc_runtime_lib.full_path())
+if have_i386_runtime
+  env.set('KGPC_RUNTIME_I386_LIB', kgpc_runtime_i386_lib.full_path())
+endif
 env.set('KGPC_CTYPES_HELPER', ctypes_helper.full_path())
 env.set('KGPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
 # Propagate the sanitizer option so the test harness can link

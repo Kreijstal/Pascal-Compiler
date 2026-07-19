@@ -4878,7 +4878,8 @@ static uint64_t kgpc_random_u64_bounded(uint64_t bound) {
   }
 
   /* For larger bounds, use rejection sampling with 128-bit multiplication
-   * (Lemire's method). */
+   * (Lemire's method).  __uint128_t is only available on 64-bit targets. */
+#if __SIZEOF_POINTER__ >= 8
   uint32_t a = kgpc_xsr128_u32rand();
   __uint128_t prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
   __uint128_t full = prod * bound;
@@ -4896,6 +4897,10 @@ static uint64_t kgpc_random_u64_bounded(uint64_t bound) {
     }
   }
   return mHi;
+#else
+  /* Fallback for 32-bit targets: simple modulo reduction. */
+  return kgpc_xsr128_u64rand() % bound;
+#endif
 }
 
 int64_t kgpc_random_int(int64_t upper) {

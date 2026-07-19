@@ -1034,4 +1034,14 @@ static const Target kX86SysV = {
 
 const Target *target_x86_sysv(void) { return &kX86SysV; }
 
-const Target *kgpc_backend_target(void) { return &kX86SysV; }
+/* The active backend target.  Defaults to x86-64 SysV; set by the front-end
+ * via kgpc_backend_target_set() when the user selects --target=i386.
+ * The backend library itself has no dependency on flags.c. */
+static const Target *g_active_backend_target = &kX86SysV;
+
+const Target *kgpc_backend_target(void) { return g_active_backend_target; }
+
+void kgpc_backend_target_set(const Target *t) {
+  if (t != NULL)
+    g_active_backend_target = t;
+}

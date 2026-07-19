@@ -63,6 +63,8 @@ HashNode_t *semcheck_find_preferred_type_node_for_unit(SymTab_t *symtab,
 
 /* Recursion limit and pointer size constants */
 #define SIZEOF_RECURSION_LIMIT 64
-#define POINTER_SIZE_BYTES 8
+/* Pointer size: use the runtime-queryable target pointer size so that i386
+ * (4-byte pointers) and x86-64 (8-byte pointers) share the same code. */
+#define POINTER_SIZE_BYTES kgpc_target_pointer_size()
 
 #endif /* SEM_CHECK_SIZEOF_H */

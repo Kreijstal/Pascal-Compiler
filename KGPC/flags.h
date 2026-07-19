@@ -22,6 +22,12 @@ typedef enum {
   KGPC_TARGET_ABI_WINDOWS = 1,   /**< Win64 calling convention. */
 } kgpc_target_abi_t;
 
+/** @brief Target architecture (ISA) selection. */
+typedef enum {
+  KGPC_TARGET_ARCH_X86_64 = 0,   /**< x86-64 (AMD64 / Intel 64). */
+  KGPC_TARGET_ARCH_I386 = 1,     /**< i386 (IA-32, 32-bit x86). */
+} kgpc_target_arch_t;
+
 /* Debug flags - can be enabled at compile time or runtime */
 /* To enable at compile time: -DKGPC_DEBUG_SEMCHECK etc. */
 /* To enable at runtime: set KGPC_DEBUG_SEMCHECK=1 etc. */
@@ -105,6 +111,10 @@ void set_time_passes_flag(void);
 void set_target_windows_flag(void);
 /** @brief Set the target ABI to SysV AMD64 (Linux/macOS/BSD). */
 void set_target_sysv_flag(void);
+/** @brief Set the target architecture to i386 (32-bit x86). */
+void set_target_arch_i386_flag(void);
+/** @brief Set the target architecture to x86-64 (default). */
+void set_target_arch_x86_64_flag(void);
 
 /**
  * @brief Set the dump-AST output path.
@@ -164,6 +174,12 @@ int kgpc_target_filerec_size(void);
 int kgpc_target_textrec_size(void);
 /** @brief Get the active target ABI (`SYSTEM_V` or `WINDOWS`). */
 kgpc_target_abi_t current_target_abi(void);
+/** @brief Get the active target architecture (`X86_64` or `I386`). */
+kgpc_target_arch_t current_target_arch(void);
+/** @brief Pointer size in bytes for the active target architecture (8 or 4). */
+int kgpc_target_pointer_size(void);
+/** @brief Get whether the target is i386 (32-bit). */
+int target_i386_flag(void);
 /** @brief Get the dump-AST output path, or NULL if unset. */
 const char *dump_ast_path(void);
 /** @brief Free and clear the dump-AST path. */

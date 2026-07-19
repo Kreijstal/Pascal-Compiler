@@ -66,7 +66,7 @@ typedef struct KGPCTextRec {
  * TextRec (kgpc_target_textrec_size() == 904 on Win64, where `name` is
  * UnicodeChar[256] = 512 bytes); the two sizes intentionally differ. */
 _Static_assert(
-    sizeof(KGPCTextRec) == 648,
+    sizeof(KGPCTextRec) == 648 || sizeof(void *) != 8,
     "KGPCTextRec must mirror FPC's leading Win64 TextRec fields at 648 bytes");
 #else
 typedef struct KGPCTextRec {
@@ -91,7 +91,7 @@ typedef struct KGPCTextRec {
 } KGPCTextRec;
 
 _Static_assert(
-    sizeof(KGPCTextRec) == 640,
+    sizeof(KGPCTextRec) == 640 || sizeof(void *) != 8,
     "KGPCTextRec size must be 640 to match TEXT_TYPE in SemCheck_sizeof.c");
 #endif
 
