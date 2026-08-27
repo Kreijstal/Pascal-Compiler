@@ -1064,10 +1064,10 @@ static void test_i386_target(void) {
         "i386: emits a 32-bit return value");
   CHECK(strstr(emitted, "%r") == NULL && strstr(emitted, "q\t") == NULL,
         "i386: emitted code contains no x86-64 registers or instructions");
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
   int assembler_status = system("as --32 -o be_i386_const.o be_i386_const.s");
   CHECK(assembler_status == 0, "i386: generated assembly assembles as ELF32");
 
-#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
   FILE *driver = fopen("be_i386_const_start.s", "w");
   if (driver == NULL) {
     CHECK(0, "i386: create ELF32 integration driver");
@@ -1102,7 +1102,8 @@ static void test_i386_target(void) {
           "i386: linked ELF32 program executes generated code");
   }
 #else
-  fprintf(stderr, "skip: i386: ELF32 execution requires a Linux x86 host\n");
+  fprintf(stderr,
+          "skip: i386: ELF32 assembly and execution require a Linux x86 host\n");
 #endif
 
   remove("be_i386_const.o");
