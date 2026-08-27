@@ -1106,6 +1106,7 @@ static void test_i386_target(void) {
           "skip: i386: ELF32 assembly and execution require a Linux x86 host\n");
 #endif
 
+  remove("be_i386_const.s");
   remove("be_i386_const.o");
   remove("be_i386_const_start.o");
   remove("be_i386_const_start.s");
