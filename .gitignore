@@ -33,6 +33,8 @@ tests/test_cases/test_fpc_*
 /*.md
 /gmon.out
 /_codeql_detected_source_root
+/be_*_exe
+/helloworld
 !/README.md
 !/CLAUDE.md
 !/CHANGELOG.md
