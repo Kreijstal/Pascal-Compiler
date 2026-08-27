@@ -34,6 +34,7 @@ tests/test_cases/test_fpc_*
 /gmon.out
 /_codeql_detected_source_root
 /be_*_exe
+/be_i386_const
 /be_*_driver.c
 /be_*_exe.buildlog
 /helloworld
