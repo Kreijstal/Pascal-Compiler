@@ -19,7 +19,7 @@ jobs:
         sys: [MSYS, MINGW64, UCRT64, CLANG64]
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -95,7 +95,7 @@ jobs:
   fpc-bootstrap:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
 
