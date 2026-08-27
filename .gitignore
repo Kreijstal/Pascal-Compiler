@@ -34,7 +34,10 @@ tests/test_cases/test_fpc_*
 /gmon.out
 /_codeql_detected_source_root
 /be_*_exe
+/be_*_driver.c
+/be_*_exe.buildlog
 /helloworld
+/wt_disk_out.txt
 !/README.md
 !/CLAUDE.md
 !/CHANGELOG.md
