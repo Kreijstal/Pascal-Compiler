@@ -12,6 +12,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 static int *vregp(BeEmitter *em) { return em->next_vreg_id; }
 
@@ -24,8 +25,9 @@ static char i386_suffix(BeWidth width) {
   case BE_W32:
     return 'l';
   case BE_W64:
+    return 'l';
   default:
-    assert(0 && "i386 does not support 64-bit scalar values");
+    assert(0 && "invalid i386 scalar width");
     return 'l';
   }
 }
@@ -39,8 +41,9 @@ static int i386_width_sel(BeWidth width) {
   case BE_W32:
     return 2;
   case BE_W64:
+    return 2;
   default:
-    assert(0 && "i386 does not support 64-bit scalar values");
+    assert(0 && "invalid i386 scalar width");
     return 2;
   }
 }
@@ -59,7 +62,24 @@ static void i386_literal(const BeOperand *op, char *buffer, size_t size) {
     snprintf(buffer, size, "$%lld", op->u.imm);
     break;
   case OPK_PHYS:
-    snprintf(buffer, size, "%s", op->u.phys);
+    if (strcmp(op->u.phys, "%rax") == 0)
+      snprintf(buffer, size, "%%eax");
+    else if (strcmp(op->u.phys, "%rbx") == 0)
+      snprintf(buffer, size, "%%ebx");
+    else if (strcmp(op->u.phys, "%rcx") == 0)
+      snprintf(buffer, size, "%%ecx");
+    else if (strcmp(op->u.phys, "%rdx") == 0)
+      snprintf(buffer, size, "%%edx");
+    else if (strcmp(op->u.phys, "%rsi") == 0)
+      snprintf(buffer, size, "%%esi");
+    else if (strcmp(op->u.phys, "%rdi") == 0)
+      snprintf(buffer, size, "%%edi");
+    else if (strcmp(op->u.phys, "%rbp") == 0)
+      snprintf(buffer, size, "%%ebp");
+    else if (strcmp(op->u.phys, "%rsp") == 0)
+      snprintf(buffer, size, "%%esp");
+    else
+      snprintf(buffer, size, "%s", op->u.phys);
     break;
   case OPK_RIP_SYM:
   case OPK_LABEL:
@@ -107,14 +127,33 @@ static void i386_emit(BeEmitter *em, BeOp op, BeWidth width,
     break;
 
   case BE_LOAD:
-    assert(dst->kind == OPK_VREG);
-    defs[0] = dst->u.vreg;
     if (a->kind == OPK_MEM_FRAME) {
       i386_frame(a, frame, sizeof(frame));
+      if (dst->kind == OPK_PHYS) {
+        i386_literal(dst, literal, sizeof(literal));
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %s\n", suffix, frame,
+                literal);
+        em->list = add_inst(em->list, tmpl);
+        break;
+      }
+      assert(dst->kind == OPK_VREG);
+      defs[0] = dst->u.vreg;
       snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%s, %%0\n", suffix, frame);
       em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
     } else {
       assert(a->kind == OPK_MEM_BD);
+      if (dst->kind == OPK_PHYS) {
+        i386_literal(dst, literal, sizeof(literal));
+        snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%0), %s\n", suffix,
+                a->u.mem_bd.disp, literal);
+        uses[0] = a->u.mem_bd.base;
+        int widths[] = {2};
+        em->list = be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1,
+                                   tmpl, widths);
+        break;
+      }
+      assert(dst->kind == OPK_VREG);
+      defs[0] = dst->u.vreg;
       snprintf(tmpl, sizeof(tmpl), "\tmov%c\t%d(%%1), %%0\n", suffix,
                a->u.mem_bd.disp);
       uses[0] = a->u.mem_bd.base;
@@ -216,14 +255,32 @@ static void i386_emit(BeEmitter *em, BeOp op, BeWidth width,
     break;
 
   case BE_LEA:
-    assert(dst->kind == OPK_VREG);
-    defs[0] = dst->u.vreg;
     if (a->kind == OPK_MEM_FRAME) {
       i386_frame(a, frame, sizeof(frame));
+      if (dst->kind == OPK_PHYS) {
+        i386_literal(dst, literal, sizeof(literal));
+        snprintf(tmpl, sizeof(tmpl), "\tleal\t%s, %s\n", frame, literal);
+        em->list = add_inst(em->list, tmpl);
+        break;
+      }
+      assert(dst->kind == OPK_VREG);
+      defs[0] = dst->u.vreg;
       snprintf(tmpl, sizeof(tmpl), "\tleal\t%s, %%0\n", frame);
       em->list = be_add_inst_du(em->list, vregp(em), defs, 1, NULL, 0, tmpl);
     } else {
       assert(a->kind == OPK_MEM_BD);
+      if (dst->kind == OPK_PHYS) {
+        i386_literal(dst, literal, sizeof(literal));
+        snprintf(tmpl, sizeof(tmpl), "\tleal\t%d(%%0), %s\n",
+                 a->u.mem_bd.disp, literal);
+        uses[0] = a->u.mem_bd.base;
+        int widths[] = {2};
+        em->list = be_add_inst_du_w(em->list, vregp(em), NULL, 0, uses, 1,
+                                    tmpl, widths);
+        break;
+      }
+      assert(dst->kind == OPK_VREG);
+      defs[0] = dst->u.vreg;
       snprintf(tmpl, sizeof(tmpl), "\tleal\t%d(%%1), %%0\n", a->u.mem_bd.disp);
       uses[0] = a->u.mem_bd.base;
       int widths[] = {2, 2};

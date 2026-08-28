@@ -1054,6 +1054,24 @@ static void test_i386_target(void) {
   CHECK(strcmp(T->return_reg(BE_W32), "%eax") == 0,
         "i386: returns integers in %eax");
 
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  BeOperand eax = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+  BeOperand edi = {OPK_PHYS, BE_W64, {.phys = "%rdi"}};
+  BeOperand frame = {
+      OPK_MEM_FRAME, BE_W64, {.mem_frame = {BE_BASE_FP, -16}}};
+  T->emit(&em, BE_MOV, BE_W64, &eax, &edi, NULL);
+  T->emit(&em, BE_LOAD, BE_W64, &eax, &frame, NULL);
+  T->emit(&em, BE_LEA, BE_W64, &eax, &frame, NULL);
+  char lowered[1024];
+  concat_emitted(em.list, lowered, sizeof(lowered));
+  CHECK(strstr(lowered, "movl\t%edi, %eax") != NULL,
+        "i386: lowers 64-bit scalar moves to 32-bit registers");
+  CHECK(strstr(lowered, "movl\t-16(%ebp), %eax") != NULL,
+        "i386: lowers 64-bit frame loads to 32-bit registers");
+  CHECK(strstr(lowered, "leal\t-16(%ebp), %eax") != NULL,
+        "i386: lowers 64-bit frame addresses to 32-bit registers");
+
   ListNode_t *list = build_const(T, "i386const", 12345);
   finalize_and_write("be_i386_const.s", "i386const", list);
   char emitted[4096];
