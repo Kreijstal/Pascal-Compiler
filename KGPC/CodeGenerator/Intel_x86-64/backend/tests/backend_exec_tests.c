@@ -1072,6 +1072,10 @@ static void test_i386_target(void) {
         "i386: lowers 64-bit frame loads to 32-bit registers");
   CHECK(strstr(lowered, "leal\t-16(%ebp), %eax") != NULL,
         "i386: lowers 64-bit frame addresses to 32-bit registers");
+  for (ListNode_t *node = em.list; node != NULL; node = node->next)
+    free(node->cur);
+  add_inst_invalidate_cache();
+  DestroyList(em.list);
 
   ListNode_t *list = build_const(T, "i386const", 12345);
   finalize_and_write("be_i386_const.s", "i386const", list);
