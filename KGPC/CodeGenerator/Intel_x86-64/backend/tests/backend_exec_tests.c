@@ -1053,6 +1053,11 @@ static void test_i386_target(void) {
   CHECK(T->arg_reg(0, BE_W32) == NULL, "i386: no register argument");
   CHECK(strcmp(T->return_reg(BE_W32), "%eax") == 0,
         "i386: returns integers in %eax");
+  int pool_count = 0;
+  const BackendRegSpec *pool = T->regpool(&pool_count);
+  CHECK(pool_count == 1, "i386: allocator excludes registers without byte names");
+  CHECK(pool != NULL && strcmp(pool[0].name8, "%bl") == 0,
+        "i386: allocator byte register is valid in IA-32");
 
   BackendCtx cx = {0, 0};
   BeEmitter em = be_emitter_from_backendctx(NULL, &cx);

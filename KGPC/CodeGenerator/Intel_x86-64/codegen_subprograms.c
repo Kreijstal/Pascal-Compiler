@@ -48,7 +48,7 @@
 #include "codegen_subprograms_internal.h"
 #include "codegen_vmt_internal.h"
 
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 
 typedef struct RecordParamWork {
   const char *id;
@@ -1582,7 +1582,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx,
   }
 
   if (has_record_return)
-    return_dest_slot = add_l_x("__record_return_dest__", (int)sizeof(void *));
+    return_dest_slot =
+        add_l_x("__record_return_dest__", kgpc_target_pointer_size());
 
   /* Make the SRET destination slot visible to EXIT statements so they
    * memcpy the local Result into the caller's buffer instead of loading

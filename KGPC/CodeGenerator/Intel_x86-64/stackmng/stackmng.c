@@ -7,6 +7,7 @@
 #include "../../../Parser/List/List.h"
 #include "../../../identifier_utils.h"
 #include "../backend/backend_emit.h"
+#include "../backend/target.h"
 #include "../register_types.h"
 #include "xmem.h"
 #include <assert.h>
@@ -182,7 +183,7 @@ static inline int align_up(int value, int alignment) {
 }
 
 static inline int stack_slot_alignment_for_size(int size) {
-  int alignment = (int)sizeof(void *);
+  int alignment = kgpc_backend_target()->ptr_width;
   if (alignment < DOUBLEWORD)
     alignment = DOUBLEWORD;
   if ((size == 10 || size >= 16) && alignment < 16)
@@ -547,7 +548,7 @@ StackNode_t *add_l_t(char *label) {
   int offset;
 
   /* Reserve space that can hold pointer-sized temporaries. */
-  int temp_size = (int)sizeof(void *);
+  int temp_size = kgpc_backend_target()->ptr_width;
   if (temp_size < DOUBLEWORD)
     temp_size = DOUBLEWORD;
 
@@ -1173,7 +1174,8 @@ int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id,
       snprintf(spill_label, sizeof(spill_label), "spill_%s", reg->bit_64 + 1);
       StackNode_t *spill_slot = find_in_temp(spill_label);
       if (spill_slot == NULL)
-        spill_slot = add_l_t_bytes(spill_label, (int)sizeof(void *));
+        spill_slot =
+            add_l_t_bytes(spill_label, kgpc_backend_target()->ptr_width);
       if (spill_slot == NULL) {
         *return_reg = NULL;
         return -1;
@@ -1422,7 +1424,8 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list) {
   snprintf(spill_label, sizeof(spill_label), "spill_%s", spill_reg->bit_64 + 1);
   StackNode_t *spill_slot = find_in_temp(spill_label);
   if (spill_slot == NULL)
-    spill_slot = add_l_t_bytes(spill_label, (int)sizeof(void *));
+    spill_slot =
+        add_l_t_bytes(spill_label, kgpc_backend_target()->ptr_width);
   if (spill_slot == NULL) {
     REG_DEBUG_LOG("[reg-spill] ERROR: Failed to allocate spill slot\n");
     return NULL;

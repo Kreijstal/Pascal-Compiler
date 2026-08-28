@@ -259,7 +259,7 @@ int codegen_statement_return_storage_size(KgpcType *return_type) {
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 #ifndef CODEGEN_POINTER_SIZE_BYTES
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #endif
 
 HashNode_t *codegen_find_zero_arg_method_node(SymTab_t *symtab,

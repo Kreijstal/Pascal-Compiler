@@ -457,7 +457,7 @@ static int expr_tree_first_arg_is_class_vmt_value(const struct Expression *expr,
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 #ifndef CODEGEN_POINTER_SIZE_BYTES
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #endif
 
 static unsigned long codegen_newfunc_temp_counter(void) {

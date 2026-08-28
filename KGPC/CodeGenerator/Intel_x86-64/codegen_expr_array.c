@@ -29,7 +29,7 @@
 #include "register_types.h"
 #include "stackmng/stackmng.h"
 
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 
 struct RecordType *codegen_expr_record_type(const struct Expression *expr,
                                             SymTab_t *symtab);

@@ -390,8 +390,6 @@ static const char *i386_return_reg(BeWidth width) {
  * reuse the stable slots for the matching i386 callee-saved registers. */
 static const BackendRegSpec kI386Pool[] = {
     {REG_RBX, "%ebx", "%ebx", "%bx", "%bl"},
-    {REG_RSI, "%esi", "%esi", "%si", "%sil"},
-    {REG_RDI, "%edi", "%edi", "%di", "%dil"},
 };
 static const BackendRegSpec *i386_regpool(int *count) {
   *count = (int)(sizeof(kI386Pool) / sizeof(kI386Pool[0]));

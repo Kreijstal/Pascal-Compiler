@@ -952,7 +952,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt,
                (void *)var_expr);
       StackNode_t *dest_spill_slot = find_in_temp(dest_spill_label);
       if (dest_spill_slot == NULL)
-        dest_spill_slot = add_l_t_bytes(dest_spill_label, (int)sizeof(void *));
+        dest_spill_slot =
+            add_l_t_bytes(dest_spill_label, kgpc_target_pointer_size());
       if (dest_spill_slot != NULL) {
         /* Integrated: store to the frame slot through the backend vtable. */
         BeEmitter em = codegen_beemitter(inst_list, ctx);
