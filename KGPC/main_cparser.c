@@ -2884,9 +2884,14 @@ int main(int argc, char **argv) {
     }
   }
 
-  /* Wire the backend target based on the parsed architecture flag. */
-  if (target_i386_flag())
-    kgpc_backend_target_set(target_i386_sysv());
+  /* Wire both emission and allocation to the selected architecture. */
+  const Target *backend_target =
+      target_i386_flag() ? target_i386_sysv() : target_x86_sysv();
+  kgpc_backend_target_set(backend_target);
+  int register_count = 0;
+  const BackendRegSpec *register_pool =
+      backend_target->regpool(&register_count);
+  stackmng_set_register_pool(register_pool, register_count);
 
   /* Record compiler binary mtime for AST cache invalidation */
   {

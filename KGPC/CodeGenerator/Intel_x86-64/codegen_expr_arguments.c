@@ -38,7 +38,7 @@
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
 /* Forward declarations for functions defined in codegen_expression.c */

@@ -45,9 +45,9 @@
 #include "register_types.h"
 #include "stackmng/stackmng.h"
 
-/* Shared macro - pointer size for x86-64 codegen */
+/* Shared macro - pointer size for the active code-generation target. */
 #ifndef CODEGEN_POINTER_SIZE_BYTES
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #endif
 
 /* Forward declarations from expr_tree module */

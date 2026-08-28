@@ -94,7 +94,7 @@ KgpcType *codegen_canonical_shortstring_type(void) {
   return canonical;
 }
 
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
 /* Module-level string sets for callable exports and available subprogram

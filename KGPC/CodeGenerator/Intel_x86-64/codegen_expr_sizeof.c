@@ -95,7 +95,7 @@ codegen_lookup_record_field_expr(struct Expression *record_access_expr,
 
 /* Keep these in sync with codegen_expression.c. */
 #ifndef CODEGEN_POINTER_SIZE_BYTES
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #endif
 #ifndef CODEGEN_SIZEOF_RECURSION_LIMIT
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32

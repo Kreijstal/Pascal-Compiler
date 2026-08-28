@@ -56,7 +56,7 @@ codegen_array_access_targets_shortstring(const struct Expression *expr,
                                          CodeGenContext *ctx);
 int codegen_get_char_array_length(const struct Expression *expr,
                                   CodeGenContext *ctx, long long *out_len);
-#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_POINTER_SIZE_BYTES (kgpc_target_pointer_size())
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
 /* Helper functions for transitioning from legacy type fields to KgpcType */
