@@ -1,6 +1,0 @@
-Target: i386 Linux SysV
-
-
-Check successful!
-
-Generating code to file: hello_i386_nostd.s

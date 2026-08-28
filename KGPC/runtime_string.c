@@ -49,11 +49,19 @@ static char **kgpc_argv = NULL;
 
 static size_t kgpc_hash_ptr(const void *value) {
   uintptr_t v = (uintptr_t)value;
+#if UINTPTR_MAX > UINT32_MAX
   v ^= v >> 33;
   v *= UINT64_C(0xff51afd7ed558ccd);
   v ^= v >> 33;
   v *= UINT64_C(0xc4ceb9fe1a85ec53);
   v ^= v >> 33;
+#else
+  v ^= v >> 16;
+  v *= UINT32_C(0x7feb352d);
+  v ^= v >> 15;
+  v *= UINT32_C(0x846ca68b);
+  v ^= v >> 16;
+#endif
   return (size_t)v;
 }
 

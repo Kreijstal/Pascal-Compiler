@@ -4899,7 +4899,9 @@ static uint64_t kgpc_random_u64_bounded(uint64_t bound) {
   return mHi;
 #else
   /* Fallback for 32-bit targets: simple modulo reduction. */
-  return kgpc_xsr128_u64rand() % bound;
+  uint64_t random_value = (uint64_t)kgpc_xsr128_u32rand() << 32;
+  random_value |= kgpc_xsr128_u32rand();
+  return random_value % bound;
 #endif
 }
 
