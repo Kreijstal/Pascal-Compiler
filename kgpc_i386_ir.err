@@ -1,0 +1,107 @@
+Target: i386 Linux SysV
+
+IR dump after def-use enabled (output to stderr).
+
+
+Check successful!
+
+Generating code to file: hello_i386_ir.s
+; --- IR: interlocked_exchange_add_i32_impl_li_li_li ---
+	movq	%rdi, -8(%rbp)
+	movl	%esi, -12(%rbp)
+	movq	%rdx, -20(%rbp)
+call kgpc_interlocked_exchange_add_i32
+    
+; --- End: interlocked_exchange_add_i32_impl_li_li_li ---
+; --- IR: interlocked_exchange_add_i32_int_impl_li_li_li ---
+	movq	%rdi, -8(%rbp)
+	movl	%esi, -12(%rbp)
+	movq	%rdx, -20(%rbp)
+call kgpc_interlocked_exchange_add_i32
+    
+; --- End: interlocked_exchange_add_i32_int_impl_li_li_li ---
+; --- IR: interlocked_exchange_add_i32_u32_impl_li_li_li ---
+	movq	%rdi, -8(%rbp)
+	movl	%esi, -12(%rbp)
+	movq	%rdx, -20(%rbp)
+call kgpc_interlocked_exchange_add_i32
+    
+; --- End: interlocked_exchange_add_i32_u32_impl_li_li_li ---
+; --- IR: interlocked_exchange_add_i64_impl_i64_i64_i64 ---
+	movq	%rdi, -8(%rbp)
+	movq	%rsi, -16(%rbp)
+	movq	%rdx, -24(%rbp)
+call kgpc_interlocked_exchange_add_i64
+    
+; --- End: interlocked_exchange_add_i64_impl_i64_i64_i64 ---
+; --- IR: interlocked_exchange_add_ptr_impl_p_p_p ---
+	movq	%rdi, -8(%rbp)
+	movq	%rsi, -16(%rbp)
+	movq	%rdx, -24(%rbp)
+call kgpc_interlocked_exchange_add_ptr
+    
+; --- End: interlocked_exchange_add_ptr_impl_p_p_p ---
+; --- IR: interlockedexchangeadd_li_li ---
+	movq	%rdi, -8(%rbp)
+	movl	%esi, -12(%rbp)
+	movl	$0, %ebx
+	movslq	%ebx, %rbx
+	movl	%ebx, -28(%ebp)                   ; def: -, use: rbx
+	movl	-8(%ebp), %ebx                    ; def: rbx, use: -
+	movl	%ebx, -84(%ebp)
+	movl	-12(%rbp), %ebx
+	movl	%ebx, -92(%ebp)
+	leal	-28(%ebp), %ebx                   ; def: rbx, use: -
+	movl	%ebx, -100(%ebp)
+	movq	-100(%rbp), %rdx
+	movq	-92(%rbp), %rsi
+	movq	-84(%rbp), %rdi
+	movl	$0, %eax
+	call	interlocked_exchange_add_i32_u32_impl_li_li_li
+	movl	-28(%rbp), %ebx
+	movl	%ebx, -20(%ebp)                   ; def: -, use: rbx
+	movl	-20(%rbp), %eax
+; --- End: interlockedexchangeadd_li_li ---
+; --- IR: interlockedexchangeadd_i64_i64 ---
+	movq	%rdi, -8(%rbp)
+	movq	%rsi, -16(%rbp)
+	movl	$0, %ebx
+	movslq	%ebx, %rbx
+	movl	%ebx, -32(%ebp)                   ; def: -, use: rbx
+	movl	-8(%ebp), %ebx                    ; def: rbx, use: -
+	movl	%ebx, -80(%ebp)
+	movq	-16(%rbp), %rbx
+	movl	%ebx, -88(%ebp)
+	leal	-32(%ebp), %ebx                   ; def: rbx, use: -
+	movl	%ebx, -96(%ebp)
+	movq	-96(%rbp), %rdx
+	movq	-88(%rbp), %rsi
+	movq	-80(%rbp), %rdi
+	movl	$0, %eax
+	call	interlocked_exchange_add_i64_impl_i64_i64_i64
+	movq	-32(%rbp), %rbx
+	movl	%ebx, -24(%ebp)                   ; def: -, use: rbx
+	movq	-24(%rbp), %rax
+; --- End: interlockedexchangeadd_i64_i64 ---
+kgpc: ../KGPC/CodeGenerator/Intel_x86-64/backend/target_i386.c:82: i386_literal: Assertion `strncmp(op->u.phys, "%r", 2) != 0 && "unsupported x86-64 physical register on i386"' failed.
+Caught signal 6
+Stack trace:
+  0x7f280bc45330: __sigaction + 0x50
+  0x7f280bc9ec0c: pthread_kill + 0x11c
+  0x7f280bc4527e: gsignal + 0x1e
+  0x7f280bc288ff: abort + 0xdf
+  0x7f280bc2881b: (unable to get procedure name)
+  0x7f280bc3b517: __assert_fail + 0x47
+  0x56308098b956: i386_literal.constprop.0 + 0xe6
+  0x56308098c75c: i386_emit + 0xb3c
+  0x563080916da1: codegen_stmt + 0x8c1
+  0x56308092731f: codegen_compound_stmt + 0x3f
+  0x56308091677a: codegen_stmt + 0x29a
+  0x5630809005ba: codegen_function + 0xffa
+  0x563080902806: codegen_subprograms.part.0 + 0x366
+  0x5630808f3899: codegen_program + 0x3e9
+  0x5630808f464c: codegen + 0x39c
+  0x5630807feaa3: main + 0x1c43
+  0x7f280bc2a1ca: __libc_init_first + 0x8a
+  0x7f280bc2a28b: __libc_start_main + 0x8b
+  0x5630808004e5: _start + 0x25

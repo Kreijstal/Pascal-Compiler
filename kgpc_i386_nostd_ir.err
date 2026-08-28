@@ -1,0 +1,23 @@
+Target: i386 Linux SysV
+
+IR dump after def-use enabled (output to stderr).
+
+
+Check successful!
+
+Generating code to file: hello_i386_nostd_ir.s
+; --- IR: HelloWorld ---
+	.section	.rodata
+.LC1:
+	.string "Hello, World!"
+	.text
+	leaq	.LC1(%rip), %rbx
+	movq	$-1, %rsi
+	movq	%rbx, %rdx                        ; def: -, use: rbx
+	xorq	%rdi, %rdi
+	movl	$0, %eax
+	call	kgpc_write_string
+	xorq	%rdi, %rdi
+	movl	$0, %eax
+	call	kgpc_write_newline
+; --- End: HelloWorld ---
