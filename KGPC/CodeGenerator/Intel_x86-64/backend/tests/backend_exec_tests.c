@@ -1045,6 +1045,97 @@ static void test_golden_x86_frame_imm(const Target *T) {
         "x86 frame-imm: BE_STORE renders movl $123, -48(%rbp)");
 }
 
+static void test_i386_target(void) {
+  const Target *T = target_i386_sysv();
+  CHECK(strcmp(T->name, "i386-sysv") == 0, "i386: target name");
+  CHECK(T->ptr_width == 4, "i386: 32-bit pointers");
+  CHECK(T->num_int_arg_regs() == 0, "i386: arguments use the stack");
+  CHECK(T->arg_reg(0, BE_W32) == NULL, "i386: no register argument");
+  CHECK(strcmp(T->return_reg(BE_W32), "%eax") == 0,
+        "i386: returns integers in %eax");
+
+  BackendCtx cx = {0, 0};
+  BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  /* Intentionally use BE_W64 to exercise the integrated lowering path. */
+  BeOperand eax = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
+  BeOperand edi = {OPK_PHYS, BE_W64, {.phys = "%rdi"}};
+  BeOperand frame = {
+      OPK_MEM_FRAME, BE_W64, {.mem_frame = {BE_BASE_FP, -16}}};
+  T->emit(&em, BE_MOV, BE_W64, &eax, &edi, NULL);
+  T->emit(&em, BE_LOAD, BE_W64, &eax, &frame, NULL);
+  T->emit(&em, BE_LEA, BE_W64, &eax, &frame, NULL);
+  char lowered[1024];
+  concat_emitted(em.list, lowered, sizeof(lowered));
+  CHECK(strstr(lowered, "movl\t%edi, %eax") != NULL,
+        "i386: lowers 64-bit scalar moves to 32-bit registers");
+  CHECK(strstr(lowered, "movl\t-16(%ebp), %eax") != NULL,
+        "i386: lowers 64-bit frame loads to 32-bit registers");
+  CHECK(strstr(lowered, "leal\t-16(%ebp), %eax") != NULL,
+        "i386: lowers 64-bit frame addresses to 32-bit registers");
+  for (ListNode_t *node = em.list; node != NULL; node = node->next)
+    free(node->cur);
+  add_inst_invalidate_cache();
+  DestroyList(em.list);
+
+  ListNode_t *list = build_const(T, "i386const", 12345);
+  finalize_and_write("be_i386_const.s", "i386const", list);
+  char emitted[4096];
+  concat_emitted(list, emitted, sizeof(emitted));
+  CHECK(strstr(emitted, "pushl\t%ebp") != NULL,
+        "i386: emits a 32-bit frame prologue");
+  CHECK(strstr(emitted, "movl\t$12345, %eax") != NULL,
+        "i386: emits a 32-bit return value");
+  CHECK(strstr(emitted, "%r") == NULL && strstr(emitted, "q\t") == NULL,
+        "i386: emitted code contains no x86-64 registers or instructions");
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+  int assembler_status = system("as --32 -o be_i386_const.o be_i386_const.s");
+  CHECK(assembler_status == 0, "i386: generated assembly assembles as ELF32");
+
+  FILE *driver = fopen("be_i386_const_start.s", "w");
+  if (driver == NULL) {
+    CHECK(0, "i386: create ELF32 integration driver");
+  } else {
+    fputs("\t.text\n"
+          "\t.globl\t_start\n"
+          "_start:\n"
+          "\tcall\ti386const\n"
+          "\tcmpl\t$12345, %eax\n"
+          "\tjne\t.Lfailure\n"
+          "\txorl\t%ebx, %ebx\n"
+          "\tjmp\t.Lexit\n"
+          ".Lfailure:\n"
+          "\tmovl\t$1, %ebx\n"
+          ".Lexit:\n"
+          "\tmovl\t$1, %eax\n"
+          "\tint\t$0x80\n",
+          driver);
+    fclose(driver);
+
+    int driver_status =
+        system("as --32 -o be_i386_const_start.o be_i386_const_start.s");
+    int link_status =
+        driver_status == 0
+            ? system("ld -m elf_i386 -o be_i386_const be_i386_const.o "
+                     "be_i386_const_start.o")
+            : -1;
+    int run_status = link_status == 0 ? system("./be_i386_const") : -1;
+    CHECK(driver_status == 0, "i386: ELF32 integration driver assembles");
+    CHECK(link_status == 0, "i386: generated object links as ELF32");
+    CHECK(run_status == 0,
+          "i386: linked ELF32 program executes generated code");
+  }
+#else
+  fprintf(stderr,
+          "skip: i386: ELF32 assembly and execution require a Linux x86 host\n");
+#endif
+
+  remove("be_i386_const.s");
+  remove("be_i386_const.o");
+  remove("be_i386_const_start.o");
+  remove("be_i386_const_start.s");
+  remove("be_i386_const");
+}
+
 static void test_golden_aarch64_frame_imm(const Target *T) {
   ListNode_t *l0 = build_frame_imm(T, "aaframei0", 0);
   ir_liveness_allocate(l0);
@@ -1539,6 +1630,7 @@ int main(void) {
   test_golden_x86_frame_imm(T);
   test_exec_frame_imm(T, "beframei", 123);
   test_exec_frame_imm(T, "beframei0", 0);
+  test_i386_target();
   test_golden_x86_frame_cmp(T);
   test_exec_frame_cmp(T, "beframec1", 3, 1); /* 5 > 3 -> 1 */
   test_exec_frame_cmp(T, "beframec0", 7, 0); /* 5 > 7 -> 0 */

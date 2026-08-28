@@ -59,6 +59,8 @@ static kgpc_target_abi_t FLAG_TARGET_ABI =
     KGPC_TARGET_ABI_SYSTEM_V;
 #endif
 
+static kgpc_target_arch_t FLAG_TARGET_ARCH = KGPC_TARGET_ARCH_X86_64;
+
 void set_nonlocal_flag(void) { FLAG_NON_LOCAL_CHASING = 1; }
 void set_o1_flag(void) {
   if (FLAG_OPTIMIZE < 1)
@@ -102,6 +104,10 @@ void set_target_windows_flag(void) {
 
 void set_target_sysv_flag(void) { FLAG_TARGET_ABI = KGPC_TARGET_ABI_SYSTEM_V; }
 
+void set_target_arch_i386_flag(void) { FLAG_TARGET_ARCH = KGPC_TARGET_ARCH_I386; }
+
+void set_target_arch_x86_64_flag(void) { FLAG_TARGET_ARCH = KGPC_TARGET_ARCH_X86_64; }
+
 int nonlocal_flag(void) { return FLAG_NON_LOCAL_CHASING; }
 int optimize_flag(void) { return FLAG_OPTIMIZE; }
 
@@ -131,6 +137,16 @@ int target_windows_flag(void) {
 }
 
 kgpc_target_abi_t current_target_abi(void) { return FLAG_TARGET_ABI; }
+
+kgpc_target_arch_t current_target_arch(void) { return FLAG_TARGET_ARCH; }
+
+int kgpc_target_pointer_size(void) {
+  return FLAG_TARGET_ARCH == KGPC_TARGET_ARCH_I386 ? 4 : 8;
+}
+
+int target_i386_flag(void) {
+  return FLAG_TARGET_ARCH == KGPC_TARGET_ARCH_I386;
+}
 
 int kgpc_target_filerec_size(void) {
   /* Storage size of FPC's FileRec (rtl/inc/filerec.inc), which a typed/untyped

@@ -35,6 +35,9 @@ EXPLICIT_TARGET_FLAGS = {
     "--target-sysv",
     "-target-sysv",
     "--sysv-abi",
+    "--target=i386",
+    "--target=i386-linux",
+    "--target=i686",
 }
 
 _COVERAGE_ENABLED_CACHE = None

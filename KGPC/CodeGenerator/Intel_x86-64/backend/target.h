@@ -249,11 +249,16 @@ typedef struct Target {
 
 /* Target factories (defined in target_x86.c / target_aarch64.c). */
 const Target *target_x86_sysv(void);
+const Target *target_i386_sysv(void);
 const Target *target_aarch64(void);
 
 /* The instruction-emitting target the live compiler lowers through.  x86 today
  * (SysV/Windows differ only in ABI register selection at the call site, not in
  * the instructions the vtable emits). */
 const Target *kgpc_backend_target(void);
+
+/* Set the active backend target (called once at startup from the front-end
+ * after parsing --target flags).  NULL is ignored. */
+void kgpc_backend_target_set(const Target *t);
 
 #endif /* KGPC_BACKEND_TARGET_H */

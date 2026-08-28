@@ -51,6 +51,7 @@ static int unsetenv(const char *name) { return _putenv_s(name, ""); }
 #include "pascal_parser.h"
 
 #include "CodeGenerator/Intel_x86-64/codegen.h"
+#include "CodeGenerator/Intel_x86-64/backend/target.h"
 #include "Parser/ParseTree/from_cparser.h"
 #include "Parser/ParseTree/ident_ref.h"
 #include "Parser/ParseTree/tree.h"
@@ -237,7 +238,7 @@ static void mark_program_subs_used(Tree_t *program) {
 static void print_usage(const char *prog_name) {
   FILE *out = stdout;
   fprintf(out, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
-  fprintf(out, "  Compiles Pascal source to x86-64 assembly\n");
+  fprintf(out, "  Compiles Pascal source to x86-64 or i386 assembly\n");
   fprintf(out, "  Flags:\n");
   fprintf(out, "    -h, --help            Show this help text and exit\n");
   fprintf(out, "    -v, --version         Print compiler version and exit\n");
@@ -249,6 +250,8 @@ static void print_usage(const char *prog_name) {
       "    --target=windows      Generate assembly for the Windows x64 ABI\n");
   fprintf(out, "    --target=sysv         Generate assembly for the System V "
                "AMD64 ABI\n");
+  fprintf(out, "    --target=i386         Generate assembly for the i386 "
+               "Linux SysV ABI (32-bit)\n");
   fprintf(out, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
   fprintf(out, "    --dump-ir-after=def-use  Dump IR with def/use annotations "
                "to stderr after each function\n");
@@ -638,6 +641,13 @@ static SetFlagsResult set_flags(char **optional_args, int count) {
         fprintf(stderr, "Target ABI: System V AMD64\n\n");
         fflush(stderr);
         set_target_sysv_flag();
+      } else if (strcasecmp(value, "i386") == 0 ||
+                 strcasecmp(value, "i386-linux") == 0 ||
+                 strcasecmp(value, "i686") == 0) {
+        fprintf(stderr, "Target: i386 Linux SysV\n\n");
+        fflush(stderr);
+        set_target_arch_i386_flag();
+        set_target_sysv_flag();
       } else {
         fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
         return SET_FLAGS_ERROR;
@@ -656,6 +666,13 @@ static SetFlagsResult set_flags(char **optional_args, int count) {
                  strcasecmp(value, "linux") == 0) {
         fprintf(stderr, "Target ABI: System V AMD64\n\n");
         fflush(stderr);
+        set_target_sysv_flag();
+      } else if (strcasecmp(value, "i386") == 0 ||
+                 strcasecmp(value, "i386-linux") == 0 ||
+                 strcasecmp(value, "i686") == 0) {
+        fprintf(stderr, "Target: i386 Linux SysV\n\n");
+        fflush(stderr);
+        set_target_arch_i386_flag();
         set_target_sysv_flag();
       } else {
         fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
@@ -2808,6 +2825,11 @@ static void emit_link_args(void) {
    * On MSYS2/Windows, winpthreads provides this. */
   used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
 
+  /* i386 target: tell the host gcc to produce a 32-bit executable. */
+  if (target_i386_flag()) {
+    used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -m32");
+  }
+
   if (g_requires_gmp) {
     used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lgmp");
   }
@@ -2861,6 +2883,10 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+
+  /* Wire the backend target based on the parsed architecture flag. */
+  if (target_i386_flag())
+    kgpc_backend_target_set(target_i386_sysv());
 
   /* Record compiler binary mtime for AST cache invalidation */
   {

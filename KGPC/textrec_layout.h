@@ -60,7 +60,7 @@ typedef struct KgpcTextRecLayout {
   void *fullname;         /* 640: FullName pointer */
 } KgpcTextRecLayout;
 
-_Static_assert(sizeof(KgpcTextRecLayout) == 648,
+_Static_assert(sizeof(KgpcTextRecLayout) == 648 || sizeof(void *) != 8,
                "KgpcTextRecLayout must be 648 bytes on Win64 to match KGPCTextRec");
 
 _Static_assert(offsetof(KgpcTextRecLayout, handle) == 0, "handle offset");
@@ -107,6 +107,7 @@ typedef struct KgpcTextRecLayout {
 } KgpcTextRecLayout;
 
 /* Compile-time verification that the struct has the expected size. */
+#if __SIZEOF_POINTER__ == 8
 _Static_assert(sizeof(KgpcTextRecLayout) == 640,
                "KgpcTextRecLayout must be 640 bytes to match KGPCTextRec");
 
@@ -132,6 +133,7 @@ _Static_assert(offsetof(KgpcTextRecLayout, line_end) == 368, "line_end offset");
 _Static_assert(offsetof(KgpcTextRecLayout, buffer) == 372, "buffer offset");
 _Static_assert(offsetof(KgpcTextRecLayout, codepage) == 628, "codepage offset");
 _Static_assert(offsetof(KgpcTextRecLayout, fullname) == 632, "fullname offset");
+#endif /* __SIZEOF_POINTER__ == 8 */
 #endif
 
 #endif /* KGPC_TEXTREC_LAYOUT_H */
