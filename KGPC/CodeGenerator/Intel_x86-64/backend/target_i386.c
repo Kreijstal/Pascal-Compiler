@@ -57,29 +57,29 @@ static void i386_frame(const BeOperand *op, char *buffer, size_t size) {
 }
 
 static void i386_literal(const BeOperand *op, char *buffer, size_t size) {
+  static const struct {
+    const char *x86_64;
+    const char *i386;
+  } register_names[] = {
+      {"%rax", "%eax"}, {"%rbx", "%ebx"}, {"%rcx", "%ecx"},
+      {"%rdx", "%edx"}, {"%rsi", "%esi"}, {"%rdi", "%edi"},
+      {"%rbp", "%ebp"}, {"%rsp", "%esp"},
+  };
   switch (op->kind) {
   case OPK_IMM:
     snprintf(buffer, size, "$%lld", op->u.imm);
     break;
   case OPK_PHYS:
-    if (strcmp(op->u.phys, "%rax") == 0)
-      snprintf(buffer, size, "%%eax");
-    else if (strcmp(op->u.phys, "%rbx") == 0)
-      snprintf(buffer, size, "%%ebx");
-    else if (strcmp(op->u.phys, "%rcx") == 0)
-      snprintf(buffer, size, "%%ecx");
-    else if (strcmp(op->u.phys, "%rdx") == 0)
-      snprintf(buffer, size, "%%edx");
-    else if (strcmp(op->u.phys, "%rsi") == 0)
-      snprintf(buffer, size, "%%esi");
-    else if (strcmp(op->u.phys, "%rdi") == 0)
-      snprintf(buffer, size, "%%edi");
-    else if (strcmp(op->u.phys, "%rbp") == 0)
-      snprintf(buffer, size, "%%ebp");
-    else if (strcmp(op->u.phys, "%rsp") == 0)
-      snprintf(buffer, size, "%%esp");
-    else
-      snprintf(buffer, size, "%s", op->u.phys);
+    for (size_t i = 0; i < sizeof(register_names) / sizeof(register_names[0]);
+         ++i) {
+      if (strcmp(op->u.phys, register_names[i].x86_64) == 0) {
+        snprintf(buffer, size, "%s", register_names[i].i386);
+        return;
+      }
+    }
+    assert(strncmp(op->u.phys, "%r", 2) != 0 &&
+           "unsupported x86-64 physical register on i386");
+    snprintf(buffer, size, "%s", op->u.phys);
     break;
   case OPK_RIP_SYM:
   case OPK_LABEL:

@@ -1056,6 +1056,7 @@ static void test_i386_target(void) {
 
   BackendCtx cx = {0, 0};
   BeEmitter em = be_emitter_from_backendctx(NULL, &cx);
+  /* Intentionally use BE_W64 to exercise the integrated lowering path. */
   BeOperand eax = {OPK_PHYS, BE_W64, {.phys = "%rax"}};
   BeOperand edi = {OPK_PHYS, BE_W64, {.phys = "%rdi"}};
   BeOperand frame = {
