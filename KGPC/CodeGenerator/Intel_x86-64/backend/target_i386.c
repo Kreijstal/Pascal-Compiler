@@ -25,6 +25,7 @@ static char i386_suffix(BeWidth width) {
   case BE_W32:
     return 'l';
   case BE_W64:
+    /* The integrated scalar lowering path represents pointer values as W64. */
     return 'l';
   default:
     assert(0 && "invalid i386 scalar width");
@@ -41,6 +42,7 @@ static int i386_width_sel(BeWidth width) {
   case BE_W32:
     return 2;
   case BE_W64:
+    /* The integrated scalar lowering path represents pointer values as W64. */
     return 2;
   default:
     assert(0 && "invalid i386 scalar width");
